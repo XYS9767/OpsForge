@@ -1,0 +1,103 @@
+[
+  {
+    "category": "Prometheus",
+    "module": "prometheus",
+    "source": "OpsForge 原创教学题",
+    "version": 2,
+    "has_answer": true,
+    "tags": [
+      "抓取",
+      "时序",
+      "标签",
+      "PromQL",
+      "规则",
+      "服务发现"
+    ],
+    "id": "basic-prometheus",
+    "type": "code",
+    "level": 1,
+    "title": "配置两个实际抓取作业并查询按作业区分的Counter速率",
+    "intro": "Prometheus 周期性抓取指标；目标健康与业务健康是不同维度。",
+    "body": "## 环境与初始材料\n平台提供原生Prometheus及两个受控指标路径/worker-a与/worker-b，不需要另开服务器。target-contract.json给出两个作业的完整配置；19100由平台替换为随机环回端口。每个端点提供training_requests_total这个Counter，起始约1000且持续增长，速率由测试端随机选择；随后平台将计数器重置到0并提高增长速率。数值来自本地受控模型，不代表真实生产请求流量。\n\n## 操作任务\n补齐jobs.yaml中的两个不同作业，保持各自路径、1秒间隔和500ms超时，让两者Targets都up。编写query.promql，输出最近5秒的每秒Counter速率，按job区分并且只保留job标签。不能把累计值当速率，不能合并两作业成一行，也不能写固定常数应付材料。第二阶段计数器重置后仍要按Counter语义正确查询。job配置可换顺序，不得把两个作业都指向同一路径。\n\n## 产物\n提交jobs.yaml的完整scrape作业数组和query.promql的一条PromQL。目标/作业信息见材料；表达式允许等价写法，不能改测试指标端。平台自动组装全局配置与启动环境。\n\n## 验收方法\n运行python3 checks/check.py。真实HTTP抓取两个端点，通过原生Targets与up核对双作业；在同一固定评估时刻，把候选查询与原生rate基准结果逐job比较全部标签和数值。重置并提高两个Counter速率后再比较一次，新速率必须发生变化。原始漏作业、错误查询累计值均失败；随机增长率和第二阶段避免把已知常数当答案。查询引擎另有样本和2秒超时限制，进程仅本地、限时限内存、finally回收。\n\n## 边界\n这是受控Counter采集与查询实操，不证明业务正确性、生产速率或长期数据完整性。为了快速练习使用5秒窗口和1秒采集，不建议无条件照搬生产窗口。学员不需要启动Kubernetes。\n",
+    "answer": "```yaml\n- job_name: worker-a\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  metrics_path: /worker-a\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\n- job_name: worker-b\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  metrics_path: /worker-b\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\n```\n\n```promql\nsum by(job) (rate(training_requests_total[5s]))\n```\n两个job名称和路径建立独立采集身份；rate按每条Counter识别回退，sum by(job)只保留要求的维度。up证明抓取成功，业务Counter的速率仍须单独查询；累计值约1000不能当每秒请求数。\n\n原题原理：scrape_configs 中配置 job_name: node 和 static_configs targets: ['node:9100']。先 promtool check config，再加载配置；在 targets 中确认 UP，查询 up{job=\"node\"}。对累计请求数用 rate(counter_total[5m]) 观察速率。",
+    "hints": [
+      "先阅读概念，识别任务中的对象和目标。",
+      "先检查状态，再执行变更，最后再次检查。"
+    ],
+    "minutes": 20,
+    "rubric": [
+      "能解释基本概念",
+      "记录操作和输出",
+      "说明验证结果"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "difficulty": "入门",
+    "topic": "抓取配置与采集质量",
+    "language": "yaml",
+    "files": {
+      "jobs.yaml": "- job_name: worker-a\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  metrics_path: /worker-a\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\n",
+      "query.promql": "sum by(job) (training_requests_total)\n",
+      "target-contract.json": "{\n  \"jobs\": [\n    {\n      \"job_name\": \"worker-a\",\n      \"scrape_interval\": \"1s\",\n      \"scrape_timeout\": \"500ms\",\n      \"metrics_path\": \"/worker-a\",\n      \"static_configs\": [\n        {\n          \"targets\": [\n            \"127.0.0.1:19100\"\n          ]\n        }\n      ]\n    },\n    {\n      \"job_name\": \"worker-b\",\n      \"scrape_interval\": \"1s\",\n      \"scrape_timeout\": \"500ms\",\n      \"metrics_path\": \"/worker-b\",\n      \"static_configs\": [\n        {\n          \"targets\": [\n            \"127.0.0.1:19100\"\n          ]\n        }\n      ]\n    }\n  ],\n  \"metric\": \"training_requests_total\",\n  \"output_labels\": [\n    \"job\"\n  ],\n  \"window\": \"5s\",\n  \"second_phase\": \"both counters restart at zero and grow faster\"\n}\n"
+    },
+    "solution_files": {
+      "jobs.yaml": "- job_name: worker-a\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  metrics_path: /worker-a\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\n- job_name: worker-b\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  metrics_path: /worker-b\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\n",
+      "query.promql": "sum by(job) (rate(training_requests_total[5s]))\n"
+    },
+    "negative_files": {
+      "jobs.yaml": "- job_name: worker-a\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  metrics_path: /worker-a\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\n- job_name: worker-b\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  metrics_path: /worker-b\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\n",
+      "query.promql": "sum by(job) (training_requests_total)\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-basic-scrape",
+      "deliverables": [
+        "jobs.yaml",
+        "query.promql"
+      ],
+      "operation": "补齐双作业采集并交付实际Counter速率查询",
+      "verification": "原生Targets/up、随机Counter与重置后两阶段原生查询逐job对账",
+      "capability_gap": [
+        "非业务正确性/生产流量/长期完整性验收"
+      ],
+      "failure_examples": [
+        "漏掉第二个作业",
+        "原始Counter累计值冒充速率",
+        "聚合时丢掉job身份",
+        "固定常数无法适应重置后变化"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import secrets\nimport pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1s'},'scrape_configs':JOBS}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error','--query.max-samples=10000','--query.timeout=2s'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\nEXPECTED=[{'job_name': 'worker-a', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'metrics_path': '/worker-a', 'static_configs': [{'targets': ['127.0.0.1:19100']}]}, {'job_name': 'worker-b', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'metrics_path': '/worker-b', 'static_configs': [{'targets': ['127.0.0.1:19100']}]}]\n\ncandidate=yaml.load(pathlib.Path('jobs.yaml').read_text(encoding='utf-8'),Loader=Strict)\nassert isinstance(candidate,list) and len(candidate)<=2\nfor job in candidate:\n assert isinstance(job,dict) and job in EXPECTED\nassert len({j['job_name'] for j in candidate})==len(candidate)\nexpr=pathlib.Path('query.promql').read_text(encoding='utf-8').strip();assert 0<len(expr)<=1000\nstate={name:{'at':time.monotonic(),'base':1000.,'slope':float(secrets.choice([2,3,5,7,11]))} for name in ['worker-a','worker-b']}\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  name=self.path.removeprefix('/')\n  if name not in state:self.send_error(404);return\n  item=state[name];value=item['base']+(time.monotonic()-item['at'])*item['slope']\n  body=('# TYPE training_requests_total counter\\ntraining_requests_total '+repr(value)+'\\n').encode()\n  self.send_response(200);self.send_header('Content-Type','text/plain; version=0.0.4');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n def log_message(self,*args):pass\nhttpd=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()\nJOBS=copy.deepcopy(candidate)\nfor job in JOBS:job['static_configs'][0]['targets']=['127.0.0.1:'+str(httpd.server_port)]\ndef canon(rows):\n assert len(rows)==2 and all(set(r['metric'])=={'job'} for r in rows)\n out={r['metric']['job']:float(r['value'][1]) for r in rows};assert set(out)=={'worker-a','worker-b'} and all(math.isfinite(v) and v>0 for v in out.values())\n return out\ndef compare(api):\n at=time.time()-1\n expected=vector(api,'sum by(job) (rate(training_requests_total[5s]))',at)\n if len(expected)!=2 or any(float(r['value'][1])<=0 for r in expected):return False\n expected=canon(expected);actual=canon(vector(api,expr,at))\n assert all(math.isclose(actual[k],expected[k],rel_tol=1e-6,abs_tol=1e-6) for k in expected),'query must yield real native per-job counter rates, not raw totals or constants'\n return expected\ndef wait(fn):\n end=time.monotonic()+12\n while time.monotonic()<end:\n  result=fn()\n  if result:return result\n  time.sleep(.15)\n raise AssertionError('both real scrape targets must be healthy and have sufficient counter samples')\ntry:\n with tempfile.TemporaryDirectory(prefix='trusted-prom-basic-scrape-') as d:\n  try:\n   with server(pathlib.Path(d),'source') as (url,api):\n    wait(lambda:len(api('/api/v1/targets')['data']['activeTargets'])==2 and all(t['health']=='up' for t in api('/api/v1/targets')['data']['activeTargets']))\n    first=wait(lambda:compare(api));print('phase1 native rates:',first)\n    for name,item in state.items():state[name]={'at':time.monotonic(),'base':0.,'slope':item['slope']+13}\n    time.sleep(6)\n    second=wait(lambda:compare(api));assert any(not math.isclose(first[k],second[k],rel_tol=.1) for k in first)\n    print('phase2 native rates after controlled resets:',second)\n    rows=vector(api,'up');assert len(rows)==2 and all(float(r['value'][1])==1 for r in rows)\n  finally:print('native lifecycle:',json.dumps(STATS))\nfinally:\n httpd.shutdown();httpd.server_close();thread.join(timeout=2)\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "basic_dual_job_live_counter_scrape_query_and_reset_practice",
+    "conversion": {
+      "original_id": "basic-prometheus",
+      "original_type": "practice",
+      "original_title": "Prometheus · 基础实操",
+      "original_version": 1,
+      "theory_retained": true
+    },
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/getting_started/",
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/#rate"
+    ]
+  }
+]

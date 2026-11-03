@@ -1,0 +1,221 @@
+[
+  {
+    "id": "curated-parallel-elk-035",
+    "module": "elk",
+    "category": "ELK / EFK",
+    "level": 2,
+    "topic": "文档模型与映射",
+    "title": "真实乐观并发：两次409后重读合并，仅递增最终新值一次且保留并发字段",
+    "answer": "```python\nimport copy\ndef increment(request,index,docid,stale):\n    current=copy.deepcopy(stale)\n    for unused in range(3):\n        body=copy.deepcopy(current['_source']);body['counter']+=1\n        query='?refresh=true&if_seq_no='+str(current['_seq_no'])+'&if_primary_term='+str(current['_primary_term'])\n        status,value=request('PUT','/'+index+'/_doc/'+docid+query,body)\n        if status in (200,201):return body\n        if status!=409:raise RuntimeError('unexpected optimistic update failure')\n        status,current=request('GET','/'+index+'/_doc/'+docid)\n        if status!=200:raise RuntimeError('cannot refresh current concurrency token')\n    raise RuntimeError('conflict retry budget exhausted')\n```\n\n原题知识说明：\n它们要求文档版本与读取时一致，期间发生写入会冲突。由开发重新读取并按业务规则重试，验收并发更新，不把冲突简单忽略。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Elastic官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现increment(request,index,docid,stale)。深拷贝stale的_source/版本令牌，最多3次尝试：复制当前_source仅counter加1，PUT _doc携带if_seq_no/if_primary_term及refresh=true；200/201返回新_source，409必须GET最新_source和令牌后再合并，其余或重读失败RuntimeError，预算耗尽RuntimeError。不改stale/其他文档。真实旧令牌第一次409，平台在第二次写前再次并发修改产生409，第三次以最新20变21，两个并发字段均保留。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Elasticsearch8.19.7 seq_no/primary_term与两个实际并发409、有限重读合并，不丢其他写者字段。096/021中OCC仅保护静止重放，本题新增真实冲突与重复冲突控制；不宣称任意并发下永久成功或分布式事务。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://www.elastic.co/guide/en/elasticsearch/reference/8.19/optimistic-concurrency-control.html"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-elk-035",
+      "original_title": "Elasticsearch乐观并发控制中的if_seq_no与if_primary_term如何防止旧更新覆盖？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef increment(request,index,docid,stale):\n    current=copy.deepcopy(stale)\n    for unused in range(3):\n        body=copy.deepcopy(current['_source']);body['counter']+=1\n        query='?refresh=true&if_seq_no='+str(current['_seq_no'])+'&if_primary_term='+str(current['_primary_term'])\n        status,value=request('PUT','/'+index+'/_doc/'+docid+query,body)\n        if status in (200,201):return body\n        if status!=409:raise RuntimeError('unexpected optimistic update failure')\n        status,current=request('GET','/'+index+'/_doc/'+docid)\n        if status!=200:raise RuntimeError('cannot refresh current concurrency token')\n    raise RuntimeError('conflict retry budget exhausted')\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef increment(request,index,docid,stale):\n    current=copy.deepcopy(stale)\n    for unused in range(3):\n        body=copy.deepcopy(current['_source']);body['counter']+=1\n        query='?refresh=true'\n        status,value=request('PUT','/'+index+'/_doc/'+docid+query,body)\n        if status in (200,201):return body\n        if status!=409:raise RuntimeError('unexpected optimistic update failure')\n        status,current=request('GET','/'+index+'/_doc/'+docid)\n        if status!=200:raise RuntimeError('cannot refresh current concurrency token')\n    raise RuntimeError('conflict retry budget exhausted')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像加只读官方Elasticsearch8.19.7，显式2GiB教学预算；不构建镜像",
+      "operation": "实现increment(request,index,docid,stale)。深拷贝stale的_source/版本令牌，最多3次尝试：复制当前_source仅counter加1，PUT _doc携带if_seq_no/if_primary_term及refresh=true；200/201返回新_source，409必须GET最新_source和令牌后再合并，其余或重读失败RuntimeError，预算耗尽RuntimeError。不改stale/其他文档。真实旧令牌第一次409，平台在第二次写前再次并发修改产生409，第三次以最新20变21，两个并发字段均保留。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Elasticsearch8.19.7 seq_no/primary_term与两个实际并发409、有限重读合并，不丢其他写者字段。096/021中OCC仅保护静止重放，本题新增真实冲突与重复冲突控制；不宣称任意并发下永久成功或分布式事务。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "elasticsearch"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/elasticsearch_native.py": "\"\"\"Owned nonroot Elasticsearch8.19.7, private config/data/ports and bounded Java memory.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.error\nimport yaml\n\ndef free_port():\n    with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Elasticsearch:\n    def __enter__(self):\n        executable=shutil.which('elasticsearch')\n        if not executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned Elasticsearch8.19.7 required')\n        if os.geteuid()==0:raise RuntimeError('nonroot Elasticsearch fixture required')\n        self.temp=tempfile.TemporaryDirectory(prefix='of-elasticsearch-');self.root=pathlib.Path(self.temp.name);self.process=None;self.log=None\n        try:\n            tool=pathlib.Path(os.environ.get('OPSF_ELASTICSEARCH_HOME',str(pathlib.Path(executable).resolve().parents[1]))).resolve()\n            config=self.root/'config';shutil.copytree(tool/'config',config)\n            for folder in ('data','logs','tmp'):(self.root/folder).mkdir()\n            self.port=free_port();transport=free_port()\n            while transport==self.port:transport=free_port()\n            settings={'cluster.name':'opsforge-private','node.name':'owned-node','path.data':str(self.root/'data'),'path.logs':str(self.root/'logs'),\n                'network.host':'127.0.0.1','http.port':self.port,'transport.port':transport,'discovery.type':'single-node',\n                'xpack.security.enabled':False,'xpack.ml.enabled':False,'xpack.watcher.enabled':False,\n                'node.roles':['master','data','ingest'],'node.store.allow_mmap':False,'ingest.geoip.downloader.enabled':False,\n                'cluster.routing.allocation.disk.threshold_enabled':False,'http.max_content_length':'8mb'}\n            (config/'elasticsearch.yml').write_text(yaml.safe_dump(settings,sort_keys=False))\n            hostname=socket.gethostname();assert not any(c in hostname for c in '\\r\\n')\n            hosts=self.root/'jvm-hosts';hosts.write_text('127.0.0.1 localhost '+hostname+'\\n')\n            env={**os.environ,'CLI_JAVA_OPTS':'-Djdk.net.hosts.file='+str(hosts),'ES_PATH_CONF':str(config),'ES_TMPDIR':str(self.root/'tmp'),\n                'ES_JAVA_OPTS':'-Xms256m -Xmx256m -XX:MaxDirectMemorySize=128m -XX:ActiveProcessorCount=2 -Djdk.net.hosts.file='+str(hosts)}\n            # Keystore contains only this disposable node's bootstrap metadata, no external credentials.\n            initialized=subprocess.run([str(tool/'bin/elasticsearch-keystore'),'create'],env=env,cwd=self.root,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15)\n            if initialized.returncode:raise RuntimeError('private empty keystore initialization failed: '+initialized.stderr[-1500:])\n            self.log=(self.root/'startup.log').open('wb')\n            self.process=subprocess.Popen([executable],env=env,cwd=self.root,stdin=subprocess.DEVNULL,stdout=self.log,stderr=self.log)\n            self.base='http://127.0.0.1:'+str(self.port);deadline=time.monotonic()+65\n            while time.monotonic()<deadline:\n                if self.process.poll() is not None:raise RuntimeError('private Elasticsearch startup failed: '+(self.root/'startup.log').read_text(errors='replace')[-6000:])\n                try:\n                    status,document=self.request('GET','/')\n                    if status==200:\n                        assert document['version']['number']=='8.19.7';break\n                except (OSError,urllib.error.URLError):pass\n                time.sleep(.15)\n            else:raise RuntimeError('private Elasticsearch readiness deadline: '+(self.root/'startup.log').read_text(errors='replace')[-4000:])\n            print('NATIVE_ELASTICSEARCH_READY:8.19.7',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,method,path,body=None,content_type='application/json'):\n        data=body.encode() if isinstance(body,str) else (json.dumps(body).encode() if body is not None else None)\n        request=urllib.request.Request(self.base+path,data=data,method=method,headers={'Content-Type':content_type})\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        try:\n            with opener.open(request,timeout=5) as response:raw=response.read();return response.status,json.loads(raw) if raw else None\n        except urllib.error.HTTPError as response:\n            try:return response.code,json.loads(response.read())\n            finally:response.close()\n    def __exit__(self,*args):\n        if self.process is not None:\n            if self.process.poll() is None:self.process.terminate()\n            try:self.process.wait(timeout=8)\n            except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=3)\n        if self.log:self.log.close()\n        self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom elasticsearch_native import Elasticsearch\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef call(server,method,path,body=None):\n status,value=server.request(method,path,body);assert status in (200,201),(method,path,status,value)\n return value\ndef create(server,index,shards=1,mapping=None):return call(server,'PUT','/'+index,{'settings':{'number_of_shards':shards,'number_of_replicas':0},'mappings':{'properties':mapping or {}}})\ndef docs(server,index):return {row['_id']:row['_source'] for row in call(server,'POST','/'+index+'/_search?size=1000')['hits']['hits']}\nwith Elasticsearch() as server:\n index='optimistic_counter';create(server,index)\n call(server,'PUT','/'+index+'/_doc/target?refresh=true',{'counter':1,'original':'kept'})\n stale=call(server,'GET','/'+index+'/_doc/target');before=copy.deepcopy(stale)\n call(server,'PUT','/'+index+'/_doc/target?refresh=true',{'counter':10,'original':'kept','concurrent_a':'keep-a'})\n status,value=server.request('PUT','/'+index+'/_doc/target?if_seq_no='+str(stale['_seq_no'])+'&if_primary_term='+str(stale['_primary_term']),{'counter':2})\n assert status==409 and 'version_conflict_engine_exception' in json.dumps(value)\n call(server,'PUT','/'+index+'/_doc/protected?refresh=true',{'counter':999,'other':'untouched'});protected=call(server,'GET','/'+index+'/_doc/protected')\n print('NATIVE_ELASTICSEARCH_ACTUAL_STALE_SEQ_NO_PRIMARY_TERM_409_NO_LOST_UPDATE',flush=True)\n print('STUDENT_OPERATION_ENTERED:bounded_conflict_refetch_merge_repeat_conflict_increment_once_latest_source',flush=True)\n calls=[];injected=False;put_count=0\n def request(method,path,body=None,**kwargs):\n  global injected,put_count\n  if method=='PUT':\n   put_count+=1\n   if put_count==2:\n    current=call(server,'GET','/'+index+'/_doc/target')['_source'];current['counter']=20;current['concurrent_b']='keep-b';call(server,'PUT','/'+index+'/_doc/target?refresh=true',current);injected=True\n  status,value=server.request(method,path,body,**kwargs);calls.append((method,path,status));return status,value\n try:result=task.increment(request,index,'target',stale)\n except Exception as error:raise AssertionError('student actual optimistic conflict recovery failed') from error\n expected={'counter':21,'original':'kept','concurrent_a':'keep-a','concurrent_b':'keep-b'}\n assert injected and result==expected and call(server,'GET','/'+index+'/_doc/target')['_source']==expected,'latest fields or counter lost on conflict retry'\n writes=[row for row in calls if row[0]=='PUT'];assert [row[2] for row in writes]==[409,409,200] and all('if_seq_no=' in path and 'if_primary_term=' in path for method,path,status in writes)\n assert len([row for row in calls if row[0]=='GET'])==2 and stale==before and call(server,'GET','/'+index+'/_doc/protected')==protected\n print('NATIVE_OCC_TWO_REAL_CONFLICTS_THREE_BOUNDED_ATTEMPTS_REFETCH_LATEST_COUNTER21_AND_BOTH_CONCURRENT_FIELDS_RETAINED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "elk"
+    ]
+  },
+  {
+    "id": "curated-parallel-elk-037",
+    "module": "elk",
+    "category": "ELK / EFK",
+    "level": 2,
+    "topic": "查询聚合与可视化",
+    "title": "真实分布式terms候选丢失：局部6胜5却漏全局10，扩shard候选恢复top1",
+    "answer": "```python\ndef top(request,index):\n    status,value=request('POST','/'+index+'/_search',{'size':0,'aggs':{'popular':{'terms':{'field':'category','size':1,'shard_size':3,'show_term_doc_count_error':True}}}})\n    if status!=200 or value.get('timed_out') or value.get('_shards',{}).get('failed'):raise RuntimeError('top bucket query incomplete')\n    return value['aggregations']['popular']\n```\n\n原题知识说明：\n分布式各分片先选候选桶，协调端合并可能遗漏局部低排名但全局重要的桶。检查误差提示并评估shard_size或composite分页，不能把top N当完整枚举。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Elastic官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现top(request,index)：size0，aggs.popular.terms={field:category,size:1,shard_size:3,show_term_doc_count_error:true}，HTTP非200/timed_out/failed RuntimeError，返回真实aggregations.popular。两个物理分片各local独有6、common5，shard_size1实际漏common全局10；扩大候选后top1必须common10、error_bound0、sum_other_doc_count12。不改数据、不返回全部桶代替top1、不伪造响应。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Elasticsearch8.19.7两主分片terms候选裁剪与上界响应，固定3个类别所以shard_size3可覆盖。不同于098桶数限额/分页、006命中数量gte；不把有限类别结论外推任意高基数terms精确保证。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://www.elastic.co/guide/en/elasticsearch/reference/8.19/search-aggregations-bucket-terms-aggregation.html"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-elk-037",
+      "original_title": "terms聚合返回top buckets时计数为何可能存在误差？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def top(request,index):\n    status,value=request('POST','/'+index+'/_search',{'size':0,'aggs':{'popular':{'terms':{'field':'category','size':1,'shard_size':3,'show_term_doc_count_error':True}}}})\n    if status!=200 or value.get('timed_out') or value.get('_shards',{}).get('failed'):raise RuntimeError('top bucket query incomplete')\n    return value['aggregations']['popular']\n"
+    },
+    "negative_files": {
+      "task.py": "def top(request,index):\n    status,value=request('POST','/'+index+'/_search',{'size':0,'aggs':{'popular':{'terms':{'field':'category','size':1,'shard_size':1,'show_term_doc_count_error':True}}}})\n    if status!=200 or value.get('timed_out') or value.get('_shards',{}).get('failed'):raise RuntimeError('top bucket query incomplete')\n    return value['aggregations']['popular']\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像加只读官方Elasticsearch8.19.7，显式2GiB教学预算；不构建镜像",
+      "operation": "实现top(request,index)：size0，aggs.popular.terms={field:category,size:1,shard_size:3,show_term_doc_count_error:true}，HTTP非200/timed_out/failed RuntimeError，返回真实aggregations.popular。两个物理分片各local独有6、common5，shard_size1实际漏common全局10；扩大候选后top1必须common10、error_bound0、sum_other_doc_count12。不改数据、不返回全部桶代替top1、不伪造响应。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Elasticsearch8.19.7两主分片terms候选裁剪与上界响应，固定3个类别所以shard_size3可覆盖。不同于098桶数限额/分页、006命中数量gte；不把有限类别结论外推任意高基数terms精确保证。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "elasticsearch"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/elasticsearch_native.py": "\"\"\"Owned nonroot Elasticsearch8.19.7, private config/data/ports and bounded Java memory.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.error\nimport yaml\n\ndef free_port():\n    with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Elasticsearch:\n    def __enter__(self):\n        executable=shutil.which('elasticsearch')\n        if not executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned Elasticsearch8.19.7 required')\n        if os.geteuid()==0:raise RuntimeError('nonroot Elasticsearch fixture required')\n        self.temp=tempfile.TemporaryDirectory(prefix='of-elasticsearch-');self.root=pathlib.Path(self.temp.name);self.process=None;self.log=None\n        try:\n            tool=pathlib.Path(os.environ.get('OPSF_ELASTICSEARCH_HOME',str(pathlib.Path(executable).resolve().parents[1]))).resolve()\n            config=self.root/'config';shutil.copytree(tool/'config',config)\n            for folder in ('data','logs','tmp'):(self.root/folder).mkdir()\n            self.port=free_port();transport=free_port()\n            while transport==self.port:transport=free_port()\n            settings={'cluster.name':'opsforge-private','node.name':'owned-node','path.data':str(self.root/'data'),'path.logs':str(self.root/'logs'),\n                'network.host':'127.0.0.1','http.port':self.port,'transport.port':transport,'discovery.type':'single-node',\n                'xpack.security.enabled':False,'xpack.ml.enabled':False,'xpack.watcher.enabled':False,\n                'node.roles':['master','data','ingest'],'node.store.allow_mmap':False,'ingest.geoip.downloader.enabled':False,\n                'cluster.routing.allocation.disk.threshold_enabled':False,'http.max_content_length':'8mb'}\n            (config/'elasticsearch.yml').write_text(yaml.safe_dump(settings,sort_keys=False))\n            hostname=socket.gethostname();assert not any(c in hostname for c in '\\r\\n')\n            hosts=self.root/'jvm-hosts';hosts.write_text('127.0.0.1 localhost '+hostname+'\\n')\n            env={**os.environ,'CLI_JAVA_OPTS':'-Djdk.net.hosts.file='+str(hosts),'ES_PATH_CONF':str(config),'ES_TMPDIR':str(self.root/'tmp'),\n                'ES_JAVA_OPTS':'-Xms256m -Xmx256m -XX:MaxDirectMemorySize=128m -XX:ActiveProcessorCount=2 -Djdk.net.hosts.file='+str(hosts)}\n            # Keystore contains only this disposable node's bootstrap metadata, no external credentials.\n            initialized=subprocess.run([str(tool/'bin/elasticsearch-keystore'),'create'],env=env,cwd=self.root,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15)\n            if initialized.returncode:raise RuntimeError('private empty keystore initialization failed: '+initialized.stderr[-1500:])\n            self.log=(self.root/'startup.log').open('wb')\n            self.process=subprocess.Popen([executable],env=env,cwd=self.root,stdin=subprocess.DEVNULL,stdout=self.log,stderr=self.log)\n            self.base='http://127.0.0.1:'+str(self.port);deadline=time.monotonic()+65\n            while time.monotonic()<deadline:\n                if self.process.poll() is not None:raise RuntimeError('private Elasticsearch startup failed: '+(self.root/'startup.log').read_text(errors='replace')[-6000:])\n                try:\n                    status,document=self.request('GET','/')\n                    if status==200:\n                        assert document['version']['number']=='8.19.7';break\n                except (OSError,urllib.error.URLError):pass\n                time.sleep(.15)\n            else:raise RuntimeError('private Elasticsearch readiness deadline: '+(self.root/'startup.log').read_text(errors='replace')[-4000:])\n            print('NATIVE_ELASTICSEARCH_READY:8.19.7',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,method,path,body=None,content_type='application/json'):\n        data=body.encode() if isinstance(body,str) else (json.dumps(body).encode() if body is not None else None)\n        request=urllib.request.Request(self.base+path,data=data,method=method,headers={'Content-Type':content_type})\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        try:\n            with opener.open(request,timeout=5) as response:raw=response.read();return response.status,json.loads(raw) if raw else None\n        except urllib.error.HTTPError as response:\n            try:return response.code,json.loads(response.read())\n            finally:response.close()\n    def __exit__(self,*args):\n        if self.process is not None:\n            if self.process.poll() is None:self.process.terminate()\n            try:self.process.wait(timeout=8)\n            except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=3)\n        if self.log:self.log.close()\n        self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom elasticsearch_native import Elasticsearch\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef call(server,method,path,body=None):\n status,value=server.request(method,path,body);assert status in (200,201),(method,path,status,value)\n return value\ndef create(server,index,shards=1,mapping=None):return call(server,'PUT','/'+index,{'settings':{'number_of_shards':shards,'number_of_replicas':0},'mappings':{'properties':mapping or {}}})\ndef docs(server,index):return {row['_id']:row['_source'] for row in call(server,'POST','/'+index+'/_search?size=1000')['hits']['hits']}\nwith Elasticsearch() as server:\n index='distributed_top';create(server,index,2,{'category':{'type':'keyword'}})\n def shard(route):return call(server,'GET','/'+index+'/_search_shards?routing='+route)['shards'][0][0]['shard']\n first='route0';second=next('route'+str(i) for i in range(1,50) if shard('route'+str(i))!=shard(first));lines=[]\n for route,category in [(first,'local-a'),(second,'local-b')]:\n  for i in range(6):lines.extend([json.dumps({'index':{'_index':index,'_id':category+'-'+str(i),'routing':route}}),json.dumps({'category':category})])\n  for i in range(5):lines.extend([json.dumps({'index':{'_index':index,'_id':route+'-common-'+str(i),'routing':route}}),json.dumps({'category':'common'})])\n status,value=server.request('POST','/_bulk?refresh=true','\\n'.join(lines)+'\\n',content_type='application/x-ndjson');assert status==200 and not value['errors']\n naive=call(server,'POST','/'+index+'/_search',{'size':0,'aggs':{'popular':{'terms':{'field':'category','size':1,'shard_size':1,'show_term_doc_count_error':True}}}})['aggregations']['popular']\n assert naive['buckets'][0]['key']!='common' and naive['buckets'][0]['doc_count']==6 and naive['doc_count_error_upper_bound']>0\n before=docs(server,index)\n print('NATIVE_ELASTICSEARCH_TWO_SHARDS_LOCAL6_COMMON5_EACH_GLOBAL_COMMON10_PRUNED_BY_SHARD_SIZE1',flush=True)\n print('STUDENT_OPERATION_ENTERED:adequate_shard_candidates_global_top1_and_error_bound_not_local_winner',flush=True)\n try:result=task.top(server.request,index)\n except Exception as error:raise AssertionError('student actual distributed terms candidate recovery failed') from error\n assert len(result['buckets'])==1 and result['buckets'][0]['key']=='common' and result['buckets'][0]['doc_count']==10\n assert result['doc_count_error_upper_bound']==0 and result['buckets'][0]['doc_count_error_upper_bound']==0 and result['sum_other_doc_count']==12\n assert docs(server,index)==before\n print('NATIVE_TERMS_GLOBAL_TOP_COMMON10_ERROR_ZERO_OTHER12_SOURCE_UNCHANGED_FIXED_FINITE_CARDINALITY',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "elk"
+    ]
+  },
+  {
+    "id": "curated-parallel-elk-042",
+    "module": "elk",
+    "category": "ELK / EFK",
+    "level": 2,
+    "topic": "查询聚合与可视化",
+    "title": "真实query_string语法边界：特殊输入按字面值检索并保持可信租户过滤",
+    "answer": "```python\ndef search(request,index,tenant,text):\n    body={'size':100,'query':{'bool':{'filter':[{'term':{'tenant':tenant}},{'term':{'literal':text}}]}}}\n    status,value=request('POST','/'+index+'/_search',body)\n    if status!=200 or value.get('timed_out') or value.get('_shards',{}).get('failed'):raise RuntimeError('literal query incomplete')\n    return sorted(row['_id'] for row in value['hits']['hits'])\n```\n\n原题知识说明：\n它解释保留字符和查询语法，输入可能报错或产生昂贵通配查询。由开发选择受控查询构造、转义和限制，验收特殊字符及复杂输入。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Elastic官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现search(request,index,tenant,text)：POST index/_search size100，query.bool.filter同时term tenant=可信tenant和term literal=原text；HTTP非200/timed_out/failed RuntimeError，返回排序ID。不把用户text当query_string，不拼接查询语言、去掉租户条件或改变大小写/引号。真实*:*可被query_string解释成全匹配，但作为值只命中本租户相同原文；OR/冒号/不平衡括号/大小写/空命中均验收。不改数据。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Elasticsearch8.19.7用户值与查询语言解析边界、结构化精确值与调用方可信租户predicate；不是实际认证授权系统，不宣称所有昂贵查询治理或生产租户权限证明。017已有term能力为辅助零附加计数。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://www.elastic.co/guide/en/elasticsearch/reference/8.19/query-dsl-query-string-query.html"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-elk-042",
+      "original_title": "query_string接受用户原文时有哪些语义与成本风险？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def search(request,index,tenant,text):\n    body={'size':100,'query':{'bool':{'filter':[{'term':{'tenant':tenant}},{'term':{'literal':text}}]}}}\n    status,value=request('POST','/'+index+'/_search',body)\n    if status!=200 or value.get('timed_out') or value.get('_shards',{}).get('failed'):raise RuntimeError('literal query incomplete')\n    return sorted(row['_id'] for row in value['hits']['hits'])\n"
+    },
+    "negative_files": {
+      "task.py": "def search(request,index,tenant,text):\n    body={'size':100,'query':{'bool':{'filter':[{'term':{'tenant':tenant}},{'query_string':{'query':text,'default_field':'literal'}}]}}}\n    status,value=request('POST','/'+index+'/_search',body)\n    if status!=200 or value.get('timed_out') or value.get('_shards',{}).get('failed'):raise RuntimeError('literal query incomplete')\n    return sorted(row['_id'] for row in value['hits']['hits'])\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像加只读官方Elasticsearch8.19.7，显式2GiB教学预算；不构建镜像",
+      "operation": "实现search(request,index,tenant,text)：POST index/_search size100，query.bool.filter同时term tenant=可信tenant和term literal=原text；HTTP非200/timed_out/failed RuntimeError，返回排序ID。不把用户text当query_string，不拼接查询语言、去掉租户条件或改变大小写/引号。真实*:*可被query_string解释成全匹配，但作为值只命中本租户相同原文；OR/冒号/不平衡括号/大小写/空命中均验收。不改数据。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Elasticsearch8.19.7用户值与查询语言解析边界、结构化精确值与调用方可信租户predicate；不是实际认证授权系统，不宣称所有昂贵查询治理或生产租户权限证明。017已有term能力为辅助零附加计数。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "elasticsearch"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/elasticsearch_native.py": "\"\"\"Owned nonroot Elasticsearch8.19.7, private config/data/ports and bounded Java memory.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.error\nimport yaml\n\ndef free_port():\n    with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Elasticsearch:\n    def __enter__(self):\n        executable=shutil.which('elasticsearch')\n        if not executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned Elasticsearch8.19.7 required')\n        if os.geteuid()==0:raise RuntimeError('nonroot Elasticsearch fixture required')\n        self.temp=tempfile.TemporaryDirectory(prefix='of-elasticsearch-');self.root=pathlib.Path(self.temp.name);self.process=None;self.log=None\n        try:\n            tool=pathlib.Path(os.environ.get('OPSF_ELASTICSEARCH_HOME',str(pathlib.Path(executable).resolve().parents[1]))).resolve()\n            config=self.root/'config';shutil.copytree(tool/'config',config)\n            for folder in ('data','logs','tmp'):(self.root/folder).mkdir()\n            self.port=free_port();transport=free_port()\n            while transport==self.port:transport=free_port()\n            settings={'cluster.name':'opsforge-private','node.name':'owned-node','path.data':str(self.root/'data'),'path.logs':str(self.root/'logs'),\n                'network.host':'127.0.0.1','http.port':self.port,'transport.port':transport,'discovery.type':'single-node',\n                'xpack.security.enabled':False,'xpack.ml.enabled':False,'xpack.watcher.enabled':False,\n                'node.roles':['master','data','ingest'],'node.store.allow_mmap':False,'ingest.geoip.downloader.enabled':False,\n                'cluster.routing.allocation.disk.threshold_enabled':False,'http.max_content_length':'8mb'}\n            (config/'elasticsearch.yml').write_text(yaml.safe_dump(settings,sort_keys=False))\n            hostname=socket.gethostname();assert not any(c in hostname for c in '\\r\\n')\n            hosts=self.root/'jvm-hosts';hosts.write_text('127.0.0.1 localhost '+hostname+'\\n')\n            env={**os.environ,'CLI_JAVA_OPTS':'-Djdk.net.hosts.file='+str(hosts),'ES_PATH_CONF':str(config),'ES_TMPDIR':str(self.root/'tmp'),\n                'ES_JAVA_OPTS':'-Xms256m -Xmx256m -XX:MaxDirectMemorySize=128m -XX:ActiveProcessorCount=2 -Djdk.net.hosts.file='+str(hosts)}\n            # Keystore contains only this disposable node's bootstrap metadata, no external credentials.\n            initialized=subprocess.run([str(tool/'bin/elasticsearch-keystore'),'create'],env=env,cwd=self.root,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15)\n            if initialized.returncode:raise RuntimeError('private empty keystore initialization failed: '+initialized.stderr[-1500:])\n            self.log=(self.root/'startup.log').open('wb')\n            self.process=subprocess.Popen([executable],env=env,cwd=self.root,stdin=subprocess.DEVNULL,stdout=self.log,stderr=self.log)\n            self.base='http://127.0.0.1:'+str(self.port);deadline=time.monotonic()+65\n            while time.monotonic()<deadline:\n                if self.process.poll() is not None:raise RuntimeError('private Elasticsearch startup failed: '+(self.root/'startup.log').read_text(errors='replace')[-6000:])\n                try:\n                    status,document=self.request('GET','/')\n                    if status==200:\n                        assert document['version']['number']=='8.19.7';break\n                except (OSError,urllib.error.URLError):pass\n                time.sleep(.15)\n            else:raise RuntimeError('private Elasticsearch readiness deadline: '+(self.root/'startup.log').read_text(errors='replace')[-4000:])\n            print('NATIVE_ELASTICSEARCH_READY:8.19.7',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,method,path,body=None,content_type='application/json'):\n        data=body.encode() if isinstance(body,str) else (json.dumps(body).encode() if body is not None else None)\n        request=urllib.request.Request(self.base+path,data=data,method=method,headers={'Content-Type':content_type})\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        try:\n            with opener.open(request,timeout=5) as response:raw=response.read();return response.status,json.loads(raw) if raw else None\n        except urllib.error.HTTPError as response:\n            try:return response.code,json.loads(response.read())\n            finally:response.close()\n    def __exit__(self,*args):\n        if self.process is not None:\n            if self.process.poll() is None:self.process.terminate()\n            try:self.process.wait(timeout=8)\n            except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=3)\n        if self.log:self.log.close()\n        self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom elasticsearch_native import Elasticsearch\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef call(server,method,path,body=None):\n status,value=server.request(method,path,body);assert status in (200,201),(method,path,status,value)\n return value\ndef create(server,index,shards=1,mapping=None):return call(server,'PUT','/'+index,{'settings':{'number_of_shards':shards,'number_of_replicas':0},'mappings':{'properties':mapping or {}}})\ndef docs(server,index):return {row['_id']:row['_source'] for row in call(server,'POST','/'+index+'/_search?size=1000')['hits']['hits']}\nwith Elasticsearch() as server:\n index='literal_inputs';create(server,index,1,{'tenant':{'type':'keyword'},'literal':{'type':'keyword'}})\n texts=['*:*','one OR two','name:admin','(unfinished','Case Value'];bodies={}\n for tenant in ('alpha','beta'):\n  for i,text in enumerate(texts):\n   docid=tenant+'-'+str(i);body={'tenant':tenant,'literal':text};bodies[docid]=body;call(server,'PUT','/'+index+'/_doc/'+docid+'?refresh=true',body)\n raw=call(server,'POST','/'+index+'/_search',{'query':{'query_string':{'query':'*:*','default_field':'literal'}}})\n assert raw['hits']['total']['value']==10\n print('NATIVE_ELASTICSEARCH_USER_LITERAL_WILDCARD_INTERPRETED_AS_QUERY_LANGUAGE_MATCHES_ALL_TENANTS',flush=True)\n print('STUDENT_OPERATION_ENTERED:structured_exact_literal_keep_trusted_tenant_filter_no_dsl_reparse',flush=True)\n for tenant in ('alpha','beta'):\n  for i,text in enumerate(texts):\n   try:result=task.search(server.request,index,tenant,text)\n   except Exception as error:raise AssertionError('student actual literal query boundary failed') from error\n   assert result==[tenant+'-'+str(i)],'input became query syntax or tenant predicate omitted'\n assert task.search(server.request,index,'alpha','does-not-exist')==[] and docs(server,index)==bodies\n print('NATIVE_LITERAL_SPECIAL_SYNTAX_UNBALANCED_PARENTHESIS_CASE_AND_TENANT_MATCH_ONLY_EXACT_VALUE',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "elk"
+    ]
+  }
+]

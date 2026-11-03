@@ -1,0 +1,89 @@
+[
+  {
+    "id": "curated-feishu-project-002",
+    "module": "shell",
+    "category": "Shell",
+    "topic": "自动化设计与安全",
+    "level": 2,
+    "type": "code",
+    "title": "Shell归档日志清理：NUL预览、身份复核和互斥执行",
+    "body": "## 操作任务\n提交task.sh，执行 bash task.sh preview|apply 根目录 截止Unix秒 计划文件 互斥锁文件。根目录必须是非根目录的规范绝对路径且不是符号链接，计划及锁在根目录外。仅处理根目录第一层普通文件且名称以.log.gz结尾、修改时间严格早于截止秒；不得触碰活动日志、子目录或符号链接。preview生成NUL分隔计划，记录根目录、截止秒及每项路径和设备/ inode /修改秒/大小；apply获得相同非阻塞互斥锁并先完整复核所有条目，再删除清单内文件。身份改变或路径不符时在任何删除之前失败。锁已占用退出75；空目录安全。假设受控目录不存在恶意并发写入，此合同不证明检查与删除之间的对抗性竞态安全，也不配置真实cron。\n\n## 提交产物\ntask.sh\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n实际Bash、find、stat和flock在普通student临时目录中操作；覆盖空格及换行文件名、截止秒边界、活动日志、嵌套目录、符号链接、锁竞争和inode替换。仅本题自有归档目录，不触碰宿主日志、不安排系统定时任务，且不宣称防御恶意并发写者。无镜像构建。",
+    "answer": "```bash\n#!/usr/bin/env bash\nset -o pipefail\nif (( $# != 5 )); then exit 64; fi\nmode=$1; root=$2; cutoff=$3; manifest=$4; lock=$5\n[[ $mode == preview || $mode == apply ]] || exit 64\n[[ $root == /* && -d $root && ! -L $root && $cutoff =~ ^[0-9]+$ && $manifest == /* && $lock == /* && ! -L $manifest && ! -L $lock ]] || exit 64\ncanonical=$(realpath -e -- \"$root\") || exit 64\n[[ $root == \"$canonical\" && $root != / && $manifest != \"$root/\"* && $lock != \"$root/\"* && $manifest != \"$lock\" ]] || exit 64\nexec 9>\"$lock\" || exit 64\nflock -n 9 || exit 75\nif [[ $mode == preview ]]; then\n tmp=\"$manifest.tmp.$$\"; scan=\"$manifest.scan.$$\"\n (set -o noclobber; : > \"$tmp\" && : > \"$scan\") || exit 64\n trap 'rm -f -- \"$tmp\" \"$scan\"' EXIT\n find \"$root\" -mindepth 1 -maxdepth 1 -type f -name '*.log.gz' -print0 > \"$scan\" || exit 1\n printf '%s\\0%s\\0' \"$root\" \"$cutoff\" > \"$tmp\"\n while IFS= read -r -d '' path; do\n  info=$(stat -c '%d %i %Y %s' -- \"$path\") || exit 1\n  read -r dev ino modified size <<< \"$info\"\n  if (( modified < cutoff )); then printf '%s\\0%s\\0' \"$path\" \"$info\" >> \"$tmp\"; fi\n done < \"$scan\"\n mv -f -- \"$tmp\" \"$manifest\" || exit 1\n exit 0\nfi\n[[ -f $manifest && ! -L $manifest ]] || exit 64\nexec 8< \"$manifest\" || exit 64\nIFS= read -r -d '' saved_root <&8 || exit 64\nIFS= read -r -d '' saved_cutoff <&8 || exit 64\n[[ $saved_root == \"$root\" && $saved_cutoff == \"$cutoff\" ]] || exit 64\npaths=(); infos=(); declare -A seen=()\nwhile IFS= read -r -d '' path <&8; do\n IFS= read -r -d '' info <&8 || exit 64\n relative=${path#\"$root/\"}\n [[ $path == \"$root/\"* && $relative != */* && $relative == *.log.gz && -f $path && ! -L $path ]] || exit 64\n [[ ! ${seen[\"$path\"]+present} ]] || exit 64; seen[\"$path\"]=1\n now=$(stat -c '%d %i %Y %s' -- \"$path\") || exit 1\n [[ $now == \"$info\" ]] || exit 1\n read -r dev ino modified size <<< \"$now\"; (( modified < cutoff )) || exit 1\n paths+=(\"$path\");infos+=(\"$info\")\ndone\n[[ -z $path ]] || exit 64\nfor path in \"${paths[@]}\"; do rm -- \"$path\" || exit 1; done\n```\n\n原题知识说明：\n优先使用已有日志轮转工具管理活动文件；Shell 清理仅作用于明确的归档目录和文件模式。先确认绝对路径、挂载及目标类型，预览命中文件，再对同一范围执行清理；变量引用完整，文件名以空字符边界处理。明确按修改时间还是文件日期保留，find 的整日取整边界要实测。定时任务设置执行身份、PATH、互斥锁和结果日志，验收包含空目录、空格文件名与时间边界。",
+    "rubric": [
+      "活动和归档分开",
+      "预览范围",
+      "文件名安全",
+      "保留时间边界"
+    ],
+    "hints": [],
+    "references": [
+      "https://www.gnu.org/software/findutils/manual/html_node/find_html/Safe-File-Name-Handling.html",
+      "https://man7.org/linux/man-pages/man1/flock.1.html"
+    ],
+    "source": "飞书项目题知识点改编；回答框架不代表用户实际项目经历",
+    "source_block_id": "IXHOd8xxSoO2JAxyoXOc0n8FnDe",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "feishu-project-reviewed",
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/W8tBwAIvUiD0S8kXRyPc29tqnvg",
+        "block_ids": [
+          "IXHOd8xxSoO2JAxyoXOc0n8FnDe"
+        ]
+      }
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "bash",
+    "has_answer": true,
+    "conversion": {
+      "original_id": "curated-feishu-project-002",
+      "original_title": "为日志清理设计预览、保护和定时执行",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\necho NotImplementedError >&2\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "#!/usr/bin/env bash\nset -o pipefail\nif (( $# != 5 )); then exit 64; fi\nmode=$1; root=$2; cutoff=$3; manifest=$4; lock=$5\n[[ $mode == preview || $mode == apply ]] || exit 64\n[[ $root == /* && -d $root && ! -L $root && $cutoff =~ ^[0-9]+$ && $manifest == /* && $lock == /* && ! -L $manifest && ! -L $lock ]] || exit 64\ncanonical=$(realpath -e -- \"$root\") || exit 64\n[[ $root == \"$canonical\" && $root != / && $manifest != \"$root/\"* && $lock != \"$root/\"* && $manifest != \"$lock\" ]] || exit 64\nexec 9>\"$lock\" || exit 64\nflock -n 9 || exit 75\nif [[ $mode == preview ]]; then\n tmp=\"$manifest.tmp.$$\"; scan=\"$manifest.scan.$$\"\n (set -o noclobber; : > \"$tmp\" && : > \"$scan\") || exit 64\n trap 'rm -f -- \"$tmp\" \"$scan\"' EXIT\n find \"$root\" -mindepth 1 -maxdepth 1 -type f -name '*.log.gz' -print0 > \"$scan\" || exit 1\n printf '%s\\0%s\\0' \"$root\" \"$cutoff\" > \"$tmp\"\n while IFS= read -r -d '' path; do\n  info=$(stat -c '%d %i %Y %s' -- \"$path\") || exit 1\n  read -r dev ino modified size <<< \"$info\"\n  if (( modified < cutoff )); then printf '%s\\0%s\\0' \"$path\" \"$info\" >> \"$tmp\"; fi\n done < \"$scan\"\n mv -f -- \"$tmp\" \"$manifest\" || exit 1\n exit 0\nfi\n[[ -f $manifest && ! -L $manifest ]] || exit 64\nexec 8< \"$manifest\" || exit 64\nIFS= read -r -d '' saved_root <&8 || exit 64\nIFS= read -r -d '' saved_cutoff <&8 || exit 64\n[[ $saved_root == \"$root\" && $saved_cutoff == \"$cutoff\" ]] || exit 64\npaths=(); infos=(); declare -A seen=()\nwhile IFS= read -r -d '' path <&8; do\n IFS= read -r -d '' info <&8 || exit 64\n relative=${path#\"$root/\"}\n [[ $path == \"$root/\"* && $relative != */* && $relative == *.log.gz && -f $path && ! -L $path ]] || exit 64\n [[ ! ${seen[\"$path\"]+present} ]] || exit 64; seen[\"$path\"]=1\n now=$(stat -c '%d %i %Y %s' -- \"$path\") || exit 1\n [[ $now == \"$info\" ]] || exit 1\n read -r dev ino modified size <<< \"$now\"; (( modified < cutoff )) || exit 1\n paths+=(\"$path\");infos+=(\"$info\")\ndone\n[[ -z $path ]] || exit 64\nfor path in \"${paths[@]}\"; do rm -- \"$path\" || exit 1; done\n"
+    },
+    "negative_files": {
+      "task.sh": "#!/usr/bin/env bash\nset -o pipefail\nif (( $# != 5 )); then exit 64; fi\nmode=$1; root=$2; cutoff=$3; manifest=$4; lock=$5\n[[ $mode == preview || $mode == apply ]] || exit 64\n[[ $root == /* && -d $root && ! -L $root && $cutoff =~ ^[0-9]+$ && $manifest == /* && $lock == /* && ! -L $manifest && ! -L $lock ]] || exit 64\ncanonical=$(realpath -e -- \"$root\") || exit 64\n[[ $root == \"$canonical\" && $root != / && $manifest != \"$root/\"* && $lock != \"$root/\"* && $manifest != \"$lock\" ]] || exit 64\nexec 9>\"$lock\" || exit 64\nflock -n 9 || exit 75\nif [[ $mode == preview ]]; then\n tmp=\"$manifest.tmp.$$\"; scan=\"$manifest.scan.$$\"\n (set -o noclobber; : > \"$tmp\" && : > \"$scan\") || exit 64\n trap 'rm -f -- \"$tmp\" \"$scan\"' EXIT\n find \"$root\" -mindepth 1 -maxdepth 1 -type f -name '*.log.gz' -print0 > \"$scan\" || exit 1\n printf '%s\\0%s\\0' \"$root\" \"$cutoff\" > \"$tmp\"\n while IFS= read -r -d '' path; do\n  info=$(stat -c '%d %i %Y %s' -- \"$path\") || exit 1\n  read -r dev ino modified size <<< \"$info\"\n  if (( modified <= cutoff )); then printf '%s\\0%s\\0' \"$path\" \"$info\" >> \"$tmp\"; fi\n done < \"$scan\"\n mv -f -- \"$tmp\" \"$manifest\" || exit 1\n exit 0\nfi\n[[ -f $manifest && ! -L $manifest ]] || exit 64\nexec 8< \"$manifest\" || exit 64\nIFS= read -r -d '' saved_root <&8 || exit 64\nIFS= read -r -d '' saved_cutoff <&8 || exit 64\n[[ $saved_root == \"$root\" && $saved_cutoff == \"$cutoff\" ]] || exit 64\npaths=(); infos=(); declare -A seen=()\nwhile IFS= read -r -d '' path <&8; do\n IFS= read -r -d '' info <&8 || exit 64\n relative=${path#\"$root/\"}\n [[ $path == \"$root/\"* && $relative != */* && $relative == *.log.gz && -f $path && ! -L $path ]] || exit 64\n [[ ! ${seen[\"$path\"]+present} ]] || exit 64; seen[\"$path\"]=1\n now=$(stat -c '%d %i %Y %s' -- \"$path\") || exit 1\n [[ $now == \"$info\" ]] || exit 1\n read -r dev ino modified size <<< \"$now\"; (( modified <= cutoff )) || exit 1\n paths+=(\"$path\");infos+=(\"$info\")\ndone\n[[ -z $path ]] || exit 64\nfor path in \"${paths[@]}\"; do rm -- \"$path\" || exit 1; done\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "提交task.sh，执行 bash task.sh preview|apply 根目录 截止Unix秒 计划文件 互斥锁文件。根目录必须是非根目录的规范绝对路径且不是符号链接，计划及锁在根目录外。仅处理根目录第一层普通文件且名称以.log.gz结尾、修改时间严格早于截止秒；不得触碰活动日志、子目录或符号链接。preview生成NUL分隔计划，记录根目录、截止秒及每项路径和设备/ inode /修改秒/大小；apply获得相同非阻塞互斥锁并先完整复核所有条目，再删除清单内文件。身份改变或路径不符时在任何删除之前失败。锁已占用退出75；空目录安全。假设受控目录不存在恶意并发写入，此合同不证明检查与删除之间的对抗性竞态安全，也不配置真实cron。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "实际Bash、find、stat和flock在普通student临时目录中操作；覆盖空格及换行文件名、截止秒边界、活动日志、嵌套目录、符号链接、锁竞争和inode替换。仅本题自有归档目录，不触碰宿主日志、不安排系统定时任务，且不宣称防御恶意并发写者。无镜像构建。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "requires": {
+        "commands": [
+          "bash",
+          "find",
+          "stat",
+          "flock",
+          "realpath",
+          "rm",
+          "mv"
+        ],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import fcntl,os,pathlib,subprocess,sys,tempfile,time\nassert os.getuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED:preview_validate_and_apply_scoped_archive_cleanup',flush=True)\nwith tempfile.TemporaryDirectory(prefix='opsforge-log-clean-') as d:\n base=pathlib.Path(d);root=base/'archives';root.mkdir();nested=root/'nested';nested.mkdir();cutoff=1700000000;manifest=base/'plan.bin';lock=base/'lock'\n names=['old space.log.gz','line\\nbreak.log.gz','boundary.log.gz','new.log.gz','active.log','link.log.gz']\n for name in names[:-1]:(root/name).write_bytes(name.encode())\n (nested/'old.log.gz').write_text('nested');outside=base/'outside.log.gz';outside.write_text('protected');(root/'link.log.gz').symlink_to(outside)\n times={'old space.log.gz':cutoff-30,'line\\nbreak.log.gz':cutoff-1,'boundary.log.gz':cutoff,'new.log.gz':cutoff+1,'active.log':cutoff-60}\n for name,stamp in times.items():os.utime(root/name,(stamp,stamp))\n def run(mode,basepath=root):return subprocess.run(['bash','task.sh',mode,str(basepath),str(cutoff),str(manifest),str(lock)],capture_output=True,text=True,timeout=5)\n p=run('preview');assert p.returncode==0,(p.returncode,p.stderr)\n fields=manifest.read_bytes().split(b'\\0');assert fields[-1]==b'';paths=[os.fsdecode(x) for x in fields[2:-1:2]]\n assert set(paths)=={str(root/'old space.log.gz'),str(root/'line\\nbreak.log.gz')},paths\n plan=manifest.read_bytes();manifest.write_bytes(plan+b'junk');assert run('apply').returncode!=0 and all(pathlib.Path(x).exists() for x in paths)\n manifest.write_bytes(plan+fields[2]+b'\\0'+fields[3]+b'\\0');assert run('apply').returncode!=0 and all(pathlib.Path(x).exists() for x in paths)\n manifest.write_bytes(plan)\n with lock.open('w') as handle:\n  fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB);p=run('apply');assert p.returncode==75 and all(pathlib.Path(x).exists() for x in paths)\n old=root/'line\\nbreak.log.gz';old.unlink();old.write_text('replacement');os.utime(old,(cutoff-1,cutoff-1))\n p=run('apply');assert p.returncode!=0 and (root/'old space.log.gz').exists() and old.read_text()=='replacement','changed inode must prevent every deletion'\n assert run('preview').returncode==0;assert run('apply').returncode==0\n assert not old.exists() and not (root/'old space.log.gz').exists()\n for name in ['boundary.log.gz','new.log.gz','active.log','link.log.gz']:assert (root/name).exists()\n assert outside.read_text()=='protected' and (nested/'old.log.gz').exists()\n empty=base/'empty';empty.mkdir();assert run('preview',empty).returncode==0 and run('apply',empty).returncode==0\n print('NATIVE_SHELL_NUL_PREVIEW_INODE_REVALIDATION_LOCK_CUTOFF_AND_PROTECTED_PATHS',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "project"
+  }
+]

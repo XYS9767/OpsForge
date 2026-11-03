@@ -1,0 +1,88 @@
+[
+  {
+    "id": "curated-parallel-prometheus-004",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 1,
+    "topic": "PromQL查询与计算",
+    "title": "修复原始范围向量与图表查询的返回类型",
+    "answer": "```json\n{\n  \"raw_window\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}[2m]\"\n  },\n  \"graph\": {\n    \"expr\": \"avg_over_time(queue_depth{service=\\\"checkout\\\"}[2m])\"\n  }\n}\n```\n表达式类型和HTTP结果格式不是一回事：instant查询可以直接返回一段原始range vector；query_range是沿时间网格反复评估，每次表达式应返回instant vector或scalar，再由API组织成矩阵。avg_over_time把每个实例窗口内的原始样本归约成当前一个值，保留实例身份。\n\n原题原理：instant vector每个序列在一个评估时刻给出一个样本，range vector为每个序列提供选定窗口内一组样本。rate等函数处理range vector，不能任意把两种类型互换。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "instant vector每个序列在一个评估时刻给出一个样本，range vector为每个序列提供选定窗口内一组样本。",
+      "rate等函数处理range vector，不能任意把两种类型互换。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/basics/",
+      "https://prometheus.io/docs/prometheus/latest/querying/api/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "json",
+    "files": {
+      "queries.json": "{\n  \"raw_window\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}\"\n  },\n  \"graph\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}[2m]\"\n  }\n}\n",
+      "samples.json": "{\n  \"sample_interval_seconds\": 60,\n  \"start_offset\": 0,\n  \"end_offset\": 360,\n  \"service\": \"checkout\",\n  \"instances\": {\n    \"a\": [\n      2,\n      11,\n      4,\n      17,\n      6,\n      23,\n      8\n    ],\n    \"b\": [\n      20,\n      18,\n      16,\n      14,\n      12,\n      10,\n      8\n    ]\n  }\n}\n"
+    },
+    "solution_files": {
+      "queries.json": "{\n  \"raw_window\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}[2m]\"\n  },\n  \"graph\": {\n    \"expr\": \"avg_over_time(queue_depth{service=\\\"checkout\\\"}[2m])\"\n  }\n}\n"
+    },
+    "negative_files": {
+      "queries.json": "{\n  \"raw_window\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}[2m]\"\n  },\n  \"graph\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}[2m]\"\n  }\n}\n"
+    },
+    "body": "## 环境与初始材料\n平台提供原生Prometheus/promtool 3.5及Python/PyYAML，向临时TSDB导入samples.json的14条真实历史样本。checkout服务a/b实例每60秒采样一次，相对时间0至360秒。无需外部服务。\n\n## 操作任务\n修复queries.json中的两个expr。raw_window通过instant /api/v1/query在360秒返回最近2分钟的原始range vector，必须保留真实采样时间和值；该范围左开，只包含300/360秒。graph通过/api/v1/query_range在120/240/360秒分别返回每实例过去2分钟的样本均值，因此每次评估表达式应产生instant vector，不能把裸range vector送入图表端点。不能把两个实例混成一个，也不能把“过去2分钟”替换成“最近两次评估”。\n\n## 产物\n提交queries.json，恰有raw_window和graph，每项恰有expr字符串。具体URL、评估时间和step由可信验收器固定。\n\n## 验收方法\n执行python3 checks/check.py。真实instant endpoint的raw_window结果为matrix，每实例两点：a为300秒23、360秒8，b为10、8；真实range endpoint的graph结果每实例三点评估值，a为7.5/11.5/15.5，b为17/13/9。range endpoint拒绝裸range vector的HTTP422即是错误证据，不能把“响应也是matrix”误解为任意range vector表达式都可提交。只验证固定材料和接口类型，不测试生产查询性能。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-query-api",
+      "deliverables": [
+        "queries.json"
+      ],
+      "operation": "修复两个真实API所需的表达式类型和窗口归约",
+      "verification": "实际HTTP类型、时间戳、标签与数值验证",
+      "capability_gap": [
+        "14点固定样本，不验证规模性能。"
+      ],
+      "failure_examples": [
+        "query_range提交裸range vector会422",
+        "raw_window误用instant selector只返回最新一点"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "prometheus",
+          "promtool"
+        ],
+        "features": [
+          "prometheus:v3.5",
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1m'},'scrape_configs':[]}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\ncandidate=yaml.load(pathlib.Path('queries.json').read_text(encoding='utf-8'),Loader=Strict)\nassert set(candidate)=={'raw_window','graph'}\nfor q in candidate.values():assert set(q)=={'expr'} and isinstance(q['expr'],str) and 0<len(q['expr'])<1000\nfor cmd in ['prometheus','promtool']:assert shutil.which(cmd)\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-query-types-') as d:\n root=pathlib.Path(d);base=int(time.time())-86400;base-=base%7200\n values={'a':[2,11,4,17,6,23,8],'b':[20,18,16,14,12,10,8]}\n lines=['# TYPE queue_depth gauge']\n for instance,seq in values.items():\n  for n,value in enumerate(seq):lines.append('queue_depth{service=\"checkout\",instance=\"'+instance+'\"} '+str(value)+' '+str(base+60*n))\n lines.append('# EOF');(root/'source.om').write_bytes(('\\n'.join(lines)+'\\n').encode())\n try:\n  run_command(['promtool','tsdb','create-blocks-from','openmetrics',str(root/'source.om'),str(root/'source')],root)\n  with server(root,'source') as (url,api):\n   raw=api('/api/v1/query',{'query':candidate['raw_window']['expr'],'time':base+360})\n   assert raw['status']=='success' and raw['data']['resultType']=='matrix','raw_window must return a range vector through instant endpoint'\n   assert len(raw['data']['result'])==2\n   seen=set()\n   for row in raw['data']['result']:\n    instance=row['metric'].get('instance');assert instance in values and instance not in seen;seen.add(instance)\n    assert row['metric']=={'__name__':'queue_depth','service':'checkout','instance':instance}\n    assert [[int(t),float(v)] for t,v in row['values']]==[[base+300,values[instance][5]],[base+360,values[instance][6]]]\n   graph=api('/api/v1/query_range',{'query':candidate['graph']['expr'],'start':base+120,'end':base+360,'step':120})\n   assert graph['status']=='success' and graph['data']['resultType']=='matrix'\n   assert len(graph['data']['result'])==2;seen=set()\n   for row in graph['data']['result']:\n    instance=row['metric'].get('instance');assert instance in values and instance not in seen;seen.add(instance)\n    assert row['metric']=={'service':'checkout','instance':instance}\n    expected=[[base+n*60,(values[instance][n-1]+values[instance][n])/2] for n in [2,4,6]]\n    assert [[int(t),float(v)] for t,v in row['values']]==expected,'graph must be per-instance range reduction at each evaluation instant'\n finally:print('native lifecycle:',json.dumps(STATS))\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "promql_expression_type_vs_http_query_result_matrix_and_window_reduction",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-004",
+      "original_type": "interview",
+      "original_title": "instant vector与range vector有何区别？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

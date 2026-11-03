@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-istio-expansion-practice-001",
+    "module": "istio",
+    "category": "Istio",
+    "related_modules": [
+      "istio"
+    ],
+    "tags": [
+      "Istio",
+      "服务网格"
+    ],
+    "type": "code",
+    "language": "yaml",
+    "question_format": "practice",
+    "level": 3,
+    "version": 1,
+    "review_status": "reviewed",
+    "has_answer": true,
+    "source": "OpsForge-verified-gap-expansion",
+    "title": "Istio配置实操：交付90/10灰度路由并用真实istioctl本地分析核验子集关系",
+    "body": "## 操作任务\n仅修改routing.yaml：在mesh-training命名空间给reviews服务交付DestinationRule的v1/v2子集，分别映射version=v1/v2；VirtualService绑定完整服务域名reviews.mesh-training.svc.cluster.local，唯一HTTP规则approved-split只路由到端口80，v1权重90、v2权重10。保持base.yaml原样，不能增加其他路由、匹配条件、镜像或副作用。\n\n## 产物\nrouting.yaml；base.yaml为固定命名空间、Service和双版本工作负载素材。\n\n## 验收方法\n实际运行istioctl1.31.3 analyze --use-kube=false，随后核对批准权重、目标端口、子集标签和作用域。只在自有user/net namespace内做本地配置分析，显式空kubeconfig；不连接集群或产生业务流量。素材不安装，镜像名仅为本地资源模型字段，无构建或拉取。配置通过不等于生产灰度流量已按比例执行。",
+    "answer": "```yaml\n{\n  \"apiVersion\": \"networking.istio.io/v1\",\n  \"kind\": \"DestinationRule\",\n  \"metadata\": {\n    \"name\": \"reviews\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"host\": \"reviews.mesh-training.svc.cluster.local\",\n    \"subsets\": [\n      {\n        \"name\": \"v1\",\n        \"labels\": {\n          \"version\": \"v1\"\n        }\n      },\n      {\n        \"name\": \"v2\",\n        \"labels\": {\n          \"version\": \"v2\"\n        }\n      }\n    ]\n  }\n}\n---\n{\n  \"apiVersion\": \"networking.istio.io/v1\",\n  \"kind\": \"VirtualService\",\n  \"metadata\": {\n    \"name\": \"reviews\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"hosts\": [\n      \"reviews.mesh-training.svc.cluster.local\"\n    ],\n    \"http\": [\n      {\n        \"name\": \"approved-split\",\n        \"route\": [\n          {\n            \"destination\": {\n              \"host\": \"reviews.mesh-training.svc.cluster.local\",\n              \"subset\": \"v1\",\n              \"port\": {\n                \"number\": 80\n              }\n            },\n            \"weight\": 90\n          },\n          {\n            \"destination\": {\n              \"host\": \"reviews.mesh-training.svc.cluster.local\",\n              \"subset\": \"v2\",\n              \"port\": {\n                \"number\": 80\n              }\n            },\n            \"weight\": 10\n          }\n        ]\n      }\n    ]\n  }\n}\n```",
+    "explanation": "VirtualService选择流量分配，DestinationRule定义命名子集和工作负载标签。先以完整服务域名和明确命名空间消除解析歧义，再用真实分析器核对引用关系；批准权重还需独立核验，语法可通过的50/50不是题设要求的90/10。",
+    "rubric": [
+      "真实本地分析器通过，批准的90/10和v1/v2标签及端口一致；保持固定素材和作用域。"
+    ],
+    "review_note": "真实实操缺口绑定冻结空名额；五路原生与浏览器证据另存，新题号单列，不当旧题改编，不算原214项故障。",
+    "references": [
+      "https://istio.io/latest/docs/ops/diagnostic-tools/istioctl-analyze/",
+      "https://istio.io/latest/docs/reference/config/networking/virtual-service/",
+      "https://istio.io/latest/docs/reference/config/networking/destination-rule/"
+    ],
+    "files": {
+      "base.yaml": "{\n  \"apiVersion\": \"v1\",\n  \"kind\": \"Namespace\",\n  \"metadata\": {\n    \"name\": \"mesh-training\",\n    \"labels\": {\n      \"istio-injection\": \"enabled\"\n    }\n  }\n}\n---\n{\n  \"apiVersion\": \"v1\",\n  \"kind\": \"Service\",\n  \"metadata\": {\n    \"name\": \"reviews\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"selector\": {\n      \"app\": \"reviews\"\n    },\n    \"ports\": [\n      {\n        \"name\": \"http\",\n        \"port\": 80,\n        \"targetPort\": 8080\n      }\n    ]\n  }\n}\n---\n{\n  \"apiVersion\": \"apps/v1\",\n  \"kind\": \"Deployment\",\n  \"metadata\": {\n    \"name\": \"reviews-v1\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"replicas\": 0,\n    \"selector\": {\n      \"matchLabels\": {\n        \"app\": \"reviews\",\n        \"version\": \"v1\"\n      }\n    },\n    \"template\": {\n      \"metadata\": {\n        \"labels\": {\n          \"app\": \"reviews\",\n          \"version\": \"v1\"\n        }\n      },\n      \"spec\": {\n        \"containers\": [\n          {\n            \"name\": \"app\",\n            \"image\": \"example.invalid/unused:v1\",\n            \"ports\": [\n              {\n                \"containerPort\": 8080,\n                \"name\": \"http\"\n              }\n            ]\n          }\n        ]\n      }\n    }\n  }\n}\n---\n{\n  \"apiVersion\": \"apps/v1\",\n  \"kind\": \"Deployment\",\n  \"metadata\": {\n    \"name\": \"reviews-v2\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"replicas\": 0,\n    \"selector\": {\n      \"matchLabels\": {\n        \"app\": \"reviews\",\n        \"version\": \"v2\"\n      }\n    },\n    \"template\": {\n      \"metadata\": {\n        \"labels\": {\n          \"app\": \"reviews\",\n          \"version\": \"v2\"\n        }\n      },\n      \"spec\": {\n        \"containers\": [\n          {\n            \"name\": \"app\",\n            \"image\": \"example.invalid/unused:v2\",\n            \"ports\": [\n              {\n                \"containerPort\": 8080,\n                \"name\": \"http\"\n              }\n            ]\n          }\n        ]\n      }\n    }\n  }\n}\n",
+      "routing.yaml": "# IMPLEMENT_APPROVED_CANARY\n"
+    },
+    "solution_files": {
+      "routing.yaml": "{\n  \"apiVersion\": \"networking.istio.io/v1\",\n  \"kind\": \"DestinationRule\",\n  \"metadata\": {\n    \"name\": \"reviews\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"host\": \"reviews.mesh-training.svc.cluster.local\",\n    \"subsets\": [\n      {\n        \"name\": \"v1\",\n        \"labels\": {\n          \"version\": \"v1\"\n        }\n      },\n      {\n        \"name\": \"v2\",\n        \"labels\": {\n          \"version\": \"v2\"\n        }\n      }\n    ]\n  }\n}\n---\n{\n  \"apiVersion\": \"networking.istio.io/v1\",\n  \"kind\": \"VirtualService\",\n  \"metadata\": {\n    \"name\": \"reviews\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"hosts\": [\n      \"reviews.mesh-training.svc.cluster.local\"\n    ],\n    \"http\": [\n      {\n        \"name\": \"approved-split\",\n        \"route\": [\n          {\n            \"destination\": {\n              \"host\": \"reviews.mesh-training.svc.cluster.local\",\n              \"subset\": \"v1\",\n              \"port\": {\n                \"number\": 80\n              }\n            },\n            \"weight\": 90\n          },\n          {\n            \"destination\": {\n              \"host\": \"reviews.mesh-training.svc.cluster.local\",\n              \"subset\": \"v2\",\n              \"port\": {\n                \"number\": 80\n              }\n            },\n            \"weight\": 10\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    },
+    "negative_files": {
+      "routing.yaml": "{\n  \"apiVersion\": \"networking.istio.io/v1\",\n  \"kind\": \"DestinationRule\",\n  \"metadata\": {\n    \"name\": \"reviews\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"host\": \"reviews.mesh-training.svc.cluster.local\",\n    \"subsets\": [\n      {\n        \"name\": \"v1\",\n        \"labels\": {\n          \"version\": \"v1\"\n        }\n      },\n      {\n        \"name\": \"v2\",\n        \"labels\": {\n          \"version\": \"v2\"\n        }\n      }\n    ]\n  }\n}\n---\n{\n  \"apiVersion\": \"networking.istio.io/v1\",\n  \"kind\": \"VirtualService\",\n  \"metadata\": {\n    \"name\": \"reviews\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"hosts\": [\n      \"reviews.mesh-training.svc.cluster.local\"\n    ],\n    \"http\": [\n      {\n        \"name\": \"approved-split\",\n        \"route\": [\n          {\n            \"destination\": {\n              \"host\": \"reviews.mesh-training.svc.cluster.local\",\n              \"subset\": \"v1\",\n              \"port\": {\n                \"number\": 80\n              }\n            },\n            \"weight\": 50\n          },\n          {\n            \"destination\": {\n              \"host\": \"reviews.mesh-training.svc.cluster.local\",\n              \"subset\": \"v2\",\n              \"port\": {\n                \"number\": 80\n              }\n            },\n            \"weight\": 50\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "既有私有WSL普通student；istioctl1.31.3在自有user/net namespace中本地分析，显式空kubeconfig",
+      "operation": "交付批准的Istio路由和子集资源，用真实本地分析器核验，再核对业务权重合同。",
+      "deliverables": [
+        "routing.yaml"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "本地配置与引用关系实操；无集群安装、业务流量或运行时灰度验证，无镜像构建和拉取。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "istioctl",
+          "unshare"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import hashlib,json,os,pathlib,subprocess,tempfile,yaml\nassert os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nbase=pathlib.Path('base.yaml');routing=pathlib.Path('routing.yaml')\nassert hashlib.sha256(base.read_bytes()).hexdigest()=='174942024b34cb93a54a3b9808416cd695dab7a2d9ab8cfa9d224bba9d2db1f7','fixed namespace/service/workload material changed'\nraw=routing.read_text(encoding='utf8')\nif raw.strip()=='# IMPLEMENT_APPROVED_CANARY':raise NotImplementedError('complete the approved Istio configuration')\nprint('STUDENT_OPERATION_ENTERED:actual_istioctl_local_resource_analysis',flush=True)\nwith tempfile.TemporaryDirectory(prefix='of-istio-offline-') as directory:\n root=pathlib.Path(directory);config=root/'kubeconfig.json';config.write_text(json.dumps({'apiVersion':'v1','kind':'Config','clusters':[],'contexts':[],'users':[],'current-context':''}))\n env={**os.environ,'KUBECONFIG':str(config),'ISTIO_CONFIG_DIR':str(root/'config'),'GOMAXPROCS':'2','GOMEMLIMIT':'384MiB'}\n command=['unshare','-Urn','--','istioctl','analyze','--use-kube=false','--kubeconfig',str(config),'--namespace','mesh-training','--failure-threshold','Error',str(base.resolve()),str(routing.resolve())]\n result=subprocess.run(command,capture_output=True,text=True,env=env,timeout=20)\n print('ISTIOCTL_LOCAL_ANALYSIS_RETURN',result.returncode,flush=True)\n assert result.returncode==0,result.stdout+result.stderr\ndocs=list(yaml.safe_load_all(raw));assert len(docs)==2 and {d['kind'] for d in docs}=={'DestinationRule','VirtualService'}\nfor d in docs:assert d['apiVersion']=='networking.istio.io/v1' and d['metadata']=={'name':'reviews','namespace':'mesh-training'}\ndr=next(d for d in docs if d['kind']=='DestinationRule');vs=next(d for d in docs if d['kind']=='VirtualService')\nhost='reviews.mesh-training.svc.cluster.local';assert set(dr['spec'])=={'host','subsets'} and dr['spec']['host']==host\nassert dr['spec']['subsets']==[{'name':'v1','labels':{'version':'v1'}},{'name':'v2','labels':{'version':'v2'}}]\nassert set(vs['spec'])=={'hosts','http'} and vs['spec']['hosts']==[host] and len(vs['spec']['http'])==1\nrule=vs['spec']['http'][0];assert set(rule)=={'name','route'} and rule['name']=='approved-split' and len(rule['route'])==2\nroutes=rule['route'];assert all(type(r.get('weight')) is int for r in routes) and sum(r['weight'] for r in routes)==100\nassert routes==[{'destination':{'host':host,'subset':'v1','port':{'number':80}},'weight':90},{'destination':{'host':host,'subset':'v2','port':{'number':80}},'weight':10}],'approved split must be stable90/canary10, without extra destinations or side effects'\nassert hashlib.sha256(base.read_bytes()).hexdigest()=='174942024b34cb93a54a3b9808416cd695dab7a2d9ab8cfa9d224bba9d2db1f7'\nprint('NATIVE_ISTIOCTL_REAL_LOCAL_ANALYZER_APPROVED_90_10_SPLIT_SUBSET_LABELS_FQDN_AND_NAMESPACE_NO_CLUSTER_NETWORK',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-advanced-network-008",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 4,
+    "topic": "TCP、UDP与连接",
+    "title": "真实Nagle与延迟ACK交互：只对当前请求启用NODELAY，异常后恢复原套接字设置",
+    "answer": "```python\nimport socket\ndef send_request(sock,parts):\n    previous=sock.getsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY)\n    total=0\n    try:\n        sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)\n        for part in parts:\n            if not isinstance(part,bytes) or not part: raise ValueError(\"nonempty byte fragments required\")\n            if total+len(part)>65536: raise ValueError(\"request budget exceeded\")\n            sock.sendall(part)\n            total+=len(part)\n        if not total: raise ValueError(\"empty request\")\n        return total\n    finally:\n        sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,previous)\n```\n\n原题知识说明：\n先抓取双方报文时间与应用write顺序，确认是否第二段小数据等待未确认数据而对端又延迟确认，形成等待链。还需排除应用批处理、TLS缓冲及调度暂停，不能仅凭延迟接近某个常见数值下结论。可由应用合并完整消息，或在适合低延迟语义的套接字上评估TCP_NODELAY，权衡小包率与CPU。验收正常及慢网络条件下的消息延迟、包量与吞吐，不应全机关闭算法。恢复配置只影响后续套接字时，还需明确连接重建范围。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man7/tcp.7.html"
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-network-008",
+      "original_title": "小型请求响应协议只在每次发送分成两个小write时出现固定延迟，怎样分析Nagle与延迟ACK的交互？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现send_request(sock,parts)，sock是调用者拥有的已连接TCP套接字，parts是按序产生的非空bytes片段迭代器：后续片段可能等待服务端消费首片段，因此禁止先耗尽迭代器再合并。仅在本次发送期间启用该套接字TCP_NODELAY，将片段依次sendall并返回实际发送字节总数；总预算65536字节，空序列/空片段/非bytes/超预算抛ValueError，不发送当前无效片段。成功、生成器异常或发送异常均恢复原TCP_NODELAY，不关闭套接字、不改KEEPALIVE/缓冲区或宿主参数，异常不得被当成成功。此前已发送的前缀无法撤回，调用方需按协议丢弃不完整请求，不能将TCP写入当事务。验收真实Nagle+延迟ACK约40毫秒等待、仅改NODELAY和仅改QUICKACK两组控制，再验收学员函数在带NUL的流式片段下恢复低延迟及原设置。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Linux回环TCP，使用自身socket的TCP_QUICKACK=0控制接收端延迟ACK，TCP_INFO实际观测首段尚未确认；与NODELAY=1和QUICKACK=1独立控制比较中位数和真实完整字节，不用sleep伪造网络延迟。QUICKACK是非永久的Linux提示，内核不呈现因果特征时该环境待验证，不能套用固定延迟判生产故障。不修改sysctl/防火墙/默认网络，不要求抓包特权，不构建镜像；不声称NODELAY永远提高吞吐，整报文已知时可以合并写入，但本题是流式依赖。套接字须由调用者独占，未覆盖共享socket并发配置恢复。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import socket\ndef send_request(sock,parts):\n    previous=sock.getsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY)\n    total=0\n    try:\n        sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)\n        for part in parts:\n            if not isinstance(part,bytes) or not part: raise ValueError(\"nonempty byte fragments required\")\n            if total+len(part)>65536: raise ValueError(\"request budget exceeded\")\n            sock.sendall(part)\n            total+=len(part)\n        if not total: raise ValueError(\"empty request\")\n        return total\n    finally:\n        sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,previous)\n"
+    },
+    "negative_files": {
+      "task.py": "import socket\ndef send_request(sock,parts):\n    previous=sock.getsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY)\n    total=0\n    try:\n        sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,0)\n        for part in parts:\n            if not isinstance(part,bytes) or not part: raise ValueError(\"nonempty byte fragments required\")\n            if total+len(part)>65536: raise ValueError(\"request budget exceeded\")\n            sock.sendall(part)\n            total+=len(part)\n        if not total: raise ValueError(\"empty request\")\n        return total\n    finally:\n        sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,previous)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现send_request(sock,parts)，sock是调用者拥有的已连接TCP套接字，parts是按序产生的非空bytes片段迭代器：后续片段可能等待服务端消费首片段，因此禁止先耗尽迭代器再合并。仅在本次发送期间启用该套接字TCP_NODELAY，将片段依次sendall并返回实际发送字节总数；总预算65536字节，空序列/空片段/非bytes/超预算抛ValueError，不发送当前无效片段。成功、生成器异常或发送异常均恢复原TCP_NODELAY，不关闭套接字、不改KEEPALIVE/缓冲区或宿主参数，异常不得被当成成功。此前已发送的前缀无法撤回，调用方需按协议丢弃不完整请求，不能将TCP写入当事务。验收真实Nagle+延迟ACK约40毫秒等待、仅改NODELAY和仅改QUICKACK两组控制，再验收学员函数在带NUL的流式片段下恢复低延迟及原设置。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Linux回环TCP，使用自身socket的TCP_QUICKACK=0控制接收端延迟ACK，TCP_INFO实际观测首段尚未确认；与NODELAY=1和QUICKACK=1独立控制比较中位数和真实完整字节，不用sleep伪造网络延迟。QUICKACK是非永久的Linux提示，内核不呈现因果特征时该环境待验证，不能套用固定延迟判生产故障。不修改sysctl/防火墙/默认网络，不要求抓包特权，不构建镜像；不声称NODELAY永远提高吞吐，整报文已知时可以合并写入，但本题是流式依赖。套接字须由调用者独占，未覆盖共享socket并发配置恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/nagle_fixture.py": "\"\"\"Controlled Linux loopback sockets; no sysctls, packet injection, or host networking changes.\"\"\"\nimport json,socket,struct,threading,time\n\ndef trial(nodelay=0,quickack=0):\n    ready=threading.Event();first=threading.Event();out={};errors=[]\n    listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(1)\n    def serve():\n        try:\n            with listener.accept()[0] as peer:\n                peer.settimeout(2);peer.setsockopt(socket.IPPROTO_TCP,socket.TCP_QUICKACK,quickack);ready.set()\n                head=peer.recv(1);assert head==b'A'\n                out['prefix_received_ns']=time.monotonic_ns();first.set()\n                tail=b''\n                while len(tail)<3:tail+=peer.recv(3-len(tail))\n                out['body']=head+tail;out['tail_received_ns']=time.monotonic_ns()\n                peer.sendall(b'OK')\n        except BaseException as exc:errors.append(repr(exc));ready.set();first.set()\n    thread=threading.Thread(target=serve);thread.start()\n    try:\n        with socket.create_connection(listener.getsockname(),timeout=2) as client:\n            client.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,nodelay)\n            assert ready.wait(2)\n            client.sendall(b'A');assert first.wait(2)\n            out['unacked_before_tail']=struct.unpack_from('I',client.getsockopt(socket.IPPROTO_TCP,socket.TCP_INFO,104),24)[0]\n            out['tail_sent_ns']=time.monotonic_ns();client.sendall(b'BCD')\n            out['reply']=client.recv(2);out['reply_received_ns']=time.monotonic_ns()\n    finally:\n        listener.close();thread.join(3)\n    assert not thread.is_alive() and not errors,errors\n    out['tail_delay_ms']=(out['tail_received_ns']-out['tail_sent_ns'])/1e6\n    out['body']=out['body'].decode();out['reply']=out['reply'].decode()\n    return out\n\nif __name__=='__main__':\n    print(json.dumps({mode:[trial(*settings) for _ in range(5)] for mode,settings in\n        [('nagle_delayed',(0,0)),('nodelay_delayed',(1,0)),('nagle_quick',(0,1))]}))\n",
+        "checks/check.py": "import json,pathlib,socket,statistics,struct,sys,threading,time\nsys.path.insert(0,str(pathlib.Path(\"checks\").resolve()))\nfrom nagle_fixture import trial\nprint(\"NATIVE_LINUX_READY\",flush=True)\nimport task\nprint(\"STUDENT_OPERATION_ENTERED: per-socket Nagle mitigation and option restoration\",flush=True)\ncontrols={mode:[trial(*settings) for _ in range(3)] for mode,settings in\n [(\"nagle_delayed\",(0,0)),(\"nodelay_delayed\",(1,0)),(\"nagle_quick\",(0,1))]}\nslow=controls[\"nagle_delayed\"];fast=controls[\"nodelay_delayed\"]+controls[\"nagle_quick\"]\nassert all(row[\"body\"]==\"ABCD\" and row[\"reply\"]==\"OK\" for rows in controls.values() for row in rows)\nassert all(row[\"unacked_before_tail\"]==1 for row in slow)\nassert statistics.median(row[\"tail_delay_ms\"] for row in slow)>20\nassert statistics.median(row[\"tail_delay_ms\"] for row in fast)<15\nassert statistics.median(row[\"tail_delay_ms\"] for row in slow)>5*max(.01,statistics.median(row[\"tail_delay_ms\"] for row in fast))\nprint(\"NATIVE_NAGLE_DELAYED_ACK_ACTUAL_UNACKED_SEGMENT_AND_TWO_CAUSAL_SOCKET_CONTROLS \"+json.dumps(controls),flush=True)\ndef checked(previous=0,error=False):\n listener=socket.socket();listener.bind((\"127.0.0.1\",0));listener.listen(1)\n ready=threading.Event();first=threading.Event();out={};errors=[]\n def serve():\n  try:\n   with listener.accept()[0] as peer:\n    peer.settimeout(2);peer.setsockopt(socket.IPPROTO_TCP,socket.TCP_QUICKACK,0);ready.set()\n    assert peer.recv(1)==b\"A\"\n    first.set()\n    if error:\n     while peer.recv(1024):pass\n    else:\n     body=b\"\"\n     while len(body)<4:\n      part=peer.recv(4-len(body));assert part;body+=part\n     out[\"body\"]=body;out[\"tail_received_ns\"]=time.monotonic_ns();peer.sendall(b\"OK\")\n  except BaseException as exc:errors.append(repr(exc));ready.set();first.set()\n thread=threading.Thread(target=serve);thread.start()\n try:\n  with socket.create_connection(listener.getsockname(),timeout=2) as client:\n   assert ready.wait(2);client.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,previous)\n   unchanged={option:client.getsockopt(socket.SOL_SOCKET,option) for option in [socket.SO_KEEPALIVE,socket.SO_SNDBUF,socket.SO_RCVBUF]}\n   def fragments():\n    yield b\"A\"\n    assert first.wait(2),\"streaming source waits for first fragment consumption\"\n    out[\"unacked_before_tail\"]=struct.unpack_from(\"I\",client.getsockopt(socket.IPPROTO_TCP,socket.TCP_INFO,104),24)[0]\n    if error:raise OSError(\"controlled producer failure after prefix\")\n    out[\"tail_sent_ns\"]=time.monotonic_ns()\n    yield b\"B\\x00CD\"\n   if error:\n    try:task.send_request(client,fragments())\n    except OSError as exc:assert str(exc)==\"controlled producer failure after prefix\"\n    else:raise AssertionError(\"source failure reported as success\")\n   else:\n    assert task.send_request(client,fragments())==5\n    assert client.recv(2)==b\"OK\"\n    out[\"delay_ms\"]=(out[\"tail_received_ns\"]-out[\"tail_sent_ns\"])/1e6\n    assert out[\"body\"]==b\"B\\x00CD\" and out[\"unacked_before_tail\"]==1\n   assert client.getsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY)==previous,\"original per-socket setting was not restored\"\n   assert unchanged=={option:client.getsockopt(socket.SOL_SOCKET,option) for option in unchanged}\n   assert client.fileno()>=0\n finally:\n  listener.close();thread.join(3)\n assert not thread.is_alive() and not errors,errors\n return {key:value for key,value in out.items() if key!=\"body\"}\nrows=[checked() for _ in range(3)]\nassert statistics.median(row[\"delay_ms\"] for row in rows)<15\nchecked(1);checked(0,True);checked(1,True)\nwith socket.socket() as client:\n client.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,0)\n for parts in [[],[\"text\"],[b\"\"],[b\"x\"*65537]]:\n  try:task.send_request(client,iter(parts))\n  except ValueError:pass\n  else:raise AssertionError(\"invalid input accepted\")\n  assert client.getsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY)==0\nprint(\"NATIVE_STUDENT_STREAMING_BINARY_REQUEST_LOW_LATENCY_ORIGINAL_OPTION_RESTORED_ON_SUCCESS_AND_SOURCE_FAILURE \"+json.dumps(rows),flush=True)\nprint(\"NATIVE_SEMANTIC_ASSERTIONS_PASSED\",flush=True)\n"
+      }
+    },
+    "question_format": "practice"
+  }
+]

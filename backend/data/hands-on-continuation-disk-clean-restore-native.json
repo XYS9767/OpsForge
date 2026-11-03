@@ -1,0 +1,72 @@
+[
+  {
+    "id": "curated-advanced-disk-017",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "level": 5,
+    "topic": "备份迁移与存储恢复",
+    "title": "误改后的干净恢复点：拒绝最新自证清单，保留合法后续增量",
+    "answer": "```python\nimport hashlib,pathlib,re,shutil\ndef recover(candidates,approved,live,approved_delta,target):\n    live=pathlib.Path(live);target=pathlib.Path(target)\n    if target.exists():raise FileExistsError(target)\n    def digest(root,name):\n        if not isinstance(name,str) or re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*[.]json',name) is None:raise ValueError('explicit top-level JSON file required')\n        file=pathlib.Path(root)/name\n        if not file.is_file() or file.is_symlink():raise ValueError('regular immutable input required')\n        return hashlib.sha256(file.read_bytes()).hexdigest()\n    if not candidates or len({c['id'] for c in candidates})!=len(candidates):raise ValueError('unique candidates required')\n    for name,sha in approved_delta.items():\n        if digest(live,name)!=sha:raise ValueError('approved live delta changed')\n    selected=None\n    for candidate in sorted(candidates,key=lambda c:c['time'],reverse=True):\n        manifest=approved.get(candidate['id'])\n        if not manifest:continue\n        try:valid=all(digest(candidate['path'],name)==sha for name,sha in manifest.items())\n        except ValueError:valid=False\n        if valid:selected=(candidate,manifest);break\n    if selected is None:raise ValueError('no approved intact recovery point')\n    candidate,manifest=selected\n    conflicts=sorted(name for name,sha in approved_delta.items() if name in manifest and sha!=manifest[name])\n    added=sorted(set(approved_delta)-set(manifest))\n    target.mkdir();baseline=target/'baseline';pending=target/'pending-delta';baseline.mkdir();pending.mkdir()\n    for name in manifest:shutil.copy2(pathlib.Path(candidate['path'])/name,baseline/name)\n    for name in approved_delta:shutil.copy2(live/name,pending/name)\n    return {'selected':candidate['id'],'conflicts':conflicts,'added':added}\n```\n\n原题知识说明：\n交付受影响时间线、可信恢复点、隔离目标与差异报告。把当前卷保持证据状态，在独立只读副本检查文件摘要、目录元数据和应用引用，不能把最新备份必然视为干净。根据业务允许恢复点选择版本并单独处理之后合法新增数据，合并前记录冲突。验收抽样与关键全量校验、权限和业务读路径，确认恢复环境不会重新执行可疑内容。切换前冻结写入并保存新旧映射；发现恢复点也受污染时停止切换。回退服务入口不能撤销用户在新卷产生的写入，需有明确增量保留方案。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "给出题设要求的具体交付物与关键机制",
+      "用可观察结果验证约束和失败分支",
+      "明确停止条件及回退或恢复边界"
+    ],
+    "references": [
+      "https://docs.python.org/3/library/shutil.html#shutil.copy2"
+    ],
+    "body": "## 操作任务\n实现recover(candidates,approved,live,approved_delta,target)。candidates为唯一id/time/path/manifest的有限恢复点目录列表，time越大越新；候选自带manifest不构成干净批准。approved为外部已确认干净点id→{文件名:SHA256}，选择其中最新且所有批准文件内容仍匹配的点，跳过已变更批准点；没有可用点ValueError且不得创建target。仅允许显式顶层[A-Za-z][A-Za-z0-9_-]*.json普通非符号链接文件。approved_delta是外部批准保留的live文件名→SHA256，须先验证匹配，否则拒绝。全新target/baseline只复制选定批准文件；target/pending-delta另存全部批准后续变更，不得自动并入干净基线。返回selected、conflicts（与基线同名但摘要不同）、added（基线中没有）排序列表。保留live/全部候选和输入对象，已有target拒绝覆盖。验收含最新自证但未批准点、较新批准后被篡改点、两个干净历史点、合法冲突修改和新增订单，独立业务读校验与候选只读权限；不执行候选脚本。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n自有真实目录、只读证据文件、实际复制与跨文件业务引用校验；干净批准由题设外部清单提供，不声称摘要能自动证明无污染。恢复产物为隔离副本和待审增量，未切生产入口、执行可疑内容或自动解决合并冲突，不证明真实存储故障、反恶意软件判断或任意元数据迁移。",
+    "related_modules": [
+      "disk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-disk-017",
+      "original_title": "设计文件服务器遭误改后的只读恢复副本交付，要求先验证干净数据再决定切换。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import hashlib,pathlib,re,shutil\ndef recover(candidates,approved,live,approved_delta,target):\n    live=pathlib.Path(live);target=pathlib.Path(target)\n    if target.exists():raise FileExistsError(target)\n    def digest(root,name):\n        if not isinstance(name,str) or re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*[.]json',name) is None:raise ValueError('explicit top-level JSON file required')\n        file=pathlib.Path(root)/name\n        if not file.is_file() or file.is_symlink():raise ValueError('regular immutable input required')\n        return hashlib.sha256(file.read_bytes()).hexdigest()\n    if not candidates or len({c['id'] for c in candidates})!=len(candidates):raise ValueError('unique candidates required')\n    for name,sha in approved_delta.items():\n        if digest(live,name)!=sha:raise ValueError('approved live delta changed')\n    selected=None\n    for candidate in sorted(candidates,key=lambda c:c['time'],reverse=True):\n        manifest=approved.get(candidate['id'])\n        if not manifest:continue\n        try:valid=all(digest(candidate['path'],name)==sha for name,sha in manifest.items())\n        except ValueError:valid=False\n        if valid:selected=(candidate,manifest);break\n    if selected is None:raise ValueError('no approved intact recovery point')\n    candidate,manifest=selected\n    conflicts=sorted(name for name,sha in approved_delta.items() if name in manifest and sha!=manifest[name])\n    added=sorted(set(approved_delta)-set(manifest))\n    target.mkdir();baseline=target/'baseline';pending=target/'pending-delta';baseline.mkdir();pending.mkdir()\n    for name in manifest:shutil.copy2(pathlib.Path(candidate['path'])/name,baseline/name)\n    for name in approved_delta:shutil.copy2(live/name,pending/name)\n    return {'selected':candidate['id'],'conflicts':conflicts,'added':added}\n"
+    },
+    "negative_files": {
+      "task.py": "import hashlib,pathlib,re,shutil\ndef recover(candidates,approved,live,approved_delta,target):\n    live=pathlib.Path(live);target=pathlib.Path(target)\n    if target.exists():raise FileExistsError(target)\n    def digest(root,name):\n        if not isinstance(name,str) or re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*[.]json',name) is None:raise ValueError('explicit top-level JSON file required')\n        file=pathlib.Path(root)/name\n        if not file.is_file() or file.is_symlink():raise ValueError('regular immutable input required')\n        return hashlib.sha256(file.read_bytes()).hexdigest()\n    if not candidates or len({c['id'] for c in candidates})!=len(candidates):raise ValueError('unique candidates required')\n    for name,sha in approved_delta.items():\n        if digest(live,name)!=sha:raise ValueError('approved live delta changed')\n    selected=None\n    for candidate in sorted(candidates,key=lambda c:c['time'],reverse=True):\n        manifest=candidate['manifest']\n        if not manifest:continue\n        try:valid=all(digest(candidate['path'],name)==sha for name,sha in manifest.items())\n        except ValueError:valid=False\n        if valid:selected=(candidate,manifest);break\n    if selected is None:raise ValueError('no approved intact recovery point')\n    candidate,manifest=selected\n    conflicts=sorted(name for name,sha in approved_delta.items() if name in manifest and sha!=manifest[name])\n    added=sorted(set(approved_delta)-set(manifest))\n    target.mkdir();baseline=target/'baseline';pending=target/'pending-delta';baseline.mkdir();pending.mkdir()\n    for name in manifest:shutil.copy2(pathlib.Path(candidate['path'])/name,baseline/name)\n    for name in approved_delta:shutil.copy2(live/name,pending/name)\n    return {'selected':candidate['id'],'conflicts':conflicts,'added':added}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现recover(candidates,approved,live,approved_delta,target)。candidates为唯一id/time/path/manifest的有限恢复点目录列表，time越大越新；候选自带manifest不构成干净批准。approved为外部已确认干净点id→{文件名:SHA256}，选择其中最新且所有批准文件内容仍匹配的点，跳过已变更批准点；没有可用点ValueError且不得创建target。仅允许显式顶层[A-Za-z][A-Za-z0-9_-]*.json普通非符号链接文件。approved_delta是外部批准保留的live文件名→SHA256，须先验证匹配，否则拒绝。全新target/baseline只复制选定批准文件；target/pending-delta另存全部批准后续变更，不得自动并入干净基线。返回selected、conflicts（与基线同名但摘要不同）、added（基线中没有）排序列表。保留live/全部候选和输入对象，已有target拒绝覆盖。验收含最新自证但未批准点、较新批准后被篡改点、两个干净历史点、合法冲突修改和新增订单，独立业务读校验与候选只读权限；不执行候选脚本。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "自有真实目录、只读证据文件、实际复制与跨文件业务引用校验；干净批准由题设外部清单提供，不声称摘要能自动证明无污染。恢复产物为隔离副本和待审增量，未切生产入口、执行可疑内容或自动解决合并冲突，不证明真实存储故障、反恶意软件判断或任意元数据迁移。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import copy,hashlib,json,os,pathlib,secrets,sys,tempfile\nsys.path.insert(0,os.getcwd());assert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nimport task\nsha=lambda raw:hashlib.sha256(raw).hexdigest()\nwith tempfile.TemporaryDirectory(dir='/workspace') as directory:\n root=pathlib.Path(directory);live=root/'live';live.mkdir();candidates=[];approved={}\n value=secrets.token_hex(12)\n for generation in (1,2,3,4):\n  path=root/('point-'+str(generation));path.mkdir()\n  items=json.dumps({'generation':generation,'value':value if generation<=2 else 'untrusted-rewrite'},sort_keys=True).encode()\n  index=json.dumps({'generation':generation,'items_sha256':sha(items)},sort_keys=True).encode()\n  (path/'items.json').write_bytes(items);(path/'index.json').write_bytes(index)\n  # A script is inert evidence, never a restore deliverable or something to execute.\n  (path/'startup.sh').write_text('untrusted evidence only')\n  manifest={'items.json':sha(items),'index.json':sha(index)}\n  candidates.append({'id':'point-'+str(generation),'time':generation,'path':str(path),'manifest':manifest})\n  if generation in (1,2,4):approved['point-'+str(generation)]=copy.deepcopy(manifest)\n  if generation==4:(path/'items.json').write_bytes(b'altered-after-approved-manifest')\n  for file in path.iterdir():os.chmod(file,0o444)\n  os.chmod(path,0o555)\n baseline_items=(root/'point-2/items.json').read_bytes()\n (live/'items.json').write_text(json.dumps({'generation':9,'value':'legitimate-approved-later-edit'}))\n (live/'orders.json').write_text(json.dumps({'new_order':secrets.token_hex(8)}))\n (live/'unapproved.json').write_text('do not merge this')\n delta={name:sha((live/name).read_bytes()) for name in ('items.json','orders.json')}\n before={str(file.relative_to(root)):sha(file.read_bytes()) for file in root.rglob('*') if file.is_file()}\n inputs=copy.deepcopy([candidates,approved,delta]);target=root/'recovery'\n try:\n  print('STUDENT_OPERATION_ENTERED:approved_clean_point_not_latest_self_manifest_and_retain_post_point_delta',flush=True)\n  result=task.recover(candidates,approved,live,delta,target)\n  assert result=={'selected':'point-2','conflicts':['items.json'],'added':['orders.json']},'newest intact explicitly approved clean point was not chosen'\n  assert [candidates,approved,delta]==inputs\n  restored=target/'baseline';pending=target/'pending-delta'\n  assert set(p.name for p in restored.iterdir())=={'items.json','index.json'}\n  assert set(p.name for p in pending.iterdir())==set(delta),'legitimate post-point changes lost'\n  for name,digest in delta.items():assert sha((pending/name).read_bytes())==digest\n  assert (restored/'items.json').read_bytes()==baseline_items\n  actual=json.loads((restored/'items.json').read_bytes());index=json.loads((restored/'index.json').read_bytes())\n  assert actual['generation']==index['generation']==2 and actual['value']==value and index['items_sha256']==sha(baseline_items)\n  assert (restored/'items.json').read_bytes()!=(pending/'items.json').read_bytes(),'conflicting delta silently merged into clean baseline'\n  assert not any(p.name=='startup.sh' for p in target.rglob('*'))\n  after={str(file.relative_to(root)):sha(file.read_bytes()) for file in root.rglob('*') if file.is_file() and not file.is_relative_to(target)}\n  assert before==after,'live data or recovery evidence changed'\n  for bad_approved,bad_delta in ({},delta),(approved,{'orders.json':'0'*64}):\n   refused=root/('refused-'+secrets.token_hex(3))\n   try:task.recover(candidates,bad_approved,live,bad_delta,refused)\n   except ValueError:pass\n   else:raise AssertionError('missing clean approval or changed delta accepted')\n   assert not refused.exists()\n  try:task.recover(candidates,approved,live,delta,target)\n  except FileExistsError:pass\n  else:raise AssertionError('existing recovery overwritten')\n  print('NATIVE_READONLY_POINTS_CLEAN_BUSINESS_READ_AND_SEPARATE_CONFLICTING_DELTA',flush=True)\n finally:\n  for candidate in candidates:os.chmod(candidate['path'],0o755)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "project"
+  }
+]

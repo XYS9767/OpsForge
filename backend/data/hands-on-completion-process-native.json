@@ -1,0 +1,858 @@
+[
+  {
+    "id": "src-2bcfb0fdcc186d52",
+    "title": "Linux fork/exec/waitpid：执行、信号退出与可靠回收",
+    "answer": "```python\nimport os\n\ndef run_child(argv):\n    if not isinstance(argv,list) or not argv or any(not isinstance(item,str) or not item for item in argv):raise ValueError('argv')\n    pid=os.fork()\n    if pid==0:\n        try:os.execvp(argv[0],argv)\n        except OSError:os._exit(127)\n    while True:\n        try:_,status=os.waitpid(pid,0);break\n        except InterruptedError:continue\n    return {'pid':pid,'exit_code':os.WEXITSTATUS(status) if os.WIFEXITED(status) else None,\n            'signal':os.WTERMSIG(status) if os.WIFSIGNALED(status) else None}\n```\n\n原题参考要点：\n典型进程创建由 fork/clone 建立子任务，子任务可通过 execve 替换程序映像，父进程使用 wait 回收退出状态；内存常使用写时复制。线程创建也利用内核任务机制但共享更多资源。exec 本身不是新建一个额外 PID。",
+    "category": "进程与服务",
+    "difficulty": "进阶",
+    "section": "高级",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "original_category": "Linux",
+    "original_title": "你能描述流程的创建方式吗?",
+    "module": "process",
+    "topic": "进程线程与生命周期",
+    "level": 1,
+    "body": "## 环境与初始材料\nLinux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。\n\n## 操作任务\n实现 run_child(argv)，argv 为非空 list[str]，非法值 ValueError。用 os.fork 创建直接子进程、os.execvp 替换为 argv 程序、os.waitpid 回收；不得使用 shell、subprocess 或模拟状态。返回 {'pid':子PID,'exit_code':正常退出码或None,'signal':终止信号或None}。exec OSError 时子进程必须 os._exit(127)，父进程继续回收；waitpid 被 InterruptedError 打断须重试。等待必须仅针对自己刚创建的子进程，不回收其他子进程。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-e588e6473fd514c9",
+        "title": "您能描述一下如何创建进程吗？",
+        "category": "Linux",
+        "source": "topics/linux/README.md",
+        "sources": [
+          "topics/linux/README.md"
+        ]
+      }
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\n\ndef run_child(argv):\n    if not isinstance(argv,list) or not argv or any(not isinstance(item,str) or not item for item in argv):raise ValueError('argv')\n    pid=os.fork()\n    if pid==0:\n        try:os.execvp(argv[0],argv)\n        except OSError:os._exit(127)\n    while True:\n        try:_,status=os.waitpid(pid,0);break\n        except InterruptedError:continue\n    return {'pid':pid,'exit_code':os.WEXITSTATUS(status) if os.WIFEXITED(status) else None,\n            'signal':os.WTERMSIG(status) if os.WIFSIGNALED(status) else None}\n"
+    },
+    "negative_files": {
+      "task.py": "import os\ndef run_child(argv):\n    pid=os.fork()\n    if pid==0:\n        try:os.execvp(argv[0],argv)\n        except OSError:os._exit(127)\n    _,status=os.waitpid(pid,0)\n    return {'pid':pid,'exit_code':status>>8,'signal':None}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 run_child(argv)，argv 为非空 list[str]，非法值 ValueError。用 os.fork 创建直接子进程、os.execvp 替换为 argv 程序、os.waitpid 回收；不得使用 shell、subprocess 或模拟状态。返回 {'pid':子PID,'exit_code':正常退出码或None,'signal':终止信号或None}。exec OSError 时子进程必须 os._exit(127)，父进程继续回收；waitpid 被 InterruptedError 打断须重试。等待必须仅针对自己刚创建的子进程，不回收其他子进程。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,pathlib,signal,sys,tempfile\nfrom unittest.mock import patch\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nfor code in [0,1,7,127,255]:\n    result=task.run_child([sys.executable,'-c','import os;os._exit('+str(code)+')'])\n    assert type(result['pid']) is int and result['pid']!=os.getpid()\n    assert result['exit_code']==code and result['signal'] is None,result\n    try:os.waitpid(result['pid'],os.WNOHANG)\n    except ChildProcessError:pass\n    else:raise AssertionError('child not reaped')\nfor sig in [signal.SIGTERM,signal.SIGKILL]:\n    result=task.run_child([sys.executable,'-c','import os,signal;os.kill(os.getpid(),'+str(sig)+')'])\n    assert result['exit_code'] is None and result['signal']==sig,result\nassert task.run_child(['/nonexistent/opsforge-child'])['exit_code']==127\noriginal=os.waitpid;calls=[]\ndef interrupted(pid,flags):\n    calls.append(pid)\n    if len(calls)==1:raise InterruptedError()\n    return original(pid,flags)\nwith patch.object(os,'waitpid',side_effect=interrupted):\n    assert task.run_child([sys.executable,'-c','pass'])['exit_code']==0\nassert len(calls)==2\nwith patch('subprocess.Popen',side_effect=AssertionError('fork/exec task cannot delegate to subprocess')):\n    assert task.run_child([sys.executable,'-c','pass'])['exit_code']==0\nfor argv in [[],(),None,[''],['echo',1]]:\n    try:task.run_child(argv)\n    except ValueError:pass\n    else:raise AssertionError('argv validation')\nprint('native fork/exec/wait: exit codes, signal status, exec failure, EINTR and reaping passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "src-2bcfb0fdcc186d52",
+      "original_type": "source",
+      "original_title": "Linux 中创建进程、替换程序映像和回收退出状态如何配合？",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_src-2bcfb0fdcc186d52",
+    "case_signature": "native_completion|src-2bcfb0fdcc186d52"
+  },
+  {
+    "id": "src-adabd806e023c2a4",
+    "title": "Linux /proc：测量指定进程RSS与虚拟内存并区分单位",
+    "answer": "```python\nfrom pathlib import Path\n\ndef process_memory(pid):\n    if isinstance(pid,bool) or not isinstance(pid,int) or pid<=0:raise ValueError('pid')\n    try:text=Path('/proc') .joinpath(str(pid),'status').read_text(encoding='utf-8')\n    except FileNotFoundError:raise ProcessLookupError(pid) from None\n    values={}\n    for line in text.splitlines():\n        key,sep,value=line.partition(':')\n        if sep and key in ('VmRSS','VmSize'):\n            parts=value.split()\n            if len(parts)!=2 or parts[1]!='kB' or not parts[0].isdigit():raise ValueError('memory unit')\n            values[key]=int(parts[0])*1024\n    if set(values)!= {'VmRSS','VmSize'}:raise ValueError('missing memory counters')\n    return {'pid':pid,'rss_bytes':values['VmRSS'],'vmsize_bytes':values['VmSize']}\n```\n\n原题参考要点：\n可用 ps -o pid,rss,vsz -p PID 做快照，读取 /proc/PID/status 或 smaps_rollup 分析 RSS、匿名页和 PSS。VSZ 是虚拟地址空间，不是实际占用物理内存；共享页会让多个 RSS 相加重复计数。结合 cgroup 和时间序列区分缓存、泄漏与瞬时峰值。",
+    "category": "进程与服务",
+    "difficulty": "入门",
+    "section": "进程",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "original_category": "Linux",
+    "original_title": "你如何查找特定进程占用的内存量?",
+    "module": "process",
+    "topic": "进程性能与故障诊断",
+    "level": 1,
+    "body": "## 环境与初始材料\nLinux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。\n\n## 操作任务\n实现 process_memory(pid)，pid 为非布尔正整数。读取当前 Linux /proc/{pid}/status，返回 {'pid':pid,'rss_bytes':VmRSS转字节,'vmsize_bytes':VmSize转字节}；kB 按1024字节换算。非法pid ValueError，不存在pid抛 ProcessLookupError；字段缺失或单位不受支持抛 ValueError，不把未知值填0。仅测调用者有权查看的进程，不以 VmSize、内存百分比或系统空闲量代替RSS。此测量是一次观察，不等于USS/PSS或泄漏证明。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "from pathlib import Path\n\ndef process_memory(pid):\n    if isinstance(pid,bool) or not isinstance(pid,int) or pid<=0:raise ValueError('pid')\n    try:text=Path('/proc') .joinpath(str(pid),'status').read_text(encoding='utf-8')\n    except FileNotFoundError:raise ProcessLookupError(pid) from None\n    values={}\n    for line in text.splitlines():\n        key,sep,value=line.partition(':')\n        if sep and key in ('VmRSS','VmSize'):\n            parts=value.split()\n            if len(parts)!=2 or parts[1]!='kB' or not parts[0].isdigit():raise ValueError('memory unit')\n            values[key]=int(parts[0])*1024\n    if set(values)!= {'VmRSS','VmSize'}:raise ValueError('missing memory counters')\n    return {'pid':pid,'rss_bytes':values['VmRSS'],'vmsize_bytes':values['VmSize']}\n"
+    },
+    "negative_files": {
+      "task.py": "from pathlib import Path\ndef process_memory(pid):\n    text=Path('/proc',str(pid),'status').read_text()\n    value=int(next(x for x in text.splitlines() if x.startswith('VmSize:')).split()[1])\n    return {'pid':pid,'rss_bytes':value,'vmsize_bytes':value}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 process_memory(pid)，pid 为非布尔正整数。读取当前 Linux /proc/{pid}/status，返回 {'pid':pid,'rss_bytes':VmRSS转字节,'vmsize_bytes':VmSize转字节}；kB 按1024字节换算。非法pid ValueError，不存在pid抛 ProcessLookupError；字段缺失或单位不受支持抛 ValueError，不把未知值填0。仅测调用者有权查看的进程，不以 VmSize、内存百分比或系统空闲量代替RSS。此测量是一次观察，不等于USS/PSS或泄漏证明。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,pathlib,subprocess,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert pathlib.Path('/proc/self/status').exists()\nchildren=[];measurements=[]\ntry:\n    for mb in [8,28]:\n        child=subprocess.Popen([sys.executable,'-u','-c',\"import sys,time;memory=bytearray(int(sys.argv[1])*1024*1024);print('READY',flush=True);time.sleep(8)\",str(mb)],stdout=subprocess.PIPE,text=True)\n        children.append(child);assert child.stdout.readline().strip()=='READY'\n        result=task.process_memory(child.pid)\n        raw=pathlib.Path('/proc',str(child.pid),'status').read_text()\n        expected={line.split(':')[0]:int(line.split()[1])*1024 for line in raw.splitlines() if line.startswith(('VmRSS:','VmSize:'))}\n        assert result['pid']==child.pid\n        assert abs(result['rss_bytes']-expected['VmRSS'])<=65536,(result,expected)\n        assert abs(result['vmsize_bytes']-expected['VmSize'])<=65536\n        assert result['rss_bytes']>mb*1024*1024 and result['vmsize_bytes']>=result['rss_bytes']\n        measurements.append(result)\n    assert measurements[1]['rss_bytes']-measurements[0]['rss_bytes']>15*1024*1024\nfinally:\n    for child in children:child.terminate();child.wait(timeout=2)\nfor pid in [0,-1,True,'1',None]:\n    try:task.process_memory(pid)\n    except ValueError:pass\n    else:raise AssertionError('invalid pid accepted')\ntry:task.process_memory(2147483647)\nexcept ProcessLookupError:pass\nelse:raise AssertionError('missing process silently zeroed')\nprint('native /proc memory: two live allocations, RSS vs VmSize, 1024 conversion and missing process passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "src-adabd806e023c2a4",
+      "original_type": "source",
+      "original_title": "你如何查找特定进程占用的内存量?",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_src-adabd806e023c2a4",
+    "case_signature": "native_completion|src-adabd806e023c2a4"
+  },
+  {
+    "id": "src-1bcfc475cf18b3dd",
+    "title": "Linux nice：仅降低新建子进程优先级并保留父进程",
+    "answer": "```python\nimport os\nimport subprocess\n\ndef spawn_niced(argv,increment):\n    if isinstance(increment,bool) or not isinstance(increment,int) or not 0<=increment<=19:raise ValueError('increment')\n    if not isinstance(argv,list) or not argv or any(not isinstance(x,str) or not x for x in argv):raise ValueError('argv')\n    return subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,preexec_fn=lambda:os.nice(increment))\n```\n\n原题参考要点：\nnice/renice 调整普通调度任务的 nice 值，较大 nice 通常降低 CPU 竞争优先级。是否能提高优先级受权限限制；实时调度是另一机制且风险更高。适用于减轻后台批处理竞争，不会解决 I/O 阻塞、锁竞争或 cgroup CPU 配额限制。",
+    "category": "进程与服务",
+    "difficulty": "入门",
+    "section": "进程",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "original_category": "Linux",
+    "original_title": "如何更改进程的优先级？ 你为什么想这么做?",
+    "module": "process",
+    "topic": "资源限制与调度隔离",
+    "level": 1,
+    "body": "## 环境与初始材料\nLinux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。\n\n## 操作任务\n实现 spawn_niced(argv, increment)，increment 必须非布尔整数0..19，argv 为非空list[str]。返回 subprocess.Popen，在子进程 exec 前 os.nice(increment)，不得更改调用者nice，也不得调用shell或提升优先级。使用 stdin=DEVNULL、stdout=PIPE、stderr=PIPE、text=True，调用者负责回收。内核nice上限19，应验证实际子nice而非只检查启动字符串。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\nimport subprocess\n\ndef spawn_niced(argv,increment):\n    if isinstance(increment,bool) or not isinstance(increment,int) or not 0<=increment<=19:raise ValueError('increment')\n    if not isinstance(argv,list) or not argv or any(not isinstance(x,str) or not x for x in argv):raise ValueError('argv')\n    return subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,preexec_fn=lambda:os.nice(increment))\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef spawn_niced(argv,increment):\n    return subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 spawn_niced(argv, increment)，increment 必须非布尔整数0..19，argv 为非空list[str]。返回 subprocess.Popen，在子进程 exec 前 os.nice(increment)，不得更改调用者nice，也不得调用shell或提升优先级。使用 stdin=DEVNULL、stdout=PIPE、stderr=PIPE、text=True，调用者负责回收。内核nice上限19，应验证实际子nice而非只检查启动字符串。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,pathlib,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nbefore=os.getpriority(os.PRIO_PROCESS,0)\nfor increment in [0,1,5,19]:\n    child=task.spawn_niced([sys.executable,'-u','-c',\"import os,time;print(os.getpriority(os.PRIO_PROCESS,0),flush=True);time.sleep(3)\"],increment)\n    try:\n        reported=int(child.stdout.readline().strip())\n        assert reported==min(19,before+increment)\n        assert os.getpriority(os.PRIO_PROCESS,child.pid)==reported\n        assert os.getpriority(os.PRIO_PROCESS,0)==before,'changed parent priority'\n    finally:child.terminate();child.communicate(timeout=2)\nfor increment in [-1,20,True,1.0,None]:\n    try:task.spawn_niced([sys.executable,'-c','pass'],increment)\n    except ValueError:pass\n    else:raise AssertionError('invalid nice increment')\nassert os.getpriority(os.PRIO_PROCESS,0)==before\nprint('native nice: child kernel priorities, saturation, parent unchanged and range validation passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "src-1bcfc475cf18b3dd",
+      "original_type": "source",
+      "original_title": "如何更改进程的优先级？ 你为什么想这么做?",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_src-1bcfc475cf18b3dd",
+    "case_signature": "native_completion|src-1bcfc475cf18b3dd"
+  },
+  {
+    "id": "curated-parallel-process-087",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 4,
+    "topic": "信号会话与文件描述符",
+    "title": "Linux flock：阻止长寿命exec子进程继承维护锁",
+    "answer": "```python\nimport fcntl\nimport os\nimport subprocess\n\ndef launch_without_lock_leak(lock_path,argv):\n    if not isinstance(argv,list) or not argv or any(not isinstance(x,str) or not x for x in argv):raise ValueError('argv')\n    descriptor=os.open(lock_path,os.O_CREAT|os.O_RDWR|os.O_CLOEXEC,0o600)\n    try:\n        fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)\n        os.set_inheritable(descriptor,False)\n        return subprocess.Popen(argv,close_fds=False,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n    finally:os.close(descriptor)\n```\n\n原题参考要点：\n检查锁持有者、进程树与描述符指向，确认子进程仍引用锁的打开文件描述。按业务影响受控关闭持有者或描述符，不能删锁路径。开发需设置合适的 close-on-exec 或子进程关闭逻辑。验证父任务结束后锁释放且并发互斥仍有效。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man2/flock.2.html"
+    ],
+    "incident_signature": "process-flock-inherited-fd-lock-retention",
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "body": "## 环境与初始材料\nLinux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。\n\n## 操作任务\n实现 launch_without_lock_leak(lock_path, argv)。只在锁定的短临界区启动给定子进程：以 O_CREAT|O_RDWR 创建0600锁文件，取得 LOCK_EX|LOCK_NB；保证此fd close-on-exec；启动 argv 后父进程立即关闭自己的锁fd并返回 Popen。为检验 CLOEXEC，Popen 必须 close_fds=False（不能靠全关fd掩盖合同）；不传 shell。父返回时子进程仍在运行，但另一个独立open必须能立即拿到同一锁。若锁被外部持有，抛 BlockingIOError，不启动子进程。所有分支关闭父fd。只用于自己的实验锁。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import fcntl\nimport os\nimport subprocess\n\ndef launch_without_lock_leak(lock_path,argv):\n    if not isinstance(argv,list) or not argv or any(not isinstance(x,str) or not x for x in argv):raise ValueError('argv')\n    descriptor=os.open(lock_path,os.O_CREAT|os.O_RDWR|os.O_CLOEXEC,0o600)\n    try:\n        fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)\n        os.set_inheritable(descriptor,False)\n        return subprocess.Popen(argv,close_fds=False,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n    finally:os.close(descriptor)\n"
+    },
+    "negative_files": {
+      "task.py": "import fcntl,os,subprocess\ndef launch_without_lock_leak(lock_path,argv):\n    fd=os.open(lock_path,os.O_CREAT|os.O_RDWR,0o600)\n    os.set_inheritable(fd,True)\n    try:\n        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)\n        return subprocess.Popen(argv,close_fds=False,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n    finally:os.close(fd)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 launch_without_lock_leak(lock_path, argv)。只在锁定的短临界区启动给定子进程：以 O_CREAT|O_RDWR 创建0600锁文件，取得 LOCK_EX|LOCK_NB；保证此fd close-on-exec；启动 argv 后父进程立即关闭自己的锁fd并返回 Popen。为检验 CLOEXEC，Popen 必须 close_fds=False（不能靠全关fd掩盖合同）；不传 shell。父返回时子进程仍在运行，但另一个独立open必须能立即拿到同一锁。若锁被外部持有，抛 BlockingIOError，不启动子进程。所有分支关闭父fd。只用于自己的实验锁。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import fcntl,os,pathlib,subprocess,sys,tempfile\nfrom unittest.mock import patch\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nwith tempfile.TemporaryDirectory(prefix='opsforge-flock-') as directory:\n    path=pathlib.Path(directory)/'maintenance.lock'\n    original=subprocess.Popen;observed=[]\n    def spawn(*args,**kwargs):\n        assert kwargs.get('close_fds') is False,'must test descriptor CLOEXEC rather than Popen close-all'\n        observed.append(True);return original(*args,**kwargs)\n    with patch.object(subprocess,'Popen',side_effect=spawn):\n        child=task.launch_without_lock_leak(path,[sys.executable,'-u','-c',\"import time;print('READY',flush=True);time.sleep(5)\"])\n    try:\n        assert child.stdout.readline().strip()=='READY' and child.poll() is None\n        with open(path,'r+') as independent:\n            fcntl.flock(independent,fcntl.LOCK_EX|fcntl.LOCK_NB)\n            fcntl.flock(independent,fcntl.LOCK_UN)\n        assert child.poll() is None,'child must stay alive while lock is free'\n    finally:child.terminate();child.communicate(timeout=2)\n    assert len(observed)==1\n    with open(path,'r+') as holder:\n        fcntl.flock(holder,fcntl.LOCK_EX|fcntl.LOCK_NB)\n        with patch.object(subprocess,'Popen',side_effect=AssertionError('locked task must not spawn')):\n            try:task.launch_without_lock_leak(path,[sys.executable,'-c','pass'])\n            except BlockingIOError:pass\n            else:raise AssertionError('ignored held lock')\nprint('native flock: independent lock while exec child alive, CLOEXEC path and no-spawn contention passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "curated-parallel-process-087",
+      "original_type": "case",
+      "original_title": "维护任务父进程已退出但 flock 一直被占，长寿命子进程继承了同一文件描述符。如何处理？",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_curated-parallel-process-087",
+    "case_signature": "native_completion|curated-parallel-process-087"
+  },
+  {
+    "id": "src-b80117eec9aa4472",
+    "title": "Linux Ctrl+C：前台进程组SIGINT与可回收退出",
+    "answer": "```python\nimport pathlib\nimport signal\nimport sys\n\nif __name__=='__main__':\n    destination=pathlib.Path(sys.argv[1])\n    def interrupted(number,frame):\n        destination.write_text('INT\\n',encoding='utf-8')\n        raise SystemExit(0)\n    signal.signal(signal.SIGINT,interrupted)\n    print('READY',flush=True)\n    while True:signal.pause()\n```\n\n原题参考要点：\n在常见交互终端设置下，Ctrl+C 让终端驱动向前台进程组发送 SIGINT。默认动作通常结束进程，但程序可以捕获或忽略；它不等价于 kill -9，也不一定终止所有后台任务。终端模式和按键绑定可改变行为。",
+    "category": "进程与服务",
+    "difficulty": "入门",
+    "section": "进程",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "original_category": "Linux",
+    "original_title": "当你按下Ctrl + C会发生什么?",
+    "module": "process",
+    "topic": "信号会话与文件描述符",
+    "level": 1,
+    "body": "## 环境与初始材料\nLinux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。\n\n## 操作任务\n实现 service.py，接受唯一参数为事件文件路径。启动时安装 SIGINT 处理器，然后 stdout 输出 READY 并flush；等待信号时不得忙轮询。SIGINT 处理应记录 INT\n 至指定事件文件，正常退出0，不能靠普通字符串输入模拟。事件文件只在接收信号后写入。不修改父进程信号处理、不发送信号给外部进程。验收器创建独立新会话并向该进程组发 SIGINT，模拟终端Ctrl+C的核心内核行为；不声称已连接真实交互终端。\n\n## 提交产物\nservice.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "Kf4IdnB3gow84mxvlQlcIYzCngh",
+        "question": "32、shell 命令行操作如何取消当前行操作"
+      }
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "Kf4IdnB3gow84mxvlQlcIYzCngh"
+        ]
+      }
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "files": {
+      "service.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "service.py": "import pathlib\nimport signal\nimport sys\n\nif __name__=='__main__':\n    destination=pathlib.Path(sys.argv[1])\n    def interrupted(number,frame):\n        destination.write_text('INT\\n',encoding='utf-8')\n        raise SystemExit(0)\n    signal.signal(signal.SIGINT,interrupted)\n    print('READY',flush=True)\n    while True:signal.pause()\n"
+    },
+    "negative_files": {
+      "service.py": "import signal,time\nprint('READY',flush=True)\nwhile True:time.sleep(1)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 service.py，接受唯一参数为事件文件路径。启动时安装 SIGINT 处理器，然后 stdout 输出 READY 并flush；等待信号时不得忙轮询。SIGINT 处理应记录 INT\n 至指定事件文件，正常退出0，不能靠普通字符串输入模拟。事件文件只在接收信号后写入。不修改父进程信号处理、不发送信号给外部进程。验收器创建独立新会话并向该进程组发 SIGINT，模拟终端Ctrl+C的核心内核行为；不声称已连接真实交互终端。",
+      "deliverables": [
+        "service.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,pathlib,signal,subprocess,sys,tempfile\nwith tempfile.TemporaryDirectory(prefix='opsforge-int-') as directory:\n    path=pathlib.Path(directory)/'event.txt'\n    child=subprocess.Popen([sys.executable,'-u','service.py',str(path)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)\n    try:\n        assert child.stdout.readline().strip()=='READY'\n        assert not path.exists(),'must wait for actual kernel signal'\n        assert os.getpgid(child.pid)==child.pid and os.getsid(child.pid)==child.pid\n        os.killpg(child.pid,signal.SIGINT)\n        stdout,stderr=child.communicate(timeout=2)\n        assert child.returncode==0,(child.returncode,stderr)\n        assert path.read_text(encoding='utf-8')=='INT\\n'\n    finally:\n        if child.poll() is None:os.killpg(child.pid,signal.SIGKILL);child.communicate(timeout=2)\nprint('native SIGINT: private session, process group signal, deferred event and clean exit passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "src-b80117eec9aa4472",
+      "original_type": "source",
+      "original_title": "当你按下Ctrl + C会发生什么?",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_src-b80117eec9aa4472",
+    "case_signature": "native_completion|src-b80117eec9aa4472"
+  },
+  {
+    "id": "curated-parallel-process-090",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 3,
+    "topic": "资源限制与调度隔离",
+    "title": "Linux RLIMIT_CPU：用内核CPU时间阈值触发SIGXCPU",
+    "answer": "```python\nimport argparse\nimport resource\nimport signal\n\nif __name__=='__main__':\n    parser=argparse.ArgumentParser()\n    parser.add_argument('--cpu-limit',type=int,required=True)\n    args=parser.parse_args()\n    if args.cpu_limit not in (1,2,3):parser.error('cpu limit must be 1..3')\n    def exhausted(number,frame):\n        print('CPU_LIMIT',flush=True)\n        raise SystemExit(42)\n    signal.signal(signal.SIGXCPU,exhausted)\n    resource.setrlimit(resource.RLIMIT_CPU,(args.cpu_limit,args.cpu_limit+1))\n    print('READY',flush=True)\n    state=1\n    while True:state=(state*1664525+1013904223)&0xffffffff\n```\n\n原题参考要点：\n读取 /proc/PID/limits 或服务 LimitCPU，区分 CPU累计时间限制与墙钟超时。软限制达到会触发SIGXCPU，后续达到硬限制可能被SIGKILL。确认任务预算和异常计算，按审批调整合理限制或优化任务；验证代表输入CPU时间与完成结果，不误归为OOM。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man2/getrlimit.2.html"
+    ],
+    "incident_signature": "process-rlimit-cpu-sigxcpu-budget",
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "body": "## 环境与初始材料\nLinux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。\n\n## 操作任务\n实现 worker.py，只接受 --cpu-limit N，N 为1..3整数。必须在本进程使用 resource.setrlimit(resource.RLIMIT_CPU,(N,N+1))，安装 SIGXCPU handler 在收到信号时stdout输出 CPU_LIMIT 后退出42；就绪后stdout输出 READY 并flush，然后运行CPU密集循环。不得以 wall clock sleep/timer、主动输出或自行发送信号模拟耗尽。只限制当前一次性子进程，不修改调用者资源上限。验收通过 /proc/limits 和实际 CPU 使用量确认。\n\n## 提交产物\nworker.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "files": {
+      "worker.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "worker.py": "import argparse\nimport resource\nimport signal\n\nif __name__=='__main__':\n    parser=argparse.ArgumentParser()\n    parser.add_argument('--cpu-limit',type=int,required=True)\n    args=parser.parse_args()\n    if args.cpu_limit not in (1,2,3):parser.error('cpu limit must be 1..3')\n    def exhausted(number,frame):\n        print('CPU_LIMIT',flush=True)\n        raise SystemExit(42)\n    signal.signal(signal.SIGXCPU,exhausted)\n    resource.setrlimit(resource.RLIMIT_CPU,(args.cpu_limit,args.cpu_limit+1))\n    print('READY',flush=True)\n    state=1\n    while True:state=(state*1664525+1013904223)&0xffffffff\n"
+    },
+    "negative_files": {
+      "worker.py": "import time\nprint('READY',flush=True)\ntime.sleep(.1)\nprint('CPU_LIMIT',flush=True)\nraise SystemExit(42)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 worker.py，只接受 --cpu-limit N，N 为1..3整数。必须在本进程使用 resource.setrlimit(resource.RLIMIT_CPU,(N,N+1))，安装 SIGXCPU handler 在收到信号时stdout输出 CPU_LIMIT 后退出42；就绪后stdout输出 READY 并flush，然后运行CPU密集循环。不得以 wall clock sleep/timer、主动输出或自行发送信号模拟耗尽。只限制当前一次性子进程，不修改调用者资源上限。验收通过 /proc/limits 和实际 CPU 使用量确认。",
+      "deliverables": [
+        "worker.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,resource,subprocess,sys,time\nbefore=resource.getrlimit(resource.RLIMIT_CPU)\nusage=resource.getrusage(resource.RUSAGE_CHILDREN)\nold_cpu=usage.ru_utime+usage.ru_stime\nchild=subprocess.Popen([sys.executable,'-u','worker.py','--cpu-limit','1'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\ntry:\n    assert child.stdout.readline().strip()=='READY'\n    limits=pathlib.Path('/proc',str(child.pid),'limits').read_text()\n    row=next(line for line in limits.splitlines() if line.startswith('Max cpu time'))\n    assert row.split()[3:5]==['1','2'],row\n    output,error=child.communicate(timeout=7)\n    assert child.returncode==42 and output.strip()=='CPU_LIMIT',(child.returncode,output,error)\nfinally:\n    if child.poll() is None:child.kill();child.communicate(timeout=2)\nusage=resource.getrusage(resource.RUSAGE_CHILDREN)\nused=usage.ru_utime+usage.ru_stime-old_cpu\nassert .8<=used<=2.2,used\nassert resource.getrlimit(resource.RLIMIT_CPU)==before,'changed caller CPU limits'\nfor argument in ['0','4','x']:\n    invalid=subprocess.run([sys.executable,'worker.py','--cpu-limit',argument],capture_output=True,text=True,timeout=2)\n    assert invalid.returncode==2\nprint('native RLIMIT_CPU: kernel limits, genuine child CPU consumption, SIGXCPU and caller isolation passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "curated-parallel-process-090",
+      "original_type": "case",
+      "original_title": "批任务每次累计消耗相同CPU秒数后以 SIGXCPU 退出，主机内存充足。怎样处理？",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_curated-parallel-process-090",
+    "case_signature": "native_completion|curated-parallel-process-090"
+  },
+  {
+    "id": "src-f1be60110aa18be3",
+    "title": "Linux 僵尸进程：观测Z状态后有界轮询并回收",
+    "answer": "```python\nimport os\n\ndef poll_child(pid):\n    if isinstance(pid,bool) or not isinstance(pid,int) or pid<=0:raise ValueError('pid')\n    while True:\n        try:result,status=os.waitpid(pid,os.WNOHANG);break\n        except InterruptedError:continue\n        except ChildProcessError:return {'state':'not_child'}\n    if result==0:return {'state':'running'}\n    return {'state':'reaped','exit_code':os.WEXITSTATUS(status) if os.WIFEXITED(status) else None,'signal':os.WTERMSIG(status) if os.WIFSIGNALED(status) else None}\n```\n\n原题参考要点：\n僵尸进程已经退出，但父进程尚未读取其退出状态，因此内核保留少量记录。它不再执行，也不能通过再次 kill 消除；父进程应调用 wait/waitpid 等回收。定位父进程的缺陷，必要时在评估影响后重启父服务，避免直接操作关键 PID 1。",
+    "category": "进程与服务",
+    "difficulty": "入门",
+    "section": "进程",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "original_category": "Linux",
+    "original_title": "什么是僵尸进程? 你是如何避免的?",
+    "module": "process",
+    "topic": "进程线程与生命周期",
+    "level": 1,
+    "body": "## 环境与初始材料\nLinux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。\n\n## 操作任务\n实现 poll_child(pid)，非布尔正整数。仅用 os.waitpid(pid,os.WNOHANG) 检查调用者的指定直接子进程，运行中返回 {'state':'running'}；退出并回收返回 {'state':'reaped','exit_code':正常码或None,'signal':终止信号或None}。已回收或非本人子进程返回 {'state':'not_child'}；waitpid被InterruptedError打断重试。不得睡眠等待、杀死子进程或读取伪造进程快照。验收器通过实际/proc状态确认僵尸和消失，waitpid轮询必须及时返回。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\n\ndef poll_child(pid):\n    if isinstance(pid,bool) or not isinstance(pid,int) or pid<=0:raise ValueError('pid')\n    while True:\n        try:result,status=os.waitpid(pid,os.WNOHANG);break\n        except InterruptedError:continue\n        except ChildProcessError:return {'state':'not_child'}\n    if result==0:return {'state':'running'}\n    return {'state':'reaped','exit_code':os.WEXITSTATUS(status) if os.WIFEXITED(status) else None,'signal':os.WTERMSIG(status) if os.WIFSIGNALED(status) else None}\n"
+    },
+    "negative_files": {
+      "task.py": "import os\ndef poll_child(pid):\n    try:\n        result,status=os.waitpid(pid,0)\n        return {'state':'reaped','exit_code':os.WEXITSTATUS(status),'signal':None}\n    except ChildProcessError:return {'state':'not_child'}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 poll_child(pid)，非布尔正整数。仅用 os.waitpid(pid,os.WNOHANG) 检查调用者的指定直接子进程，运行中返回 {'state':'running'}；退出并回收返回 {'state':'reaped','exit_code':正常码或None,'signal':终止信号或None}。已回收或非本人子进程返回 {'state':'not_child'}；waitpid被InterruptedError打断重试。不得睡眠等待、杀死子进程或读取伪造进程快照。验收器通过实际/proc状态确认僵尸和消失，waitpid轮询必须及时返回。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,pathlib,signal,sys,time\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nreader,writer=os.pipe();pid=os.fork()\nif pid==0:\n    os.close(writer);os.read(reader,1);os._exit(17)\nos.close(reader)\ntry:\n    start=time.monotonic();assert task.poll_child(pid)=={'state':'running'};assert time.monotonic()-start<.2\n    os.close(writer);writer=None\n    deadline=time.monotonic()+2\n    while time.monotonic()<deadline:\n        status=pathlib.Path('/proc',str(pid),'status').read_text()\n        if next(line for line in status.splitlines() if line.startswith('State:')).split()[1]=='Z':break\n        time.sleep(.005)\n    else:raise AssertionError('test child never became a native zombie')\n    assert task.poll_child(pid)=={'state':'reaped','exit_code':17,'signal':None}\n    assert not pathlib.Path('/proc',str(pid)).exists()\n    assert task.poll_child(pid)=={'state':'not_child'}\nfinally:\n    if writer is not None:os.close(writer)\n    try:os.kill(pid,signal.SIGKILL);os.waitpid(pid,0)\n    except ProcessLookupError:pass\n    except ChildProcessError:pass\nassert task.poll_child(os.getpid())=={'state':'not_child'}\nprint('native zombie: observed Z, nonblocking running check, exact reaping status and /proc disappearance passed')\n"
+      },
+      "timeout": 8
+    },
+    "conversion": {
+      "original_id": "src-f1be60110aa18be3",
+      "original_type": "source",
+      "original_title": "什么是僵尸进程? 你是如何避免的?",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_src-f1be60110aa18be3",
+    "case_signature": "native_completion|src-f1be60110aa18be3"
+  },
+  {
+    "id": "src-2893cd386a3df984",
+    "title": "Linux 进程与线程：真实共享内存与fork副本隔离",
+    "answer": "```python\nimport os\nimport threading\n\ndef sharing_probe(initial):\n    if isinstance(initial,bool) or not isinstance(initial,int):raise ValueError('initial')\n    shared={'value':initial}\n    def update():shared['value']+=1\n    thread=threading.Thread(target=update);thread.start();thread.join()\n    thread_value=shared['value']\n    reader,writer=os.pipe()\n    pid=os.fork()\n    if pid==0:\n        os.close(reader)\n        try:\n            shared['value']+=1\n            os.write(writer,str(shared['value']).encode('ascii'))\n        finally:\n            os.close(writer);os._exit(0)\n    os.close(writer)\n    try:\n        chunks=[]\n        while True:\n            part=os.read(reader,4096)\n            if not part:break\n            chunks.append(part)\n    finally:os.close(reader)\n    while True:\n        try:os.waitpid(pid,0);break\n        except InterruptedError:continue\n    return {'thread_value':thread_value,'parent_value':shared['value'],'child_value':int(b''.join(chunks))}\n```\n\n原题参考要点：\n进程通常具有独立地址空间和资源边界，线程共享所属进程的地址空间和部分资源，但各有执行栈与寄存器上下文。线程通信方便却需要同步，单个线程的内存错误可能影响整个进程；选择应结合隔离、并发模型和语言运行时。",
+    "category": "进程与服务",
+    "difficulty": "进阶",
+    "section": "高级",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "original_category": "Linux",
+    "original_title": "进程和线程的区别是什么?",
+    "module": "process",
+    "topic": "进程线程与生命周期",
+    "level": 1,
+    "body": "## 环境与初始材料\nLinux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。\n\n## 操作任务\n实现 sharing_probe(initial)，initial 非布尔整数。创建一个 threading.Thread 将共享字典的value加1并join；然后 os.fork 子进程在其私有内存中再加1，通过pipe把子值发回并退出；父进程回收后返回 {'thread_value':initial+1,'parent_value':initial+1,'child_value':initial+2}。必须真实创建线程和进程，不能返回算术常量替代；关闭pipe各自未使用端，可靠回收。此题仅验证进程地址空间与线程共享状态，不泛化成所有IPC或内核线程。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-70d706ede49e8ed3",
+        "title": "线程和进程之间有什么区别?",
+        "category": "Linux",
+        "source": "README-zh_CN.md",
+        "sources": [
+          "README-zh_CN.md"
+        ]
+      },
+      {
+        "id": "src-254e23e299c86d8a",
+        "title": "进程和线程有什么区别？",
+        "category": "Linux",
+        "source": "topics/linux/README.md",
+        "sources": [
+          "topics/linux/README.md"
+        ]
+      },
+      {
+        "id": "src-5d054109d78d5173",
+        "title": "线程和进程有什么区别？",
+        "category": "Linux",
+        "source": "topics/linux/README.md",
+        "sources": [
+          "topics/linux/README.md"
+        ]
+      }
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\nimport threading\n\ndef sharing_probe(initial):\n    if isinstance(initial,bool) or not isinstance(initial,int):raise ValueError('initial')\n    shared={'value':initial}\n    def update():shared['value']+=1\n    thread=threading.Thread(target=update);thread.start();thread.join()\n    thread_value=shared['value']\n    reader,writer=os.pipe()\n    pid=os.fork()\n    if pid==0:\n        os.close(reader)\n        try:\n            shared['value']+=1\n            os.write(writer,str(shared['value']).encode('ascii'))\n        finally:\n            os.close(writer);os._exit(0)\n    os.close(writer)\n    try:\n        chunks=[]\n        while True:\n            part=os.read(reader,4096)\n            if not part:break\n            chunks.append(part)\n    finally:os.close(reader)\n    while True:\n        try:os.waitpid(pid,0);break\n        except InterruptedError:continue\n    return {'thread_value':thread_value,'parent_value':shared['value'],'child_value':int(b''.join(chunks))}\n"
+    },
+    "negative_files": {
+      "task.py": "def sharing_probe(initial):\n    return {'thread_value':initial+1,'parent_value':initial+1,'child_value':initial+2}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 sharing_probe(initial)，initial 非布尔整数。创建一个 threading.Thread 将共享字典的value加1并join；然后 os.fork 子进程在其私有内存中再加1，通过pipe把子值发回并退出；父进程回收后返回 {'thread_value':initial+1,'parent_value':initial+1,'child_value':initial+2}。必须真实创建线程和进程，不能返回算术常量替代；关闭pipe各自未使用端，可靠回收。此题仅验证进程地址空间与线程共享状态，不泛化成所有IPC或内核线程。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,pathlib,sys,threading\nfrom unittest.mock import patch\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nreal_fork=os.fork;real_start=threading.Thread.start\ncalls={'fork':0,'thread':0}\ndef fork():calls['fork']+=1;return real_fork()\ndef start(thread):calls['thread']+=1;return real_start(thread)\nwith patch.object(os,'fork',side_effect=fork),patch.object(threading.Thread,'start',start):\n    for initial in [0,-5,100,10**50]:\n        assert task.sharing_probe(initial)=={'thread_value':initial+1,'parent_value':initial+1,'child_value':initial+2}\nassert calls=={'fork':4,'thread':4},calls\nfor invalid in [True,None,'1']:\n    try:task.sharing_probe(invalid)\n    except ValueError:pass\n    else:raise AssertionError('invalid initial value')\nprint('native process/thread memory: real thread starts, real forks, dynamic shared vs private state and cleanup passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "src-2893cd386a3df984",
+      "original_type": "source",
+      "original_title": "进程和线程的区别是什么?",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_src-2893cd386a3df984",
+    "case_signature": "native_completion|src-2893cd386a3df984"
+  },
+  {
+    "id": "curated-parallel-process-082",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 5,
+    "topic": "服务托管与systemd",
+    "title": "Linux 维护停机：排空子进程并在退出前持久化完成标记",
+    "answer": "```python\nimport os\nfrom pathlib import Path\nimport signal\nimport subprocess\nimport sys\n\nif __name__=='__main__':\n    root=Path(sys.argv[1])\n    child=subprocess.Popen([sys.executable,'-u','-c',\"import os,pathlib,sys,time;pathlib.Path(sys.argv[1],'worker.pid').write_text(str(os.getpid()));print('WORKER_READY',flush=True);time.sleep(20)\",str(root)],stdout=subprocess.PIPE,text=True)\n    stopping=False\n    def stop(number,frame):\n        global stopping\n        stopping=True\n    signal.signal(signal.SIGTERM,stop)\n    try:\n        if child.stdout.readline().strip()!='WORKER_READY':raise RuntimeError('worker failed startup')\n        print('READY',flush=True)\n        while not stopping:signal.pause()\n        child.terminate();child.wait(timeout=3)\n        with open(root/'drained','w',encoding='ascii') as handle:\n            handle.write(str(child.pid)+'\\n');handle.flush();os.fsync(handle.fileno())\n    finally:\n        if child.poll() is None:child.kill();child.wait()\n```\n\n原题参考要点：\n维护前记录cgroup成员和进行中的业务，停止接流并等待排空，再受控停止服务。检查整个服务组任务、相关打开文件、应用持久化完成标记及下游状态；重新启动后核对事务或任务结果。进程不存在不自动证明最后写入已提交。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "references": [],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "body": "## 环境与初始材料\nLinux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。\n\n## 操作任务\n实现 supervisor.py，以唯一参数指定工作目录，目录已存在。启动一个真实长寿命 worker 子进程，worker 先在目录写 worker.pid 并flush，然后stdout通知监督者就绪。监督者安装 SIGTERM 处理，输出 READY 后等待；接到SIGTERM仅终止并wait自己的worker，确认回收后写 drained 标记（内容为worker PID加换行，fsync文件）再退出0。不得先写标记再放任孤儿，不得扫描/杀死外部PID，不修改全局服务。验收器在worker就绪后对监督者发SIGTERM并检查/proc消失。\n\n## 提交产物\nsupervisor.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "files": {
+      "supervisor.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "supervisor.py": "import os\nfrom pathlib import Path\nimport signal\nimport subprocess\nimport sys\n\nif __name__=='__main__':\n    root=Path(sys.argv[1])\n    child=subprocess.Popen([sys.executable,'-u','-c',\"import os,pathlib,sys,time;pathlib.Path(sys.argv[1],'worker.pid').write_text(str(os.getpid()));print('WORKER_READY',flush=True);time.sleep(20)\",str(root)],stdout=subprocess.PIPE,text=True)\n    stopping=False\n    def stop(number,frame):\n        global stopping\n        stopping=True\n    signal.signal(signal.SIGTERM,stop)\n    try:\n        if child.stdout.readline().strip()!='WORKER_READY':raise RuntimeError('worker failed startup')\n        print('READY',flush=True)\n        while not stopping:signal.pause()\n        child.terminate();child.wait(timeout=3)\n        with open(root/'drained','w',encoding='ascii') as handle:\n            handle.write(str(child.pid)+'\\n');handle.flush();os.fsync(handle.fileno())\n    finally:\n        if child.poll() is None:child.kill();child.wait()\n"
+    },
+    "negative_files": {
+      "supervisor.py": "from pathlib import Path\nimport os,signal,subprocess,sys\nroot=Path(sys.argv[1]);child=subprocess.Popen([sys.executable,'-c','import time;time.sleep(15)'])\n(root/'worker.pid').write_text(str(child.pid))\ndef stop(number,frame):\n    (root/'drained').write_text(str(child.pid)+'\\n');raise SystemExit(0)\nsignal.signal(signal.SIGTERM,stop)\nprint('READY',flush=True)\nwhile True:signal.pause()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 supervisor.py，以唯一参数指定工作目录，目录已存在。启动一个真实长寿命 worker 子进程，worker 先在目录写 worker.pid 并flush，然后stdout通知监督者就绪。监督者安装 SIGTERM 处理，输出 READY 后等待；接到SIGTERM仅终止并wait自己的worker，确认回收后写 drained 标记（内容为worker PID加换行，fsync文件）再退出0。不得先写标记再放任孤儿，不得扫描/杀死外部PID，不修改全局服务。验收器在worker就绪后对监督者发SIGTERM并检查/proc消失。",
+      "deliverables": [
+        "supervisor.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,pathlib,signal,subprocess,sys,tempfile,time\nwith tempfile.TemporaryDirectory(prefix='opsforge-drain-') as directory:\n    root=pathlib.Path(directory)\n    supervisor=subprocess.Popen([sys.executable,'-u','supervisor.py',str(root)],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)\n    worker=None\n    try:\n        assert supervisor.stdout.readline().strip()=='READY'\n        worker=int((root/'worker.pid').read_text());assert pathlib.Path('/proc',str(worker)).exists()\n        assert not (root/'drained').exists()\n        supervisor.terminate();output,error=supervisor.communicate(timeout=5)\n        assert supervisor.returncode==0,error\n        assert (root/'drained').read_text()==str(worker)+'\\n'\n        assert not pathlib.Path('/proc',str(worker)).exists(),'worker still exists after claimed drain'\n    finally:\n        if supervisor.poll() is None:os.killpg(supervisor.pid,signal.SIGKILL);supervisor.communicate(timeout=2)\n        if worker and pathlib.Path('/proc',str(worker)).exists():\n            try:os.kill(worker,signal.SIGKILL)\n            except ProcessLookupError:pass\nprint('native drain: child readiness, TERM supervision, wait/reaping before persisted completion and no worker left passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "curated-parallel-process-082",
+      "original_type": "practice",
+      "original_title": "如何证明维护停机没有遗留服务子进程或未完成写入？",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_curated-parallel-process-082",
+    "case_signature": "native_completion|curated-parallel-process-082"
+  },
+  {
+    "id": "curated-advanced-process-014",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 5,
+    "topic": "进程性能与故障诊断",
+    "title": "Linux 短命进程取证：wait4保留退出码与CPU/峰值RSS",
+    "answer": "```python\nimport os\n\ndef run_measured(argv):\n    if not isinstance(argv,list) or not argv or any(not isinstance(x,str) or not x for x in argv):raise ValueError('argv')\n    pid=os.fork()\n    if pid==0:\n        try:os.execvp(argv[0],argv)\n        except OSError:os._exit(127)\n    while True:\n        try:_,status,usage=os.wait4(pid,0);break\n        except InterruptedError:continue\n    return {'pid':pid,'exit_code':os.WEXITSTATUS(status) if os.WIFEXITED(status) else None,'signal':os.WTERMSIG(status) if os.WIFSIGNALED(status) else None,'user_seconds':usage.ru_utime,'system_seconds':usage.ru_stime,'maxrss_bytes':usage.ru_maxrss*1024}\n```\n\n原题参考要点：\n交付任务身份、启动退出事件、聚合窗口和低开销采集方案。用应用任务ID或受管执行单元关联启动时间，记录退出状态及子任务资源，避免PID复用误并；按平台支持采用进程记账、调度追踪或已有任务指标。先量化采集丢事件、CPU与存储开销，再限定对象和时间，不能全机无限追踪。验收每秒大量任务及异常退出，核对任务总数与事件完整性，分析单任务成本分布。达到采集预算即降采样并明确缺口，保留业务侧计数对账；停止追踪后确认无残留探针和持续写文件。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "references": [],
+    "body": "## 环境与初始材料\nLinux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。\n\n## 操作任务\n实现 run_measured(argv)，用 fork/execvp 执行显式参数列表，不经shell。用 os.wait4 只回收本次子进程，即使进程很快退出也返回 {'pid':pid,'exit_code':正常码或None,'signal':信号或None,'user_seconds':ru_utime,'system_seconds':ru_stime,'maxrss_bytes':ru_maxrss*1024}。Linux ru_maxrss单位kB；wait4中断须重试。exec失败退出127；不得读取top一帧或以父进程/全体历史子进程累计资源代替本次资源。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\n\ndef run_measured(argv):\n    if not isinstance(argv,list) or not argv or any(not isinstance(x,str) or not x for x in argv):raise ValueError('argv')\n    pid=os.fork()\n    if pid==0:\n        try:os.execvp(argv[0],argv)\n        except OSError:os._exit(127)\n    while True:\n        try:_,status,usage=os.wait4(pid,0);break\n        except InterruptedError:continue\n    return {'pid':pid,'exit_code':os.WEXITSTATUS(status) if os.WIFEXITED(status) else None,'signal':os.WTERMSIG(status) if os.WIFSIGNALED(status) else None,'user_seconds':usage.ru_utime,'system_seconds':usage.ru_stime,'maxrss_bytes':usage.ru_maxrss*1024}\n"
+    },
+    "negative_files": {
+      "task.py": "import os\ndef run_measured(argv):\n    pid=os.fork()\n    if pid==0:os.execvp(argv[0],argv)\n    _,status,usage=os.wait4(pid,0)\n    return {'pid':pid,'exit_code':status>>8,'signal':None,'user_seconds':usage.ru_utime,'system_seconds':usage.ru_stime,'maxrss_bytes':usage.ru_maxrss}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 run_measured(argv)，用 fork/execvp 执行显式参数列表，不经shell。用 os.wait4 只回收本次子进程，即使进程很快退出也返回 {'pid':pid,'exit_code':正常码或None,'signal':信号或None,'user_seconds':ru_utime,'system_seconds':ru_stime,'maxrss_bytes':ru_maxrss*1024}。Linux ru_maxrss单位kB；wait4中断须重试。exec失败退出127；不得读取top一帧或以父进程/全体历史子进程累计资源代替本次资源。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,pathlib,signal,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nrows=[]\nfor megabytes in [8,40]:\n    program=\"import os,sys;data=bytearray(int(sys.argv[1])*1024*1024);result=sum(i*i for i in range(300000));os._exit(13)\"\n    result=task.run_measured([sys.executable,'-c',program,str(megabytes)])\n    assert result['exit_code']==13 and result['signal'] is None\n    assert result['user_seconds']>=0 and result['system_seconds']>=0 and result['user_seconds']+result['system_seconds']>0\n    assert result['maxrss_bytes']>=megabytes*1024*1024\n    assert not pathlib.Path('/proc',str(result['pid'])).exists()\n    rows.append(result)\nassert rows[1]['maxrss_bytes']-rows[0]['maxrss_bytes']>20*1024*1024\nsignal_result=task.run_measured([sys.executable,'-c','import os,signal;os.kill(os.getpid(),signal.SIGTERM)'])\nassert signal_result['exit_code'] is None and signal_result['signal']==signal.SIGTERM\nassert task.run_measured(['/missing/opsforge'])['exit_code']==127\nprint('native wait4: short-lived workloads, per-child CPU/peak RSS, kB conversion, signal status and reaping passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "curated-advanced-process-014",
+      "original_type": "practice",
+      "original_title": "为频繁启动的短命进程设计资源取证方案，要求不依赖top某一帧捕获PID。",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_curated-advanced-process-014",
+    "case_signature": "native_completion|curated-advanced-process-014"
+  },
+  {
+    "id": "curated-advanced-process-020",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 5,
+    "topic": "资源限制与调度隔离",
+    "title": "Linux CPU亲和性：在现有允许CPU集内绑定新子进程",
+    "answer": "```python\nimport os\nimport subprocess\n\ndef spawn_pinned(argv,cpus):\n    if not isinstance(argv,list) or not argv or any(not isinstance(x,str) or not x for x in argv):raise ValueError('argv')\n    if not isinstance(cpus,set) or not cpus or any(type(cpu) is not int for cpu in cpus) or not cpus<=os.sched_getaffinity(0):raise ValueError('allowed CPUs required')\n    selected=set(cpus)\n    return subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,preexec_fn=lambda:os.sched_setaffinity(0,selected))\n```\n\n原题参考要点：\n交付核心与NUMA拓扑、任务/IRQ分配和干扰清单。固定应用CPU并不自动隔离中断、内核线程、共享缓存、内存带宽或SMT同核线程；按硬件与内核支持能力选择隔离范围，同时给管理任务留资源。验收网络高峰、后台I/O和同核邻居压力下的尾延迟，记录迁移、软中断及频率变化。性能收益必须与吞吐和可运维性一并比较。若出现系统管理饥饿或IRQ热点，恢复已验证布局并减载；不能仅以taskset显示目标掩码正确宣布完全隔离。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "references": [],
+    "body": "## 环境与初始材料\nLinux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。\n\n## 操作任务\n实现 spawn_pinned(argv, cpus)，argv为非空list[str]，cpus为非空set[int]且不含bool；cpus必须是调用者当前 os.sched_getaffinity(0) 的子集，非法值ValueError。只在新子进程exec前用os.sched_setaffinity(0,cpus)绑定，再返回 Popen（stdout/stderr PIPE、stdin DEVNULL、text=True）。不能修改调用者或宿主IRQ亲和性，不能假定CPU编号从0连续。本题验证原生允许集与子进程绑定，不宣称已隔离IRQ/共享缓存。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\nimport subprocess\n\ndef spawn_pinned(argv,cpus):\n    if not isinstance(argv,list) or not argv or any(not isinstance(x,str) or not x for x in argv):raise ValueError('argv')\n    if not isinstance(cpus,set) or not cpus or any(type(cpu) is not int for cpu in cpus) or not cpus<=os.sched_getaffinity(0):raise ValueError('allowed CPUs required')\n    selected=set(cpus)\n    return subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,preexec_fn=lambda:os.sched_setaffinity(0,selected))\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef spawn_pinned(argv,cpus):\n    return subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 spawn_pinned(argv, cpus)，argv为非空list[str]，cpus为非空set[int]且不含bool；cpus必须是调用者当前 os.sched_getaffinity(0) 的子集，非法值ValueError。只在新子进程exec前用os.sched_setaffinity(0,cpus)绑定，再返回 Popen（stdout/stderr PIPE、stdin DEVNULL、text=True）。不能修改调用者或宿主IRQ亲和性，不能假定CPU编号从0连续。本题验证原生允许集与子进程绑定，不宣称已隔离IRQ/共享缓存。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import json,os,pathlib,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nallowed=os.sched_getaffinity(0)\nsets=[{min(allowed)},allowed]\nif len(allowed)>1:sets.append({max(allowed)})\nfor chosen in sets:\n    child=task.spawn_pinned([sys.executable,'-c',\"import os,json;print(json.dumps(sorted(os.sched_getaffinity(0))))\"],chosen)\n    output,error=child.communicate(timeout=3)\n    assert child.returncode==0,error\n    assert set(json.loads(output))==chosen\n    assert os.sched_getaffinity(0)==allowed,'parent affinity changed'\nfor invalid in [set(),{True},{-1},{max(allowed)+1},[],None]:\n    try:task.spawn_pinned([sys.executable,'-c','pass'],invalid)\n    except ValueError:pass\n    else:raise AssertionError('invalid affinity accepted')\nassert os.sched_getaffinity(0)==allowed\nprint('native affinity: real child allowed-set observation, noncontiguous-safe selection, invalid sets and parent retention passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "curated-advanced-process-020",
+      "original_type": "practice",
+      "original_title": "为延迟敏感服务设计CPU亲和性与IRQ布置验收，要求解释独占核心之外仍可能存在的共享干扰。",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_curated-advanced-process-020",
+    "case_signature": "native_completion|curated-advanced-process-020"
+  },
+  {
+    "id": "curated-advanced-process-024",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 5,
+    "topic": "服务托管与systemd",
+    "title": "Linux 维护任务托管：独立session、持久日志与断开后继续",
+    "answer": "```python\nimport os\nimport subprocess\n\ndef launch_detached(argv,log_path):\n    if not isinstance(argv,list) or not argv or any(not isinstance(x,str) or not x for x in argv):raise ValueError('argv')\n    descriptor=os.open(log_path,os.O_CREAT|os.O_WRONLY|os.O_TRUNC|os.O_CLOEXEC|os.O_NOFOLLOW,0o600)\n    try:\n        os.fchmod(descriptor,0o600)\n        return subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=descriptor,stderr=subprocess.STDOUT,close_fds=True,start_new_session=True)\n    finally:os.close(descriptor)\n```\n\n原题参考要点：\n交付受管任务身份、输出位置、资源上限与状态查询方式。使用系统支持的服务或瞬态单元托管开发提供的任务，明确工作目录、环境和输入，不依赖终端及交互密码。任务状态应保存退出码、业务完成标记与实际对象清单，SSH连接结束不代表任务完成。验收断开会话、重复提交和主机重启，重复任务应被识别或按业务键去重。任务达到时限需可停止并记录部分完成范围；回退或取消不能仅杀当前SSH进程，应由管理器按任务ID处理，避免残留后代继续修改数据。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "references": [],
+    "body": "## 环境与初始材料\nLinux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。\n\n## 操作任务\n实现 launch_detached(argv,log_path)，在本人实验目录创建0600日志文件，stdout和stderr都定向到该文件；stdin=DEVNULL、close_fds=True、start_new_session=True。返回 Popen，不阻塞等任务完成，不使用shell。关闭调用者持有的日志fd，但子进程仍可写；不能继承SSH/父终端stdio。验收器向自己创建的launcher进程组发SIGHUP，独立session任务必须继续完成并可通过日志查询。此题不承诺跨宿主重启自动恢复。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\nimport subprocess\n\ndef launch_detached(argv,log_path):\n    if not isinstance(argv,list) or not argv or any(not isinstance(x,str) or not x for x in argv):raise ValueError('argv')\n    descriptor=os.open(log_path,os.O_CREAT|os.O_WRONLY|os.O_TRUNC|os.O_CLOEXEC|os.O_NOFOLLOW,0o600)\n    try:\n        os.fchmod(descriptor,0o600)\n        return subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=descriptor,stderr=subprocess.STDOUT,close_fds=True,start_new_session=True)\n    finally:os.close(descriptor)\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef launch_detached(argv,log_path):\n    with open(log_path,'w') as output:\n        return subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=output,stderr=subprocess.STDOUT)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 launch_detached(argv,log_path)，在本人实验目录创建0600日志文件，stdout和stderr都定向到该文件；stdin=DEVNULL、close_fds=True、start_new_session=True。返回 Popen，不阻塞等任务完成，不使用shell。关闭调用者持有的日志fd，但子进程仍可写；不能继承SSH/父终端stdio。验收器向自己创建的launcher进程组发SIGHUP，独立session任务必须继续完成并可通过日志查询。此题不承诺跨宿主重启自动恢复。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux 原生进程/文件系统，在一次性工作区和本人子进程中验收；不修改宿主配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,pathlib,signal,stat,subprocess,sys,tempfile,time\nwith tempfile.TemporaryDirectory(prefix='opsforge-detach-') as directory:\n    root=pathlib.Path(directory);log=root/'job.log'\n    job=\"import os,sys,time;print('BEGIN',flush=True);print('ERROR_STREAM',file=sys.stderr,flush=True);time.sleep(.5);print('COMPLETE',flush=True)\"\n    launcher=\"import task,sys,time;child=task.launch_detached([sys.executable,'-u','-c',sys.argv[2]],sys.argv[1]);print(child.pid,flush=True);time.sleep(10)\"\n    parent=subprocess.Popen([sys.executable,'-u','-c',launcher,str(log),job],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)\n    child=None\n    try:\n        child=int(parent.stdout.readline().strip())\n        assert os.getsid(child)==child and os.getpgid(child)==child\n        assert os.getsid(parent.pid)==parent.pid and os.getsid(child)!=os.getsid(parent.pid)\n        os.killpg(parent.pid,signal.SIGHUP);parent.communicate(timeout=2)\n        deadline=time.monotonic()+3\n        while time.monotonic()<deadline:\n            text=log.read_text() if log.exists() else ''\n            if 'COMPLETE' in text:break\n            time.sleep(.02)\n        assert 'BEGIN' in text and 'ERROR_STREAM' in text and 'COMPLETE' in text,text\n        assert stat.S_IMODE(log.stat().st_mode)==0o600\n    finally:\n        if parent.poll() is None:os.killpg(parent.pid,signal.SIGKILL);parent.communicate(timeout=2)\n        if child:\n            try:os.kill(child,signal.SIGKILL)\n            except ProcessLookupError:pass\nprint('native detached job: separate session/group, launcher SIGHUP survival, stderr/stdout persistence and private log passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "curated-advanced-process-024",
+      "original_type": "practice",
+      "original_title": "设计长期运行维护任务的托管方案，要求管理员SSH断开后任务继续且结果可重新查询。",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_curated-advanced-process-024",
+    "case_signature": "native_completion|curated-advanced-process-024"
+  }
+]

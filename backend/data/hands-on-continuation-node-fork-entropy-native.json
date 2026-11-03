@@ -1,0 +1,154 @@
+[
+  {
+    "id": "curated-parallel-node_exporter-046",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 1,
+    "topic": "CPU内存与系统状态指标",
+    "title": "真实fork计数实操：子进程全部退出回收，累计创建计数仍保留",
+    "answer": "```python\ndef measure_churn(scrape,spawn,count):\n    if type(count) is not int or not 1<=count<=32:raise ValueError('finite owned child count required')\n    before=scrape();children=[]\n    try:\n        for _ in range(count):children.append(spawn())\n        for child in children:child.wait(timeout=3)\n        after=scrape()\n        if after<before:raise ValueError('kernel counter reset; no interval delta')\n        return {'before':before,'after':after,'delta':after-before,'owned_created':len(children),'owned_reaped':sum(child.returncode is not None for child in children)}\n    finally:\n        for child in children:\n            if child.poll() is None:child.kill()\n            child.wait(timeout=3)\n```\n\n原题知识说明：\n它累计任务创建活动，rate可揭示短命任务洪峰。不同内核统计语义需注意，不能直接当作业务进程存活数。与进程数、CPU系统态和调度开销共同分析。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它累计任务创建活动，rate可揭示短命任务洪峰。",
+      "不同内核统计语义需注意，不能直接当作业务进程存活数。",
+      "与进程数、CPU系统态和调度开销共同分析。"
+    ],
+    "references": [
+      "https://github.com/prometheus/node_exporter/blob/v1.9.1/collector/stat_linux.go"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-046",
+      "original_title": "node_forks_total适合发现哪类变化？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现measure_churn(scrape,spawn,count)。count严格int且1至32；scrape读取真实node_forks_total整数，spawn创建一个自有短命Popen。先采一次before，恰创建count个子进程，全部wait(timeout=3)后采after；返回恰含before,after,delta=after-before,owned_created,owned_reaped（已wait而非仅发信号）。after<before视为重置须ValueError；无论成功失败finally只清理本次自有子进程，不触碰其他PID。真实node_exporter stat读/proc/stat，子进程结束后计数不回落；系统同时可能创建其他任务，因此delta只保证>=本次创建数，不能把全局增量都归因于本程序，也不能把它当当前进程数量。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实node_exporter1.9.1/stat与只读内核/proc，实际两批7/13个自有非root子进程。node_forks_total来自内核累计创建任务计数，可包括clone/线程及其他主机活动，不是当前PID数或容器配额指标。本题不做全主机fork风暴、性能压测、根因或全量来源归因。无镜像构建或默认身份变更。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def measure_churn(scrape,spawn,count):\n    if type(count) is not int or not 1<=count<=32:raise ValueError('finite owned child count required')\n    before=scrape();children=[]\n    try:\n        for _ in range(count):children.append(spawn())\n        for child in children:child.wait(timeout=3)\n        after=scrape()\n        if after<before:raise ValueError('kernel counter reset; no interval delta')\n        return {'before':before,'after':after,'delta':after-before,'owned_created':len(children),'owned_reaped':sum(child.returncode is not None for child in children)}\n    finally:\n        for child in children:\n            if child.poll() is None:child.kill()\n            child.wait(timeout=3)\n"
+    },
+    "negative_files": {
+      "task.py": "def measure_churn(scrape,spawn,count):\n    if type(count) is not int or not 1<=count<=32:raise ValueError('finite owned child count required')\n    before=scrape();children=[]\n    try:\n        for _ in range(count):children.append(spawn())\n        for child in children:child.wait(timeout=3)\n        after=scrape()\n        if after<before:raise ValueError('kernel counter reset; no interval delta')\n        return {'before':before,'after':after,'delta':0,'owned_created':len(children),'owned_reaped':sum(child.returncode is not None for child in children)}\n    finally:\n        for child in children:\n            if child.poll() is None:child.kill()\n            child.wait(timeout=3)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现measure_churn(scrape,spawn,count)。count严格int且1至32；scrape读取真实node_forks_total整数，spawn创建一个自有短命Popen。先采一次before，恰创建count个子进程，全部wait(timeout=3)后采after；返回恰含before,after,delta=after-before,owned_created,owned_reaped（已wait而非仅发信号）。after<before视为重置须ValueError；无论成功失败finally只清理本次自有子进程，不触碰其他PID。真实node_exporter stat读/proc/stat，子进程结束后计数不回落；系统同时可能创建其他任务，因此delta只保证>=本次创建数，不能把全局增量都归因于本程序，也不能把它当当前进程数量。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实node_exporter1.9.1/stat与只读内核/proc，实际两批7/13个自有非root子进程。node_forks_total来自内核累计创建任务计数，可包括clone/线程及其他主机活动，不是当前PID数或容器配额指标。本题不做全主机fork风暴、性能压测、根因或全量来源归因。无镜像构建或默认身份变更。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "node_exporter"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac",
+          "node_exporter:v1.9"
+        ]
+      },
+      "test_files": {
+        "checks/node_fixture.py": "\"\"\"Native collector fixture; owned non-root loopback process only.\"\"\"\nimport contextlib\nimport json\nimport os\nfrom pathlib import Path\nimport shutil\nimport socket\nimport subprocess\nimport tempfile\nimport threading\nimport time\nimport urllib.request\n\n\n@contextlib.contextmanager\ndef node(directory, flags=(), textfile=True):\n    assert os.name == 'posix' and os.geteuid() != 0, 'isolated non-root Linux required'\n    binary = shutil.which('node_exporter')\n    assert binary, 'node_exporter missing'\n    directory = Path(directory).resolve()\n    with socket.socket() as sock:\n        sock.bind(('127.0.0.1', 0))\n        port = sock.getsockname()[1]\n    stop = threading.Event()\n    failures = []\n    stats = {'peak_rss': 0, 'port': port, 'uid': os.geteuid()}\n    with tempfile.TemporaryDirectory(prefix='opsforge-node-') as temporary:\n        with (Path(temporary)/'node.log').open('wb') as output:\n            collector_flags = ['--collector.textfile', '--collector.textfile.directory='+str(directory)] if textfile else []\n            process = subprocess.Popen([binary, '--web.listen-address=127.0.0.1:'+str(port),\n                '--collector.disable-defaults', *collector_flags, *flags],\n                stdout=output, stderr=output,\n                env={**os.environ, 'GOMAXPROCS':'1', 'GOMEMLIMIT':'64MiB'})\n            deadline = time.monotonic()+30\n            def monitor():\n                while not stop.is_set() and process.poll() is None:\n                    try:\n                        status = Path('/proc',str(process.pid),'status').read_text()\n                        rss = next(int(line.split()[1])*1024 for line in status.splitlines() if line.startswith('VmRSS:'))\n                        stats['peak_rss'] = max(stats['peak_rss'],rss)\n                        if rss > 128*1024**2 or time.monotonic() > deadline:\n                            failures.append('resource guard');process.kill();return\n                    except (FileNotFoundError, ProcessLookupError):\n                        return\n                    stop.wait(.02)\n            guard = threading.Thread(target=monitor, daemon=True)\n            guard.start()\n            base = 'http://127.0.0.1:'+str(port)\n            def scrape(query=''):\n                with urllib.request.urlopen(base+'/metrics'+query, timeout=2) as response:\n                    assert response.status == 200\n                    return response.read().decode()\n            try:\n                ready = time.monotonic()+5\n                while True:\n                    try:\n                        with urllib.request.urlopen(base+'/', timeout=.5):\n                            break\n                    except OSError:\n                        assert process.poll() is None and time.monotonic() < ready, 'native collector startup failed: '+(Path(temporary)/'node.log').read_text(errors='replace')[-2500:]\n                        time.sleep(.03)\n                yield scrape\n                assert not failures, failures\n            finally:\n                stop.set()\n                if process.poll() is None:\n                    process.terminate()\n                try:\n                    process.wait(timeout=3)\n                except subprocess.TimeoutExpired:\n                    process.kill();process.wait(timeout=3)\n                guard.join(timeout=2)\n                stats['terminated'] = process.poll() is not None\n                print('NODE_NATIVE '+json.dumps(stats))\n                assert not failures, failures\n\n\ndef samples(text, name):\n    # Exported label values (for example uname.version) can contain spaces.\n    return {line.rsplit(None,1)[0]:float(line.rsplit(None,1)[1]) for line in text.splitlines()\n            if line.startswith(name+' ') or line.startswith(name+'{')}\n",
+        "checks/check.py": "import errno,math,os,pathlib,secrets,subprocess,sys,tempfile,time\nsys.path[:0]=[os.getcwd(),str(pathlib.Path.cwd()/'checks')]\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nimport task\nfrom node_fixture import node,samples\nwith tempfile.TemporaryDirectory(prefix='fork-counter-') as directory,node(directory,flags=('--collector.stat',),textfile=False) as scrape:\n def value():\n  text=scrape();assert 'node_scrape_collector_success{collector=\"stat\"} 1' in text\n  counter=samples(text,'node_forks_total');assert set(counter)=={'node_forks_total'}\n  number=counter['node_forks_total'];assert math.isfinite(number) and number>=0 and number.is_integer()\n  return int(number)\n for count in (7,13):\n  children=[];observations=[]\n  def observed():number=value();observations.append(number);return number\n  def spawn():\n   child=subprocess.Popen([sys.executable,'-c','pass'],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);children.append(child);return child\n  print('STUDENT_OPERATION_ENTERED:real_owned_child_churn_observe_cumulative_kernel_fork_counter_after_reaping',flush=True)\n  result=task.measure_churn(observed,spawn,count)\n  assert len(observations)==2 and len(children)==count\n  assert result=={'before':observations[0],'after':observations[1],'delta':observations[1]-observations[0],'owned_created':count,'owned_reaped':count}\n  assert all(child.returncode==0 for child in children)\n  assert observations[1]-observations[0]>=count,'actual global kernel task creation counter failed to include owned children'\n  assert value()>=observations[1],'fork counter fell when children exited'\n for invalid in (0,33,True,-1):\n  try:task.measure_churn(lambda:0,lambda:None,invalid)\n  except ValueError:pass\n  else:raise AssertionError('unbounded or invalid child creation accepted')\n print('NATIVE_NODE_STAT_ACTUAL_CHILDREN_EXITED_AND_REAPED_BUT_GLOBAL_FORKS_COUNTER_STILL_INCREASED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "practice"
+  },
+  {
+    "id": "curated-parallel-node_exporter-075",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 2,
+    "topic": "CPU内存与系统状态指标",
+    "title": "真实熵诊断实操：同时测随机源与TLS，不从一个熵阈值推断所有TLS阻塞",
+    "answer": "```python\nimport math\n\ndef diagnose(text,nonblocking_random,tls_probe):\n    def metric(name):\n        rows=[line.split()[1] for line in text.splitlines() if line.startswith(name+' ')]\n        if len(rows)!=1:raise ValueError('one entropy observation required')\n        value=float(rows[0])\n        if not math.isfinite(value) or value<0 or not value.is_integer():raise ValueError('finite nonnegative bit count')\n        return int(value)\n    available=metric('node_entropy_available_bits');pool=metric('node_entropy_pool_size_bits')\n    if pool<=0 or available>pool:raise ValueError('invalid entropy pool observation')\n    try:\n        random_bytes=nonblocking_random()\n        if not isinstance(random_bytes,bytes) or len(random_bytes)!=32:raise ValueError('32-byte sample required')\n        random_state='ready'\n    except BlockingIOError:random_state='would-block'\n    except OSError:random_state='error'\n    try:tls_state='ok' if tls_probe() is True else 'failed'\n    except OSError:tls_state='failed'\n    return {'available_bits':available,'pool_bits':pool,'random_nonblocking':random_state,'tls_probe':tls_state,'all_tls_blocked_proven':False}\n```\n\n原题知识说明：\n随机接口行为依内核版本、初始化和应用API而异，不能据单一熵值推出普遍阻塞。结合系统调用等待和启动阶段证据，使用受支持随机源。不要用可预测数据填充来伪造熵。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "随机接口行为依内核版本、初始化和应用API而异，不能据单一熵值推出普遍阻塞。",
+      "结合系统调用等待和启动阶段证据，使用受支持随机源。",
+      "不要用可预测数据填充来伪造熵。"
+    ],
+    "references": [
+      "https://github.com/prometheus/node_exporter/blob/v1.9.1/collector/entropy_linux.go",
+      "https://man7.org/linux/man-pages/man2/getrandom.2.html"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-075",
+      "original_title": "entropy_avail较低是否必然造成所有TLS请求阻塞？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现diagnose(text,nonblocking_random,tls_probe)。从唯一node_entropy_available_bits/node_entropy_pool_size_bits样本解析非负整数，pool>0且available<=pool，缺失/重复/非法ValueError，不默认零。调用nonblocking_random()读取32字节bytes；正常为ready，BlockingIOError为would-block，其他OSError为error，返回短字节须ValueError。独立调用tls_probe()，严格True为ok，False或OSError为failed，不能从随机源或熵数值直接代替TLS实测。返回恰含available_bits,pool_bits,random_nonblocking,tls_probe,all_tls_blocked_proven=False。真实collector读/proc随机指标，GRND_NONBLOCK取样和私有可信TLS握手；错证书会在随机源正常时失败。另有明确受控零熵文本及EAGAIN/ENOSYS分支，不代表实际降低宿主熵或重现早期开机。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实node_exporter1.9.1/entropy、os.getrandom GRND_NONBLOCK和私有TLS证书名称验证；不写随机种子/熵池/宿主信任。受控零值和系统调用错误只验证诊断接口分支，未伪称实际内核熵被耗尽或CRNG未初始化。一个成功/失败TLS样本不证明所有库、所有主机或后续请求；非生产全链路诊断，不构建镜像。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import math\n\ndef diagnose(text,nonblocking_random,tls_probe):\n    def metric(name):\n        rows=[line.split()[1] for line in text.splitlines() if line.startswith(name+' ')]\n        if len(rows)!=1:raise ValueError('one entropy observation required')\n        value=float(rows[0])\n        if not math.isfinite(value) or value<0 or not value.is_integer():raise ValueError('finite nonnegative bit count')\n        return int(value)\n    available=metric('node_entropy_available_bits');pool=metric('node_entropy_pool_size_bits')\n    if pool<=0 or available>pool:raise ValueError('invalid entropy pool observation')\n    try:\n        random_bytes=nonblocking_random()\n        if not isinstance(random_bytes,bytes) or len(random_bytes)!=32:raise ValueError('32-byte sample required')\n        random_state='ready'\n    except BlockingIOError:random_state='would-block'\n    except OSError:random_state='error'\n    try:tls_state='ok' if tls_probe() is True else 'failed'\n    except OSError:tls_state='failed'\n    return {'available_bits':available,'pool_bits':pool,'random_nonblocking':random_state,'tls_probe':tls_state,'all_tls_blocked_proven':False}\n"
+    },
+    "negative_files": {
+      "task.py": "import math\n\ndef diagnose(text,nonblocking_random,tls_probe):\n    def metric(name):\n        rows=[line.split()[1] for line in text.splitlines() if line.startswith(name+' ')]\n        if len(rows)!=1:raise ValueError('one entropy observation required')\n        value=float(rows[0])\n        if not math.isfinite(value) or value<0 or not value.is_integer():raise ValueError('finite nonnegative bit count')\n        return int(value)\n    available=metric('node_entropy_available_bits');pool=metric('node_entropy_pool_size_bits')\n    if pool<=0 or available>pool:raise ValueError('invalid entropy pool observation')\n    try:\n        random_bytes=nonblocking_random()\n        if not isinstance(random_bytes,bytes) or len(random_bytes)!=32:raise ValueError('32-byte sample required')\n        random_state='would-block' if available<1024 else 'ready'\n    except BlockingIOError:random_state='would-block'\n    except OSError:random_state='error'\n    try:tls_state='ok' if tls_probe() is True else 'failed'\n    except OSError:tls_state='failed'\n    return {'available_bits':available,'pool_bits':pool,'random_nonblocking':random_state,'tls_probe':tls_state,'all_tls_blocked_proven':False}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现diagnose(text,nonblocking_random,tls_probe)。从唯一node_entropy_available_bits/node_entropy_pool_size_bits样本解析非负整数，pool>0且available<=pool，缺失/重复/非法ValueError，不默认零。调用nonblocking_random()读取32字节bytes；正常为ready，BlockingIOError为would-block，其他OSError为error，返回短字节须ValueError。独立调用tls_probe()，严格True为ok，False或OSError为failed，不能从随机源或熵数值直接代替TLS实测。返回恰含available_bits,pool_bits,random_nonblocking,tls_probe,all_tls_blocked_proven=False。真实collector读/proc随机指标，GRND_NONBLOCK取样和私有可信TLS握手；错证书会在随机源正常时失败。另有明确受控零熵文本及EAGAIN/ENOSYS分支，不代表实际降低宿主熵或重现早期开机。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实node_exporter1.9.1/entropy、os.getrandom GRND_NONBLOCK和私有TLS证书名称验证；不写随机种子/熵池/宿主信任。受控零值和系统调用错误只验证诊断接口分支，未伪称实际内核熵被耗尽或CRNG未初始化。一个成功/失败TLS样本不证明所有库、所有主机或后续请求；非生产全链路诊断，不构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "node_exporter"
+        ],
+        "python_modules": [
+          "cryptography"
+        ],
+        "features": [
+          "linux:nonroot_dac",
+          "node_exporter:v1.9"
+        ]
+      },
+      "test_files": {
+        "checks/node_fixture.py": "\"\"\"Native collector fixture; owned non-root loopback process only.\"\"\"\nimport contextlib\nimport json\nimport os\nfrom pathlib import Path\nimport shutil\nimport socket\nimport subprocess\nimport tempfile\nimport threading\nimport time\nimport urllib.request\n\n\n@contextlib.contextmanager\ndef node(directory, flags=(), textfile=True):\n    assert os.name == 'posix' and os.geteuid() != 0, 'isolated non-root Linux required'\n    binary = shutil.which('node_exporter')\n    assert binary, 'node_exporter missing'\n    directory = Path(directory).resolve()\n    with socket.socket() as sock:\n        sock.bind(('127.0.0.1', 0))\n        port = sock.getsockname()[1]\n    stop = threading.Event()\n    failures = []\n    stats = {'peak_rss': 0, 'port': port, 'uid': os.geteuid()}\n    with tempfile.TemporaryDirectory(prefix='opsforge-node-') as temporary:\n        with (Path(temporary)/'node.log').open('wb') as output:\n            collector_flags = ['--collector.textfile', '--collector.textfile.directory='+str(directory)] if textfile else []\n            process = subprocess.Popen([binary, '--web.listen-address=127.0.0.1:'+str(port),\n                '--collector.disable-defaults', *collector_flags, *flags],\n                stdout=output, stderr=output,\n                env={**os.environ, 'GOMAXPROCS':'1', 'GOMEMLIMIT':'64MiB'})\n            deadline = time.monotonic()+30\n            def monitor():\n                while not stop.is_set() and process.poll() is None:\n                    try:\n                        status = Path('/proc',str(process.pid),'status').read_text()\n                        rss = next(int(line.split()[1])*1024 for line in status.splitlines() if line.startswith('VmRSS:'))\n                        stats['peak_rss'] = max(stats['peak_rss'],rss)\n                        if rss > 128*1024**2 or time.monotonic() > deadline:\n                            failures.append('resource guard');process.kill();return\n                    except (FileNotFoundError, ProcessLookupError):\n                        return\n                    stop.wait(.02)\n            guard = threading.Thread(target=monitor, daemon=True)\n            guard.start()\n            base = 'http://127.0.0.1:'+str(port)\n            def scrape(query=''):\n                with urllib.request.urlopen(base+'/metrics'+query, timeout=2) as response:\n                    assert response.status == 200\n                    return response.read().decode()\n            try:\n                ready = time.monotonic()+5\n                while True:\n                    try:\n                        with urllib.request.urlopen(base+'/', timeout=.5):\n                            break\n                    except OSError:\n                        assert process.poll() is None and time.monotonic() < ready, 'native collector startup failed: '+(Path(temporary)/'node.log').read_text(errors='replace')[-2500:]\n                        time.sleep(.03)\n                yield scrape\n                assert not failures, failures\n            finally:\n                stop.set()\n                if process.poll() is None:\n                    process.terminate()\n                try:\n                    process.wait(timeout=3)\n                except subprocess.TimeoutExpired:\n                    process.kill();process.wait(timeout=3)\n                guard.join(timeout=2)\n                stats['terminated'] = process.poll() is not None\n                print('NODE_NATIVE '+json.dumps(stats))\n                assert not failures, failures\n\n\ndef samples(text, name):\n    # Exported label values (for example uname.version) can contain spaces.\n    return {line.rsplit(None,1)[0]:float(line.rsplit(None,1)[1]) for line in text.splitlines()\n            if line.startswith(name+' ') or line.startswith(name+'{')}\n",
+        "checks/tls_native.py": "\"\"\"Private live TLS test, without modifying host trust, entropy or kernel RNG settings.\"\"\"\nimport contextlib,datetime,ipaddress,pathlib,socket,ssl,tempfile,threading\nfrom cryptography import x509\nfrom cryptography.hazmat.primitives import hashes,serialization\nfrom cryptography.hazmat.primitives.asymmetric import ec\nfrom cryptography.x509.oid import NameOID\n\n@contextlib.contextmanager\ndef tls_service():\n with tempfile.TemporaryDirectory(prefix='entropy-tls-') as directory:\n  root=pathlib.Path(directory);now=datetime.datetime.utcnow();key=ec.generate_private_key(ec.SECP256R1())\n  name=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,'entropy.training.test')])\n  certificate=x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(now-datetime.timedelta(minutes=1)).not_valid_after(now+datetime.timedelta(days=1)).add_extension(x509.SubjectAlternativeName([x509.DNSName('entropy.training.test')]),False).sign(key,hashes.SHA256())\n  cert=root/'server.pem';secret=root/'server.key';cert.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))\n  secret.write_bytes(key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption()));secret.chmod(0o600)\n  server=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);server.load_cert_chain(cert,secret)\n  client=ssl.create_default_context(cafile=str(cert))\n  listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(8);listener.settimeout(.2)\n  port=listener.getsockname()[1];stop=threading.Event()\n  def run():\n   while not stop.is_set():\n    try:connection,_=listener.accept()\n    except socket.timeout:continue\n    except OSError:\n     if stop.is_set():return\n     raise\n    try:\n     connection.settimeout(2)\n     with server.wrap_socket(connection,server_side=True) as channel:\n      if channel.recv(4)==b'PING':channel.sendall(b'PONG')\n    except (ssl.SSLError,OSError):connection.close()\n  thread=threading.Thread(target=run,daemon=True);thread.start()\n  def probe(hostname='entropy.training.test'):\n   with socket.create_connection(('127.0.0.1',port),timeout=2) as connection:\n    with client.wrap_socket(connection,server_hostname=hostname) as channel:\n     channel.sendall(b'PING');return channel.recv(4)==b'PONG'\n  try:yield probe\n  finally:stop.set();listener.close();thread.join(timeout=3);assert not thread.is_alive()\n",
+        "checks/check.py": "import errno,math,os,pathlib,secrets,subprocess,sys,tempfile,time\nsys.path[:0]=[os.getcwd(),str(pathlib.Path.cwd()/'checks')]\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nimport task\nfrom node_fixture import node,samples\nfrom tls_native import tls_service\nwith tempfile.TemporaryDirectory(prefix='entropy-metrics-') as directory,node(directory,flags=('--collector.entropy',),textfile=False) as scrape,tls_service() as tls:\n text=scrape();assert 'node_scrape_collector_success{collector=\"entropy\"} 1' in text\n available=int(samples(text,'node_entropy_available_bits')['node_entropy_available_bits'])\n pool=int(samples(text,'node_entropy_pool_size_bits')['node_entropy_pool_size_bits'])\n assert available==int(pathlib.Path('/proc/sys/kernel/random/entropy_avail').read_text()) and pool==int(pathlib.Path('/proc/sys/kernel/random/poolsize').read_text())\n calls={'random':0,'tls':0}\n def random_sample():calls['random']+=1;return os.getrandom(32,os.GRND_NONBLOCK)\n def handshake():calls['tls']+=1;return tls()\n print('STUDENT_OPERATION_ENTERED:separate_actual_entropy_gauges_getrandom_readiness_and_live_verified_tls',flush=True)\n report=task.diagnose(text,random_sample,handshake)\n assert report=={'available_bits':available,'pool_bits':pool,'random_nonblocking':'ready','tls_probe':'ok','all_tls_blocked_proven':False}\n assert calls=={'random':1,'tls':1}\n bad_certificate=task.diagnose(text,random_sample,lambda:tls('wrong.training.test'))\n assert bad_certificate['random_nonblocking']=='ready' and bad_certificate['tls_probe']=='failed','random readiness did not prove certificate validity'\n # Controlled error branches do not mutate the real kernel or claim to reproduce early boot.\n low='node_entropy_available_bits 0\\nnode_entropy_pool_size_bits '+str(pool)+'\\n'\n result=task.diagnose(low,random_sample,handshake)\n assert result['available_bits']==0 and result['random_nonblocking']=='ready' and result['tls_probe']=='ok'\n def would_block():raise BlockingIOError(errno.EAGAIN,'controlled uninitialized-source branch')\n result=task.diagnose(low,would_block,lambda:False)\n assert result['random_nonblocking']=='would-block' and result['tls_probe']=='failed' and result['all_tls_blocked_proven'] is False\n def unavailable():raise OSError(errno.ENOSYS,'controlled unsupported syscall branch')\n assert task.diagnose(text,unavailable,lambda:True)['random_nonblocking']=='error'\n for malformed in ('',text+'\\nnode_entropy_available_bits 0\\n','node_entropy_available_bits NaN\\nnode_entropy_pool_size_bits 256\\n','node_entropy_available_bits 500\\nnode_entropy_pool_size_bits 256\\n'):\n  try:task.diagnose(malformed,random_sample,handshake)\n  except ValueError:pass\n  else:raise AssertionError('missing/ambiguous entropy observation was treated as zero or healthy')\n print('NATIVE_NODE_ENTROPY_ACTUAL_PROCFS_GETRANDOM_READY_TLS_HANDSHAKE_SUCCEEDS_CERTIFICATE_FAILURE_INDEPENDENT_NO_KERNEL_MUTATION',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "practice"
+  }
+]

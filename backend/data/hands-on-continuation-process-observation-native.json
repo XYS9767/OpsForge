@@ -1,0 +1,409 @@
+[
+  {
+    "id": "curated-parallel-process-001",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 0,
+    "topic": "进程线程与生命周期",
+    "title": "读取真实boot_id和进程启动ticks，正确处理stat中含空格与括号的名称",
+    "answer": "```python\nfrom pathlib import Path\ndef process_identity(pid):\n    if type(pid) is not int or pid<=0:raise ValueError('positive PID')\n    raw=Path('/proc',str(pid),'stat').read_text(encoding='utf8')\n    closing=raw.rfind(')');opening=raw.find('(')\n    if opening<0 or closing<=opening or int(raw[:opening].strip())!=pid:raise ValueError('invalid stat record')\n    fields=raw[closing+1:].split()\n    if len(fields)<20:raise ValueError('incomplete stat record')\n    ticks=int(fields[19])\n    if ticks<0:raise ValueError('negative start ticks')\n    return {'pid':pid,'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text(encoding='ascii').strip(),'start_ticks':ticks}\n```\n\n原题知识说明：\n进程退出后 PID 可被复用；不同 PID 命名空间还可能出现相同数字。记录主机、boot ID、PID 和启动时间共同定位实例，关联服务实例或部署 ID。仅按昨天的 PID 发信号可能操作到今天的另一个进程。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原ID原生进程操作；按精确题目及执行bundle的五路验证记录认定。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "进程退出后 PID 可被复用；不同 PID 命名空间还可能出现相同数字。",
+      "记录主机、boot ID、PID 和启动时间共同定位实例，关联服务实例或部署 ID。",
+      "仅按昨天的 PID 发信号可能操作到今天的另一个进程。"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html",
+      "https://man7.org/linux/man-pages/man5/proc_sys_kernel.5.html"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-process-001",
+      "original_title": "PID 为什么不能长期充当业务实例的唯一标识？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现 process_identity(pid)，pid为正整数且拒绝bool。只读/proc/PID/stat的starttime（字段22）及当前boot_id，返回pid/boot_id/start_ticks；解析不能把comm里的空格或括号当字段边界。读取失败传播OSError，不缓存旧PID结果，不发信号。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；真实非root Linux子进程、procfs和文件描述符。\n\n## 能力边界\n真实procfs当前PID命名空间的观察标识；未强制触发PID复用，该三元组不是跨命名空间业务ID，也不是pidfd式发信号竞态保护。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "from pathlib import Path\ndef process_identity(pid):\n    if type(pid) is not int or pid<=0:raise ValueError('positive PID')\n    raw=Path('/proc',str(pid),'stat').read_text(encoding='utf8')\n    closing=raw.rfind(')');opening=raw.find('(')\n    if opening<0 or closing<=opening or int(raw[:opening].strip())!=pid:raise ValueError('invalid stat record')\n    fields=raw[closing+1:].split()\n    if len(fields)<20:raise ValueError('incomplete stat record')\n    ticks=int(fields[19])\n    if ticks<0:raise ValueError('negative start ticks')\n    return {'pid':pid,'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text(encoding='ascii').strip(),'start_ticks':ticks}\n"
+    },
+    "negative_files": {
+      "task.py": "from pathlib import Path\ndef process_identity(pid):\n    if type(pid) is not int or pid<=0:raise ValueError('positive PID')\n    raw=Path('/proc',str(pid),'stat').read_text(encoding='utf8')\n    closing=raw.rfind(')');opening=raw.find('(')\n    if opening<0 or closing<=opening or int(raw[:opening].strip())!=pid:raise ValueError('invalid stat record')\n    fields=raw.split()[2:]\n    if len(fields)<20:raise ValueError('incomplete stat record')\n    ticks=int(fields[19])\n    if ticks<0:raise ValueError('negative start ticks')\n    return {'pid':pid,'boot_id':Path('/proc/sys/kernel/random/boot_id').read_text(encoding='ascii').strip(),'start_ticks':ticks}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11与procfs，自有子进程",
+      "operation": "实现 process_identity(pid)，pid为正整数且拒绝bool。只读/proc/PID/stat的starttime（字段22）及当前boot_id，返回pid/boot_id/start_ticks；解析不能把comm里的空格或括号当字段边界。读取失败传播OSError，不缓存旧PID结果，不发信号。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实procfs当前PID命名空间的观察标识；未强制触发PID复用，该三元组不是跨命名空间业务ID，也不是pidfd式发信号竞态保护。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,signal,time,resource,errno,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student operation did not complete') from error\ndef finish(child):\n if child.poll() is None:\n  child.send_signal(signal.SIGCONT);child.kill()\n child.wait(timeout=3)\n if child.stdout:child.stdout.close()\ncode=\"import ctypes,time; ctypes.CDLL(None).prctl(15,b'name ) ( tail',0,0,0); print('READY',flush=True); time.sleep(20)\"\nchild=subprocess.Popen([sys.executable,'-u','-c',code],stdout=subprocess.PIPE,text=True)\ntry:\n assert child.stdout.readline().strip()=='READY'\n raw=pathlib.Path('/proc',str(child.pid),'stat').read_text();tail=raw[raw.rfind(')')+1:].split();expected_ticks=int(tail[19]);assert expected_ticks>0\n result=student(task.process_identity,child.pid)\n assert result=={'pid':child.pid,'boot_id':pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(),'start_ticks':expected_ticks},'PID alone or whitespace-split stat is not a process identity'\n assert str(uuid.UUID(result['boot_id']))==result['boot_id']\n assert task.process_identity(child.pid)==result\n for bad in [True,0,-1,'1']:\n  try:task.process_identity(bad)\n  except ValueError:pass\n  else:raise AssertionError('invalid PID accepted')\nfinally:finish(child)\ntry:task.process_identity(child.pid)\nexcept FileNotFoundError:pass\nelse:raise AssertionError('exited process identity was fabricated')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-process-019",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 1,
+    "topic": "资源限制与调度隔离",
+    "title": "只在私有子进程降低NOFILE软限制，真实触发EMFILE并保留硬限制",
+    "answer": "```python\nimport subprocess,sys,json\ndef exhaust_private_fds(soft):\n    if type(soft) is not int or not 24<=soft<=64:raise ValueError('24..64 private fd limit')\n    code=\"\"\"import os,sys,resource,json\nold=resource.getrlimit(resource.RLIMIT_NOFILE);soft=int(sys.argv[1])\nif old[1]!=resource.RLIM_INFINITY and soft>old[1]:raise RuntimeError('private hard limit too small')\nopened=[];error=0\ntry:\n resource.setrlimit(resource.RLIMIT_NOFILE,(soft,old[1]))\n during=resource.getrlimit(resource.RLIMIT_NOFILE)\n for _ in range(128):\n  try:opened.append(os.open('/dev/null',os.O_RDONLY))\n  except OSError as exc:error=exc.errno;break\nfinally:\n for fd in opened:os.close(fd)\n resource.setrlimit(resource.RLIMIT_NOFILE,old)\nprint(json.dumps({'soft':during[0],'hard':during[1],'old_hard':old[1],'opened':len(opened),'errno':error,'restored':resource.getrlimit(resource.RLIMIT_NOFILE)==old,'pid':os.getpid()}))\n\"\"\"\n    return json.loads(subprocess.check_output([sys.executable,'-I','-c',code,str(soft)],text=True))\n```\n\n原题知识说明：\n软限制是当前使用的上限，硬限制限制非特权进程可把软限制提高到哪里。应用可能进一步自设软限制，最终应检查目标 PID 的值。增大上限不会修复描述符泄漏，也可能扩大内核和下游压力。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原ID原生进程操作；按精确题目及执行bundle的五路验证记录认定。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "软限制是当前使用的上限，硬限制限制非特权进程可把软限制提高到哪里。",
+      "应用可能进一步自设软限制，最终应检查目标 PID 的值。",
+      "增大上限不会修复描述符泄漏，也可能扩大内核和下游压力。"
+    ],
+    "references": [
+      "https://docs.python.org/3.11/library/resource.html",
+      "https://man7.org/linux/man-pages/man2/getrlimit.2.html"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-process-019",
+      "original_title": "RLIMIT_NOFILE 的软限制与硬限制各做什么？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现 exhaust_private_fds(soft)，soft为24..64非bool整数。独立子进程保存RLIMIT_NOFILE，保留硬限制仅降低软限制，最多128次实际open /dev/null直到失败；记录soft/hard/old_hard/opened/errno/pid，关闭本次fd并恢复原限制，restored表示实际相等。父进程限制不变，不修改宿主limits配置。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；真实非root Linux子进程、procfs和文件描述符。\n\n## 能力边界\n非root私有子进程的实际EMFILE与软硬限制；不证明全机ENFILE、systemd LimitNOFILE、网络连接容量或永久提额。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import subprocess,sys,json\ndef exhaust_private_fds(soft):\n    if type(soft) is not int or not 24<=soft<=64:raise ValueError('24..64 private fd limit')\n    code=\"\"\"import os,sys,resource,json\nold=resource.getrlimit(resource.RLIMIT_NOFILE);soft=int(sys.argv[1])\nif old[1]!=resource.RLIM_INFINITY and soft>old[1]:raise RuntimeError('private hard limit too small')\nopened=[];error=0\ntry:\n resource.setrlimit(resource.RLIMIT_NOFILE,(soft,old[1]))\n during=resource.getrlimit(resource.RLIMIT_NOFILE)\n for _ in range(128):\n  try:opened.append(os.open('/dev/null',os.O_RDONLY))\n  except OSError as exc:error=exc.errno;break\nfinally:\n for fd in opened:os.close(fd)\n resource.setrlimit(resource.RLIMIT_NOFILE,old)\nprint(json.dumps({'soft':during[0],'hard':during[1],'old_hard':old[1],'opened':len(opened),'errno':error,'restored':resource.getrlimit(resource.RLIMIT_NOFILE)==old,'pid':os.getpid()}))\n\"\"\"\n    return json.loads(subprocess.check_output([sys.executable,'-I','-c',code,str(soft)],text=True))\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess,sys,json\ndef exhaust_private_fds(soft):\n    if type(soft) is not int or not 24<=soft<=64:raise ValueError('24..64 private fd limit')\n    code=\"\"\"import os,sys,resource,json\nold=resource.getrlimit(resource.RLIMIT_NOFILE);soft=int(sys.argv[1])\nif old[1]!=resource.RLIM_INFINITY and soft>old[1]:raise RuntimeError('private hard limit too small')\nopened=[];error=0\ntry:\n pass # omitted limit, bounded loop must not exhaust host descriptors\n during=resource.getrlimit(resource.RLIMIT_NOFILE)\n for _ in range(128):\n  try:opened.append(os.open('/dev/null',os.O_RDONLY))\n  except OSError as exc:error=exc.errno;break\nfinally:\n for fd in opened:os.close(fd)\n resource.setrlimit(resource.RLIMIT_NOFILE,old)\nprint(json.dumps({'soft':during[0],'hard':during[1],'old_hard':old[1],'opened':len(opened),'errno':error,'restored':resource.getrlimit(resource.RLIMIT_NOFILE)==old,'pid':os.getpid()}))\n\"\"\"\n    return json.loads(subprocess.check_output([sys.executable,'-I','-c',code,str(soft)],text=True))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11与procfs，自有子进程",
+      "operation": "实现 exhaust_private_fds(soft)，soft为24..64非bool整数。独立子进程保存RLIMIT_NOFILE，保留硬限制仅降低软限制，最多128次实际open /dev/null直到失败；记录soft/hard/old_hard/opened/errno/pid，关闭本次fd并恢复原限制，restored表示实际相等。父进程限制不变，不修改宿主limits配置。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "非root私有子进程的实际EMFILE与软硬限制；不证明全机ENFILE、systemd LimitNOFILE、网络连接容量或永久提额。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,signal,time,resource,errno,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student operation did not complete') from error\ndef finish(child):\n if child.poll() is None:\n  child.send_signal(signal.SIGCONT);child.kill()\n child.wait(timeout=3)\n if child.stdout:child.stdout.close()\nbefore=resource.getrlimit(resource.RLIMIT_NOFILE)\nfor limit in [32,48]:\n result=student(task.exhaust_private_fds,limit)\n assert result['soft']==limit and result['errno']==errno.EMFILE,'private soft fd cap did not reject actual open'\n assert 0<result['opened']<limit and result['hard']==result['old_hard'] and result['restored'] is True\n assert result['pid']!=os.getpid() and resource.getrlimit(resource.RLIMIT_NOFILE)==before\nfor bad in [True,0,23,65,'32']:\n try:task.exhaust_private_fds(bad)\n except ValueError:pass\n else:raise AssertionError('unbounded fd limit accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-process-020",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 1,
+    "topic": "信号会话与文件描述符",
+    "title": "真实区分已捕获TSTP与不可捕获STOP，再用CONT恢复自有进程",
+    "answer": "```python\nimport os,signal\ndef demonstrate_stop(process,probe):\n    process.send_signal(signal.SIGTSTP)\n    handled=probe('handled')\n    process.send_signal(signal.SIGSTOP)\n    stopped=probe('stopped')\n    process.send_signal(signal.SIGCONT)\n    resumed=probe('resumed')\n    return {'handled':handled,'stopped':stopped,'resumed':resumed}\n```\n\n原题知识说明：\nSIGSTOP 不能被捕获、阻塞或忽略；SIGTSTP 是终端停止信号，程序可以处理。停止任务仍保留内存、描述符和锁，不能当作释放资源。恢复使用 SIGCONT，但需先评估依赖超时和持锁影响。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原ID原生进程操作；按精确题目及执行bundle的五路验证记录认定。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "SIGSTOP 不能被捕获、阻塞或忽略；SIGTSTP 是终端停止信号，程序可以处理。",
+      "停止任务仍保留内存、描述符和锁，不能当作释放资源。",
+      "恢复使用 SIGCONT，但需先评估依赖超时和持锁影响。"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man7/signal.7.html"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-process-020",
+      "original_title": "SIGSTOP 与 SIGTSTP 的可处理性有什么不同？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现 demonstrate_stop(process,probe)。process为调用方自有、已就绪且捕获SIGTSTP的Popen子进程。依次发送SIGTSTP、SIGSTOP、SIGCONT，每步调用可信probe(stage)，stage依次handled/stopped/resumed，返回对应布尔观测。probe实际读取处理标记和/proc进程状态，不可硬编码结果或跳过恢复，不触碰其他进程。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；真实非root Linux子进程、procfs和文件描述符。\n\n## 能力边界\n真实Linux信号及procfs T状态；不操作终端作业控制、其他用户或systemd服务。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,signal\ndef demonstrate_stop(process,probe):\n    process.send_signal(signal.SIGTSTP)\n    handled=probe('handled')\n    process.send_signal(signal.SIGSTOP)\n    stopped=probe('stopped')\n    process.send_signal(signal.SIGCONT)\n    resumed=probe('resumed')\n    return {'handled':handled,'stopped':stopped,'resumed':resumed}\n"
+    },
+    "negative_files": {
+      "task.py": "import os,signal\ndef demonstrate_stop(process,probe):\n    process.send_signal(signal.SIGTSTP)\n    handled=probe('handled')\n    process.send_signal(signal.SIGTSTP)\n    stopped=probe('stopped')\n    process.send_signal(signal.SIGCONT)\n    resumed=probe('resumed')\n    return {'handled':handled,'stopped':stopped,'resumed':resumed}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11与procfs，自有子进程",
+      "operation": "实现 demonstrate_stop(process,probe)。process为调用方自有、已就绪且捕获SIGTSTP的Popen子进程。依次发送SIGTSTP、SIGSTOP、SIGCONT，每步调用可信probe(stage)，stage依次handled/stopped/resumed，返回对应布尔观测。probe实际读取处理标记和/proc进程状态，不可硬编码结果或跳过恢复，不触碰其他进程。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Linux信号及procfs T状态；不操作终端作业控制、其他用户或systemd服务。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,signal,time,resource,errno,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student operation did not complete') from error\ndef finish(child):\n if child.poll() is None:\n  child.send_signal(signal.SIGCONT);child.kill()\n child.wait(timeout=3)\n if child.stdout:child.stdout.close()\nwith tempfile.TemporaryDirectory() as directory:\n marker=pathlib.Path(directory)/'handled';events=[]\n code=\"import signal,time,pathlib,sys; signal.signal(signal.SIGTSTP,lambda *_:pathlib.Path(sys.argv[1]).write_text('handled')); print('READY',flush=True); time.sleep(20)\"\n child=subprocess.Popen([sys.executable,'-u','-c',code,str(marker)],stdout=subprocess.PIPE,text=True,start_new_session=True)\n try:\n  assert child.stdout.readline().strip()=='READY'\n  def state():\n   raw=pathlib.Path('/proc',str(child.pid),'stat').read_text();return raw[raw.rfind(')')+1:].split()[0]\n  def probe(stage):\n   deadline=time.monotonic()+1\n   while time.monotonic()<deadline:\n    observed=state()\n    ok=(marker.exists() and observed!='T') if stage=='handled' else observed=='T' if stage=='stopped' else observed!='T'\n    if ok:events.append(stage);return True\n    time.sleep(.005)\n   events.append('failed:'+stage);return False\n  result=student(task.demonstrate_stop,child,probe)\n  assert result=={'handled':True,'stopped':True,'resumed':True} and events==['handled','stopped','resumed'],'caught TSTP and uncatchable STOP were conflated or CONT omitted'\n  assert child.poll() is None\n finally:finish(child)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-process-024",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 1,
+    "topic": "进程性能与故障诊断",
+    "title": "只读真实进程exe/cwd/root链接，保留已删除工作目录的原始标记",
+    "answer": "```python\nimport os\ndef process_links(pid):\n    if type(pid) is not int or pid<=0:raise ValueError('positive PID')\n    return {name:os.readlink('/proc/'+str(pid)+'/'+name) for name in ('exe','cwd','root')}\n```\n\n原题知识说明：\nexe 指向执行映像，cwd 是当前工作目录，root 是进程所见文件系统根。路径可能因删除、命名空间或权限而呈现特殊结果。结合它们能确认执行与路径视图，但不能仅用命令行文本证明正在运行哪个制品。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原ID原生进程操作；按精确题目及执行bundle的五路验证记录认定。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "exe 指向执行映像，cwd 是当前工作目录，root 是进程所见文件系统根。",
+      "路径可能因删除、命名空间或权限而呈现特殊结果。",
+      "结合它们能确认执行与路径视图，但不能仅用命令行文本证明正在运行哪个制品。"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man5/proc_pid_exe.5.html",
+      "https://man7.org/linux/man-pages/man5/proc_pid_cwd.5.html"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-process-024",
+      "original_title": "/proc/PID/exe、cwd、root 三个链接分别表示什么？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现 process_links(pid)，pid为正整数且拒绝bool。使用readlink读取/proc/PID/exe、cwd、root，返回同名字符串字段，不跟随或规范化目标，不删掉内核给出的 (deleted) 标记。读取失败传播OSError，不改目标进程工作目录或文件。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；真实非root Linux子进程、procfs和文件描述符。\n\n## 能力边界\n同UID自有进程在当前挂载命名空间的只读观察；不创建chroot或容器，也不代表有权限观察任意其他用户。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\ndef process_links(pid):\n    if type(pid) is not int or pid<=0:raise ValueError('positive PID')\n    return {name:os.readlink('/proc/'+str(pid)+'/'+name) for name in ('exe','cwd','root')}\n"
+    },
+    "negative_files": {
+      "task.py": "import os\ndef process_links(pid):\n    if type(pid) is not int or pid<=0:raise ValueError('positive PID')\n    return {name:os.readlink('/proc/'+str(pid)+'/cwd') for name in ('exe','cwd','root')}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11与procfs，自有子进程",
+      "operation": "实现 process_links(pid)，pid为正整数且拒绝bool。使用readlink读取/proc/PID/exe、cwd、root，返回同名字符串字段，不跟随或规范化目标，不删掉内核给出的 (deleted) 标记。读取失败传播OSError，不改目标进程工作目录或文件。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "同UID自有进程在当前挂载命名空间的只读观察；不创建chroot或容器，也不代表有权限观察任意其他用户。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,signal,time,resource,errno,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student operation did not complete') from error\ndef finish(child):\n if child.poll() is None:\n  child.send_signal(signal.SIGCONT);child.kill()\n child.wait(timeout=3)\n if child.stdout:child.stdout.close()\nwith tempfile.TemporaryDirectory() as directory:\n cwd=pathlib.Path(directory)/('cwd '+secrets.token_hex(4));cwd.mkdir()\n child=subprocess.Popen([sys.executable,'-u','-c',\"import time;print('READY',flush=True);time.sleep(20)\"],cwd=cwd,stdout=subprocess.PIPE,text=True)\n try:\n  assert child.stdout.readline().strip()=='READY'\n  expected={name:os.readlink('/proc/'+str(child.pid)+'/'+name) for name in ('exe','cwd','root')}\n  assert expected['cwd']==str(cwd) and expected['cwd']!=expected['exe']\n  assert student(task.process_links,child.pid)==expected,'exe/cwd/root targets were confused'\n  cwd.rmdir();expected['cwd']=str(cwd)+' (deleted)'\n  assert task.process_links(child.pid)==expected,'deleted target marker was removed or the link was resolved'\n  for bad in [True,0,-1,'1']:\n   try:task.process_links(bad)\n   except ValueError:pass\n   else:raise AssertionError('invalid PID accepted')\n finally:finish(child)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-process-025",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 1,
+    "topic": "进程线程与生命周期",
+    "title": "读取真实NUL分隔cmdline，保留空参数、空格与不可解码原始字节",
+    "answer": "```python\nimport os\nfrom pathlib import Path\ndef parse_cmdline(raw):\n    if not isinstance(raw,bytes):raise TypeError('bytes')\n    if not raw:return []\n    if not raw.endswith(b'\\0'):raise ValueError('missing final NUL')\n    return [os.fsdecode(arg) for arg in raw[:-1].split(b'\\0')]\ndef read_cmdline(pid):\n    if type(pid) is not int or pid<=0:raise ValueError('positive PID')\n    return parse_cmdline(Path('/proc',str(pid),'cmdline').read_bytes())\n```\n\n原题知识说明：\n命令行由参数数组构成，NUL 用于区分参数边界，空格可能本来就是参数内容。按空格切分会误读带空格参数；读取结果还可能被程序改变。输出可能包含密码，应只取必要字段并脱敏。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原ID原生进程操作；按精确题目及执行bundle的五路验证记录认定。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "命令行由参数数组构成，NUL 用于区分参数边界，空格可能本来就是参数内容。",
+      "按空格切分会误读带空格参数；读取结果还可能被程序改变。",
+      "输出可能包含密码，应只取必要字段并脱敏。"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man5/proc_pid_cmdline.5.html",
+      "https://docs.python.org/3.11/library/os.html#os.fsdecode"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-process-025",
+      "original_title": "/proc/PID/cmdline 为什么常用 NUL 分隔？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现 parse_cmdline(raw)和read_cmdline(pid)。raw必须为bytes；空字节串返回[]，非空必须以NUL结尾，仅去掉这一个结尾分隔符再拆参数，使用os.fsdecode保持不可解码字节可逆。pid为正整数且拒绝bool，实际读取/proc/PID/cmdline，不缓存、不写目标。不能按空白分割或丢弃空参数。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；真实非root Linux子进程、procfs和文件描述符。\n\n## 能力边界\n当前Linux自有进程的可观察argv，不将cmdline当秘密存储、不可伪造身份或完整进程历史。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\nfrom pathlib import Path\ndef parse_cmdline(raw):\n    if not isinstance(raw,bytes):raise TypeError('bytes')\n    if not raw:return []\n    if not raw.endswith(b'\\0'):raise ValueError('missing final NUL')\n    return [os.fsdecode(arg) for arg in raw[:-1].split(b'\\0')]\ndef read_cmdline(pid):\n    if type(pid) is not int or pid<=0:raise ValueError('positive PID')\n    return parse_cmdline(Path('/proc',str(pid),'cmdline').read_bytes())\n"
+    },
+    "negative_files": {
+      "task.py": "import os\nfrom pathlib import Path\ndef parse_cmdline(raw):\n    if not isinstance(raw,bytes):raise TypeError('bytes')\n    if not raw:return []\n    if not raw.endswith(b'\\0'):raise ValueError('missing final NUL')\n    return os.fsdecode(raw.replace(b'\\0',b' ')).split()\ndef read_cmdline(pid):\n    if type(pid) is not int or pid<=0:raise ValueError('positive PID')\n    return parse_cmdline(Path('/proc',str(pid),'cmdline').read_bytes())\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11与procfs，自有子进程",
+      "operation": "实现 parse_cmdline(raw)和read_cmdline(pid)。raw必须为bytes；空字节串返回[]，非空必须以NUL结尾，仅去掉这一个结尾分隔符再拆参数，使用os.fsdecode保持不可解码字节可逆。pid为正整数且拒绝bool，实际读取/proc/PID/cmdline，不缓存、不写目标。不能按空白分割或丢弃空参数。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "当前Linux自有进程的可观察argv，不将cmdline当秘密存储、不可伪造身份或完整进程历史。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,signal,time,resource,errno,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student operation did not complete') from error\ndef finish(child):\n if child.poll() is None:\n  child.send_signal(signal.SIGCONT);child.kill()\n child.wait(timeout=3)\n if child.stdout:child.stdout.close()\narguments=[sys.executable,'-u','-c',\"import time;print('READY',flush=True);time.sleep(20)\",'a b','中文','']\nchild=subprocess.Popen(arguments,stdout=subprocess.PIPE,text=True)\ntry:\n assert child.stdout.readline().strip()=='READY'\n assert student(task.read_cmdline,child.pid)==arguments,'NUL boundaries, whitespace or empty final argument were lost'\n assert task.parse_cmdline(b'')==[]\n assert task.parse_cmdline(b'\\0x\\0\\0')==['','x','']\n assert [os.fsencode(x) for x in task.parse_cmdline(b'raw\\xff\\0')]==[b'raw\\xff'],'filesystem undecodable bytes were lost'\n for bad,error in [(b'unterminated',ValueError),('text',TypeError)]:\n  try:task.parse_cmdline(bad)\n  except error:pass\n  else:raise AssertionError('invalid cmdline accepted')\nfinally:finish(child)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-process-050",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 2,
+    "topic": "信号会话与文件描述符",
+    "title": "用真实exec对照FD_CLOEXEC，验证目标句柄关闭并恢复调用者标志",
+    "answer": "```python\nimport os\ndef inspect_exec_inheritance(fd,probe):\n    original=os.get_inheritable(fd)\n    try:\n        os.set_inheritable(fd,True);inherited=probe()\n        os.set_inheritable(fd,False);closed=probe()\n        return {'inherited':inherited,'after_cloexec':closed}\n    finally:os.set_inheritable(fd,original)\n```\n\n原题知识说明：\n带 close-on-exec 的描述符在成功 exec 时关闭，避免子程序继承日志、锁或敏感 socket；fork 本身不会因此关闭。应在创建描述符时原子设置相应标志，避免多线程下先打开再设置的竞态。最终行为由应用实现保证。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原ID原生进程操作；按精确题目及执行bundle的五路验证记录认定。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "带 close-on-exec 的描述符在成功 exec 时关闭，避免子程序继承日志、锁或敏感 socket；fork 本身不会因此关闭。",
+      "应在创建描述符时原子设置相应标志，避免多线程下先打开再设置的竞态。",
+      "最终行为由应用实现保证。"
+    ],
+    "references": [
+      "https://docs.python.org/3.11/library/os.html#inheritance-of-file-descriptors",
+      "https://man7.org/linux/man-pages/man2/fcntl.2.html"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-process-050",
+      "original_title": "FD_CLOEXEC 为什么能减少子程序继承不必要资源？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现 inspect_exec_inheritance(fd,probe)。fd是调用方拥有的普通文件描述符。保存原继承标志，先设可继承并调用probe，再设不可继承并调用probe，返回inherited/after_cloexec观测。probe使用close_fds=False执行真实新Python进程，以dev/inode核对是否仍有同一工件句柄。成功失败均恢复原标志，不关闭调用者fd或改变内容。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；真实非root Linux子进程、procfs和文件描述符。\n\n## 能力边界\n当前Linux普通fd跨exec行为；不将CLOEXEC当作fork期间隔离，也不覆盖SCM_RIGHTS、其他库启动策略或应用权限撤销。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\ndef inspect_exec_inheritance(fd,probe):\n    original=os.get_inheritable(fd)\n    try:\n        os.set_inheritable(fd,True);inherited=probe()\n        os.set_inheritable(fd,False);closed=probe()\n        return {'inherited':inherited,'after_cloexec':closed}\n    finally:os.set_inheritable(fd,original)\n"
+    },
+    "negative_files": {
+      "task.py": "import os\ndef inspect_exec_inheritance(fd,probe):\n    original=os.get_inheritable(fd)\n    try:\n        os.set_inheritable(fd,True);inherited=probe()\n        os.set_inheritable(fd,True);closed=probe()\n        return {'inherited':inherited,'after_cloexec':closed}\n    finally:os.set_inheritable(fd,original)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11与procfs，自有子进程",
+      "operation": "实现 inspect_exec_inheritance(fd,probe)。fd是调用方拥有的普通文件描述符。保存原继承标志，先设可继承并调用probe，再设不可继承并调用probe，返回inherited/after_cloexec观测。probe使用close_fds=False执行真实新Python进程，以dev/inode核对是否仍有同一工件句柄。成功失败均恢复原标志，不关闭调用者fd或改变内容。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "当前Linux普通fd跨exec行为；不将CLOEXEC当作fork期间隔离，也不覆盖SCM_RIGHTS、其他库启动策略或应用权限撤销。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,signal,time,resource,errno,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student operation did not complete') from error\ndef finish(child):\n if child.poll() is None:\n  child.send_signal(signal.SIGCONT);child.kill()\n child.wait(timeout=3)\n if child.stdout:child.stdout.close()\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'owned';payload=secrets.token_bytes(22);path.write_bytes(payload);fd=os.open(path,os.O_RDONLY)\n child_code=\"\"\"import os,sys,json\ntry:\n st=os.fstat(int(sys.argv[1]));match=st.st_dev==int(sys.argv[2]) and st.st_ino==int(sys.argv[3])\nexcept OSError:match=False\nprint(json.dumps({'present':match,'pid':os.getpid()}))\n\"\"\"\n try:\n  identity=os.fstat(fd)\n  for initial in [True,False]:\n   os.set_inheritable(fd,initial);events=[]\n   def probe():\n    result=json.loads(subprocess.check_output([sys.executable,'-I','-c',child_code,str(fd),str(identity.st_dev),str(identity.st_ino)],close_fds=False,text=True));assert result['pid']!=os.getpid();events.append(result['present']);return result['present']\n   result=student(task.inspect_exec_inheritance,fd,probe)\n   assert events==[True,False] and result=={'inherited':True,'after_cloexec':False},'exec did not actually close the target descriptor'\n   assert os.get_inheritable(fd)==initial,'caller descriptor flag changed'\n   assert os.pread(fd,len(payload),0)==payload\n  os.set_inheritable(fd,True)\n  def broken_probe():raise RuntimeError('probe unavailable')\n  try:task.inspect_exec_inheritance(fd,broken_probe)\n  except RuntimeError:pass\n  else:raise AssertionError('probe error swallowed')\n  assert os.get_inheritable(fd) is True,'error path did not restore inheritance flag'\n finally:os.close(fd)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

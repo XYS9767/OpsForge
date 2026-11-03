@@ -1,0 +1,348 @@
+[
+  {
+    "id": "curated-permissions-completion-001",
+    "module": "permissions",
+    "category": "用户、权限与安全",
+    "level": 1,
+    "topic": "文件访问控制",
+    "title": "真实目录权限矩阵：可列名不一定可读，不能列名仍可遍历已知文件",
+    "answer": "```python\nimport os\nfrom pathlib import Path\ndef probe_path(directory,name):\n    if not isinstance(name,str) or not name or name in ('.','..') or '/' in name or '\\\\' in name:raise ValueError('one name')\n    try:os.listdir(directory);listable=True\n    except PermissionError:listable=False\n    try:data=(Path(directory)/name).read_bytes();readable=True\n    except PermissionError:data=None;readable=False\n    return {'listable':listable,'readable':readable,'data':data}\n```\n\n原题知识说明：\n读取路径需要逐级搜索目录，目录 x 表示可遍历；文件自身 r 不能绕过父目录限制。应从实际运行 UID/GID 检查整条路径、ACL 和安全策略。目录 r 主要影响列出名称，与已知名称的访问不是同一权限。",
+    "type": "code",
+    "source": "OpsForge 原创权限与安全专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原ID原生操作改编；完成情况以精确题目及执行bundle的五路验证为准。",
+    "pack": "permissions-completion-20261021",
+    "body": "## 操作任务\n实现 probe_path(directory,name)。name须为非空单个文件名，拒绝点、双点、斜杠和反斜杠。实际分别尝试列目录与读取已知文件，返回listable/readable/data；仅PermissionError表示该操作被拒绝，其他错误传播。不得改权限、内容或身份。文件data是bytes，读取被拒时为None。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；非root Linux真实文件、子进程或Unix套接字操作。\n\n## 能力边界\n当前非root UID拥有自有目录，实际验证目录r与x；不改变用户、组、ACL或SELinux，不代表这些额外策略均已覆盖。",
+    "rubric": [
+      "身份与授权区分准确",
+      "不扩大权限掩盖根因",
+      "验证合法访问与禁止访问"
+    ],
+    "hints": [],
+    "references": [
+      "https://man7.org/linux/man-pages/man7/path_resolution.7.html"
+    ],
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-permissions-completion-001",
+      "original_title": "文件可读但路径中某一级目录没有 x 权限，会发生什么？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\nfrom pathlib import Path\ndef probe_path(directory,name):\n    if not isinstance(name,str) or not name or name in ('.','..') or '/' in name or '\\\\' in name:raise ValueError('one name')\n    try:os.listdir(directory);listable=True\n    except PermissionError:listable=False\n    try:data=(Path(directory)/name).read_bytes();readable=True\n    except PermissionError:data=None;readable=False\n    return {'listable':listable,'readable':readable,'data':data}\n"
+    },
+    "negative_files": {
+      "task.py": "import os\nfrom pathlib import Path\ndef probe_path(directory,name):\n    if not isinstance(name,str) or not name or name in ('.','..') or '/' in name or '\\\\' in name:raise ValueError('one name')\n    try:os.listdir(directory);listable=True\n    except PermissionError:listable=False\n    try:\n        os.listdir(directory)\n        data=(Path(directory)/name).read_bytes();readable=True\n    except PermissionError:data=None;readable=False\n    return {'listable':listable,'readable':readable,'data':data}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11标准库，自有目录与子进程",
+      "operation": "实现 probe_path(directory,name)。name须为非空单个文件名，拒绝点、双点、斜杠和反斜杠。实际分别尝试列目录与读取已知文件，返回listable/readable/data；仅PermissionError表示该操作被拒绝，其他错误传播。不得改权限、内容或身份。文件data是bytes，读取被拒时为None。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "当前非root UID拥有自有目录，实际验证目录r与x；不改变用户、组、ACL或SELinux，不代表这些额外策略均已覆盖。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,socket,array,struct,errno,resource,signal,time,math\nfrom unittest.mock import patch\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student operation did not complete') from error\nwith tempfile.TemporaryDirectory() as directory:\n parent=pathlib.Path(directory);root=parent/'private';root.mkdir();name='payload-'+secrets.token_hex(6);path=root/name;payload=secrets.token_bytes(70);path.write_bytes(payload);path.chmod(0o400)\n try:\n  for mode,want_list,want_read in [(0o400,True,False),(0o100,False,True),(0,False,False),(0o500,True,True)]:\n   root.chmod(mode)\n   result=student(task.probe_path,root,name)\n   assert result=={'listable':want_list,'readable':want_read,'data':payload if want_read else None},'directory listing and traversal were conflated'\n   assert stat.S_IMODE(root.stat().st_mode)==mode,'probe changed permissions'\n  root.chmod(0o700)\n  for bad in ['', '.', '..', '../outside', '/absolute']:\n   try:task.probe_path(root,bad)\n   except ValueError:pass\n   else:raise AssertionError('non-component path accepted')\n  try:task.probe_path(root,'not-present')\n  except FileNotFoundError:pass\n  else:raise AssertionError('missing file was mistaken for permission denial')\n  assert path.read_bytes()==payload\n finally:root.chmod(0o700)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-permissions-completion-003",
+    "module": "permissions",
+    "category": "用户、权限与安全",
+    "level": 1,
+    "topic": "文件访问控制",
+    "title": "在真实子进程创建文件与目录，验证umask清位且保留父进程设置",
+    "answer": "```python\nimport subprocess,sys,json\ndef measure_umask(mask,file_mode=0o666,dir_mode=0o777):\n    if any(type(x) is not int or not 0<=x<=0o777 for x in (mask,file_mode,dir_mode)):raise ValueError('permission bits')\n    code=\"\"\"import os,sys,tempfile,stat,json\nwith tempfile.TemporaryDirectory() as root:\n os.umask(int(sys.argv[1]))\n fd=os.open(root+'/file',os.O_WRONLY|os.O_CREAT|os.O_EXCL,int(sys.argv[2]))\n try:file_mode=stat.S_IMODE(os.fstat(fd).st_mode)\n finally:os.close(fd)\n os.mkdir(root+'/directory',int(sys.argv[3]))\n print(json.dumps({'file':file_mode,'directory':stat.S_IMODE(os.stat(root+'/directory').st_mode),'pid':os.getpid()}))\n os.chmod(root+'/directory',0o700)\n\"\"\"\n    return json.loads(subprocess.check_output([sys.executable,'-I','-c',code,str(mask),str(file_mode),str(dir_mode)],text=True))\n```\n\n原题知识说明：\n应用通常以0666请求普通文件、0777请求目录，屏蔽027后常得0640和0750。umask 是清除权限位，不是十进制相减；应用自选 mode、默认 ACL 等会影响结果。它不自动修改已有文件，也不保证所有软件都采用同一创建策略。",
+    "type": "code",
+    "source": "OpsForge 原创权限与安全专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原ID原生操作改编；完成情况以精确题目及执行bundle的五路验证为准。",
+    "pack": "permissions-completion-20261021",
+    "body": "## 操作任务\n实现 measure_umask(mask,file_mode=0o666,dir_mode=0o777)。三个参数均须为0..0777的非bool整数。独立子进程设置umask，实际在自有临时目录独占创建文件及目录，以fstat/stat返回实际权限整数file/directory和子进程pid。清理临时对象，父进程umask不得改变；不能只计算权限或用chmod伪造观测。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；非root Linux真实文件、子进程或Unix套接字操作。\n\n## 能力边界\n实际Linux新对象创建权限，未配置默认ACL；不声称覆盖带默认ACL或所有应用的创建策略。",
+    "rubric": [
+      "身份与授权区分准确",
+      "不扩大权限掩盖根因",
+      "验证合法访问与禁止访问"
+    ],
+    "hints": [],
+    "references": [
+      "https://man7.org/linux/man-pages/man2/umask.2.html"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh",
+        "block_ids": [
+          "LVvLdLLXGok8pWxD6skcuNdsnxb"
+        ]
+      }
+    ],
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-permissions-completion-003",
+      "original_title": "umask=027 时，新建普通文件和目录的常见初始权限分别是什么？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import subprocess,sys,json\ndef measure_umask(mask,file_mode=0o666,dir_mode=0o777):\n    if any(type(x) is not int or not 0<=x<=0o777 for x in (mask,file_mode,dir_mode)):raise ValueError('permission bits')\n    code=\"\"\"import os,sys,tempfile,stat,json\nwith tempfile.TemporaryDirectory() as root:\n os.umask(int(sys.argv[1]))\n fd=os.open(root+'/file',os.O_WRONLY|os.O_CREAT|os.O_EXCL,int(sys.argv[2]))\n try:file_mode=stat.S_IMODE(os.fstat(fd).st_mode)\n finally:os.close(fd)\n os.mkdir(root+'/directory',int(sys.argv[3]))\n print(json.dumps({'file':file_mode,'directory':stat.S_IMODE(os.stat(root+'/directory').st_mode),'pid':os.getpid()}))\n os.chmod(root+'/directory',0o700)\n\"\"\"\n    return json.loads(subprocess.check_output([sys.executable,'-I','-c',code,str(mask),str(file_mode),str(dir_mode)],text=True))\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess,sys,json\ndef measure_umask(mask,file_mode=0o666,dir_mode=0o777):\n    if any(type(x) is not int or not 0<=x<=0o777 for x in (mask,file_mode,dir_mode)):raise ValueError('permission bits')\n    code=\"\"\"import os,sys,tempfile,stat,json\nwith tempfile.TemporaryDirectory() as root:\n os.umask(int(sys.argv[1]))\n fd=os.open(root+'/file',os.O_WRONLY|os.O_CREAT|os.O_EXCL,int(sys.argv[2]))\n try:file_mode=stat.S_IMODE(os.fstat(fd).st_mode)\n finally:os.close(fd)\n os.mkdir(root+'/directory',int(sys.argv[3]))\n print(json.dumps({'file':file_mode,'directory':stat.S_IMODE(os.stat(root+'/directory').st_mode),'pid':os.getpid()}))\n os.chmod(root+'/directory',0o700)\n\"\"\"\n    result=json.loads(subprocess.check_output([sys.executable,'-I','-c',code,str(mask),str(file_mode),str(dir_mode)],text=True))\n    result['file']=max(0,file_mode-mask);result['directory']=max(0,dir_mode-mask)\n    return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11标准库，自有目录与子进程",
+      "operation": "实现 measure_umask(mask,file_mode=0o666,dir_mode=0o777)。三个参数均须为0..0777的非bool整数。独立子进程设置umask，实际在自有临时目录独占创建文件及目录，以fstat/stat返回实际权限整数file/directory和子进程pid。清理临时对象，父进程umask不得改变；不能只计算权限或用chmod伪造观测。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "实际Linux新对象创建权限，未配置默认ACL；不声称覆盖带默认ACL或所有应用的创建策略。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,socket,array,struct,errno,resource,signal,time,math\nfrom unittest.mock import patch\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student operation did not complete') from error\noriginal=os.umask(0o022);os.umask(original)\ntry:\n for mask,fmode,dmode in [(0o027,0o666,0o777),(0o077,0o600,0o700),(0o222,0o444,0o555),(0o777,0o666,0o777),(0,0o620,0o710)]:\n  result=student(task.measure_umask,mask,fmode,dmode)\n  assert result['file']==fmode&~mask and result['directory']==dmode&~mask,'umask clears bits instead of subtracting numbers'\n  assert type(result['pid']) is int and result['pid']!=os.getpid(),'mask experiment must execute in a separate process'\n  observed=os.umask(original);assert observed==original,'caller umask changed'\n for bad in [True,-1,0o1000,'027']:\n  try:task.measure_umask(bad)\n  except ValueError:pass\n  else:raise AssertionError('invalid mask accepted')\nfinally:os.umask(original)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-advanced-process-002",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 4,
+    "topic": "信号会话与文件描述符",
+    "title": "用真实竞争进程证明：关闭额外fd释放记录锁，却不释放flock",
+    "answer": "```python\nimport os,fcntl\ndef compare_lifetimes(path,probe):\n    result={}\n    for kind in ('record','flock'):\n        first=os.open(path,os.O_RDWR);extra=os.open(path,os.O_RDWR)\n        try:\n            lock=fcntl.lockf if kind=='record' else fcntl.flock\n            lock(first,fcntl.LOCK_EX|fcntl.LOCK_NB)\n            before=probe(kind)\n            os.close(extra);extra=None\n            after=probe(kind)\n            result[kind]={'before':before,'after':after}\n        finally:\n            if extra is not None:os.close(extra)\n            os.close(first)\n    return result\n```\n\n原题知识说明：\n传统POSIX记录锁与进程和文件关联，关闭该进程指向该文件的任一描述符可能释放其记录锁，不能把锁寿命等同某一个fd。flock通常关联打开文件描述，语义不同；OFD锁又有不同生命周期及平台支持。应核对实际锁API、dup与fork关系以及库是否内部打开关闭同一文件。恢复不能只重建锁文件，需让所有参与者使用同一互斥协议。验收并行竞争、额外打开关闭和进程退出，确认锁保护范围及释放时机；不同锁机制不应假定天然互相协调。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原ID原生操作改编；完成情况以精确题目及执行bundle的五路验证为准。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man2/fcntl_locking.2.html",
+      "https://man7.org/linux/man-pages/man2/flock.2.html"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-process-002",
+      "original_title": "使用fcntl记录锁的进程打开同一文件两次，关闭一个无关描述符后锁消失，为什么与flock表现不同？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现 compare_lifetimes(path,probe)。现有自有普通文件以两次独立open获得fd；分别实验fcntl.lockf记录锁与flock排他非阻塞锁。在持锁时调用probe(kind)，关闭第二个fd后再次调用，按record/flock返回before/after布尔观测。probe是可信真实竞争子进程，True表示被锁拒绝。所有路径关闭全部本次fd，文件内容不变，不能返回预填结论或混用锁API。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；非root Linux真实文件、子进程或Unix套接字操作。\n\n## 能力边界\n当前Linux本地普通文件上的传统记录锁与flock，未验证NFS/SMB、OFD锁或所有库内部打开行为。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,fcntl\ndef compare_lifetimes(path,probe):\n    result={}\n    for kind in ('record','flock'):\n        first=os.open(path,os.O_RDWR);extra=os.open(path,os.O_RDWR)\n        try:\n            lock=fcntl.lockf if kind=='record' else fcntl.flock\n            lock(first,fcntl.LOCK_EX|fcntl.LOCK_NB)\n            before=probe(kind)\n            os.close(extra);extra=None\n            after=probe(kind)\n            result[kind]={'before':before,'after':after}\n        finally:\n            if extra is not None:os.close(extra)\n            os.close(first)\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "import os,fcntl\ndef compare_lifetimes(path,probe):\n    result={}\n    for kind in ('record','flock'):\n        first=os.open(path,os.O_RDWR);extra=os.open(path,os.O_RDWR)\n        try:\n            lock=fcntl.flock\n            lock(first,fcntl.LOCK_EX|fcntl.LOCK_NB)\n            before=probe(kind)\n            os.close(extra);extra=None\n            after=probe(kind)\n            result[kind]={'before':before,'after':after}\n        finally:\n            if extra is not None:os.close(extra)\n            os.close(first)\n    return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11标准库，自有目录与子进程",
+      "operation": "实现 compare_lifetimes(path,probe)。现有自有普通文件以两次独立open获得fd；分别实验fcntl.lockf记录锁与flock排他非阻塞锁。在持锁时调用probe(kind)，关闭第二个fd后再次调用，按record/flock返回before/after布尔观测。probe是可信真实竞争子进程，True表示被锁拒绝。所有路径关闭全部本次fd，文件内容不变，不能返回预填结论或混用锁API。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "当前Linux本地普通文件上的传统记录锁与flock，未验证NFS/SMB、OFD锁或所有库内部打开行为。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,socket,array,struct,errno,resource,signal,time,math\nfrom unittest.mock import patch\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student operation did not complete') from error\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'locked';payload=secrets.token_bytes(32);path.write_bytes(payload);events=[]\n child_code=\"\"\"import os,sys,fcntl,json\nfd=os.open(sys.argv[1],os.O_RDWR)\ntry:\n try:\n  (fcntl.lockf if sys.argv[2]=='record' else fcntl.flock)(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)\n  blocked=False\n except BlockingIOError:blocked=True\n print(json.dumps({'blocked':blocked,'pid':os.getpid()}))\nfinally:os.close(fd)\n\"\"\"\n def probe(kind):\n  result=json.loads(subprocess.check_output([sys.executable,'-I','-c',child_code,str(path),kind],text=True));assert result['pid']!=os.getpid();events.append((kind,result['blocked']));return result['blocked']\n result=student(task.compare_lifetimes,path,probe)\n assert events==[('record',True),('record',False),('flock',True),('flock',True)],'actual independent-process lock states differ'\n assert result=={'record':{'before':True,'after':False},'flock':{'before':True,'after':True}}\n assert not probe('record') and not probe('flock'),'lock leaked after function returned'\n assert path.read_bytes()==payload\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-advanced-process-007",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 4,
+    "topic": "信号会话与文件描述符",
+    "title": "真实SCM_RIGHTS委派：路径被拒后仍可读fd，校验对端并拒绝可写句柄",
+    "answer": "```python\nimport os,socket,array,struct,stat,fcntl\ndef receive_readonly(connection,expected_uid,limit):\n    if type(expected_uid) is not int or expected_uid<0 or type(limit) is not int or not 1<=limit<=65536:raise ValueError('uid and limit')\n    pid,uid,gid=struct.unpack('3i',connection.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,struct.calcsize('3i')))\n    if uid!=expected_uid:raise PermissionError('unexpected peer')\n    descriptors=[]\n    try:\n        data,ancillary,flags,address=connection.recvmsg(1,socket.CMSG_SPACE(16*array.array('i').itemsize),socket.MSG_CMSG_CLOEXEC)\n        for level,kind,raw in ancillary:\n            if level==socket.SOL_SOCKET and kind==socket.SCM_RIGHTS:\n                values=array.array('i');values.frombytes(raw[:len(raw)//values.itemsize*values.itemsize]);descriptors.extend(values)\n        if flags&socket.MSG_CTRUNC or data!=b'F' or len(descriptors)!=1:raise ValueError('exactly one descriptor')\n        fd=descriptors[0]\n        if not stat.S_ISREG(os.fstat(fd).st_mode) or fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE!=os.O_RDONLY:raise ValueError('readonly regular file required')\n        os.set_inheritable(fd,False)\n        payload=os.pread(fd,limit+1,0)\n        if len(payload)>limit:raise ValueError('size limit')\n        return payload\n    finally:\n        for fd in descriptors:os.close(fd)\n```\n\n原题知识说明：\nSCM_RIGHTS传递的是对已打开文件描述的引用，接收方不一定再次按路径完成原来的打开检查，因此发送方承担授权委派责任。应核对发送者身份、允许传递的对象和访问模式，不能仅在接收进程目录权限上做限制。描述符还可能共享偏移或状态，接收方要处理close-on-exec和生命周期。验收陌生对端请求、只读与读写fd、重复发送和连接中断，确认不会泄漏额外资源。撤销路径权限不能自动回收已传递句柄，紧急撤权需识别持有者并按业务停止或更新。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原ID原生操作改编；完成情况以精确题目及执行bundle的五路验证为准。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://docs.python.org/3.11/library/socket.html#socket.socket.recvmsg",
+      "https://man7.org/linux/man-pages/man7/unix.7.html"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-process-007",
+      "original_title": "通过Unix套接字传递文件描述符后，接收进程能读到自身路径权限不允许打开的文件，这是怎么发生的？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现 receive_readonly(connection,expected_uid,limit)。connection是已连接的Linux AF_UNIX套接字；expected_uid非负非bool整数，limit为1..65536非bool整数。先SO_PEERCRED验证uid，不符PermissionError且不消费消息；recvmsg接收标记F和恰一个SCM_RIGHTS普通只读文件fd，截断、多fd、可写fd或内容超限均ValueError。返回从偏移0读取的bytes，不改变共享偏移，所有成功/失败路径关闭收到的fd且禁止继承。原路径已无读权限，不得chmod或重新按路径打开。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；非root Linux真实文件、子进程或Unix套接字操作。\n\n## 能力边界\n真实本机Unix socketpair与SCM_RIGHTS；检查同UID和故意不匹配UID，不创建新账号，也不声称UID校验足以覆盖所有应用层授权。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,socket,array,struct,stat,fcntl\ndef receive_readonly(connection,expected_uid,limit):\n    if type(expected_uid) is not int or expected_uid<0 or type(limit) is not int or not 1<=limit<=65536:raise ValueError('uid and limit')\n    pid,uid,gid=struct.unpack('3i',connection.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,struct.calcsize('3i')))\n    if uid!=expected_uid:raise PermissionError('unexpected peer')\n    descriptors=[]\n    try:\n        data,ancillary,flags,address=connection.recvmsg(1,socket.CMSG_SPACE(16*array.array('i').itemsize),socket.MSG_CMSG_CLOEXEC)\n        for level,kind,raw in ancillary:\n            if level==socket.SOL_SOCKET and kind==socket.SCM_RIGHTS:\n                values=array.array('i');values.frombytes(raw[:len(raw)//values.itemsize*values.itemsize]);descriptors.extend(values)\n        if flags&socket.MSG_CTRUNC or data!=b'F' or len(descriptors)!=1:raise ValueError('exactly one descriptor')\n        fd=descriptors[0]\n        if not stat.S_ISREG(os.fstat(fd).st_mode) or fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE!=os.O_RDONLY:raise ValueError('readonly regular file required')\n        os.set_inheritable(fd,False)\n        payload=os.pread(fd,limit+1,0)\n        if len(payload)>limit:raise ValueError('size limit')\n        return payload\n    finally:\n        for fd in descriptors:os.close(fd)\n"
+    },
+    "negative_files": {
+      "task.py": "import os,socket,array,struct,stat,fcntl\ndef receive_readonly(connection,expected_uid,limit):\n    if type(expected_uid) is not int or expected_uid<0 or type(limit) is not int or not 1<=limit<=65536:raise ValueError('uid and limit')\n    pid,uid,gid=struct.unpack('3i',connection.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,struct.calcsize('3i')))\n    if uid!=expected_uid:raise PermissionError('unexpected peer')\n    descriptors=[]\n    try:\n        data,ancillary,flags,address=connection.recvmsg(1,socket.CMSG_SPACE(16*array.array('i').itemsize),socket.MSG_CMSG_CLOEXEC)\n        for level,kind,raw in ancillary:\n            if level==socket.SOL_SOCKET and kind==socket.SCM_RIGHTS:\n                values=array.array('i');values.frombytes(raw[:len(raw)//values.itemsize*values.itemsize]);descriptors.extend(values)\n        if flags&socket.MSG_CTRUNC or data!=b'F' or len(descriptors)!=1:raise ValueError('exactly one descriptor')\n        fd=descriptors[0]\n        if not stat.S_ISREG(os.fstat(fd).st_mode):raise ValueError('readonly regular file required')\n        os.set_inheritable(fd,False)\n        payload=os.pread(fd,limit+1,0)\n        if len(payload)>limit:raise ValueError('size limit')\n        return payload\n    finally:\n        for fd in descriptors:os.close(fd)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11标准库，自有目录与子进程",
+      "operation": "实现 receive_readonly(connection,expected_uid,limit)。connection是已连接的Linux AF_UNIX套接字；expected_uid非负非bool整数，limit为1..65536非bool整数。先SO_PEERCRED验证uid，不符PermissionError且不消费消息；recvmsg接收标记F和恰一个SCM_RIGHTS普通只读文件fd，截断、多fd、可写fd或内容超限均ValueError。返回从偏移0读取的bytes，不改变共享偏移，所有成功/失败路径关闭收到的fd且禁止继承。原路径已无读权限，不得chmod或重新按路径打开。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实本机Unix socketpair与SCM_RIGHTS；检查同UID和故意不匹配UID，不创建新账号，也不声称UID校验足以覆盖所有应用层授权。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,socket,array,struct,errno,resource,signal,time,math\nfrom unittest.mock import patch\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student operation did not complete') from error\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'delegated';payload=secrets.token_bytes(75);path.write_bytes(payload)\n readonly=os.open(path,os.O_RDONLY);writable=os.open(path,os.O_RDWR);path.chmod(0)\n def sent(fds,marker=b'F'):\n  sender,receiver=socket.socketpair();sender.sendmsg([marker],[(socket.SOL_SOCKET,socket.SCM_RIGHTS,array.array('i',fds))] if fds else [])\n  return sender,receiver\n try:\n  try:path.read_bytes()\n  except PermissionError:pass\n  else:raise AssertionError('fixture lacks native DAC denial')\n  os.lseek(readonly,3,os.SEEK_SET);sender,receiver=sent([readonly])\n  try:\n   before=len(os.listdir('/proc/self/fd'));result=student(task.receive_readonly,receiver,os.getuid(),100)\n   assert result==payload,'delegated fd must be read from offset zero'\n   assert os.lseek(readonly,0,os.SEEK_CUR)==3,'shared open-file offset changed'\n   assert len(os.listdir('/proc/self/fd'))==before,'received descriptor leaked'\n  finally:sender.close();receiver.close()\n  for fds,limit in [([writable],100),([readonly,readonly],100),([],100),([readonly],10)]:\n   sender,receiver=sent(fds)\n   try:\n    before=len(os.listdir('/proc/self/fd'))\n    try:task.receive_readonly(receiver,os.getuid(),limit)\n    except ValueError:pass\n    else:raise AssertionError('invalid delegation accepted')\n    assert len(os.listdir('/proc/self/fd'))==before,'error path leaked received fd'\n   finally:sender.close();receiver.close()\n  sender,receiver=sent([readonly])\n  try:\n   try:task.receive_readonly(receiver,os.getuid()+1,100)\n   except PermissionError:pass\n   else:raise AssertionError('unexpected peer accepted')\n   assert task.receive_readonly(receiver,os.getuid(),100)==payload,'peer check consumed an unauthorized message'\n  finally:sender.close();receiver.close()\n finally:os.close(readonly);os.close(writable);path.chmod(0o600)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-advanced-process-009",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 4,
+    "topic": "进程性能与故障诊断",
+    "title": "在私有子进程触发RLIMIT_AS下的mmap失败，不误报宿主物理内存耗尽",
+    "answer": "```python\nimport subprocess,sys,json\ndef probe_address_limit(requested):\n    if type(requested) is not int or not 32*1024*1024<=requested<=64*1024*1024:raise ValueError('32..64 MiB')\n    code=\"\"\"import os,sys,json,resource,mmap\nvirtual=int(open('/proc/self/statm').read().split()[0])*os.sysconf('SC_PAGE_SIZE')\nlimit=virtual+8*1024*1024\nsoft,hard=resource.getrlimit(resource.RLIMIT_AS)\nif hard!=resource.RLIM_INFINITY and limit>hard:raise RuntimeError('insufficient private AS budget')\nresource.setrlimit(resource.RLIMIT_AS,(limit,hard))\nerror=0\ntry:\n mapping=mmap.mmap(-1,int(sys.argv[1]));mapping.close()\nexcept OSError as exc:error=exc.errno\nprint(json.dumps({'requested':int(sys.argv[1]),'errno':error,'virtual_before':virtual,'as_limit':limit,'pid':os.getpid(),'physical_exhaustion_proven':False}))\n\"\"\"\n    return json.loads(subprocess.check_output([sys.executable,'-I','-c',code,str(requested)],text=True))\n```\n\n原题知识说明：\n同时检查RLIMIT_AS、实际虚拟地址空间、映射条目数量与vm.max_map_count，再关联系统提交承诺和内存压力。大量小映射可能先触及条目限制，稀疏映射也会消耗虚拟空间而非同比RSS；32位进程还可能受地址碎片限制。保留失败errno、请求大小和映射布局，不能只根据MemAvailable调大堆。处置优先减少不必要映射或调整经测算的限制，并验证内核元数据成本。验收长时间运行后的映射数和失败路径，避免只在刚启动的空进程中证明配置有效。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原ID原生操作改编；完成情况以精确题目及执行bundle的五路验证为准。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://docs.python.org/3.11/library/resource.html",
+      "https://man7.org/linux/man-pages/man2/getrlimit.2.html"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-process-009",
+      "original_title": "进程RSS不高却无法mmap新区域，怎样区分地址空间限制、映射数量限制和物理内存不足？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现 probe_address_limit(requested)，requested为32..64MiB的非bool整数字节数。独立子进程读取自身statm和真实页大小得到virtual_before，将RLIMIT_AS软限制设为virtual_before+8MiB并保留硬限制；实际mmap requested字节并关闭成功映射。返回requested/errno/virtual_before/as_limit/pid/physical_exhaustion_proven（恒False）。不得触碰父进程限制或宿主sysctl，不通过大量实际写页制造OOM。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；非root Linux真实文件、子进程或Unix套接字操作。\n\n## 能力边界\n只证明本机子进程地址空间上限造成的真实ENOMEM，不测试vm.max_map_count、32位碎片、宿主OOM或cgroup内存压力，不能据此断定所有mmap故障根因。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import subprocess,sys,json\ndef probe_address_limit(requested):\n    if type(requested) is not int or not 32*1024*1024<=requested<=64*1024*1024:raise ValueError('32..64 MiB')\n    code=\"\"\"import os,sys,json,resource,mmap\nvirtual=int(open('/proc/self/statm').read().split()[0])*os.sysconf('SC_PAGE_SIZE')\nlimit=virtual+8*1024*1024\nsoft,hard=resource.getrlimit(resource.RLIMIT_AS)\nif hard!=resource.RLIM_INFINITY and limit>hard:raise RuntimeError('insufficient private AS budget')\nresource.setrlimit(resource.RLIMIT_AS,(limit,hard))\nerror=0\ntry:\n mapping=mmap.mmap(-1,int(sys.argv[1]));mapping.close()\nexcept OSError as exc:error=exc.errno\nprint(json.dumps({'requested':int(sys.argv[1]),'errno':error,'virtual_before':virtual,'as_limit':limit,'pid':os.getpid(),'physical_exhaustion_proven':False}))\n\"\"\"\n    return json.loads(subprocess.check_output([sys.executable,'-I','-c',code,str(requested)],text=True))\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess,sys,json\ndef probe_address_limit(requested):\n    if type(requested) is not int or not 32*1024*1024<=requested<=64*1024*1024:raise ValueError('32..64 MiB')\n    code=\"\"\"import os,sys,json,resource,mmap\nvirtual=int(open('/proc/self/statm').read().split()[0])*os.sysconf('SC_PAGE_SIZE')\nlimit=virtual+8*1024*1024\nsoft,hard=resource.getrlimit(resource.RLIMIT_AS)\nif hard!=resource.RLIM_INFINITY and limit>hard:raise RuntimeError('insufficient private AS budget')\npass # forgot to apply the private address-space limit\nerror=0\ntry:\n mapping=mmap.mmap(-1,int(sys.argv[1]));mapping.close()\nexcept OSError as exc:error=exc.errno\nprint(json.dumps({'requested':int(sys.argv[1]),'errno':error,'virtual_before':virtual,'as_limit':limit,'pid':os.getpid(),'physical_exhaustion_proven':False}))\n\"\"\"\n    return json.loads(subprocess.check_output([sys.executable,'-I','-c',code,str(requested)],text=True))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11标准库，自有目录与子进程",
+      "operation": "实现 probe_address_limit(requested)，requested为32..64MiB的非bool整数字节数。独立子进程读取自身statm和真实页大小得到virtual_before，将RLIMIT_AS软限制设为virtual_before+8MiB并保留硬限制；实际mmap requested字节并关闭成功映射。返回requested/errno/virtual_before/as_limit/pid/physical_exhaustion_proven（恒False）。不得触碰父进程限制或宿主sysctl，不通过大量实际写页制造OOM。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "只证明本机子进程地址空间上限造成的真实ENOMEM，不测试vm.max_map_count、32位碎片、宿主OOM或cgroup内存压力，不能据此断定所有mmap故障根因。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,socket,array,struct,errno,resource,signal,time,math\nfrom unittest.mock import patch\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student operation did not complete') from error\nbefore=resource.getrlimit(resource.RLIMIT_AS)\nfor requested in [32*1024*1024,48*1024*1024]:\n result=student(task.probe_address_limit,requested)\n assert result['requested']==requested and result['errno']==errno.ENOMEM,'native mmap did not fail under the private AS cap'\n assert result['as_limit']==result['virtual_before']+8*1024*1024 and result['pid']!=os.getpid()\n assert result['physical_exhaustion_proven'] is False,'address-space limit is not proof of host physical exhaustion'\n assert resource.getrlimit(resource.RLIMIT_AS)==before,'parent address-space limit changed'\nfor bad in [True,0,31*1024*1024,65*1024*1024]:\n try:task.probe_address_limit(bad)\n except ValueError:pass\n else:raise AssertionError('unbounded mapping request accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

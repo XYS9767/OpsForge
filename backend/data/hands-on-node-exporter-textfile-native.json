@@ -1,0 +1,237 @@
+[
+  {
+    "id": "curated-parallel-node_exporter-055",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 2,
+    "topic": "Textfile与批任务指标",
+    "title": "修复textfile显式采样时间戳并保留最后成功时间语义",
+    "answer": "文件 backup.prom：\n```text\n# HELP training_backup_last_success_seconds Last successful backup Unix time.\n# TYPE training_backup_last_success_seconds gauge\ntraining_backup_last_success_seconds{job=\"nightly\"} 1700000000\n```\n\n原理说明：node_exporter的textfile机制不支持把带时间戳样本当历史回填使用。应把业务完成时间作为独立gauge值暴露，由Prometheus记录抓取时间。历史导入需选择支持该能力的链路。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "node_exporter的textfile机制不支持把带时间戳样本当历史回填使用。",
+      "应把业务完成时间作为独立gauge值暴露，由Prometheus记录抓取时间。",
+      "历史导入需选择支持该能力的链路。"
+    ],
+    "references": [
+      "https://github.com/prometheus/node_exporter/blob/v1.9.1/README.md",
+      "https://github.com/prometheus/node_exporter/blob/v1.9.1/collector/textfile.go"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台使用固定node_exporter 1.9.x，以非root身份只绑定环回临时端口；仅启用题目需要的collector。所有文件与进程均属于临时实验，不写宿主目录、不访问生产。\n\n## 操作任务\nbackup.prom把最后成功时间同时放在样本值和第三列采样时间戳中，导致textfile拒绝文件。修复产物，使training_backup_last_success_seconds保持Gauge，job标签为nightly且值仍为1700000000；移除不受支持的样本时间戳。不能把最后成功时间改成当前时间或文件mtime，不能删掉指标来消除错误。平台会改变文件mtime并重复抓取，业务样本必须保持原成功时间。\n\n## 产物\n提交题给文件的修正版，文件名不变；不需要自行启动服务。\n\n## 验收方法\n运行python3 checks/check.py。平台实际启动官方node_exporter、请求HTTP指标端点，检查解析状态、完整业务样本和collector范围，并在结束后回收进程。兼容等价格式，不按文件字符串完全匹配判分。初始与典型错误配置均不能通过；这只证明所述采集合同，不代表生产监控已经部署。",
+    "files": {
+      "backup.prom": "# HELP training_backup_last_success_seconds Last successful backup Unix time.\n# TYPE training_backup_last_success_seconds gauge\ntraining_backup_last_success_seconds{job=\"nightly\"} 1700000000 1700000000000\n"
+    },
+    "solution_files": {
+      "backup.prom": "# HELP training_backup_last_success_seconds Last successful backup Unix time.\n# TYPE training_backup_last_success_seconds gauge\ntraining_backup_last_success_seconds{job=\"nightly\"} 1700000000\n"
+    },
+    "negative_files": {
+      "backup.prom": "# HELP training_backup_last_success_seconds Last successful backup Unix time.\n# TYPE training_backup_last_success_seconds gauge\ntraining_backup_last_success_seconds{job=\"nightly\"} 1700000100\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-node-exporter",
+      "operation": "backup.prom把最后成功时间同时放在样本值和第三列采样时间戳中，导致textfile拒绝文件。修复产物，使training_backup_last_success_seconds保持Gauge，job标签为nightly且值仍为1700000000；移除不受支持的样本时间戳。不能把最后成功时间改成当前时间或文件mtime，不能删掉指标来消除错误。平台会改变文件mtime并重复抓取，业务样本必须保持原成功时间。",
+      "deliverables": [
+        "backup.prom"
+      ],
+      "verification": "官方node_exporter原生HTTP抓取与指标合同检查。",
+      "failure_examples": [
+        "初始材料或错误修复导致原生解析报错、样本缺失或采集范围不符。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "node_exporter"
+        ],
+        "features": [
+          "node_exporter:v1.9"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "\"\"\"Native collector fixture; owned non-root loopback process only.\"\"\"\nimport contextlib\nimport json\nimport os\nfrom pathlib import Path\nimport shutil\nimport socket\nimport subprocess\nimport tempfile\nimport threading\nimport time\nimport urllib.request\n\n\n@contextlib.contextmanager\ndef node(directory, flags=(), textfile=True):\n    assert os.name == 'posix' and os.geteuid() != 0, 'isolated non-root Linux required'\n    binary = shutil.which('node_exporter')\n    assert binary, 'node_exporter missing'\n    directory = Path(directory).resolve()\n    with socket.socket() as sock:\n        sock.bind(('127.0.0.1', 0))\n        port = sock.getsockname()[1]\n    stop = threading.Event()\n    failures = []\n    stats = {'peak_rss': 0, 'port': port, 'uid': os.geteuid()}\n    with tempfile.TemporaryDirectory(prefix='opsforge-node-') as temporary:\n        with (Path(temporary)/'node.log').open('wb') as output:\n            collector_flags = ['--collector.textfile', '--collector.textfile.directory='+str(directory)] if textfile else []\n            process = subprocess.Popen([binary, '--web.listen-address=127.0.0.1:'+str(port),\n                '--collector.disable-defaults', *collector_flags, *flags],\n                stdout=output, stderr=output,\n                env={**os.environ, 'GOMAXPROCS':'1', 'GOMEMLIMIT':'64MiB'})\n            deadline = time.monotonic()+30\n            def monitor():\n                while not stop.is_set() and process.poll() is None:\n                    try:\n                        status = Path('/proc',str(process.pid),'status').read_text()\n                        rss = next(int(line.split()[1])*1024 for line in status.splitlines() if line.startswith('VmRSS:'))\n                        stats['peak_rss'] = max(stats['peak_rss'],rss)\n                        if rss > 128*1024**2 or time.monotonic() > deadline:\n                            failures.append('resource guard');process.kill();return\n                    except (FileNotFoundError, ProcessLookupError):\n                        return\n                    stop.wait(.02)\n            guard = threading.Thread(target=monitor, daemon=True)\n            guard.start()\n            base = 'http://127.0.0.1:'+str(port)\n            def scrape(query=''):\n                with urllib.request.urlopen(base+'/metrics'+query, timeout=2) as response:\n                    assert response.status == 200\n                    return response.read().decode()\n            try:\n                ready = time.monotonic()+5\n                while True:\n                    try:\n                        with urllib.request.urlopen(base+'/', timeout=.5):\n                            break\n                    except OSError:\n                        assert process.poll() is None and time.monotonic() < ready, 'native collector startup failed: '+(Path(temporary)/'node.log').read_text(errors='replace')[-2500:]\n                        time.sleep(.03)\n                yield scrape\n                assert not failures, failures\n            finally:\n                stop.set()\n                if process.poll() is None:\n                    process.terminate()\n                try:\n                    process.wait(timeout=3)\n                except subprocess.TimeoutExpired:\n                    process.kill();process.wait(timeout=3)\n                guard.join(timeout=2)\n                stats['terminated'] = process.poll() is not None\n                print('NODE_NATIVE '+json.dumps(stats))\n                assert not failures, failures\n\n\ndef samples(text, name):\n    # Exported label values (for example uname.version) can contain spaces.\n    return {line.rsplit(None,1)[0]:float(line.rsplit(None,1)[1]) for line in text.splitlines()\n            if line.startswith(name+' ') or line.startswith(name+'{')}\n\nwith tempfile.TemporaryDirectory(prefix='node-time-contract-') as directory:\n p=Path(directory)/'backup.prom';p.write_bytes(Path('backup.prom').read_bytes())\n with node(directory) as scrape:\n  for modified in (1700012345,1700056789):\n   os.utime(p,(modified,modified));text=scrape()\n   assert samples(text,'node_textfile_scrape_error')=={'node_textfile_scrape_error':0},'textfile parse failed'\n   assert '# TYPE training_backup_last_success_seconds gauge' in text\n   assert samples(text,'training_backup_last_success_seconds')=={'training_backup_last_success_seconds{job=\"nightly\"}':1700000000},'success time must be metric value, not sample timestamp or mtime'\n   mtimes=samples(text,'node_textfile_mtime_seconds');assert len(mtimes)==1 and list(mtimes.values())==[modified]\n print('actual parser accepted sample; event time stable while mtime changed')\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "textfile_unsupported_sample_timestamp_vs_success_value",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-055",
+      "original_title": "为什么不应给textfile中的样本添加任意采样时间戳？",
+      "original_type": "interview",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-node_exporter-054",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 2,
+    "topic": "Textfile与批任务指标",
+    "title": "统一共享textfile指标族元数据并保留两团队的独立样本",
+    "answer": "文件 alpha.prom：\n```text\n# HELP training_backup_jobs_total Completed backup jobs.\n# TYPE training_backup_jobs_total counter\ntraining_backup_jobs_total{team=\"alpha\"} 7\n```\n\n文件 beta.prom：\n```text\n# HELP training_backup_jobs_total Completed backup jobs.\n# TYPE training_backup_jobs_total counter\ntraining_backup_jobs_total{team=\"beta\"} 11\n```\n\n原理说明：名称、类型、HELP和标签结构应保持兼容，样本标签集合不能重复冲突。否则可能解析或收集失败。为生成器分配清晰命名责任，并在发布前用同一格式检查器验证全部文件组合。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "名称、类型、HELP和标签结构应保持兼容，样本标签集合不能重复冲突。",
+      "否则可能解析或收集失败。",
+      "为生成器分配清晰命名责任，并在发布前用同一格式检查器验证全部文件组合。"
+    ],
+    "references": [
+      "https://github.com/prometheus/node_exporter/blob/v1.9.1/README.md",
+      "https://github.com/prometheus/node_exporter/blob/v1.9.1/collector/textfile.go"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台使用固定node_exporter 1.9.x，以非root身份只绑定环回临时端口；仅启用题目需要的collector。所有文件与进程均属于临时实验，不写宿主目录、不访问生产。\n\n## 操作任务\nalpha.prom与beta.prom由两个团队维护，却对training_backup_jobs_total给出了不同HELP。统一为Counter且所有文件HELP一致，保留alpha=7、beta=11的team维度。不能用改指标名、丢弃一个团队或把两文件都改成相同team来绕过冲突。平台会交换文件读取顺序、修改单个团队数值后重抓，完整样本不能互相覆盖。HELP可自行改写但两个文件必须一致。\n\n## 产物\n提交题给文件的修正版，文件名不变；不需要自行启动服务。\n\n## 验收方法\n运行python3 checks/check.py。平台实际启动官方node_exporter、请求HTTP指标端点，检查解析状态、完整业务样本和collector范围，并在结束后回收进程。兼容等价格式，不按文件字符串完全匹配判分。初始与典型错误配置均不能通过；这只证明所述采集合同，不代表生产监控已经部署。",
+    "files": {
+      "alpha.prom": "# HELP training_backup_jobs_total Completed backup jobs.\n# TYPE training_backup_jobs_total counter\ntraining_backup_jobs_total{team=\"alpha\"} 7\n",
+      "beta.prom": "# HELP training_backup_jobs_total Finished files.\n# TYPE training_backup_jobs_total counter\ntraining_backup_jobs_total{team=\"beta\"} 11\n"
+    },
+    "solution_files": {
+      "alpha.prom": "# HELP training_backup_jobs_total Completed backup jobs.\n# TYPE training_backup_jobs_total counter\ntraining_backup_jobs_total{team=\"alpha\"} 7\n",
+      "beta.prom": "# HELP training_backup_jobs_total Completed backup jobs.\n# TYPE training_backup_jobs_total counter\ntraining_backup_jobs_total{team=\"beta\"} 11\n"
+    },
+    "negative_files": {
+      "alpha.prom": "# HELP training_backup_jobs_total Completed backup jobs.\n# TYPE training_backup_jobs_total counter\ntraining_backup_jobs_total{team=\"alpha\"} 7\n",
+      "beta.prom": "# HELP training_backup_jobs_total Completed backup jobs.\n# TYPE training_backup_jobs_total counter\ntraining_backup_jobs_total{team=\"alpha\"} 11\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-node-exporter",
+      "operation": "alpha.prom与beta.prom由两个团队维护，却对training_backup_jobs_total给出了不同HELP。统一为Counter且所有文件HELP一致，保留alpha=7、beta=11的team维度。不能用改指标名、丢弃一个团队或把两文件都改成相同team来绕过冲突。平台会交换文件读取顺序、修改单个团队数值后重抓，完整样本不能互相覆盖。HELP可自行改写但两个文件必须一致。",
+      "deliverables": [
+        "alpha.prom",
+        "beta.prom"
+      ],
+      "verification": "官方node_exporter原生HTTP抓取与指标合同检查。",
+      "failure_examples": [
+        "初始材料或错误修复导致原生解析报错、样本缺失或采集范围不符。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "node_exporter"
+        ],
+        "features": [
+          "node_exporter:v1.9"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "\"\"\"Native collector fixture; owned non-root loopback process only.\"\"\"\nimport contextlib\nimport json\nimport os\nfrom pathlib import Path\nimport shutil\nimport socket\nimport subprocess\nimport tempfile\nimport threading\nimport time\nimport urllib.request\n\n\n@contextlib.contextmanager\ndef node(directory, flags=(), textfile=True):\n    assert os.name == 'posix' and os.geteuid() != 0, 'isolated non-root Linux required'\n    binary = shutil.which('node_exporter')\n    assert binary, 'node_exporter missing'\n    directory = Path(directory).resolve()\n    with socket.socket() as sock:\n        sock.bind(('127.0.0.1', 0))\n        port = sock.getsockname()[1]\n    stop = threading.Event()\n    failures = []\n    stats = {'peak_rss': 0, 'port': port, 'uid': os.geteuid()}\n    with tempfile.TemporaryDirectory(prefix='opsforge-node-') as temporary:\n        with (Path(temporary)/'node.log').open('wb') as output:\n            collector_flags = ['--collector.textfile', '--collector.textfile.directory='+str(directory)] if textfile else []\n            process = subprocess.Popen([binary, '--web.listen-address=127.0.0.1:'+str(port),\n                '--collector.disable-defaults', *collector_flags, *flags],\n                stdout=output, stderr=output,\n                env={**os.environ, 'GOMAXPROCS':'1', 'GOMEMLIMIT':'64MiB'})\n            deadline = time.monotonic()+30\n            def monitor():\n                while not stop.is_set() and process.poll() is None:\n                    try:\n                        status = Path('/proc',str(process.pid),'status').read_text()\n                        rss = next(int(line.split()[1])*1024 for line in status.splitlines() if line.startswith('VmRSS:'))\n                        stats['peak_rss'] = max(stats['peak_rss'],rss)\n                        if rss > 128*1024**2 or time.monotonic() > deadline:\n                            failures.append('resource guard');process.kill();return\n                    except (FileNotFoundError, ProcessLookupError):\n                        return\n                    stop.wait(.02)\n            guard = threading.Thread(target=monitor, daemon=True)\n            guard.start()\n            base = 'http://127.0.0.1:'+str(port)\n            def scrape(query=''):\n                with urllib.request.urlopen(base+'/metrics'+query, timeout=2) as response:\n                    assert response.status == 200\n                    return response.read().decode()\n            try:\n                ready = time.monotonic()+5\n                while True:\n                    try:\n                        with urllib.request.urlopen(base+'/', timeout=.5):\n                            break\n                    except OSError:\n                        assert process.poll() is None and time.monotonic() < ready, 'native collector startup failed: '+(Path(temporary)/'node.log').read_text(errors='replace')[-2500:]\n                        time.sleep(.03)\n                yield scrape\n                assert not failures, failures\n            finally:\n                stop.set()\n                if process.poll() is None:\n                    process.terminate()\n                try:\n                    process.wait(timeout=3)\n                except subprocess.TimeoutExpired:\n                    process.kill();process.wait(timeout=3)\n                guard.join(timeout=2)\n                stats['terminated'] = process.poll() is not None\n                print('NODE_NATIVE '+json.dumps(stats))\n                assert not failures, failures\n\n\ndef samples(text, name):\n    # Exported label values (for example uname.version) can contain spaces.\n    return {line.rsplit(None,1)[0]:float(line.rsplit(None,1)[1]) for line in text.splitlines()\n            if line.startswith(name+' ') or line.startswith(name+'{')}\n\nimport re\nwith tempfile.TemporaryDirectory(prefix='node-family-contract-') as directory:\n with node(directory) as scrape:\n  for reverse in (False,True):\n   for p in Path(directory).glob('*.prom'):p.unlink()\n   for name,source in [('a.prom','beta.prom' if reverse else 'alpha.prom'),('b.prom','alpha.prom' if reverse else 'beta.prom')]:\n    (Path(directory)/name).write_bytes(Path(source).read_bytes())\n   text=scrape();assert samples(text,'node_textfile_scrape_error')=={'node_textfile_scrape_error':0}\n   assert '# TYPE training_backup_jobs_total counter' in text\n   expected={'training_backup_jobs_total{team=\"alpha\"}':7,'training_backup_jobs_total{team=\"beta\"}':11}\n   assert samples(text,'training_backup_jobs_total')==expected,'both team series must survive file order'\n   for p in Path(directory).glob('*.prom'):\n    changed=re.sub(r'(^[ \\t]*training_backup_jobs_total\\s*\\{[^}\\n]*\\bteam\\s*=\\s*\"beta\"[^}\\n]*\\}\\s+)[^\\s\\n]+',r'\\g<1>17',p.read_text(),flags=re.MULTILINE)\n    p.write_text(changed)\n   expected['training_backup_jobs_total{team=\"beta\"}']=17\n   assert samples(scrape(),'training_backup_jobs_total')==expected,'one team update must not replace another team'\n print('native multi-file metric family accepted in either source order')\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "textfile_shared_metric_family_help_label_identity",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-054",
+      "original_title": "多个.prom文件定义同一指标族时需要满足什么约束？",
+      "original_type": "interview",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-node_exporter-058",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 2,
+    "topic": "Collector配置与采集性能",
+    "title": "用请求级collector过滤分离批任务指标和主机身份指标",
+    "answer": "文件 requests.json：\n```json\n{\n  \"batch\": \"?collect[]=textfile\",\n  \"identity\": \"?exclude[]=textfile\"\n}\n```\n\n原理说明：支持的版本可按抓取请求选择collector集合，便于分离昂贵采集或不同频率。需核对允许参数和互斥规则，防止不同抓取产生重复序列或遗漏。过滤不是主机级权限隔离。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "支持的版本可按抓取请求选择collector集合，便于分离昂贵采集或不同频率。",
+      "需核对允许参数和互斥规则，防止不同抓取产生重复序列或遗漏。",
+      "过滤不是主机级权限隔离。"
+    ],
+    "references": [
+      "https://github.com/prometheus/node_exporter/blob/v1.9.1/README.md",
+      "https://github.com/prometheus/node_exporter/blob/v1.9.1/collector/textfile.go"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台使用固定node_exporter 1.9.x，以非root身份只绑定环回临时端口；仅启用题目需要的collector。所有文件与进程均属于临时实验，不写宿主目录、不访问生产。\n\n## 操作任务\n同一临时exporter启用textfile与uname。编辑requests.json的batch与identity两条查询后缀：batch请求只能采集textfile；identity请求只能采集uname。可用collect[]白名单或exclude[]黑名单，不允许改服务器、指标内容或开启其他collector。参数只是/metrics后面的查询部分，不能填URL；保留两个键。平台用真实HTTP响应检查collector_success范围和业务指标，随后正常无过滤抓取仍应同时含两类，证明没有改变服务全局配置。\n\n## 产物\n提交题给文件的修正版，文件名不变；不需要自行启动服务。\n\n## 验收方法\n运行python3 checks/check.py。平台实际启动官方node_exporter、请求HTTP指标端点，检查解析状态、完整业务样本和collector范围，并在结束后回收进程。兼容等价格式，不按文件字符串完全匹配判分。初始与典型错误配置均不能通过；这只证明所述采集合同，不代表生产监控已经部署。",
+    "files": {
+      "requests.json": "{\"batch\":\"\",\"identity\":\"\"}\n"
+    },
+    "solution_files": {
+      "requests.json": "{\n  \"batch\": \"?collect[]=textfile\",\n  \"identity\": \"?exclude[]=textfile\"\n}\n"
+    },
+    "negative_files": {
+      "requests.json": "{\"batch\":\"?collect[]=uname\",\"identity\":\"?collect[]=textfile\"}\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-node-exporter",
+      "operation": "同一临时exporter启用textfile与uname。编辑requests.json的batch与identity两条查询后缀：batch请求只能采集textfile；identity请求只能采集uname。可用collect[]白名单或exclude[]黑名单，不允许改服务器、指标内容或开启其他collector。参数只是/metrics后面的查询部分，不能填URL；保留两个键。平台用真实HTTP响应检查collector_success范围和业务指标，随后正常无过滤抓取仍应同时含两类，证明没有改变服务全局配置。",
+      "deliverables": [
+        "requests.json"
+      ],
+      "verification": "官方node_exporter原生HTTP抓取与指标合同检查。",
+      "failure_examples": [
+        "初始材料或错误修复导致原生解析报错、样本缺失或采集范围不符。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "node_exporter"
+        ],
+        "features": [
+          "node_exporter:v1.9"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "\"\"\"Native collector fixture; owned non-root loopback process only.\"\"\"\nimport contextlib\nimport json\nimport os\nfrom pathlib import Path\nimport shutil\nimport socket\nimport subprocess\nimport tempfile\nimport threading\nimport time\nimport urllib.request\n\n\n@contextlib.contextmanager\ndef node(directory, flags=(), textfile=True):\n    assert os.name == 'posix' and os.geteuid() != 0, 'isolated non-root Linux required'\n    binary = shutil.which('node_exporter')\n    assert binary, 'node_exporter missing'\n    directory = Path(directory).resolve()\n    with socket.socket() as sock:\n        sock.bind(('127.0.0.1', 0))\n        port = sock.getsockname()[1]\n    stop = threading.Event()\n    failures = []\n    stats = {'peak_rss': 0, 'port': port, 'uid': os.geteuid()}\n    with tempfile.TemporaryDirectory(prefix='opsforge-node-') as temporary:\n        with (Path(temporary)/'node.log').open('wb') as output:\n            collector_flags = ['--collector.textfile', '--collector.textfile.directory='+str(directory)] if textfile else []\n            process = subprocess.Popen([binary, '--web.listen-address=127.0.0.1:'+str(port),\n                '--collector.disable-defaults', *collector_flags, *flags],\n                stdout=output, stderr=output,\n                env={**os.environ, 'GOMAXPROCS':'1', 'GOMEMLIMIT':'64MiB'})\n            deadline = time.monotonic()+30\n            def monitor():\n                while not stop.is_set() and process.poll() is None:\n                    try:\n                        status = Path('/proc',str(process.pid),'status').read_text()\n                        rss = next(int(line.split()[1])*1024 for line in status.splitlines() if line.startswith('VmRSS:'))\n                        stats['peak_rss'] = max(stats['peak_rss'],rss)\n                        if rss > 128*1024**2 or time.monotonic() > deadline:\n                            failures.append('resource guard');process.kill();return\n                    except (FileNotFoundError, ProcessLookupError):\n                        return\n                    stop.wait(.02)\n            guard = threading.Thread(target=monitor, daemon=True)\n            guard.start()\n            base = 'http://127.0.0.1:'+str(port)\n            def scrape(query=''):\n                with urllib.request.urlopen(base+'/metrics'+query, timeout=2) as response:\n                    assert response.status == 200\n                    return response.read().decode()\n            try:\n                ready = time.monotonic()+5\n                while True:\n                    try:\n                        with urllib.request.urlopen(base+'/', timeout=.5):\n                            break\n                    except OSError:\n                        assert process.poll() is None and time.monotonic() < ready, 'native collector startup failed: '+(Path(temporary)/'node.log').read_text(errors='replace')[-2500:]\n                        time.sleep(.03)\n                yield scrape\n                assert not failures, failures\n            finally:\n                stop.set()\n                if process.poll() is None:\n                    process.terminate()\n                try:\n                    process.wait(timeout=3)\n                except subprocess.TimeoutExpired:\n                    process.kill();process.wait(timeout=3)\n                guard.join(timeout=2)\n                stats['terminated'] = process.poll() is not None\n                print('NODE_NATIVE '+json.dumps(stats))\n                assert not failures, failures\n\n\ndef samples(text, name):\n    # Exported label values (for example uname.version) can contain spaces.\n    return {line.rsplit(None,1)[0]:float(line.rsplit(None,1)[1]) for line in text.splitlines()\n            if line.startswith(name+' ') or line.startswith(name+'{')}\n\nimport urllib.parse\nrequests=json.loads(Path('requests.json').read_text());assert isinstance(requests,dict) and set(requests)=={'batch','identity'}\nfor query in requests.values():\n assert isinstance(query,str) and query.startswith('?') and len(query)<300 and '#' not in query\n pairs=urllib.parse.parse_qsl(query[1:],keep_blank_values=True,strict_parsing=True)\n assert pairs and all(k in ('collect[]','exclude[]') and v in ('textfile','uname') for k,v in pairs)\nwith tempfile.TemporaryDirectory(prefix='node-filter-contract-') as directory:\n (Path(directory)/'batch.prom').write_text('# TYPE training_batch_jobs gauge\\ntraining_batch_jobs 5\\n')\n with node(directory,['--collector.uname']) as scrape:\n  for key,collector in [('batch','textfile'),('identity','uname')]:\n   text=scrape(requests[key]);assert samples(text,'node_scrape_collector_success')=={'node_scrape_collector_success{collector=\"'+collector+'\"}':1}\n   assert bool(samples(text,'training_batch_jobs'))==(key=='batch')\n   assert bool(samples(text,'node_uname_info'))==(key=='identity')\n  text=scrape();assert len(samples(text,'node_scrape_collector_success'))==2 and samples(text,'training_batch_jobs') and samples(text,'node_uname_info')\n print('request filters changed actual collector output without global reconfiguration')\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "request_scoped_collector_filter_not_global_disable",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-058",
+      "original_title": "collect[]与exclude[]请求过滤适用于什么目的？",
+      "original_type": "interview",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

@@ -1,0 +1,70 @@
+[
+  {
+    "id": "curated-python-completion-048",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 4,
+    "topic": "并发与异步控制",
+    "title": "协程批处理使用可取消异步等待与并发上限",
+    "answer": "```python\nimport asyncio,time\n\nasync def run_batch(delays,max_concurrency):\n    if not isinstance(delays,list) or any(isinstance(d,bool) or not isinstance(d,(int,float)) or not 0<=d<=30 for d in delays):raise ValueError('invalid delays')\n    if isinstance(max_concurrency,bool) or not isinstance(max_concurrency,int) or not 1<=max_concurrency<=64:raise ValueError('invalid concurrency bound')\n    semaphore=asyncio.Semaphore(max_concurrency)\n    async def one(index,delay):\n        async with semaphore:\n            started=time.monotonic()\n            await asyncio.sleep(delay)\n            return (index,started,time.monotonic())\n    return await asyncio.gather(*(one(i,d) for i,d in enumerate(delays)))\n```\n\n原题知识说明：\n确认阻塞发生在事件循环线程，使用适当异步等待或把真正阻塞操作移到受控执行器。设置并发边界并观察事件循环延迟；验证多个请求交错执行和取消，不能只增加worker掩盖同一循环被阻塞。",
+    "type": "code",
+    "source": "OpsForge Python运维开发补充题",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "python-completion-20261021",
+    "body": "## 操作任务\n实现async run_batch(delays,max_concurrency)：所有等待必须协作让出事件循环，使用Semaphore限制同时运行数，并传播取消。返回每个任务的起止单调时钟时间供并发度审计；拒绝非法延迟和并发界限。禁止在协程中调用time.sleep，也不能靠增加线程掩盖事件循环阻塞。\n\n## 提交产物\ntask.py\n\n## 验收方法\n运行真实asyncio并发任务和心跳，核对重叠区间恰受Semaphore限制、循环持续响应且取消及时传播。\n\n## 能力边界\n隔离Python 3.11事件循环的调度/并发验证；不证明外部数据库或网络库本身异步，也不包含应用级任务取消后的远端副作用撤销。\n\n## 故障初态与公开复现\n初态故障：task.py 在事件循环线程实际调用 time.sleep，批次等待阻塞心跳。先运行 python3 reproduce.py，观察阻塞调用及心跳证据；修复为原题要求的协作等待与 Semaphore 边界后，复现脚本应退出0。复现仅操作本进程事件循环，不启动外部服务；不要求并发跑满，也不替代私有边界/取消检查。",
+    "rubric": [
+      "Python语义准确",
+      "资源与错误处理明确",
+      "验证覆盖边界"
+    ],
+    "hints": [],
+    "references": [],
+    "incident_signature": "python:event-loop-sleep",
+    "related_modules": [
+      "python"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-python-completion-048",
+      "original_title": "异步接口每次批量调用时全站暂停数秒，追踪发现协程中执行 time.sleep。如何处理？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "import asyncio,time\n\nasync def run_batch(delays,max_concurrency):\n    if not isinstance(delays,list) or any(isinstance(d,bool) or not isinstance(d,(int,float)) or not 0<=d<=30 for d in delays):raise ValueError('invalid delays')\n    if isinstance(max_concurrency,bool) or not isinstance(max_concurrency,int) or not 1<=max_concurrency<=64:raise ValueError('invalid concurrency bound')\n    semaphore=asyncio.Semaphore(max_concurrency)\n    async def one(index,delay):\n        async with semaphore:\n            started=time.monotonic()\n            time.sleep(delay)\n            return (index,started,time.monotonic())\n    return await asyncio.gather(*(one(i,d) for i,d in enumerate(delays)))\n",
+      "reproduce.py": "\"\"\"Owned event-loop reproduction; exit1 reports the real blocking initial fault.\"\"\"\nimport asyncio,json,sys,time\nimport task\n\nasync def main():\n    ticks=[];finished=asyncio.Event()\n    async def heartbeat():\n        while not finished.is_set():\n            ticks.append(time.monotonic())\n            await asyncio.sleep(.003)\n    monitor=asyncio.create_task(heartbeat())\n    await asyncio.sleep(0)\n    started=time.monotonic();blocking_sleeps=[];previous=sys.getprofile()\n    real_sleep=time.sleep\n    def observe(frame,event,arg):\n        if event=='c_call'and arg is real_sleep:blocking_sleeps.append(time.monotonic())\n    sys.setprofile(observe)\n    try:\n        rows=await task.run_batch([.04]*4,2)\n        ended=time.monotonic()\n    finally:\n        sys.setprofile(previous)\n        finished.set()\n        await monitor\n    events=[]\n    for index,begin,end in rows:\n        events.extend([(begin,1),(end,-1)])\n    active=peak=0\n    for stamp,delta in sorted(events,key=lambda event:(event[0],event[1])):\n        active+=delta;peak=max(peak,active)\n    during=sum(started<tick<ended for tick in ticks)\n    checks={'all_work_returned':len(rows)==4,\n            'concurrency_not_above_bound':peak<=2,\n            'no_time_sleep_on_event_loop_thread':not blocking_sleeps,\n            'heartbeat_ran_during_business':during>0}\n    print(json.dumps({'checks':checks,'actual_heartbeat_ticks_during_work':during,\n                      'reported_interval_peak':peak,'blocking_sleep_calls_on_loop_thread':len(blocking_sleeps),\n                      'elapsed_seconds':ended-started},sort_keys=True),flush=True)\n    return 0 if all(checks.values())else 1\n\nraise SystemExit(asyncio.run(main()))\n"
+    },
+    "solution_files": {
+      "task.py": "import asyncio,time\n\nasync def run_batch(delays,max_concurrency):\n    if not isinstance(delays,list) or any(isinstance(d,bool) or not isinstance(d,(int,float)) or not 0<=d<=30 for d in delays):raise ValueError('invalid delays')\n    if isinstance(max_concurrency,bool) or not isinstance(max_concurrency,int) or not 1<=max_concurrency<=64:raise ValueError('invalid concurrency bound')\n    semaphore=asyncio.Semaphore(max_concurrency)\n    async def one(index,delay):\n        async with semaphore:\n            started=time.monotonic()\n            await asyncio.sleep(delay)\n            return (index,started,time.monotonic())\n    return await asyncio.gather(*(one(i,d) for i,d in enumerate(delays)))\n"
+    },
+    "negative_files": {
+      "task.py": "import asyncio,time\n\nasync def run_batch(delays,max_concurrency):\n    if not isinstance(delays,list) or any(isinstance(d,bool) or not isinstance(d,(int,float)) or not 0<=d<=30 for d in delays):raise ValueError('invalid delays')\n    if isinstance(max_concurrency,bool) or not isinstance(max_concurrency,int) or not 1<=max_concurrency<=64:raise ValueError('invalid concurrency bound')\n    semaphore=asyncio.Semaphore(max_concurrency)\n    async def one(index,delay):\n        async with semaphore:\n            started=time.monotonic()\n            time.sleep(delay)\n            await asyncio.sleep(0)\n            return (index,started,time.monotonic())\n    return await asyncio.gather(*(one(i,d) for i,d in enumerate(delays)))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现async run_batch(delays,max_concurrency)：所有等待必须协作让出事件循环，使用Semaphore限制同时运行数，并传播取消。返回每个任务的起止单调时钟时间供并发度审计；拒绝非法延迟和并发界限。禁止在协程中调用time.sleep，也不能靠增加线程掩盖事件循环阻塞。\n初态故障：task.py 在事件循环线程实际调用 time.sleep，批次等待阻塞心跳。先运行 python3 reproduce.py，观察阻塞调用及心跳证据；修复为原题要求的协作等待与 Semaphore 边界后，复现脚本应退出0。复现仅操作本进程事件循环，不启动外部服务；不要求并发跑满，也不替代私有边界/取消检查。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "隔离Python 3.11事件循环的调度/并发验证；不证明外部数据库或网络库本身异步，也不包含应用级任务取消后的远端副作用撤销。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,asyncio,time\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: cooperative asyncio batch',flush=True)\nasync def main():\n ticks=[];finished=asyncio.Event()\n async def heartbeat():\n  while not finished.is_set():ticks.append(time.monotonic());await asyncio.sleep(.005)\n monitor=asyncio.create_task(heartbeat());start=time.monotonic();blocking_calls=[];previous_profile=sys.getprofile();actual_sleep=time.sleep\n def observe_call(frame,event,argument):\n  if event=='c_call'and argument is actual_sleep:blocking_calls.append(time.monotonic())\n sys.setprofile(observe_call)\n try:\n  rows=await task.run_batch([.06]*4,2);end=time.monotonic()\n finally:\n  sys.setprofile(previous_profile);finished.set();await monitor\n assert len(rows)==4,rows\n assert not blocking_calls,'blocking time.sleep actually ran on the event-loop thread'\n events=[]\n for _,a,b in rows:events.extend([(a,1),(b,-1)])\n active=peak=0\n for _,delta in sorted(events,key=lambda x:(x[0],x[1])):active+=delta;peak=max(peak,active)\n assert 1<=peak<=2,peak\n assert any(start<t<end for t in ticks),'event loop heartbeat stalled during work'\n job=asyncio.create_task(task.run_batch([3],1));await asyncio.sleep(.02);job.cancel()\n try:await job\n except asyncio.CancelledError:pass\n else:raise AssertionError('cancellation was not propagated promptly')\n for delays,bound in [([-1],1),([31],1),([.1],0),([.1],True)]:\n  try:await task.run_batch(delays,bound)\n  except ValueError:pass\n  else:raise AssertionError('invalid async work accepted')\nasyncio.run(main())\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "case"
+  }
+]

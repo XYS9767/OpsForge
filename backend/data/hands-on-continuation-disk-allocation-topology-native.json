@@ -1,0 +1,140 @@
+[
+  {
+    "id": "curated-parallel-disk-028",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "level": 1,
+    "topic": "文件系统结构与容量",
+    "title": "真实posix_fallocate预分配：区分逻辑扩展和已分配块，保留已有目标",
+    "answer": "```python\nimport os\ndef allocate(path,size):\n if not isinstance(size,int) or isinstance(size,bool) or size<=0:raise ValueError('positive integer size required')\n fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o600)\n try:\n  try:os.posix_fallocate(fd,0,size)\n  except BaseException:\n   os.unlink(path)\n   raise\n finally:os.close(fd)\n```\n\n原题知识说明：\n预分配通常实际预留块以降低后续空间不足风险；truncate 增大逻辑长度常产生空洞而不立即分配全部块。文件系统支持和模式会影响行为。预分配不代表内容已写入或应用数据完整。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "预分配通常实际预留块以降低后续空间不足风险；truncate 增大逻辑长度常产生空洞而不立即分配全部块。",
+      "文件系统支持和模式会影响行为。",
+      "预分配不代表内容已写入或应用数据完整。"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man2/fallocate.2.html"
+    ],
+    "related_modules": [
+      "disk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-disk-028",
+      "original_title": "fallocate 预分配与 truncate 扩展文件有什么区别？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现allocate(path,size)。size必须为正整数且不接受bool；独占新建文件，用os.posix_fallocate(fd,0,size)预分配，关闭fd；分配失败清理自己新建的文件并传播异常。已有目标不得覆盖。实际tmpfs中同长度truncate对照为稀疏洞，目标st_size精确且st_blocks*512覆盖请求长度，读出为零；不能把零内容误称业务数据完整，不证明物理介质持久化。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n非root隔离Linux临时文件系统，实际系统调用、stat、内容与写传播验证；不是块设备故障/掉电测试，不改宿主挂载或权限；辅助检查不单计。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\ndef allocate(path,size):\n if not isinstance(size,int) or isinstance(size,bool) or size<=0:raise ValueError('positive integer size required')\n fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o600)\n try:\n  try:os.posix_fallocate(fd,0,size)\n  except BaseException:\n   os.unlink(path)\n   raise\n finally:os.close(fd)\n"
+    },
+    "negative_files": {
+      "task.py": "import os\ndef allocate(path,size):\n if not isinstance(size,int) or isinstance(size,bool) or size<=0:raise ValueError('positive integer size required')\n fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o600)\n try:\n  try:os.ftruncate(fd,size)\n  except BaseException:\n   os.unlink(path)\n   raise\n finally:os.close(fd)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现allocate(path,size)。size必须为正整数且不接受bool；独占新建文件，用os.posix_fallocate(fd,0,size)预分配，关闭fd；分配失败清理自己新建的文件并传播异常。已有目标不得覆盖。实际tmpfs中同长度truncate对照为稀疏洞，目标st_size精确且st_blocks*512覆盖请求长度，读出为零；不能把零内容误称业务数据完整，不证明物理介质持久化。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "非root隔离Linux临时文件系统，实际系统调用、stat、内容与写传播验证；不是块设备故障/掉电测试，不改宿主挂载或权限；辅助检查不单计。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,tempfile,pathlib,hashlib,stat\nsys.path.insert(0,os.getcwd())\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nfrom task import allocate\nprint('STUDENT_OPERATION_ENTERED:',flush=True)\nwith tempfile.TemporaryDirectory(prefix='of-allocation-') as folder:\n root=pathlib.Path(folder);size=4*1024*1024+123;control=root/'truncate-control'\n with control.open('wb') as stream:stream.truncate(size)\n sparse=control.stat();assert sparse.st_size==size and sparse.st_blocks*512<size//8,'fixture filesystem must support sparse truncate'\n for index,length in enumerate((size,8193)):\n  path=root/('allocated-'+str(index));allocate(path,length);info=path.stat()\n  assert stat.S_ISREG(info.st_mode) and info.st_size==length and info.st_blocks*512>=length,'logical extension is not full preallocation'\n  with path.open('rb') as stream:\n   while True:\n    chunk=stream.read(65536)\n    if not chunk:break\n    assert chunk==bytes(len(chunk)),'allocation must not claim application payload already written'\n  before=(info.st_ino,info.st_size,info.st_blocks,hashlib.sha256(path.read_bytes()).hexdigest())\n  try:allocate(path,length*2)\n  except FileExistsError:pass\n  else:raise AssertionError('existing destination must not be overwritten')\n  now=path.stat();assert before==(now.st_ino,now.st_size,now.st_blocks,hashlib.sha256(path.read_bytes()).hexdigest())\n for invalid in (0,-1,True,1.5):\n  path=root/'invalid'\n  try:allocate(path,invalid)\n  except ValueError:pass\n  else:raise AssertionError('invalid size accepted')\n  assert not path.exists()\n assert control.stat().st_blocks==sparse.st_blocks and control.stat().st_size==size\n print('NATIVE_POSIX_FALLOCATE_ALLOCATED_BLOCKS_VS_TRUNCATE_HOLE_EXACT_LENGTH_ZERO_CONTENT_EXISTING_FILE_PRESERVED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-disk-063",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "level": 3,
+    "topic": "备份迁移与存储恢复",
+    "title": "真实目录恢复的硬链接拓扑：保持inode分组，不能按内容哈希合并文件",
+    "answer": "```python\nimport os,stat,shutil\nfrom pathlib import Path\ndef clone_tree(source,destination):\n source=Path(source);destination=Path(destination);directories=[];files=[]\n if source.is_symlink() or not source.is_dir():raise ValueError('real directory required')\n for current,dirs,names in os.walk(source,followlinks=False):\n  for name in dirs+names:\n   path=Path(current)/name;info=path.lstat();relative=path.relative_to(source)\n   if stat.S_ISDIR(info.st_mode):directories.append(relative)\n   elif stat.S_ISREG(info.st_mode):files.append((relative,info))\n   else:raise ValueError('only regular files and directories allowed')\n destination.mkdir();groups={}\n for relative in sorted(directories,key=lambda p:(len(p.parts),str(p))):(destination/relative).mkdir()\n for relative,info in files:\n  target=destination/relative;key=(info.st_dev,info.st_ino)\n  if key in groups:os.link(groups[key],target)\n  else:shutil.copyfile(source/relative,target);groups[key]=target\n```\n\n原题知识说明：\n若工具把多个硬链接复制成多个独立文件，内容哈希仍相同但空间、更新传播和应用语义改变。应按设备/inode分组核对源关系与目标链接数，同时验证ACL/xattr和稀疏性。内容校验只是迁移验收的一部分。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "若工具把多个硬链接复制成多个独立文件，内容哈希仍相同但空间、更新传播和应用语义改变。",
+      "应按设备/inode分组核对源关系与目标链接数，同时验证ACL/xattr和稀疏性。",
+      "内容校验只是迁移验收的一部分。"
+    ],
+    "references": [
+      "https://www.gnu.org/software/coreutils/manual/html_node/cp-invocation.html"
+    ],
+    "related_modules": [
+      "disk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-disk-063",
+      "original_title": "大规模目录迁移为何还要比较硬链接拓扑？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现clone_tree(source,destination)。源是已稳定的自有目录，目的必须不存在。先完整扫描，只允许普通文件与目录，遇符号链接或其他类型在创建目的前ValueError。复制所有目录、隐藏文件和内容，以源(st_dev,st_ino)分组，在新目的内用硬链接保持同一组；源中内容相同但inode不同的文件必须保持独立。不能让目的与源共享inode，源树外硬链接不纳入目的。已有目的拒绝覆盖。不要求ACL、xattr、稀疏性或并发源快照一致性，这些不能仅凭本题通过推断。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n非root隔离Linux临时文件系统，实际系统调用、stat、内容与写传播验证；不是块设备故障/掉电测试，不改宿主挂载或权限；辅助检查不单计。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,stat,shutil\nfrom pathlib import Path\ndef clone_tree(source,destination):\n source=Path(source);destination=Path(destination);directories=[];files=[]\n if source.is_symlink() or not source.is_dir():raise ValueError('real directory required')\n for current,dirs,names in os.walk(source,followlinks=False):\n  for name in dirs+names:\n   path=Path(current)/name;info=path.lstat();relative=path.relative_to(source)\n   if stat.S_ISDIR(info.st_mode):directories.append(relative)\n   elif stat.S_ISREG(info.st_mode):files.append((relative,info))\n   else:raise ValueError('only regular files and directories allowed')\n destination.mkdir();groups={}\n for relative in sorted(directories,key=lambda p:(len(p.parts),str(p))):(destination/relative).mkdir()\n for relative,info in files:\n  target=destination/relative;key=(info.st_dev,info.st_ino)\n  if key in groups:os.link(groups[key],target)\n  else:shutil.copyfile(source/relative,target);groups[key]=target\n"
+    },
+    "negative_files": {
+      "task.py": "import os,stat,shutil\nfrom pathlib import Path\ndef clone_tree(source,destination):\n source=Path(source);destination=Path(destination);directories=[];files=[]\n if source.is_symlink() or not source.is_dir():raise ValueError('real directory required')\n for current,dirs,names in os.walk(source,followlinks=False):\n  for name in dirs+names:\n   path=Path(current)/name;info=path.lstat();relative=path.relative_to(source)\n   if stat.S_ISDIR(info.st_mode):directories.append(relative)\n   elif stat.S_ISREG(info.st_mode):files.append((relative,info))\n   else:raise ValueError('only regular files and directories allowed')\n destination.mkdir();groups={}\n for relative in sorted(directories,key=lambda p:(len(p.parts),str(p))):(destination/relative).mkdir()\n for relative,info in files:\n  target=destination/relative;key=(info.st_dev,info.st_ino)\n  if key in groups:shutil.copyfile(source/relative,target)\n  else:shutil.copyfile(source/relative,target);groups[key]=target\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现clone_tree(source,destination)。源是已稳定的自有目录，目的必须不存在。先完整扫描，只允许普通文件与目录，遇符号链接或其他类型在创建目的前ValueError。复制所有目录、隐藏文件和内容，以源(st_dev,st_ino)分组，在新目的内用硬链接保持同一组；源中内容相同但inode不同的文件必须保持独立。不能让目的与源共享inode，源树外硬链接不纳入目的。已有目的拒绝覆盖。不要求ACL、xattr、稀疏性或并发源快照一致性，这些不能仅凭本题通过推断。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "非root隔离Linux临时文件系统，实际系统调用、stat、内容与写传播验证；不是块设备故障/掉电测试，不改宿主挂载或权限；辅助检查不单计。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,tempfile,pathlib,hashlib,stat\nsys.path.insert(0,os.getcwd())\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nfrom task import clone_tree\nprint('STUDENT_OPERATION_ENTERED:',flush=True)\nwith tempfile.TemporaryDirectory(prefix='of-topology-') as folder:\n root=pathlib.Path(folder);source=root/'source';source.mkdir();(source/'nested').mkdir();(source/'nested'/'空 目录').mkdir();payload=os.urandom(8192)\n (source/'a').write_bytes(payload);os.link(source/'a',source/'nested'/'a alias');os.link(source/'a',root/'external-link')\n (source/'same-content-independent').write_bytes(payload)\n (source/'nested'/'b').write_bytes(b'separate group');os.link(source/'nested'/'b',source/'b alias');os.link(source/'nested'/'b',source/'nested'/'空 目录'/'b alias')\n (source/'.hidden').write_bytes(b'hidden-content')\n def snapshot(tree):\n  return {str(path.relative_to(tree)):(path.stat().st_dev,path.stat().st_ino,path.stat().st_nlink,path.read_bytes()) for path in tree.rglob('*') if path.is_file()}\n before=snapshot(source);destination=root/'restored';clone_tree(source,destination);after=snapshot(destination)\n assert set(before)==set(after) and (destination/'nested'/'空 目录').is_dir()\n for left in before:\n  assert before[left][3]==after[left][3] and before[left][:2]!=after[left][:2],'restored files must be independent from source'\n  for right in before:\n   assert (before[left][:2]==before[right][:2])==(after[left][:2]==after[right][:2]),'lost hard-link relationship or deduplicated unrelated equal-content files'\n for name,info in after.items():assert info[2]==sum(other[:2]==info[:2] for other in after.values()),'external source links must not leak into restored topology'\n assert snapshot(source)==before and (root/'external-link').read_bytes()==payload\n (destination/'a').write_bytes(b'changed restored group');assert (destination/'nested'/'a alias').read_bytes()==b'changed restored group' and (destination/'same-content-independent').read_bytes()==payload and snapshot(source)==before\n try:clone_tree(source,destination)\n except FileExistsError:pass\n else:raise AssertionError('existing restoration directory must not be overwritten')\n bad=root/'bad';bad.mkdir();(bad/'escape').symlink_to(source/'a');rejected=root/'rejected'\n try:clone_tree(bad,rejected)\n except ValueError:pass\n else:raise AssertionError('symlink must be rejected before destination publication')\n assert not rejected.exists() and snapshot(source)==before\n print('NATIVE_TREE_COPY_PRESERVES_INODE_EQUIVALENCE_NOT_HASH_EQUALITY_EXTERNAL_LINK_EXCLUDED_NEW_INODES_AND_WRITE_PROPAGATION',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

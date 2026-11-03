@@ -1,0 +1,147 @@
+[
+  {
+    "category": "网络与DNS",
+    "module": "network",
+    "source": "OpsForge 原创教学题",
+    "version": 2,
+    "has_answer": true,
+    "tags": [
+      "TCP/IP",
+      "子网",
+      "DNS",
+      "路由",
+      "TLS",
+      "防火墙"
+    ],
+    "id": "basic-network",
+    "type": "code",
+    "level": 1,
+    "title": "网络基础实操：采集接口、路由、监听与 HTTP 分层证据",
+    "intro": "域名解析、路由、TCP 连接、TLS、HTTP 是不同阶段，按层检查能缩小范围。",
+    "body": "## 环境与初始材料\n普通用户 Linux，Python3 与原生 ip/ss/curl。验收创建两个真实回环HTTP服务（200、503、持续不回头部）及一个已保留但未监听的端口，提供函数骨架。不修改网络配置，不请求外部URL，不操作生产业务。\n\n## 操作任务\n实现 execute(port,output_dir)，采集本机教学HTTP端口的分层诊断证据。只使用127.0.0.1:<port>/health，port为1～65535整数且不接受bool。依次调用原生 ip -j address show dev lo、ip -j route get 127.0.0.1、ss -H -lnt 按该源端口过滤、curl。curl必须绕过环境代理、连接超时1秒/总时限3秒，保留响应体与错误输出；不要用curl进程退出0冒充HTTP业务健康。业务健康仅200，HTTP503是传输成功但业务失败，连接拒绝是传输失败且HTTP状态0。输出目录必须不存在，全部采集好再一次性发布，失败清理自己的临时目录，不覆盖旧证据。\n\n## 提交产物\ntask.py；函数创建的目录包含 addresses.json、route.json、listeners.txt、response.bin、curl.stderr、summary.json。summary字段为 port/curl_exit/http_status/transport_ok/business_ok，并作为函数返回值。原生工具输出和响应体必须来自本次实际采集，不能填写固定文字报告。\n\n## 验收方法\npython3 checks/check.py 使用实际工具对照接口/路由工件，对真实服务核对监听端口、仅一次/health请求、二进制响应体、200与503语义，再检查无监听端口的curl失败证据、3秒总时限与环境代理绕过、非法端口、已有目录不覆盖及临时文件/FD清理。全部断言通过退出0；工具缺失显示能力待验。本题只覆盖回环IPv4+HTTP基础链路，没有公网DNS或TLS部署验收。\n\n失败示例：将 business_ok 直接设为curl退出码是否为0，会把HTTP503当成业务正常，实际错误服务验收失败。",
+    "answer": "```python\nimport pathlib,subprocess,json,tempfile,shutil,os\ndef execute(port,output_dir):\n    if type(port) is not int or not 1<=port<=65535:raise ValueError('port must be 1..65535')\n    target=pathlib.Path(output_dir)\n    if target.exists():raise ValueError('output directory must be new')\n    temporary=pathlib.Path(tempfile.mkdtemp(prefix='.probe-',dir=target.parent))\n    try:\n        commands=[('addresses.json',['ip','-j','address','show','dev','lo']),\n                  ('route.json',['ip','-j','route','get','127.0.0.1']),\n                  ('listeners.txt',['ss','-H','-lnt','sport = :'+str(port)])]\n        for name,command in commands:\n            result=subprocess.run(command,capture_output=True,text=True,timeout=3)\n            if result.returncode:raise RuntimeError('tool failed: '+command[0])\n            if name.endswith('.json'):json.loads(result.stdout)\n            (temporary/name).write_text(result.stdout)\n        body=temporary/'response.bin';body.write_bytes(b'')\n        result=subprocess.run(['curl','--silent','--show-error','--noproxy','*',\n            '--connect-timeout','1','--max-time','3','--output',str(body),\n            '--write-out','%{http_code}','http://127.0.0.1:'+str(port)+'/health'],\n            capture_output=True,text=True,timeout=4)\n        status=int(result.stdout) if result.stdout.strip().isdigit() else 0\n        transport=result.returncode==0\n        summary={'port':port,'curl_exit':result.returncode,'http_status':status,\n                 'transport_ok':transport,'business_ok':transport and status==200}\n        (temporary/'summary.json').write_text(json.dumps(summary,indent=2))\n        (temporary/'curl.stderr').write_text(result.stderr)\n        os.rename(temporary,target)\n        return summary\n    finally:\n        if temporary.exists():shutil.rmtree(temporary)\n```\n\ncurl未启用--fail时，收到HTTP503也可退出0；这代表完成HTTP交换，不代表业务健康。接口/路由存在也不能替代监听和应用层检查。\n\n原理补充：\nip addr 查看地址；ip route 查看默认路由；ss -lntp 查看监听（进程信息可能受权限限制）；curl -v --connect-timeout 3 --max-time 10 URL 查看连接、TLS 和 HTTP 阶段。每一步针对不同层。",
+    "hints": [
+      "先阅读概念，识别任务中的对象和目标。",
+      "先检查状态，再执行变更，最后再次检查。"
+    ],
+    "minutes": 20,
+    "rubric": [
+      "能解释基本概念",
+      "记录操作和输出",
+      "说明验证结果"
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "difficulty": "简单",
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "NLWzdofMroVjg9xboQBcPIXYnuc",
+        "question": "30、如何查看监听端口netstat -lntp nltp"
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "DbJwdNZ0xo6Cbpx82JHc51nOnBh",
+        "question": "7、怎么查看监听端口"
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "GCACdz0ztoGGA6xfVtGczQjIncb",
+        "question": "8、如果一个机器安装了nginx，但是在外部访问不到，请写出可能的原因"
+      }
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+      "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "NLWzdofMroVjg9xboQBcPIXYnuc"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "DbJwdNZ0xo6Cbpx82JHc51nOnBh"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "GCACdz0ztoGGA6xfVtGczQjIncb"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh",
+        "block_ids": [
+          "BEyhdlphroKtS7xT8MKcPEDanDh"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh",
+        "block_ids": [
+          "GMfyd3M22ojlgqx3jpNctmPVn7c"
+        ]
+      }
+    ],
+    "topic": "网络分层诊断基础",
+    "language": "python",
+    "files": {
+      "task.py": "def execute(port,output_dir):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import pathlib,subprocess,json,tempfile,shutil,os\ndef execute(port,output_dir):\n    if type(port) is not int or not 1<=port<=65535:raise ValueError('port must be 1..65535')\n    target=pathlib.Path(output_dir)\n    if target.exists():raise ValueError('output directory must be new')\n    temporary=pathlib.Path(tempfile.mkdtemp(prefix='.probe-',dir=target.parent))\n    try:\n        commands=[('addresses.json',['ip','-j','address','show','dev','lo']),\n                  ('route.json',['ip','-j','route','get','127.0.0.1']),\n                  ('listeners.txt',['ss','-H','-lnt','sport = :'+str(port)])]\n        for name,command in commands:\n            result=subprocess.run(command,capture_output=True,text=True,timeout=3)\n            if result.returncode:raise RuntimeError('tool failed: '+command[0])\n            if name.endswith('.json'):json.loads(result.stdout)\n            (temporary/name).write_text(result.stdout)\n        body=temporary/'response.bin';body.write_bytes(b'')\n        result=subprocess.run(['curl','--silent','--show-error','--noproxy','*',\n            '--connect-timeout','1','--max-time','3','--output',str(body),\n            '--write-out','%{http_code}','http://127.0.0.1:'+str(port)+'/health'],\n            capture_output=True,text=True,timeout=4)\n        status=int(result.stdout) if result.stdout.strip().isdigit() else 0\n        transport=result.returncode==0\n        summary={'port':port,'curl_exit':result.returncode,'http_status':status,\n                 'transport_ok':transport,'business_ok':transport and status==200}\n        (temporary/'summary.json').write_text(json.dumps(summary,indent=2))\n        (temporary/'curl.stderr').write_text(result.stderr)\n        os.rename(temporary,target)\n        return summary\n    finally:\n        if temporary.exists():shutil.rmtree(temporary)\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib,subprocess,json,tempfile,shutil,os\ndef execute(port,output_dir):\n    if type(port) is not int or not 1<=port<=65535:raise ValueError('port must be 1..65535')\n    target=pathlib.Path(output_dir)\n    if target.exists():raise ValueError('output directory must be new')\n    temporary=pathlib.Path(tempfile.mkdtemp(prefix='.probe-',dir=target.parent))\n    try:\n        commands=[('addresses.json',['ip','-j','address','show','dev','lo']),\n                  ('route.json',['ip','-j','route','get','127.0.0.1']),\n                  ('listeners.txt',['ss','-H','-lnt','sport = :'+str(port)])]\n        for name,command in commands:\n            result=subprocess.run(command,capture_output=True,text=True,timeout=3)\n            if result.returncode:raise RuntimeError('tool failed: '+command[0])\n            if name.endswith('.json'):json.loads(result.stdout)\n            (temporary/name).write_text(result.stdout)\n        body=temporary/'response.bin';body.write_bytes(b'')\n        result=subprocess.run(['curl','--silent','--show-error','--noproxy','*',\n            '--connect-timeout','1','--max-time','3','--output',str(body),\n            '--write-out','%{http_code}','http://127.0.0.1:'+str(port)+'/health'],\n            capture_output=True,text=True,timeout=4)\n        status=int(result.stdout) if result.stdout.strip().isdigit() else 0\n        transport=result.returncode==0\n        summary={'port':port,'curl_exit':result.returncode,'http_status':status,\n                 'transport_ok':transport,'business_ok':transport}\n        (temporary/'summary.json').write_text(json.dumps(summary,indent=2))\n        (temporary/'curl.stderr').write_text(result.stderr)\n        os.rename(temporary,target)\n        return summary\n    finally:\n        if temporary.exists():shutil.rmtree(temporary)\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(port,output_dir)，采集本机教学HTTP端口的分层诊断证据。只使用127.0.0.1:<port>/health，port为1～65535整数且不接受bool。依次调用原生 ip -j address show dev lo、ip -j route get 127.0.0.1、ss -H -lnt 按该源端口过滤、curl。curl必须绕过环境代理、连接超时1秒/总时限3秒，保留响应体与错误输出；不要用curl进程退出0冒充HTTP业务健康。业务健康仅200，HTTP503是传输成功但业务失败，连接拒绝是传输失败且HTTP状态0。输出目录必须不存在，全部采集好再一次性发布，失败清理自己的临时目录，不覆盖旧证据。",
+      "deliverables": [
+        "task.py"
+      ],
+      "generated_artifacts": [
+        "addresses.json",
+        "route.json",
+        "listeners.txt",
+        "response.bin",
+        "curl.stderr",
+        "summary.json"
+      ],
+      "verification": "原生ip/ss/curl真实采集，200/503/拒绝连接三条链路，旧证据保护和资源回收",
+      "failure_examples": [
+        "curl成功返回HTTP503却误判业务正常"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,json,sys,subprocess,http.server,threading,contextlib,socket,os\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nbaseline=len(os.listdir('/proc/self/fd'))\naddresses=json.loads(subprocess.check_output(['ip','-j','address','show','dev','lo'],text=True))\nroutes=json.loads(subprocess.check_output(['ip','-j','route','get','127.0.0.1'],text=True))\n@contextlib.contextmanager\ndef server(code):\n    hits=[];release=threading.Event()\n    class Handler(http.server.BaseHTTPRequestHandler):\n        def do_GET(self):\n            hits.append(self.path)\n            if code==0:\n                release.wait(4);return\n            body=b'HEALTHY\\x00' if code==200 else b'MAINTENANCE\\x00'\n            self.send_response(code);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n        def log_message(self,*args):pass\n    srv=http.server.HTTPServer(('127.0.0.1',0),Handler)\n    thread=threading.Thread(target=lambda:srv.serve_forever(poll_interval=.01));thread.start()\n    try:yield srv.server_port,hits\n    finally:release.set();srv.shutdown();srv.server_close();thread.join(1);assert not thread.is_alive()\ndef verify(output,summary):\n    d=pathlib.Path(output)\n    assert set(p.name for p in d.iterdir())=={'addresses.json','route.json','listeners.txt','response.bin','summary.json','curl.stderr'}\n    assert json.loads((d/'addresses.json').read_text())==addresses\n    # Route's ephemeral cache counters are not part of this fixture; compare actual returned fields.\n    route=json.loads((d/'route.json').read_text())\n    assert route==routes,(route,routes)\n    assert json.loads((d/'summary.json').read_text())==summary\n    assert not list(pathlib.Path('.').glob('.probe-*'))\nfor status in [200,503]:\n    with server(status) as (port,hits):\n        out='probe-'+str(status);summary=task.execute(port,out)\n        assert summary=={'port':port,'curl_exit':0,'http_status':status,'transport_ok':True,'business_ok':status==200},summary\n        verify(out,summary)\n        assert (pathlib.Path(out)/'response.bin').read_bytes()==(b'HEALTHY\\x00' if status==200 else b'MAINTENANCE\\x00')\n        assert hits==['/health']\n        lines=(pathlib.Path(out)/'listeners.txt').read_text().splitlines()\n        assert len(lines)==1 and lines[0].split()[3]=='127.0.0.1:'+str(port),lines\n        assert (pathlib.Path(out)/'curl.stderr').read_text()==''\n        before={str(p):p.read_bytes() for p in pathlib.Path(out).iterdir()}\n        try:task.execute(port,out)\n        except ValueError:pass\n        else:raise AssertionError('existing diagnostic evidence overwritten')\n        assert before=={str(p):p.read_bytes() for p in pathlib.Path(out).iterdir()}\n        assert hits==['/health'],'existing-directory rejection still issued request'\nwith socket.socket() as held:\n    held.bind(('127.0.0.1',0));port=held.getsockname()[1] # Reserved but not listening.\n    summary=task.execute(port,'probe-refused');verify('probe-refused',summary)\n    assert summary['curl_exit']!=0 and summary['http_status']==0 and not summary['transport_ok'] and not summary['business_ok']\n    assert pathlib.Path('probe-refused/listeners.txt').read_text()==''\n    assert pathlib.Path('probe-refused/response.bin').read_bytes()==b''\n    assert pathlib.Path('probe-refused/curl.stderr').read_text()\n\nwith server(0) as (port,hits):\n    summary=task.execute(port,'probe-timeout');verify('probe-timeout',summary)\n    assert summary['curl_exit']==28 and summary['http_status']==0 and not summary['transport_ok'] and not summary['business_ok']\n    assert hits==['/health'] and pathlib.Path('probe-timeout/response.bin').read_bytes()==b''\n# The diagnostic target is local: ambient proxy settings must not redirect the request.\nwith socket.socket() as proxy_guard,server(200) as (port,hits):\n    proxy_guard.bind(('127.0.0.1',0));proxy_url='http://127.0.0.1:'+str(proxy_guard.getsockname()[1])\n    names=['http_proxy','https_proxy','HTTP_PROXY','HTTPS_PROXY','ALL_PROXY','all_proxy','NO_PROXY','no_proxy']\n    old={k:os.environ.get(k) for k in names}\n    try:\n        for k in names:os.environ[k]='' if k.lower()=='no_proxy' else proxy_url\n        summary=task.execute(port,'probe-proxy');verify('probe-proxy',summary)\n        assert summary['business_ok'] and hits==['/health'],'ambient proxy intercepted loopback diagnosis'\n    finally:\n        for k,v in old.items():\n            if v is None:os.environ.pop(k,None)\n            else:os.environ[k]=v\n\nfor bad in [0,65536,-1,True,'80',None]:\n    try:task.execute(bad,'invalid-output')\n    except ValueError:pass\n    else:raise AssertionError('invalid port accepted')\n    assert not pathlib.Path('invalid-output').exists()\nassert not list(pathlib.Path('.').glob('.probe-*'))\nassert len(os.listdir('/proc/self/fd'))==baseline,'tool/process descriptors leaked'\nprint('PASS: real ip/ss/curl artifacts and 200 versus 503 versus refused separation')\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "ip",
+          "ss",
+          "curl"
+        ]
+      }
+    },
+    "case_signature": "network-basic-program-contract|ip-ss-curl-transport-vs-http",
+    "conversion": {
+      "original_id": "basic-network",
+      "original_title": "网络与 DNS · 基础实操",
+      "original_type": "practice",
+      "preserve_history": true
+    }
+  }
+]

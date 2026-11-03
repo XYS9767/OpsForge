@@ -1,0 +1,313 @@
+[
+  {
+    "id": "curated-ansible-expansion-028",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "让共享角色默认值可覆盖并保留角色固定标识",
+    "level": 1,
+    "type": "code",
+    "title": "让共享角色默认值可覆盖并保留角色固定标识",
+    "body": "## 操作环境\nLinux普通用户、ansible-core、Python3/PyYAML，localhost、forks=1，不使用提权或SSH。仅在题目临时workspace中操作；制品服务器也是本机回环测试服务。\n\n## 操作任务\nservice_port 默认8080，必须允许play变量和extra-vars覆盖；service_kind保持角色固定值api，不受play中误设worker影响。正确拆分roles/service的defaults与vars，依次验证默认、play覆盖和extra-vars优先级。\n\n## 提交产物\nroles/service/defaults/main.yml, roles/service/vars/main.yml。其余辅助文件保持原样。\n\n## 验收方法\n真实ansible-playbook执行正常、失败、幂等与参数变化路径，检查文件副作用、状态码和数据完整性。",
+    "answer": "### roles/service/defaults/main.yml\n```yaml\nservice_port: 8080\n\n```\n\n### roles/service/vars/main.yml\n```yaml\nservice_kind: api\n\n```\n\ndefaults适合调用方可覆盖的默认值，vars优先于play变量；extra-vars优先级更高。不要将所有配置塞到role vars使正常调用方无法覆盖。",
+    "rubric": [
+      "defaults 放希望调用方方便覆盖的默认参数；vars 通常优先级更高，适合少数明确内部定义"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  roles:\n    - service\n",
+      "roles/service/tasks/main.yml": "- name: Render the effective role settings\n  ansible.builtin.copy:\n    dest: '{{ workspace }}/effective.json'\n    content: '{{ {\"port\": service_port, \"kind\": service_kind} | to_json }}'\n    mode: '0600'\n",
+      "roles/service/defaults/main.yml": "{}\n",
+      "roles/service/vars/main.yml": "service_port: 8080\nservice_kind: api\n"
+    },
+    "solution_files": {
+      "roles/service/defaults/main.yml": "service_port: 8080\n",
+      "roles/service/vars/main.yml": "service_kind: api\n"
+    },
+    "negative_files": {
+      "roles/service/defaults/main.yml": "service_port: 8080\nservice_kind: api\n",
+      "roles/service/vars/main.yml": "{}\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "service_port 默认8080，必须允许play变量和extra-vars覆盖；service_kind保持角色固定值api，不受play中误设worker影响。正确拆分roles/service的defaults与vars，依次验证默认、play覆盖和extra-vars优先级。",
+      "deliverables": [
+        "roles/service/defaults/main.yml",
+        "roles/service/vars/main.yml"
+      ],
+      "verification": "原生Ansible参数、控制流及产物验证",
+      "failure_examples": [
+        "defaults适合调用方可覆盖的默认值，vars优先于play变量；extra-vars优先级更高。不要将所有配置塞到role vars使正常调用方无法覆盖。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nMATERIAL_ROOT=Path.cwd()\nSELECT_TAGS=None\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    \n    for filename in ['roles/service/tasks/main.yml', 'roles/service/defaults/main.yml', 'roles/service/vars/main.yml']:\n        target=root/filename;target.parent.mkdir(parents=True,exist_ok=True)\n        target.write_text((MATERIAL_ROOT/filename).read_text())\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    if check:command.append('--check')\n    if SELECT_TAGS:command.extend(['--tags',SELECT_TAGS])\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);base=source\n    run(root,{});assert json.loads((root/'effective.json').read_text())=={'port':8080,'kind':'api'}\n    doc=yaml.safe_load(base);doc[0]['vars']={'service_port':9090,'service_kind':'worker'};source=yaml.safe_dump(doc)\n    run(root,{});assert json.loads((root/'effective.json').read_text())=={'port':9090,'kind':'api'}\n    run(root,{'service_port':10000});assert json.loads((root/'effective.json').read_text())=={'port':10000,'kind':'api'}\n    unchanged(run(root,{'service_port':10000}))\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-028",
+      "original_type": "interview",
+      "original_title": "roles 的 defaults 与 vars 应分别放什么？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-028"
+  },
+  {
+    "id": "curated-ansible-expansion-035",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "隔离外层租户变量与内层文件循环",
+    "level": 2,
+    "type": "code",
+    "title": "隔离外层租户变量与内层文件循环",
+    "body": "## 操作环境\nLinux普通用户、ansible-core、Python3/PyYAML，localhost、forks=1，不使用提权或SSH。仅在题目临时workspace中操作；制品服务器也是本机回环测试服务。\n\n## 操作任务\ntenants各有name和files，files各有name/content；按给定tenant.yml写入对应租户目录。修复外层include循环变量，防止与内层item冲突。空文件列表仍创建该租户目录，不能只处理第一个租户。\n\n## 提交产物\nplaybook.yaml。其余辅助文件保持原样。\n\n## 验收方法\n真实ansible-playbook执行正常、失败、幂等与参数变化路径，检查文件副作用、状态码和数据完整性。",
+    "answer": "### playbook.yaml\n```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Process one tenant with a dedicated loop variable\n      ansible.builtin.include_tasks: tenant.yml\n      loop: '{{ tenants }}'\n      loop_control:\n        loop_var: tenant_spec\n\n```\n\ninclude的外层使用独立loop_var保存租户对象，内层item仅表示文件，避免循环变量被覆盖导致跨租户误写。",
+    "rubric": [
+      "内外层默认 item 可能互相覆盖，导致模板取到错误对象"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "tenant.yml": "- name: Create the tenant directory\n  ansible.builtin.file:\n    path: '{{ workspace }}/{{ tenant_spec.name }}'\n    state: directory\n    mode: '0700'\n- name: Write tenant file set\n  ansible.builtin.copy:\n    dest: '{{ workspace }}/{{ tenant_spec.name }}/{{ item.name }}'\n    content: '{{ item.content }}'\n    mode: '0600'\n  loop: '{{ tenant_spec.files }}'\n",
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Process one tenant with a dedicated loop variable\n      ansible.builtin.include_tasks: tenant.yml\n      loop: '{{ tenants }}'\n      loop_control:\n        loop_var: item\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Process one tenant with a dedicated loop variable\n      ansible.builtin.include_tasks: tenant.yml\n      loop: '{{ tenants }}'\n      loop_control:\n        loop_var: tenant_spec\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Process one tenant with a dedicated loop variable\n      ansible.builtin.include_tasks: tenant.yml\n      loop: '{{ tenants[:1] }}'\n      loop_control:\n        loop_var: tenant_spec\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "tenants各有name和files，files各有name/content；按给定tenant.yml写入对应租户目录。修复外层include循环变量，防止与内层item冲突。空文件列表仍创建该租户目录，不能只处理第一个租户。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生Ansible参数、控制流及产物验证",
+      "failure_examples": [
+        "include的外层使用独立loop_var保存租户对象，内层item仅表示文件，避免循环变量被覆盖导致跨租户误写。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nMATERIAL_ROOT=Path.cwd()\nSELECT_TAGS=None\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    \n    for filename in ['tenant.yml']:\n        target=root/filename;target.parent.mkdir(parents=True,exist_ok=True)\n        target.write_text((MATERIAL_ROOT/filename).read_text())\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    if check:command.append('--check')\n    if SELECT_TAGS:command.extend(['--tags',SELECT_TAGS])\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);tenants=[{'name':'alpha','files':[{'name':'a','content':'A'},{'name':'b','content':'B'}]},{'name':'beta space','files':[{'name':'a','content':'OTHER'}]},{'name':'empty','files':[]}]\n    run(root,{'tenants':tenants})\n    for tenant in tenants:\n        target=root/tenant['name'];assert target.is_dir()\n        assert sorted(p.name for p in target.iterdir())==sorted(f['name'] for f in tenant['files'])\n        for f in tenant['files']:assert (target/f['name']).read_text()==f['content']\n    unchanged(run(root,{'tenants':list(reversed(tenants))}))\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-035",
+      "original_type": "interview",
+      "original_title": "嵌套 include 与循环为何要设置独立 loop_var？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-035"
+  },
+  {
+    "id": "curated-ansible-expansion-042",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "修复动态 include 的标签传播",
+    "level": 2,
+    "type": "code",
+    "title": "修复动态 include 的标签传播",
+    "body": "## 操作环境\nLinux普通用户、ansible-core、Python3/PyYAML，localhost、forks=1，不使用提权或SSH。仅在题目临时workspace中操作；制品服务器也是本机回环测试服务。\n\n## 操作任务\n执行--tags deploy时，动态包含的deploy.yml必须实际写deployed；无关标签audit不得触发部署。保留动态include，不通过always标签扩大执行范围；相同release_label再次部署应幂等。\n\n## 提交产物\nplaybook.yaml。其余辅助文件保持原样。\n\n## 验收方法\n真实ansible-playbook执行正常、失败、幂等与参数变化路径，检查文件副作用、状态码和数据完整性。",
+    "answer": "### playbook.yaml\n```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Include deploy tasks and propagate their selection tag\n      ansible.builtin.include_tasks:\n        file: deploy.yml\n        apply:\n          tags: deploy\n      tags: deploy\n\n```\n\n动态include本身的tags不会自动传播到子任务；apply.tags负责子任务，include本身也需选中。always会导致无关操作误触发部署。",
+    "rubric": [
+      "前者运行时展开，后者静态导入，标签、条件和循环继承行为不同"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 4,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "merged_sources": [
+      {
+        "id": "src-0d10f4c80b73188e",
+        "title": "`include_task` 和 `import_task` 有什么区别？",
+        "category": "Ansible",
+        "source": "topics/ansible/README.md",
+        "sources": [
+          "topics/ansible/README.md"
+        ]
+      }
+    ],
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "deploy.yml": "- name: Write the approved deployment marker\n  ansible.builtin.copy:\n    dest: '{{ workspace }}/deployed'\n    content: '{{ release_label }}'\n    mode: '0600'\n",
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n  - name: Include deploy tasks and propagate their selection tag\n    ansible.builtin.include_tasks: deploy.yml\n    tags: deploy\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Include deploy tasks and propagate their selection tag\n      ansible.builtin.include_tasks:\n        file: deploy.yml\n        apply:\n          tags: deploy\n      tags: deploy\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Include deploy tasks and propagate their selection tag\n      ansible.builtin.include_tasks:\n        file: deploy.yml\n        apply:\n          tags: always\n      tags: always\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "执行--tags deploy时，动态包含的deploy.yml必须实际写deployed；无关标签audit不得触发部署。保留动态include，不通过always标签扩大执行范围；相同release_label再次部署应幂等。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生Ansible参数、控制流及产物验证",
+      "failure_examples": [
+        "动态include本身的tags不会自动传播到子任务；apply.tags负责子任务，include本身也需选中。always会导致无关操作误触发部署。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nMATERIAL_ROOT=Path.cwd()\nSELECT_TAGS=None\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    \n    for filename in ['deploy.yml']:\n        target=root/filename;target.parent.mkdir(parents=True,exist_ok=True)\n        target.write_text((MATERIAL_ROOT/filename).read_text())\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    if check:command.append('--check')\n    if SELECT_TAGS:command.extend(['--tags',SELECT_TAGS])\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);SELECT_TAGS='deploy';run(root,{'release_label':'v1'});assert (root/'deployed').read_text()=='v1'\n    unchanged(run(root,{'release_label':'v1'}))\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);SELECT_TAGS='audit';run(root,{'release_label':'v1'});assert not (root/'deployed').exists()\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-042",
+      "original_type": "interview",
+      "original_title": "include_tasks 与 import_tasks 如何影响标签和条件作用域？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-042"
+  },
+  {
+    "id": "curated-ansible-expansion-054",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "在替换制品前验证固定 SHA256",
+    "level": 2,
+    "type": "code",
+    "title": "在替换制品前验证固定 SHA256",
+    "body": "## 操作环境\nLinux普通用户、ansible-core、Python3/PyYAML，localhost、forks=1，不使用提权或SSH。仅在题目临时workspace中操作；制品服务器也是本机回环测试服务。\n\n## 操作任务\n从本地artifact_url下载制品，先写独立artifact.download并使用批准的artifact_sha256校验，通过后才安装release.bin。每次重新取回并验证；远端损坏时应失败且保留已安装正确制品，权限0600。HTTP仅限本题回环服务，不作为生产传输安全方案。\n\n## 提交产物\nplaybook.yaml。其余辅助文件保持原样。\n\n## 验收方法\n真实ansible-playbook执行正常、失败、幂等与参数变化路径，检查文件副作用、状态码和数据完整性。",
+    "answer": "### playbook.yaml\n```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Fetch and verify into a separate staging file\n      ansible.builtin.get_url:\n        url: '{{ artifact_url }}'\n        dest: '{{ workspace }}/artifact.download'\n        checksum: 'sha256:{{ artifact_sha256 }}'\n        force: true\n        mode: '0600'\n    - name: Install only after the staging file passes checksum validation\n      ansible.builtin.copy:\n        src: '{{ workspace }}/artifact.download'\n        dest: '{{ workspace }}/release.bin'\n        remote_src: true\n        mode: '0600'\n\n```\n\n不能把get_url的校验失败当成已安装文件保全保证；本次原生验证发现校验失败可删除其dest。先使用独立暂存文件，校验通过后再copy安装，force确保每次核对远端内容。",
+    "rubric": [
+      "固定可信来源和校验和可验证下载内容符合批准版本，避免可变 URL 或传输异常产生错误制品"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/get_url_module.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n  - name: Fetch and verify into a separate staging file\n    ansible.builtin.get_url:\n      url: '{{ artifact_url }}'\n      dest: '{{ workspace }}/artifact.download'\n      force: true\n      mode: '0600'\n  - name: Install only after the staging file passes checksum validation\n    ansible.builtin.copy:\n      src: '{{ workspace }}/artifact.download'\n      dest: '{{ workspace }}/release.bin'\n      remote_src: true\n      mode: '0600'\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Fetch and verify into a separate staging file\n      ansible.builtin.get_url:\n        url: '{{ artifact_url }}'\n        dest: '{{ workspace }}/artifact.download'\n        checksum: 'sha256:{{ artifact_sha256 }}'\n        force: true\n        mode: '0600'\n    - name: Install only after the staging file passes checksum validation\n      ansible.builtin.copy:\n        src: '{{ workspace }}/artifact.download'\n        dest: '{{ workspace }}/release.bin'\n        remote_src: true\n        mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Fetch and verify into a separate staging file\n      ansible.builtin.get_url:\n        url: '{{ artifact_url }}'\n        dest: '{{ workspace }}/artifact.download'\n        checksum: 'sha256:{{ artifact_sha256 }}'\n        force: false\n        mode: '0600'\n    - name: Install only after the staging file passes checksum validation\n      ansible.builtin.copy:\n        src: '{{ workspace }}/artifact.download'\n        dest: '{{ workspace }}/release.bin'\n        remote_src: true\n        mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "从本地artifact_url下载制品，先写独立artifact.download并使用批准的artifact_sha256校验，通过后才安装release.bin。每次重新取回并验证；远端损坏时应失败且保留已安装正确制品，权限0600。HTTP仅限本题回环服务，不作为生产传输安全方案。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生Ansible参数、控制流及产物验证",
+      "failure_examples": [
+        "不能把get_url的校验失败当成已安装文件保全保证；本次原生验证发现校验失败可删除其dest。先使用独立暂存文件，校验通过后再copy安装，force确保每次核对远端内容。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nMATERIAL_ROOT=Path.cwd()\nSELECT_TAGS=None\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    \n    for filename in []:\n        target=root/filename;target.parent.mkdir(parents=True,exist_ok=True)\n        target.write_text((MATERIAL_ROOT/filename).read_text())\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    if check:command.append('--check')\n    if SELECT_TAGS:command.extend(['--tags',SELECT_TAGS])\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nimport hashlib,http.server,threading,stat\ngood=b'opsforge fixture artifact\\x00\\xff\\n';state={'payload':good}\nclass Handler(http.server.BaseHTTPRequestHandler):\n    def do_GET(self):\n        self.send_response(200);self.send_header('Content-Length',str(len(state['payload'])));self.end_headers();self.wfile.write(state['payload'])\n    def log_message(self,*args):pass\nserver=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()\ntry:\n    with tempfile.TemporaryDirectory() as tmp:\n        root=Path(tmp);values={'artifact_url':'http://127.0.0.1:%d/release.bin'%server.server_port,'artifact_sha256':hashlib.sha256(good).hexdigest()}\n        run(root,values);target=root/'release.bin';assert target.read_bytes()==good and stat.S_IMODE(target.stat().st_mode)==0o600\n        state['payload']=b'corrupted artifact';run(root,values,expected=1);assert target.read_bytes()==good\n        state['payload']=good;run(root,values);assert target.read_bytes()==good\n        unchanged(run(root,values));assert target.read_bytes()==good\nfinally:server.shutdown();server.server_close();thread.join(timeout=3)\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-054",
+      "original_type": "interview",
+      "original_title": "get_url 获取制品时为什么需要校验和及固定 URL？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-054"
+  }
+]

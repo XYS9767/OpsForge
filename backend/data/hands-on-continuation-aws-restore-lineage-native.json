@@ -1,0 +1,144 @@
+[
+  {
+    "id": "curated-advanced-aws-008",
+    "module": "aws",
+    "category": "AWS",
+    "level": 5,
+    "topic": "事件队列与无服务器",
+    "title": "离线恢复实操：六个复制初始化状态的进程重新建立唯一标识、凭据与连接",
+    "body": "## 操作任务\n实现after_restore(state,now,refresh,connect)。state为复制的初始化状态，含environment_id、已过期credential和旧connection；输入不得改动。返回新dict，environment_id用系统安全随机源恢复后新生成；credential通过refresh()恰调用一次取得并复制，expires必须大于now；connect()恰一次取得新socket，发PING\\n并收到PONG\\n后才返回到connection字段。新连接健康检查失败应关闭连接并抛错，凭据刷新失败或仍过期必须中止，不能沿用旧状态。验收实际fork六个非root进程共享相同初始内存，分别检查标识不同、模拟凭据新鲜及新TCP连接可反复使用。这里只实现恢复后业务逻辑，不注册AWS运行时hook；state中的旧连接不能复用。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n离线云模拟；使用真实Linux fork和私有TCP echo服务演示应用内存复制风险；不是Lambda内存快照、SnapStart恢复或AWS凭据服务实测。当前Python3.11教学运行时不冒称支持托管SnapStart。凭据仅toy字符串，未测试生产回滚、旧重复业务数据修复及随机性统计证明。 不调用云API、不部署、不构建镜像，不计真实云故障闭环。",
+    "answer": "```python\nimport secrets\n\ndef after_restore(state,now,refresh,connect):\n    # Work on a replacement object; the copied initialization state is not trusted.\n    credential=refresh()\n    if credential['expires']<=now:raise ValueError('refreshed credential expired')\n    connection=connect()\n    try:\n        connection.sendall(b'PING\\n')\n        if connection.recv(64)!=b'PONG\\n':raise ValueError('new connection unhealthy')\n    except BaseException:\n        connection.close()\n        raise\n    return {'environment_id':secrets.token_hex(24),'credential':dict(credential),'connection':connection}\n```\n\n原题知识说明：\n交付运行时支持范围、初始化阶段生成的ID、随机状态、秘密缓存及网络连接清单。SnapStart可能从同一初始化快照恢复多个执行环境，初始化时生成并保存的唯一值会随快照复制，不能沿用“每个新进程都会重新初始化一次”的假设。检查所用随机库是否具有官方支持的恢复语义，必要的唯一数据应在恢复后生成，连接与过期凭据也需按合同重新验证。验收并发扩展到多个恢复环境，检查业务ID不重复、过期状态不会被继续使用，并保留普通冷启动对照。失败将流量转回批准的非SnapStart版本或已验证版本，记录已经产生的重复身份及业务影响；只重新发布快照不能修复历史重复记录，实际代码修正由开发提供。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释AWS具体机制及适用范围",
+      "列出能推翻错误假设的反例",
+      "明确配置恢复与数据副作用的差异"
+    ],
+    "references": [
+      "https://docs.aws.amazon.com/lambda/latest/dg/snapstart-uniqueness.html"
+    ],
+    "related_modules": [
+      "aws"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-aws-008",
+      "original_title": "Lambda SnapStart上线如何交付初始化快照中的唯一性与恢复后状态验收？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import secrets\n\ndef after_restore(state,now,refresh,connect):\n    # Work on a replacement object; the copied initialization state is not trusted.\n    credential=refresh()\n    if credential['expires']<=now:raise ValueError('refreshed credential expired')\n    connection=connect()\n    try:\n        connection.sendall(b'PING\\n')\n        if connection.recv(64)!=b'PONG\\n':raise ValueError('new connection unhealthy')\n    except BaseException:\n        connection.close()\n        raise\n    return {'environment_id':secrets.token_hex(24),'credential':dict(credential),'connection':connection}\n"
+    },
+    "negative_files": {
+      "task.py": "import secrets\n\ndef after_restore(state,now,refresh,connect):\n    # Work on a replacement object; the copied initialization state is not trusted.\n    credential=refresh()\n    if credential['expires']<=now:raise ValueError('refreshed credential expired')\n    connection=connect()\n    try:\n        connection.sendall(b'PING\\n')\n        if connection.recv(64)!=b'PONG\\n':raise ValueError('new connection unhealthy')\n    except BaseException:\n        connection.close()\n        raise\n    return {'environment_id':state['environment_id'],'credential':dict(credential),'connection':connection}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现after_restore(state,now,refresh,connect)。state为复制的初始化状态，含environment_id、已过期credential和旧connection；输入不得改动。返回新dict，environment_id用系统安全随机源恢复后新生成；credential通过refresh()恰调用一次取得并复制，expires必须大于now；connect()恰一次取得新socket，发PING\\n并收到PONG\\n后才返回到connection字段。新连接健康检查失败应关闭连接并抛错，凭据刷新失败或仍过期必须中止，不能沿用旧状态。验收实际fork六个非root进程共享相同初始内存，分别检查标识不同、模拟凭据新鲜及新TCP连接可反复使用。这里只实现恢复后业务逻辑，不注册AWS运行时hook；state中的旧连接不能复用。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "离线云模拟；使用真实Linux fork和私有TCP echo服务演示应用内存复制风险；不是Lambda内存快照、SnapStart恢复或AWS凭据服务实测。当前Python3.11教学运行时不冒称支持托管SnapStart。凭据仅toy字符串，未测试生产回滚、旧重复业务数据修复及随机性统计证明。 不调用云API、不部署、不构建镜像，不计真实云故障闭环。",
+      "validation_kind": "offline_cloud_model"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import copy,json,os,pathlib,secrets,socket,subprocess,sys,tempfile\nsys.path.insert(0,os.getcwd())\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('OFFLINE_CLOUD_SCOPE:NO_CLOUD_API_REQUESTS',flush=True)\nimport task\nserver_source=\"\"\"import socket,threading\ns=socket.socket();s.bind(('127.0.0.1',0));s.listen(32);print(s.getsockname()[1],flush=True)\ndef serve(c):\n try:\n  while True:\n   value=c.recv(64)\n   if not value:break\n   c.sendall(b'PONG\\\\n' if value==b'PING\\\\n' else b'ERROR\\\\n')\n finally:c.close()\nwhile True:\n c,_=s.accept();threading.Thread(target=serve,args=(c,),daemon=True).start()\n\"\"\"\nwith tempfile.TemporaryDirectory(prefix='restore-clones-') as directory:\n server=subprocess.Popen([sys.executable,'-u','-c',server_source],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n try:\n  port=int(server.stdout.readline())\n  state={'environment_id':'initialization-snapshot-id','credential':{'token':'toy-expired','expires':10},'connection':None}\n  before=copy.deepcopy(state);children=[]\n  print('STUDENT_OPERATION_ENTERED:refresh_unique_state_and_connection_after_copied_initialization',flush=True)\n  # Actual fork copies application memory; this does NOT emulate a Lambda microVM or runtime hook registration.\n  for index in range(6):\n   pid=os.fork()\n   if pid==0:\n    try:\n     calls={'refresh':0,'connect':0}\n     def refresh():\n      calls['refresh']+=1\n      return {'token':'toy-current-'+str(os.getpid()),'expires':1000}\n     def connect():\n      calls['connect']+=1\n      return socket.create_connection(('127.0.0.1',port),timeout=2)\n     result=task.after_restore(state,100,refresh,connect)\n     assert result['environment_id']!=state['environment_id']\n     assert calls=={'refresh':1,'connect':1}\n     assert result['credential']=={'token':'toy-current-'+str(os.getpid()),'expires':1000}\n     connection=result['connection'];connection.sendall(b'PING\\n');assert connection.recv(64)==b'PONG\\n'\n     connection.close();assert state==before\n     pathlib.Path(directory,str(index)+'.json').write_text(json.dumps({'pid':os.getpid(),'id':result['environment_id'],'token':result['credential']['token']}))\n    except BaseException:\n     import traceback;traceback.print_exc();os._exit(3)\n    os._exit(0)\n   children.append(pid)\n  statuses=[os.waitpid(pid,0)[1] for pid in children]\n  assert statuses==[0]*6,('restored application state was stale',statuses)\n  rows=[json.loads(pathlib.Path(directory,str(i)+'.json').read_text()) for i in range(6)]\n  assert len({r['id'] for r in rows})==len({r['token'] for r in rows})==6\n  assert state==before\n  def unavailable():raise OSError('private credential provider unavailable')\n  try:task.after_restore(state,100,unavailable,lambda:None)\n  except OSError:pass\n  else:raise AssertionError('restore continued with stale credential after refresh failed')\n  try:task.after_restore(state,100,lambda:{'token':'toy-expired','expires':99},lambda:None)\n  except ValueError:pass\n  else:raise AssertionError('expired refreshed credential accepted')\n  print('OFFLINE_SNAPSHOT_COPIED_ID_REPLACED_IN_SIX_FORKED_PROCESSES_FRESH_CREDENTIALS_REAL_NEW_TCP_CONNECTIONS',flush=True)\n finally:\n  server.terminate()\n  try:server.communicate(timeout=3)\n  except subprocess.TimeoutExpired:server.kill();server.communicate()\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "practice"
+  },
+  {
+    "id": "curated-advanced-aws-009",
+    "module": "aws",
+    "category": "AWS",
+    "level": 5,
+    "topic": "事件队列与无服务器",
+    "title": "离线分片交接实操：合并全部父分片终结，SQLite检查点重启后才开放子分片",
+    "body": "## 操作任务\n实现ready_shards(shards,checkpoints)，返回可推进分片ID的排序列表，输入不变。规范化shards含唯一非空id、parents列表（0至2个不同父ID）、state=OPEN/CLOSED/EXPIRED；全部亲缘关系已提供。checkpoints映射ID到十进制sequence字符串或显式SHARD_END。序列数值再大也不等于EOF，CLOSED也不等于已消费完。只有全部父分片都持久化SHARD_END才开放子分片；未结束的独立OPEN/CLOSED根可推进，已SHARD_END和EXPIRED本身不推进。拒绝未知父/检查点、OPEN父仍被引用、循环、OPEN标终结、LATEST伪检查点、未读完已EXPIRED历史。已经终结的EXPIRED父允许子分片继续；缺失历史须ValueError而非跳过。真实SQLite保存检查点后重启解释器验收合并、拆分与大序列。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n离线云模拟；有限规范化Kinesis亲缘和检查点控制模型；SQLite仅教学持久化，不实现DynamoDB lease/KCL、Kinesis API、哈希范围路由、业务exactly-once或实际reshard。SHARD_END由可信消费层在EOF及副作用已确认后提供，本函数不从序列号推导；未知/过期亲缘拒绝并转外部补偿。 不调用云API、不部署、不构建镜像，不计真实云故障闭环。",
+    "answer": "```python\ndef ready_shards(shards,checkpoints):\n    by_id={}\n    for row in shards:\n        ident=row['id']\n        if not isinstance(ident,str) or not ident or ident in by_id:raise ValueError('unique shard IDs required')\n        if row['state'] not in ('OPEN','CLOSED','EXPIRED'):raise ValueError('unknown shard state')\n        if not isinstance(row['parents'],list) or len(row['parents'])>2 or len(set(row['parents']))!=len(row['parents']):raise ValueError('zero, one or two distinct parents')\n        by_id[ident]=row\n    if set(checkpoints)-set(by_id):raise ValueError('checkpoint has unknown shard')\n    for ident,value in checkpoints.items():\n        if value!='SHARD_END' and (not isinstance(value,str) or not value.isdecimal()):raise ValueError('explicit sequence or terminal checkpoint required')\n        if value=='SHARD_END' and by_id[ident]['state']=='OPEN':raise ValueError('open shard cannot have terminal checkpoint')\n    visiting=set();seen=set()\n    def visit(ident):\n        if ident in visiting:raise ValueError('cyclic lineage')\n        if ident in seen:return\n        visiting.add(ident)\n        for parent in by_id[ident]['parents']:\n            if parent not in by_id or by_id[parent]['state']=='OPEN':raise ValueError('missing or still open parent')\n            visit(parent)\n        visiting.remove(ident);seen.add(ident)\n    for ident in by_id:visit(ident)\n    if any(row['state']=='EXPIRED' and checkpoints.get(ident)!='SHARD_END' for ident,row in by_id.items()):raise ValueError('expired unread history requires external reconciliation')\n    return sorted(ident for ident,row in by_id.items() if row['state']!='EXPIRED' and checkpoints.get(ident)!='SHARD_END'\n                  and all(checkpoints.get(parent)=='SHARD_END' for parent in row['parents']))\n```\n\n原题知识说明：\n交付分片亲缘关系、消费者实现或KCL版本、检查点存储及顺序需求。reshard后新记录进入子分片，关闭的父分片仍可能留有未消费记录；如果立即并行处理子分片，特定业务键的历史与新记录可能乱序。验收在持续写入中拆分和合并，故意放慢父分片，确认消费者按所需合同完成父分片再推进相关子分片，并检查重启后不会丢掉亲缘依赖。监控应区分无新写入的关闭分片与仍待追赶的历史积压。失败暂停相关下游推进并保存检查点与记录身份，不能通过删除检查点从LATEST开始掩盖积压；超过流保留期的缺口需从独立来源补偿，调整分片数量不会恢复已过期记录。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释AWS具体机制及适用范围",
+      "列出能推翻错误假设的反例",
+      "明确配置恢复与数据副作用的差异"
+    ],
+    "references": [
+      "https://docs.aws.amazon.com/streams/latest/dev/kinesis-using-sdk-java-after-resharding.html"
+    ],
+    "related_modules": [
+      "aws"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-aws-009",
+      "original_title": "Kinesis分片拆分或合并时，如何交付父子分片消费顺序与检查点验收？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def ready_shards(shards,checkpoints):\n    by_id={}\n    for row in shards:\n        ident=row['id']\n        if not isinstance(ident,str) or not ident or ident in by_id:raise ValueError('unique shard IDs required')\n        if row['state'] not in ('OPEN','CLOSED','EXPIRED'):raise ValueError('unknown shard state')\n        if not isinstance(row['parents'],list) or len(row['parents'])>2 or len(set(row['parents']))!=len(row['parents']):raise ValueError('zero, one or two distinct parents')\n        by_id[ident]=row\n    if set(checkpoints)-set(by_id):raise ValueError('checkpoint has unknown shard')\n    for ident,value in checkpoints.items():\n        if value!='SHARD_END' and (not isinstance(value,str) or not value.isdecimal()):raise ValueError('explicit sequence or terminal checkpoint required')\n        if value=='SHARD_END' and by_id[ident]['state']=='OPEN':raise ValueError('open shard cannot have terminal checkpoint')\n    visiting=set();seen=set()\n    def visit(ident):\n        if ident in visiting:raise ValueError('cyclic lineage')\n        if ident in seen:return\n        visiting.add(ident)\n        for parent in by_id[ident]['parents']:\n            if parent not in by_id or by_id[parent]['state']=='OPEN':raise ValueError('missing or still open parent')\n            visit(parent)\n        visiting.remove(ident);seen.add(ident)\n    for ident in by_id:visit(ident)\n    if any(row['state']=='EXPIRED' and checkpoints.get(ident)!='SHARD_END' for ident,row in by_id.items()):raise ValueError('expired unread history requires external reconciliation')\n    return sorted(ident for ident,row in by_id.items() if row['state']!='EXPIRED' and checkpoints.get(ident)!='SHARD_END'\n                  and all(checkpoints.get(parent)=='SHARD_END' for parent in row['parents']))\n"
+    },
+    "negative_files": {
+      "task.py": "def ready_shards(shards,checkpoints):\n    by_id={}\n    for row in shards:\n        ident=row['id']\n        if not isinstance(ident,str) or not ident or ident in by_id:raise ValueError('unique shard IDs required')\n        if row['state'] not in ('OPEN','CLOSED','EXPIRED'):raise ValueError('unknown shard state')\n        if not isinstance(row['parents'],list) or len(row['parents'])>2 or len(set(row['parents']))!=len(row['parents']):raise ValueError('zero, one or two distinct parents')\n        by_id[ident]=row\n    if set(checkpoints)-set(by_id):raise ValueError('checkpoint has unknown shard')\n    for ident,value in checkpoints.items():\n        if value!='SHARD_END' and (not isinstance(value,str) or not value.isdecimal()):raise ValueError('explicit sequence or terminal checkpoint required')\n        if value=='SHARD_END' and by_id[ident]['state']=='OPEN':raise ValueError('open shard cannot have terminal checkpoint')\n    visiting=set();seen=set()\n    def visit(ident):\n        if ident in visiting:raise ValueError('cyclic lineage')\n        if ident in seen:return\n        visiting.add(ident)\n        for parent in by_id[ident]['parents']:\n            if parent not in by_id or by_id[parent]['state']=='OPEN':raise ValueError('missing or still open parent')\n            visit(parent)\n        visiting.remove(ident);seen.add(ident)\n    for ident in by_id:visit(ident)\n    if any(row['state']=='EXPIRED' and checkpoints.get(ident)!='SHARD_END' for ident,row in by_id.items()):raise ValueError('expired unread history requires external reconciliation')\n    return sorted(ident for ident,row in by_id.items() if row['state']!='EXPIRED' and checkpoints.get(ident)!='SHARD_END'\n                  and (not row['parents'] or any(checkpoints.get(parent)=='SHARD_END' for parent in row['parents'])))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现ready_shards(shards,checkpoints)，返回可推进分片ID的排序列表，输入不变。规范化shards含唯一非空id、parents列表（0至2个不同父ID）、state=OPEN/CLOSED/EXPIRED；全部亲缘关系已提供。checkpoints映射ID到十进制sequence字符串或显式SHARD_END。序列数值再大也不等于EOF，CLOSED也不等于已消费完。只有全部父分片都持久化SHARD_END才开放子分片；未结束的独立OPEN/CLOSED根可推进，已SHARD_END和EXPIRED本身不推进。拒绝未知父/检查点、OPEN父仍被引用、循环、OPEN标终结、LATEST伪检查点、未读完已EXPIRED历史。已经终结的EXPIRED父允许子分片继续；缺失历史须ValueError而非跳过。真实SQLite保存检查点后重启解释器验收合并、拆分与大序列。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "离线云模拟；有限规范化Kinesis亲缘和检查点控制模型；SQLite仅教学持久化，不实现DynamoDB lease/KCL、Kinesis API、哈希范围路由、业务exactly-once或实际reshard。SHARD_END由可信消费层在EOF及副作用已确认后提供，本函数不从序列号推导；未知/过期亲缘拒绝并转外部补偿。 不调用云API、不部署、不构建镜像，不计真实云故障闭环。",
+      "validation_kind": "offline_cloud_model"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import copy,json,os,pathlib,sqlite3,subprocess,sys,tempfile\nsys.path.insert(0,os.getcwd())\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('OFFLINE_CLOUD_SCOPE:NO_CLOUD_API_REQUESTS',flush=True)\nimport task\nshards=[{'id':'left','parents':[],'state':'CLOSED'},{'id':'right','parents':[],'state':'CLOSED'},\n {'id':'merged','parents':['left','right'],'state':'CLOSED'},\n {'id':'child-a','parents':['merged'],'state':'OPEN'},{'id':'child-b','parents':['merged'],'state':'OPEN'},\n {'id':'independent','parents':[],'state':'OPEN'}]\nbefore=copy.deepcopy(shards)\nwith tempfile.TemporaryDirectory(prefix='lineage-checkpoint-') as directory:\n path=pathlib.Path(directory)/'checkpoints.db'\n with sqlite3.connect(path) as db:db.execute('CREATE TABLE checkpoints(shard TEXT PRIMARY KEY,value TEXT NOT NULL)')\n def persist(values):\n  with sqlite3.connect(path) as db:\n   for key,value in values.items():db.execute('INSERT OR REPLACE INTO checkpoints VALUES(?,?)',(key,value))\n def saved():\n  with sqlite3.connect(path) as db:return dict(db.execute('SELECT shard,value FROM checkpoints'))\n print('STUDENT_OPERATION_ENTERED:wait_for_all_parent_shard_end_checkpoints_across_merge_split_restart',flush=True)\n assert task.ready_shards(shards,{})==['independent','left','right']\n persist({'left':'SHARD_END','right':'42'})\n assert task.ready_shards(shards,saved())==['independent','right'],'merge started before all parents reached terminal checkpoint'\n persist({'right':'SHARD_END'})\n assert task.ready_shards(shards,saved())==['independent','merged']\n persist({'merged':'999999999999999999999999999999'})\n assert task.ready_shards(shards,saved())==['independent','merged'],'sequence checkpoint was incorrectly treated as terminal EOF'\n # Restart a real interpreter and reopen durable checkpoints; no in-memory lineage-progress shortcut.\n probe=\"import json,sqlite3,sys;sys.path.insert(0,'.');import task;d=sqlite3.connect(sys.argv[1]);print(json.dumps(task.ready_shards(json.loads(sys.argv[2]),dict(d.execute('SELECT shard,value FROM checkpoints')))))\"\n assert json.loads(subprocess.check_output([sys.executable,'-c',probe,str(path),json.dumps(shards)],text=True))==['independent','merged']\n persist({'merged':'SHARD_END'})\n assert task.ready_shards(shards,saved())==['child-a','child-b','independent']\n checkpoint=saved();original_checkpoint=dict(checkpoint)\n assert task.ready_shards(list(reversed(shards)),checkpoint)==['child-a','child-b','independent']\n assert checkpoint==original_checkpoint and shards==before\n for changed,cp in [\n  ([{'id':'lost','parents':[],'state':'EXPIRED'}],{}),\n  ([{'id':'child','parents':['missing'],'state':'OPEN'}],{}),\n  ([{'id':'a','parents':['b'],'state':'CLOSED'},{'id':'b','parents':['a'],'state':'CLOSED'}],{}),\n  ([{'id':'live','parents':[],'state':'OPEN'}],{'live':'SHARD_END'}),\n  (shards,{'missing':'1'}), (shards,{'left':'LATEST'})]:\n  try:task.ready_shards(changed,cp)\n  except ValueError:pass\n  else:raise AssertionError('unknown/expired history or invalid lineage was silently skipped')\n assert task.ready_shards([{'id':'old','parents':[],'state':'EXPIRED'}],{'old':'SHARD_END'})==[]\n print('OFFLINE_KINESIS_ALL_MERGE_PARENTS_END_BEFORE_CHILDREN_SEQUENCE_IS_NOT_EOF_SQLITE_RESTART_AND_EXPIRED_GAP_REFUSAL',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "practice"
+  }
+]

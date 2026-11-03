@@ -1,0 +1,223 @@
+[
+  {
+    "id": "curated-advanced-disk-019",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "level": 5,
+    "topic": "挂载与网络文件系统",
+    "title": "交付容器外部维护工具的挂载传播方案，要求宿主新增子挂载能被看见但工具不能反向污染宿主挂载树。",
+    "answer": "交付宿主与维护进程mount namespace图、传播方向和只读边界。区分shared、slave和private，按需要选择单向接收传播而非双向共享；读取宿主路径不意味着自动看见后续子挂载。验证实际挂载树与传播标记，权限控制另行限制工具创建和修改挂载。验收新增、移除子挂载及工具退出，确认宿主拓扑不被反向改变。出现意外传播时停止维护操作并按挂载身份清理，不能递归卸载宿主根路径；回退前核对仍被进程引用的挂载，避免留下不可见但占资源的对象。",
+    "type": "practice",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "pending",
+    "review_note": "判分信任链修复候选；旧公开marker/子报JSON证据不能证明防投机，本版待新SHA作者与独审；修复不计新增完成量。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "给出题设要求的具体交付物与关键机制",
+      "用可观察结果验证约束和失败分支",
+      "明确停止条件及回退或恢复边界"
+    ],
+    "references": [],
+    "body": "## 操作任务\n补全configure(path)，path是本题私有user/mount namespace中的shared挂载根。根与既有nested子挂载均预设shared；把工具侧递归设为slave，使宿主随后新增子挂载可见、工具新增子挂载不传播回宿主。原生父/子mount namespace实际mount tmpfs、写入标记并双向观察，再由宿主移除子挂载并核对工具侧同样消失；输出双方原始mountinfo图谱；真实UID始终1000，--keep-caps只保留新user namespace内能力，退出后无默认配置改变。交付需说明宿主源必须为shared且子挂载有传播链；普通private根不会自动传播。不得用复制目录/轮询替代传播。\n\n## 产物\ntask.py；透明原生夹具见附带文件。\n\n## 验收方法\npython3 checks/check.py。只使用题目创建的资源，全部回收；依赖不满足时报告环境阻塞。\n",
+    "question_format": "project",
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "def configure(path):\n    raise NotImplementedError()\n"
+    },
+    "solution_files": {
+      "task.py": "import subprocess\ndef configure(path):subprocess.run(['mount','--make-rslave',str(path)],check=True,capture_output=True)\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef configure(path):subprocess.run(['mount','--make-rprivate',str(path)],check=True,capture_output=True)\n"
+    },
+    "exercise": {
+      "environment": "Linux非root student UID1000；仅自有临时镜像/目录/namespace；不接触真实设备、默认身份或挂载树。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "unshare",
+          "mount",
+          "umount"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,pathlib,sys,runpy,json\nassert os.geteuid()==1000\nos.environ['PYTHONDONTWRITEBYTECODE']='1'\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nfrom private_namespace import enter_private_namespace\nobserved=enter_private_namespace()\nwith pathlib.Path('checks/native-commands.jsonl').open('a',encoding='utf8')as out:out.write(json.dumps(dict(event='private_checker_namespace',**observed))+'\\n')\nrunpy.run_path('checks/native_namespace.py',run_name='__main__')\n",
+        "checks/native_namespace.py": "import ctypes,os,pathlib,subprocess,sys,tempfile,json\nL=ctypes.CDLL(None,use_errno=True)\n\ndef record(row):\n with (pathlib.Path.cwd()/'checks/native-commands.jsonl').open('a',encoding='utf8')as out:out.write(json.dumps(row)+'\\n')\n\ndef mount(source,target,typ,flags=0):\n r=L.mount(source.encode()if source else None,str(target).encode(),typ.encode()if typ else None,ctypes.c_ulong(flags),None)\n if r:raise OSError(ctypes.get_errno(),'mount')\ndef unmount(path,flags=0):\n r=L.umount2(str(path).encode(),flags)\n if r:raise OSError(ctypes.get_errno(),'umount')\ndef mounted(path):return any(line.split()[4]==str(path)for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines())\n\ndef kernel_child(child,root):\n assert child.poll()is None,'tool process exited before independent kernel inspection'\n proc=pathlib.Path('/proc')/str(child.pid)\n status=proc.joinpath('status').read_text();uids=next(line.split()[1:]for line in status.splitlines()if line.startswith('Uid:'))\n assert uids==['1000']*4,'actual child credentials changed'\n assert os.readlink(proc/'ns/user')==os.readlink('/proc/self/ns/user')and os.readlink(proc/'ns/mnt')!=os.readlink('/proc/self/ns/mnt')\n lines=proc.joinpath('mountinfo').read_text().splitlines();mounts={line.split()[4]:line for line in lines}\n view=proc/'root'\n record(dict(event='trusted_kernel_child_mountinfo',pid=child.pid,uid_fields=uids,mountinfo=[line for line in lines if str(root)in line]))\n return view,mounts\ndef view_path(view,path):return view/path.relative_to('/')\n\nassert os.geteuid()==1000\nwith tempfile.TemporaryDirectory(prefix='of-s07-disk019-')as d:\n root=pathlib.Path(d);nested=root/'nested';mount('tmpfs',root,'tmpfs');mount(None,root,None,1<<20);nested.mkdir();mount('tmpfs',nested,'tmpfs');mount(None,nested,None,1<<20);bases=[root,nested]\n for base in bases:(base/'from-host').mkdir();(base/'from-tool').mkdir()\n childcode=\"import ctypes,os,pathlib,subprocess,sys,tempfile,json\\nL=ctypes.CDLL(None,use_errno=True)\\ndef mount(source,target,typ,flags=0):\\n r=L.mount(source.encode()if source else None,str(target).encode(),typ.encode()if typ else None,ctypes.c_ulong(flags),None)\\n if r:raise OSError(ctypes.get_errno(),'mount')\\ndef unmount(path,flags=0):\\n r=L.umount2(str(path).encode(),flags)\\n if r:raise OSError(ctypes.get_errno(),'umount')\\ndef mounted(path):return any(line.split()[4]==str(path)for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines())\\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\\nroot=pathlib.Path(sys.argv[1]);bases=[root,root/'nested'];task.configure(root);print('READY',flush=True)\\nassert sys.stdin.readline().strip()=='FORWARD'\\nforward=[(base/'from-host'/'forward-marker').exists()for base in bases]\\nfor base in bases:mount('tmpfs',base/'from-tool','tmpfs');(base/'from-tool'/'reverse-marker').write_text('reverse')\\nprint(json.dumps({'forward':forward,'uid':os.geteuid()}),flush=True)\\nassert sys.stdin.readline().strip()=='REMOVE'\\nprint(json.dumps({'removed':[not mounted(base/'from-host')and not(base/'from-host'/'forward-marker').exists()for base in bases],'child_mountinfo':[line for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines()if str(root)in line]}),flush=True)\\nsys.stdin.readline()\\nfor base in reversed(bases):unmount(base/'from-tool')\\n\"\n child=subprocess.Popen(['unshare','-m','--propagation','unchanged',sys.executable,'-B','-c',childcode,str(root)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n try:\n  assert child.stdout.readline().strip()=='READY','child did not configure mount propagation'\n  for base in bases:mount('tmpfs',base/'from-host','tmpfs');(base/'from-host'/'forward-marker').write_text('forward')\n  child.stdin.write('FORWARD\\n');child.stdin.flush();row=json.loads(child.stdout.readline());reverse=[mounted(base/'from-tool')or(base/'from-tool'/'reverse-marker').exists()for base in bases]\n  view,child_mounts=kernel_child(child,root)\n  observed=[]\n  for base in bases:\n   visible=view_path(view,base);host=base/'from-host';tool=visible/'from-tool'\n   assert str(host)in child_mounts and (visible/'from-host'/'forward-marker').read_text()=='forward'\n   assert (visible/'from-host').stat().st_dev==host.stat().st_dev,'must be same native propagated filesystem'\n   assert str(base/'from-tool')in child_mounts and (tool/'reverse-marker').read_text()=='reverse'\n   assert tool.stat().st_dev!=(base/'from-tool').stat().st_dev,'tool must have an actual independent child tmpfs'\n   host_line=next(line for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines()if line.split()[4]==str(base))\n   host_shared=next(field.split(':')[1]for field in host_line.split()if field.startswith('shared:'))\n   assert 'master:'+host_shared in child_mounts[str(base)].split(),'root and existing nested mount must both be slaves of actual host groups'\n   observed.append(dict(base=str(base),forward_device=host.stat().st_dev,tool_device=tool.stat().st_dev))\n  assert reverse==[False,False],('actual host kernel observed reverse propagation',reverse)\n  record(dict(event='trusted_kernel_forward_and_reverse_verified',pid=child.pid,observed=observed,reverse=reverse,untrusted_child_report=row))\n  for base in reversed(bases):unmount(base/'from-host')\n  child.stdin.write('REMOVE\\n');child.stdin.flush();removed=json.loads(child.stdout.readline());view,child_mounts=kernel_child(child,root)\n  for base in bases:assert str(base/'from-host')not in child_mounts and not(view_path(view,base)/'from-host'/'forward-marker').exists(),'host removal missing in actual child kernel mount view'\n  record(dict(event='trusted_kernel_host_removal_verified',pid=child.pid,untrusted_child_report=removed,child_mountinfo=list(child_mounts.values())))\n  print('NATIVE_MOUNT_GRAPH '+json.dumps({'host_mountinfo':[line for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines()if str(root)in line],**removed}),flush=True)\n  child.stdin.write('END\\n');child.stdin.flush();stdout,stderr=child.communicate(timeout=5);assert child.returncode==0,stderr\n  print('NATIVE_NAMESPACE_ASSERTIONS_PASSED root_and_nested_forward=True reverse=False removals=True uid=1000',flush=True)\n finally:\n  if child.poll()is None:child.terminate();child.wait(timeout=3)\n  for base in reversed(bases):\n   for name in ('from-tool','from-host'):\n    if mounted(base/name):unmount(base/name,2)\n  unmount(nested,2);unmount(root,2)\n",
+        "checks/private_namespace.py": "\"\"\"Enter only this checker process's UID1000 user/mount namespace, without exec.\n\nThis keeps the existing sealed runpy completion wrapper on the same stack.\nNo accounts, default distribution, host namespace, PATH, or external files change.\n\"\"\"\nimport ctypes,os,pathlib\n\ndef enter_private_namespace():\n    assert (os.getuid(),os.geteuid(),os.getgid(),os.getegid())==(1000,1000,1000,1000)\n    before={kind:os.readlink('/proc/self/ns/'+kind)for kind in ['user','mnt']}\n    os.unshare(os.CLONE_NEWUSER)\n    pathlib.Path('/proc/self/uid_map').write_text('1000 1000 1\\n')\n    pathlib.Path('/proc/self/setgroups').write_text('deny\\n')\n    pathlib.Path('/proc/self/gid_map').write_text('1000 1000 1\\n')\n    assert (os.getuid(),os.geteuid(),os.getgid(),os.getegid())==(1000,1000,1000,1000)\n    os.unshare(os.CLONE_NEWNS)\n    libc=ctypes.CDLL(None,use_errno=True)\n    libc.mount.argtypes=[ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_ulong,ctypes.c_void_p]\n    if libc.mount(None,b'/',None,(1<<14)|(1<<18),None):raise OSError(ctypes.get_errno(),'private propagation in own mount namespace')\n    class Header(ctypes.Structure):_fields_=[('version',ctypes.c_uint32),('pid',ctypes.c_int)]\n    class Data(ctypes.Structure):_fields_=[('effective',ctypes.c_uint32),('permitted',ctypes.c_uint32),('inheritable',ctypes.c_uint32)]\n    header=Header(0x20080522,0);data=(Data*2)()\n    if libc.capget(ctypes.byref(header),data):raise OSError(ctypes.get_errno(),'own namespace capget')\n    admin=1<<21\n    assert data[0].permitted&admin,'new namespace must permit CAP_SYS_ADMIN'\n    data[0].inheritable|=admin\n    if libc.capset(ctypes.byref(header),data):raise OSError(ctypes.get_errno(),'own namespace inheritable SYS_ADMIN')\n    if libc.prctl(47,ctypes.c_ulong(2),ctypes.c_ulong(21),ctypes.c_ulong(0),ctypes.c_ulong(0)):raise OSError(ctypes.get_errno(),'own namespace ambient SYS_ADMIN')\n    assert libc.prctl(47,ctypes.c_ulong(1),ctypes.c_ulong(21),ctypes.c_ulong(0),ctypes.c_ulong(0))==1\n    after={kind:os.readlink('/proc/self/ns/'+kind)for kind in ['user','mnt']}\n    assert all(after[kind]!=before[kind]for kind in before)\n    return dict(uid=os.getuid(),euid=os.geteuid(),gid=os.getgid(),before=before,after=after,\n                uid_map=pathlib.Path('/proc/self/uid_map').read_text(),gid_map=pathlib.Path('/proc/self/gid_map').read_text(),\n                ambient_capability='CAP_SYS_ADMIN in this new user namespace only',\n                credentials=[x for x in pathlib.Path('/proc/self/status').read_text().splitlines()if x.startswith(('Uid:','Gid:','CapEff:','CapPrm:','CapInh:','CapAmb:'))])\n"
+      }
+    }
+  },
+  {
+    "id": "src-5b1b806dce9c46a6",
+    "title": "什么是懒卸载?",
+    "answer": "Linux 的 lazy unmount 先把挂载点从当前命名空间的目录树分离，等引用释放后再清理。仍打开文件的进程可能继续访问旧挂载，因此不等于立刻完成安全拔盘或数据落盘。先确认占用和业务影响，优先正常卸载。",
+    "category": "磁盘与文件系统",
+    "difficulty": "入门",
+    "section": "调试",
+    "type": "practice",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "pending",
+    "review_note": "判分信任链修复候选；旧公开marker/子报JSON证据不能证明防投机，本版待新SHA作者与独审；修复不计新增完成量。",
+    "original_category": "Linux",
+    "original_title": "什么是懒卸载?",
+    "module": "disk",
+    "topic": "挂载与网络文件系统",
+    "level": 1,
+    "body": "## 操作任务\n补全detach(path)，对本题自有、已证明EBUSY的tmpfs执行真正lazy umount。验收父进程保持文件FD：完成后路径离开挂载树，旧FD仍可读，关闭最后引用后才可释放。不能把lazy解释成强制完成所有I/O或解除D状态；本题仅证明命名空间脱离与引用生命周期，不模拟NFS恢复。仅在保持UID1000的私有user/mount namespace操作；不得触碰宿主挂载点。\n\n## 产物\ntask.py；透明原生夹具见附带文件。\n\n## 验收方法\npython3 checks/check.py。只使用题目创建的资源，全部回收；依赖不满足时报告环境阻塞。\n",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-473700c7e2f57d35",
+        "title": "什么是延迟卸载？",
+        "category": "Linux",
+        "source": "topics/linux/README.md",
+        "sources": [
+          "topics/linux/README.md"
+        ]
+      }
+    ],
+    "question_format": "practice",
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "def detach(path):\n    raise NotImplementedError()\n"
+    },
+    "solution_files": {
+      "task.py": "import subprocess\ndef detach(path):subprocess.run(['umount','--lazy',str(path)],check=True,capture_output=True)\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef detach(path):subprocess.run(['umount',str(path)],check=True,capture_output=True)\n"
+    },
+    "exercise": {
+      "environment": "Linux非root student UID1000；仅自有临时镜像/目录/namespace；不接触真实设备、默认身份或挂载树。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "unshare",
+          "mount",
+          "umount"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,pathlib,sys,runpy,json\nassert os.geteuid()==1000\nos.environ['PYTHONDONTWRITEBYTECODE']='1'\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nfrom private_namespace import enter_private_namespace\nobserved=enter_private_namespace()\nwith pathlib.Path('checks/native-commands.jsonl').open('a',encoding='utf8')as out:out.write(json.dumps(dict(event='private_checker_namespace',**observed))+'\\n')\nrunpy.run_path('checks/native_namespace.py',run_name='__main__')\n",
+        "checks/native_namespace.py": "import ctypes,os,pathlib,subprocess,sys,tempfile,json\nL=ctypes.CDLL(None,use_errno=True)\n\ndef record(row):\n with (pathlib.Path.cwd()/'checks/native-commands.jsonl').open('a',encoding='utf8')as out:out.write(json.dumps(row)+'\\n')\n\ndef mount(source,target,typ,flags=0):\n r=L.mount(source.encode()if source else None,str(target).encode(),typ.encode()if typ else None,ctypes.c_ulong(flags),None)\n record(dict(native_syscall='mount',source=source,target=str(target),fs_type=typ,flags=flags,rc=r,errno=ctypes.get_errno()if r else 0))\n if r:raise OSError(ctypes.get_errno(),'mount')\ndef unmount(path,flags=0):\n r=L.umount2(str(path).encode(),flags)\n record(dict(native_syscall='umount2',target=str(path),flags=flags,rc=r,errno=ctypes.get_errno()if r else 0))\n if r:raise OSError(ctypes.get_errno(),'umount')\ndef mounted(path):return any(line.split()[4]==str(path)for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines())\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nassert os.geteuid()==1000\nwith tempfile.TemporaryDirectory(prefix='of-s07-lazy-')as d:\n root=pathlib.Path(d);mount('tmpfs',root,'tmpfs');(root/'payload').write_bytes(b'held-open-native-mount');fd=os.open(root/'payload',os.O_RDONLY)\n try:\n  try:unmount(root)\n  except OSError as e:assert e.errno==16,('expected real EBUSY',e)\n  else:raise AssertionError('native mount was not busy')\n  try:task.detach(root)\n  except Exception as e:raise AssertionError('lazy detach must succeed despite held open file')from e\n  assert not mounted(root)and not(root/'payload').exists(),'mount not detached from namespace'\n  held=os.read(fd,100);assert held==b'held-open-native-mount','held open mount reference lost before close'\n  record(dict(event='trusted_lazy_kernel_observation',uid=os.geteuid(),owned_root=str(root),detached=not mounted(root),path_payload_exists=(root/'payload').exists(),held_fd_bytes=held.hex(),mountinfo=[line for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines()if str(root)in line]))\n  print('NATIVE_NAMESPACE_ASSERTIONS_PASSED busy_before=True path_detached=True open_fd_readable=True uid=1000',flush=True)\n finally:\n  os.close(fd)\n  if mounted(root):unmount(root,2)\n\nrecord(dict(event='cleanup',owned_root=str(root),exists=root.exists()))\n",
+        "checks/private_namespace.py": "\"\"\"Enter only this checker process's UID1000 user/mount namespace, without exec.\n\nThis keeps the existing sealed runpy completion wrapper on the same stack.\nNo accounts, default distribution, host namespace, PATH, or external files change.\n\"\"\"\nimport ctypes,os,pathlib\n\ndef enter_private_namespace():\n    assert (os.getuid(),os.geteuid(),os.getgid(),os.getegid())==(1000,1000,1000,1000)\n    before={kind:os.readlink('/proc/self/ns/'+kind)for kind in ['user','mnt']}\n    os.unshare(os.CLONE_NEWUSER)\n    pathlib.Path('/proc/self/uid_map').write_text('1000 1000 1\\n')\n    pathlib.Path('/proc/self/setgroups').write_text('deny\\n')\n    pathlib.Path('/proc/self/gid_map').write_text('1000 1000 1\\n')\n    assert (os.getuid(),os.geteuid(),os.getgid(),os.getegid())==(1000,1000,1000,1000)\n    os.unshare(os.CLONE_NEWNS)\n    libc=ctypes.CDLL(None,use_errno=True)\n    libc.mount.argtypes=[ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_ulong,ctypes.c_void_p]\n    if libc.mount(None,b'/',None,(1<<14)|(1<<18),None):raise OSError(ctypes.get_errno(),'private propagation in own mount namespace')\n    class Header(ctypes.Structure):_fields_=[('version',ctypes.c_uint32),('pid',ctypes.c_int)]\n    class Data(ctypes.Structure):_fields_=[('effective',ctypes.c_uint32),('permitted',ctypes.c_uint32),('inheritable',ctypes.c_uint32)]\n    header=Header(0x20080522,0);data=(Data*2)()\n    if libc.capget(ctypes.byref(header),data):raise OSError(ctypes.get_errno(),'own namespace capget')\n    admin=1<<21\n    assert data[0].permitted&admin,'new namespace must permit CAP_SYS_ADMIN'\n    data[0].inheritable|=admin\n    if libc.capset(ctypes.byref(header),data):raise OSError(ctypes.get_errno(),'own namespace inheritable SYS_ADMIN')\n    if libc.prctl(47,ctypes.c_ulong(2),ctypes.c_ulong(21),ctypes.c_ulong(0),ctypes.c_ulong(0)):raise OSError(ctypes.get_errno(),'own namespace ambient SYS_ADMIN')\n    assert libc.prctl(47,ctypes.c_ulong(1),ctypes.c_ulong(21),ctypes.c_ulong(0),ctypes.c_ulong(0))==1\n    after={kind:os.readlink('/proc/self/ns/'+kind)for kind in ['user','mnt']}\n    assert all(after[kind]!=before[kind]for kind in before)\n    return dict(uid=os.getuid(),euid=os.geteuid(),gid=os.getgid(),before=before,after=after,\n                uid_map=pathlib.Path('/proc/self/uid_map').read_text(),gid_map=pathlib.Path('/proc/self/gid_map').read_text(),\n                ambient_capability='CAP_SYS_ADMIN in this new user namespace only',\n                credentials=[x for x in pathlib.Path('/proc/self/status').read_text().splitlines()if x.startswith(('Uid:','Gid:','CapEff:','CapPrm:','CapInh:','CapAmb:'))])\n"
+      }
+    }
+  },
+  {
+    "id": "curated-feishu-project-028",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "topic": "备份迁移与存储恢复",
+    "level": 5,
+    "type": "practice",
+    "title": "综合方案：已有备份条件下的数据盘故障恢复",
+    "body": "## 操作任务\n实现restore(archive,expected_sha256,destination,live,verify,recovery_point,last_known_sequence)。所有路径都属于本题私有目录，archive是/dev/shm的独立GNU tar备份，destination是另一真实ext4替代卷中的空staging目录，live是已停止应用的受控逻辑数据根symlink。先确认备份存在、SHA256正确；无有效备份必须ValueError且不得修改目标或切换路径。不得通过重装或重新初始化空数据库冒数据恢复。\n用原生GNU tar --acls --xattrs --numeric-owner或等价方式恢复文件和权限，调用透明verify(destination/'app')检查真正的SQLite PRAGMA integrity_check、业务总额与明细一致、恢复sequence、附件摘要、mode及xattr。只有integrity_ok与business_consistent均为真且max_sequence等于给定recovery_point，才原子替换本题live symlink指向恢复后的app目录；应用验证失败必须ValueError且保持旧live。verify返回借入记录，不能篡改或伪造。这里只在应用已停写/关闭连接窗口切换，不承诺活动服务任意并发切换原子性。\n返回精确字段backup_sha256、observation(实际verify记录)、recovery_point、known_unrecovered_sequences=last_known_sequence-recovery_point、elapsed_ns(非负实际单调时钟耗时)、scope='owned_fuse_ext4_backend_disconnect_not_physical_media_failure'。\n## 产物\ntask.py。fixture建立两个真实ext4镜像，保留UID1000的私有user/mount namespace中由原生fuse2fs挂载。源卷放入SQLite、受保护权限和附件；在停止写入并关闭数据库连接后制作备份，随后源卷继续提交一笔更新，再以SIGKILL终止仅本题自有FUSE daemon（SIGTERM会正常卸载，不能产生本题故障），实际访问旧数据得到ENOTCONN。保留故障镜像/日志，不向源卷修复或重初始化。\n## 验收方法\npython3 checks/check.py。参考必须从独立备份恢复至替代ext4，独立校验SQLite事务点/业务内容、权限/xattr、挂载路径和实际live访问，记录真实恢复耗时及未包含的已知新事务。缺备份、损坏备份、真实SQLite业务不一致备份以及业务一致但事务点与请求不符的备份都必须拒绝切换。全部owned挂载、daemon、FD及临时目录回收；用户始终UID1000。\n## 原生环境与边界\n显式WSL OpsForge-Validation-20261022/student。/tmp/opsforge-session07-20261029/native/usr/bin/fuse2fs及libfuse2以子进程env使用；unshare --map-current-user --keep-caps只在新user namespace内保留能力，不变更默认身份/PATH/宿主挂载树。ext4经FUSE写入且journal不由fuse2fs重放，本题只在SQLite连接已关闭的干净点备份，不能冒kernel ext4崩溃恢复保证。故障是原生FUSE后端断联导致卷不可访问，不声称物理磁盘EIO、控制器损坏或跨主机灾备。没有有效备份且唯一介质不可恢复时不能保证找回数据。旧故障镜像保全至验收结束，仅本题资源清理时移除，不复用为业务卷。\n",
+    "answer": "先停止可能扩大损坏的写入，确认故障范围与存储层状态，保留故障介质和日志。准备替代存储，验证备份完整性及恢复链，将数据恢复到隔离目标并检查权限、挂载路径和应用一致性；通过业务校验后受控切换。记录实际恢复点与耗时，旧盘未经确认不复用。若缺少有效备份或冗余且介质不可恢复，应明确数据不可保证找回，不能承诺重装即可恢复。",
+    "rubric": [
+      "保护现场",
+      "替代目标恢复",
+      "一致性验收",
+      "数据恢复边界"
+    ],
+    "hints": [],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/W8tBwAIvUiD0S8kXRyPc29tqnvg",
+      "https://www.postgresql.org/docs/current/backup.html"
+    ],
+    "source": "飞书项目题知识点改编；回答框架不代表用户实际项目经历",
+    "source_block_id": "WluedtNhNo8GmzxxJPbcTNQonQg",
+    "version": 2,
+    "review_status": "pending",
+    "review_note": "判分信任链修复候选；旧公开marker/子报JSON证据不能证明防投机，本版待新SHA作者与独审；修复不计新增完成量。",
+    "pack": "feishu-project-reviewed",
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/W8tBwAIvUiD0S8kXRyPc29tqnvg",
+        "block_ids": [
+          "WluedtNhNo8GmzxxJPbcTNQonQg"
+        ]
+      }
+    ],
+    "question_format": "practice",
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "def restore(archive,expected_sha256,destination,live,verify,recovery_point,last_known_sequence):\n    raise NotImplementedError()\n"
+    },
+    "solution_files": {
+      "task.py": "import hashlib,os,pathlib,subprocess,time\ndef restore(archive,expected_sha256,destination,live,verify,recovery_point,last_known_sequence):\n    started=time.monotonic_ns();archive=pathlib.Path(archive);destination=pathlib.Path(destination);live=pathlib.Path(live)\n    if not archive.is_file():raise ValueError('no valid backup; recovery cannot be guaranteed')\n    actual=hashlib.sha256(archive.read_bytes()).hexdigest()\n    if actual!=expected_sha256:raise ValueError('backup integrity mismatch')\n    subprocess.run(['tar','--extract','--acls','--xattrs','--numeric-owner','-f',str(archive),'-C',str(destination)],check=True,capture_output=True)\n    observation=verify(destination/'app')\n    if observation['integrity_ok']is not True or observation['business_consistent']is not True or observation['max_sequence']!=recovery_point:raise ValueError('restored application validation failed')\n    candidate=live.with_name(live.name+'.replacement');candidate.symlink_to(destination/'app',target_is_directory=True);os.replace(candidate,live)\n    return {'backup_sha256':actual,'observation':observation,'recovery_point':recovery_point,'known_unrecovered_sequences':last_known_sequence-recovery_point,'elapsed_ns':time.monotonic_ns()-started,'scope':'owned_fuse_ext4_backend_disconnect_not_physical_media_failure'}\n"
+    },
+    "negative_files": {
+      "task.py": "import hashlib,os,pathlib,subprocess,time\ndef restore(archive,expected_sha256,destination,live,verify,recovery_point,last_known_sequence):\n    started=time.monotonic_ns();archive=pathlib.Path(archive);destination=pathlib.Path(destination);live=pathlib.Path(live)\n    if not archive.is_file():raise ValueError('no valid backup; recovery cannot be guaranteed')\n    actual=hashlib.sha256(archive.read_bytes()).hexdigest()\n    if False:raise ValueError('backup integrity mismatch')\n    subprocess.run(['tar','--extract','--acls','--xattrs','--numeric-owner','-f',str(archive),'-C',str(destination)],check=True,capture_output=True)\n    observation=verify(destination/'app')\n    if observation['integrity_ok']is not True or observation['business_consistent']is not True or observation['max_sequence']!=recovery_point:raise ValueError('restored application validation failed')\n    candidate=live.with_name(live.name+'.replacement');candidate.symlink_to(destination/'app',target_is_directory=True);os.replace(candidate,live)\n    return {'backup_sha256':actual,'observation':observation,'recovery_point':recovery_point,'known_unrecovered_sequences':last_known_sequence-recovery_point,'elapsed_ns':time.monotonic_ns()-started,'scope':'owned_fuse_ext4_backend_disconnect_not_physical_media_failure'}\n"
+    },
+    "exercise": {
+      "environment": "Linux/student UID1000；现有unshare、mkfs.ext4、GNU tar及私有fuse2fs/libfuse2；真实SQLite标准库；两自有ext4 FUSE卷和/dev/shm备份。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "python3",
+          "unshare",
+          "mkfs.ext4",
+          "tar"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/native_restore.py": "import ctypes,errno,hashlib,json,os,pathlib,sqlite3,stat,subprocess,sys,tempfile,time,copy\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nassert os.geteuid()==1000\nTOOL=pathlib.Path('/tmp/opsforge-session07-20261029/native');ENV=dict(os.environ,LD_LIBRARY_PATH=str(TOOL/'lib/x86_64-linux-gnu')+':'+str(TOOL/'usr/lib/x86_64-linux-gnu'))\ncommands=[];processes=[];mounts=[];logs=[]\ndef required_restore_xattr(path):\n try:return os.getxattr(path,'user.opsforge')\n except OSError as error:\n  if error.errno==errno.ENODATA:raise AssertionError('restored filesystem lost required xattr metadata')from error\n  raise\ndef run(argv,**kw):\n p=subprocess.run(argv,capture_output=True,check=True,**kw);commands.append({'argv':list(map(str,argv)),'returncode':p.returncode,'stdout':p.stdout.decode(errors='replace'),'stderr':p.stderr.decode(errors='replace')});return p\ndef mounted(path):return any(line.split()[4]==str(path)for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines())\ndef unmount(path):\n    if ctypes.CDLL(None,use_errno=True).umount2(str(path).encode(),2):raise OSError(ctypes.get_errno(),'umount owned FUSE')\ndef make_volume(root,name):\n    image=root/(name+'.ext4');mountpoint=root/(name+'-mount');mountpoint.mkdir()\n    with image.open('wb')as f:f.truncate(24*1024*1024)\n    run(['mkfs.ext4','-F','-q','-E','root_owner=1000:1000',str(image)])\n    log=(root/(name+'.log')).open('wb');logs.append(log)\n    proc=subprocess.Popen([str(TOOL/'usr/bin/fuse2fs'),str(image),str(mountpoint),'-f'],env=ENV,stdout=log,stderr=log);processes.append(proc);mounts.append(mountpoint);commands.append({'event':'process_start','argv':proc.args,'pid':proc.pid,'owned_root':str(root)})\n    deadline=time.monotonic()+3\n    while not (mounted(mountpoint)and mountpoint.stat().st_uid==1000 and os.access(mountpoint,os.W_OK)):\n        if proc.poll()is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: fuse2fs exited before mount')\n        if time.monotonic()>deadline:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: fuse2fs mount timeout')\n        time.sleep(.02)\n    return image,mountpoint,proc\ndef seed_app(path,count,invalid=False):\n    path.mkdir();db=path/'app.sqlite3';conn=sqlite3.connect(db);conn.execute('CREATE TABLE entries(sequence INTEGER PRIMARY KEY, amount INTEGER NOT NULL)');conn.execute('CREATE TABLE totals(amount INTEGER NOT NULL)')\n    conn.executemany('INSERT INTO entries VALUES(?,?)',[(i,i*10)for i in range(1,count+1)]);conn.execute('INSERT INTO totals VALUES(?)',(999 if invalid else sum(i*10 for i in range(1,count+1)),));conn.commit();conn.close();os.chmod(db,0o640);(path/'attachment').write_bytes(b'native-restore-attachment');os.chmod(path/'attachment',0o600);os.chmod(path,0o750);os.setxattr(db,'user.opsforge',b'restore-contract')\n    for file in path.iterdir():\n        with file.open('rb')as handle:os.fsync(handle.fileno())\ndef inspect(path):\n    conn=sqlite3.connect('file:'+str(path/'app.sqlite3')+'?mode=ro',uri=True)\n    try:integrity=conn.execute('PRAGMA integrity_check').fetchone()[0];count,maxseq,total=conn.execute('SELECT count(*),max(sequence),sum(amount) FROM entries').fetchone();declared=conn.execute('SELECT amount FROM totals').fetchone()[0]\n    finally:conn.close()\n    return dict(integrity_ok=integrity=='ok',business_consistent=total==declared,max_sequence=maxseq,rows=count,sum_amount=total,declared_total=declared,attachment_sha256=hashlib.sha256((path/'attachment').read_bytes()).hexdigest(),db_mode=stat.S_IMODE((path/'app.sqlite3').stat().st_mode),attachment_mode=stat.S_IMODE((path/'attachment').stat().st_mode),directory_mode=stat.S_IMODE(path.stat().st_mode),db_xattr=required_restore_xattr(path/'app.sqlite3').hex())\nwith tempfile.TemporaryDirectory(prefix='of-s07-disk02-restore-')as d,tempfile.TemporaryDirectory(prefix='of-s07-disk02-backup-',dir='/dev/shm')as b:\n root=pathlib.Path(d);backup_root=pathlib.Path(b)\n try:\n    image,source,daemon=make_volume(root,'failed');replacement_image,replacement,replacement_daemon=make_volume(root,'replacement');assert source.stat().st_dev!=replacement.stat().st_dev and source.stat().st_dev!=backup_root.stat().st_dev\n    seed_app(source/'app',3);baseline=inspect(source/'app');assert baseline['rows']==3 and baseline['business_consistent']is True\n    archive=backup_root/'approved.tar';run(['tar','--create','--acls','--xattrs','--numeric-owner','-f',str(archive),'-C',str(source),'app']);digest=hashlib.sha256(archive.read_bytes()).hexdigest()\n    with archive.open('rb')as handle:os.fsync(handle.fileno())\n    conn=sqlite3.connect(source/'app'/'app.sqlite3');conn.execute('INSERT INTO entries VALUES(4,40)');conn.execute('UPDATE totals SET amount=100');conn.commit();conn.close();assert inspect(source/'app')['max_sequence']==4\n    live=root/'live';live.symlink_to(source/'app',target_is_directory=True);old_live=os.readlink(live)\n    daemon.kill();daemon.wait(timeout=3);commands.append({'event':'owned_backend_fault_injection','signal':'SIGKILL','pid':daemon.pid,'returncode':daemon.returncode})\n    try:os.open(source/'app'/'app.sqlite3',os.O_RDONLY)\n    except OSError as e:assert e.errno==errno.ENOTCONN,('expected actual FUSE backend disconnect',e)\n    else:raise AssertionError('failed source volume still readable')\n    failed_hash=hashlib.sha256(image.read_bytes()).hexdigest();seen=[];borrowed=[]\n    def verify(path):row=inspect(path);seen.append((path,copy.deepcopy(row)));borrowed.append((row,json.dumps(row,sort_keys=True)));return row\n    # No backup and wrong hash must leave even the empty destination and live link intact.\n    for trial,backup,expected_hash in [('missing',backup_root/'absent',digest),('bad-hash',archive,'0'*64)]:\n        destination=replacement/trial;destination.mkdir();before_seen=len(seen)\n        try:task.restore(backup,expected_hash,destination,live,verify,3,4)\n        except ValueError:pass\n        else:raise AssertionError('invalid backup accepted: '+trial)\n        assert list(destination.iterdir())==[]and os.readlink(live)==old_live and len(seen)==before_seen,'invalid backup modified target or switched path'\n    # A digest-valid archive can contain logically inconsistent real SQLite data.\n    badtree=root/'bad-tree';badtree.mkdir();seed_app(badtree/'app',3,invalid=True);badarchive=backup_root/'inconsistent.tar';run(['tar','--create','--acls','--xattrs','--numeric-owner','-f',str(badarchive),'-C',str(badtree),'app']);badstage=replacement/'bad-business';badstage.mkdir()\n    try:task.restore(badarchive,hashlib.sha256(badarchive.read_bytes()).hexdigest(),badstage,live,verify,3,4)\n    except ValueError:pass\n    else:raise AssertionError('real inconsistent SQLite restored and accepted')\n    assert os.readlink(live)==old_live,'invalid application switched logical live path'\n    wrongtree=root/'wrong-point-tree';wrongtree.mkdir();seed_app(wrongtree/'app',2);wrongarchive=backup_root/'wrong-point.tar';run(['tar','--create','--acls','--xattrs','--numeric-owner','-f',str(wrongarchive),'-C',str(wrongtree),'app']);wrongstage=replacement/'wrong-point';wrongstage.mkdir()\n    try:task.restore(wrongarchive,hashlib.sha256(wrongarchive.read_bytes()).hexdigest(),wrongstage,live,verify,3,4)\n    except ValueError:pass\n    else:raise AssertionError('business-consistent real SQLite backup at wrong recovery point accepted')\n    assert os.readlink(live)==old_live,'wrong recovery point switched live data path'\n    staging=replacement/'validated';staging.mkdir();started=time.monotonic_ns()\n    try:report=task.restore(archive,digest,staging,live,verify,3,4)\n    except Exception as e:raise AssertionError('valid complete native restore rejected')from e\n    elapsed=time.monotonic_ns()-started;actual=inspect(staging/'app');assert actual==baseline and inspect(live)==baseline,'actual SQLite/data/permissions/xattr recovery mismatch'\n    assert os.readlink(live)==str(staging/'app')and pathlib.Path(live).resolve()==staging/'app','logical data path did not switch to validated replacement volume'\n    required={'backup_sha256','observation','recovery_point','known_unrecovered_sequences','elapsed_ns','scope'};assert isinstance(report,dict)and set(report)==required\n    assert report['backup_sha256']==digest and report['observation']==baseline and report['recovery_point']==3 and report['known_unrecovered_sequences']==1 and report['scope']=='owned_fuse_ext4_backend_disconnect_not_physical_media_failure'\n    assert type(report['elapsed_ns'])is int and 0<=report['elapsed_ns']<=elapsed and type(report['recovery_point'])is int and type(report['known_unrecovered_sequences'])is int\n    assert any(path==staging/'app'and row==baseline for path,row in seen),'report lacked actual native verification'\n    assert all(json.dumps(row,sort_keys=True)==frozen for row,frozen in borrowed),'borrowed native observations changed'\n    assert report['observation']['integrity_ok']is True and report['observation']['business_consistent']is True,'native bool fields changed type'\n    assert hashlib.sha256(image.read_bytes()).hexdigest()==failed_hash,'failed source image was repaired or reused'\n    assert hashlib.sha256(archive.read_bytes()).hexdigest()==digest,'independent backup modified'\n    commands.append({'event':'native_failure_and_recovery','failure_errno':errno.ENOTCONN,'failed_image_preserved_sha256':failed_hash,'backup_sha256':digest,'original_recovery_point':3,'last_known_sequence':4,'restored':actual,'elapsed_ns':elapsed,'mountinfo':[line for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines()if str(root)in line]})\n finally:\n    for mountpoint in reversed(mounts):\n        if mounted(mountpoint):unmount(mountpoint)\n    for proc in processes:\n        if proc.poll()is None:proc.terminate()\n        proc.wait(timeout=3)\n    for log in logs:log.close()\n    commands.append({'event':'cleanup','processes':[{'pid':proc.pid,'returncode':proc.poll()}for proc in processes],'remaining_owned_mounts':[str(mountpoint)for mountpoint in mounts if mounted(mountpoint)],'logs':{log.name:pathlib.Path(log.name).read_text(errors='replace')for log in logs}})\n    with(pathlib.Path.cwd()/'checks/native-commands.jsonl').open('a')as out:\n        for row in commands:out.write(json.dumps(row)+'\\n')\nassert all(proc.poll()is not None for proc in processes)\nprint('NATIVE_EXT4_FUSE_ENOTCONN_FAILED_IMAGE_PRESERVED_REAL_SQLITE_RESTORE_POINT_PERMISSIONS_XATTR_BACKUP_GATES_ATOMIC_PATH_CUTOVER_CLEANUP',flush=True)\n",
+        "checks/check.py": "import os,pathlib,sys,runpy,json\nassert os.geteuid()==1000\nos.environ['PYTHONDONTWRITEBYTECODE']='1'\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nfrom private_namespace import enter_private_namespace\nobserved=enter_private_namespace()\nwith pathlib.Path('checks/native-commands.jsonl').open('a',encoding='utf8')as out:out.write(json.dumps(dict(event='private_checker_namespace',**observed))+'\\n')\nrunpy.run_path('checks/native_restore.py',run_name='__main__')\n",
+        "checks/private_namespace.py": "\"\"\"Enter only this checker process's UID1000 user/mount namespace, without exec.\n\nThis keeps the existing sealed runpy completion wrapper on the same stack.\nNo accounts, default distribution, host namespace, PATH, or external files change.\n\"\"\"\nimport ctypes,os,pathlib\n\ndef enter_private_namespace():\n    assert (os.getuid(),os.geteuid(),os.getgid(),os.getegid())==(1000,1000,1000,1000)\n    before={kind:os.readlink('/proc/self/ns/'+kind)for kind in ['user','mnt']}\n    os.unshare(os.CLONE_NEWUSER)\n    pathlib.Path('/proc/self/uid_map').write_text('1000 1000 1\\n')\n    pathlib.Path('/proc/self/setgroups').write_text('deny\\n')\n    pathlib.Path('/proc/self/gid_map').write_text('1000 1000 1\\n')\n    assert (os.getuid(),os.geteuid(),os.getgid(),os.getegid())==(1000,1000,1000,1000)\n    os.unshare(os.CLONE_NEWNS)\n    libc=ctypes.CDLL(None,use_errno=True)\n    libc.mount.argtypes=[ctypes.c_char_p,ctypes.c_char_p,ctypes.c_char_p,ctypes.c_ulong,ctypes.c_void_p]\n    if libc.mount(None,b'/',None,(1<<14)|(1<<18),None):raise OSError(ctypes.get_errno(),'private propagation in own mount namespace')\n    class Header(ctypes.Structure):_fields_=[('version',ctypes.c_uint32),('pid',ctypes.c_int)]\n    class Data(ctypes.Structure):_fields_=[('effective',ctypes.c_uint32),('permitted',ctypes.c_uint32),('inheritable',ctypes.c_uint32)]\n    header=Header(0x20080522,0);data=(Data*2)()\n    if libc.capget(ctypes.byref(header),data):raise OSError(ctypes.get_errno(),'own namespace capget')\n    admin=1<<21\n    assert data[0].permitted&admin,'new namespace must permit CAP_SYS_ADMIN'\n    data[0].inheritable|=admin\n    if libc.capset(ctypes.byref(header),data):raise OSError(ctypes.get_errno(),'own namespace inheritable SYS_ADMIN')\n    if libc.prctl(47,ctypes.c_ulong(2),ctypes.c_ulong(21),ctypes.c_ulong(0),ctypes.c_ulong(0)):raise OSError(ctypes.get_errno(),'own namespace ambient SYS_ADMIN')\n    assert libc.prctl(47,ctypes.c_ulong(1),ctypes.c_ulong(21),ctypes.c_ulong(0),ctypes.c_ulong(0))==1\n    after={kind:os.readlink('/proc/self/ns/'+kind)for kind in ['user','mnt']}\n    assert all(after[kind]!=before[kind]for kind in before)\n    return dict(uid=os.getuid(),euid=os.geteuid(),gid=os.getgid(),before=before,after=after,\n                uid_map=pathlib.Path('/proc/self/uid_map').read_text(),gid_map=pathlib.Path('/proc/self/gid_map').read_text(),\n                ambient_capability='CAP_SYS_ADMIN in this new user namespace only',\n                credentials=[x for x in pathlib.Path('/proc/self/status').read_text().splitlines()if x.startswith(('Uid:','Gid:','CapEff:','CapPrm:','CapInh:','CapAmb:'))])\n"
+      }
+    }
+  }
+]

@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-parallel-alertmanager-077",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 3,
+    "topic": "高可用协同与状态持久化",
+    "title": "真实旧快照恢复：已取消静默重新生效，按外部取消审计精确对账并保留仍有效维护",
+    "answer": "```python\ndef reconcile(base,cancellations,request):\n    done=[]\n    for approved in cancellations:\n        qid=approved[\"id\"]\n        status,current=request(\"GET\",base+\"/api/v2/silence/\"+qid)\n        if status!=200:raise ValueError(\"approved silence unavailable\")\n        if current[\"status\"][\"state\"]==\"expired\":continue\n        if current[\"id\"]!=qid or current[\"matchers\"]!=approved[\"matchers\"] or current[\"endsAt\"]!=approved[\"endsAt\"]:raise ValueError(\"restored scope or deadline differs from reviewed cancellation\")\n        status,_=request(\"DELETE\",base+\"/api/v2/silence/\"+qid)\n        if status!=200:raise RuntimeError(\"cancel request rejected\")\n        status,after=request(\"GET\",base+\"/api/v2/silence/\"+qid)\n        if status!=200 or after[\"status\"][\"state\"]!=\"expired\":raise RuntimeError(\"cancel not effective\")\n        done.append(qid)\n    return done\n```\n\n原题知识说明：\n备份反映旧时刻状态，恢复后其静默窗口可能仍有效，与当前维护计划不一致。恢复后对账静默ID/范围/期限和审计记录，不能只验证进程启动。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "备份反映旧时刻状态，恢复后其静默窗口可能仍有效，与当前维护计划不一致。",
+      "恢复后对账静默ID/范围/期限和审计记录，不能只验证进程启动。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/alertmanager/",
+      "https://github.com/prometheus/alertmanager/blob/v0.28.1/api/v2/openapi.yaml"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-077",
+      "original_title": "恢复旧数据目录为何可能重新引入已取消静默？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现reconcile(base,cancellations,request)。cancellations是恢复点之外保存的、经审批的取消记录，每条含精确id/matchers/endsAt；request返回HTTP状态及JSON。逐条GET /api/v2/silence/{id}，无记录或非200则ValueError，已expired跳过；否则核对id、完整matcher列表及原期限与审批完全相同，不符ValueError且该条不得删除。只对批准且匹配的ID发DELETE，非200抛RuntimeError，再GET确认expired后计入返回ID列表。不得批量清掉其他活动静默，不能从旧备份自身反推哪些静默曾被取消，不改原审批输入。真实测试创建两个维护静默、保存silences原生持久化文件，取消其中一个并证明真实告警解除抑制；从旧文件恢复到另一独立数据目录后同ID重新active并真实抑制告警，执行对账只取消该ID、保留另一维护静默及范围，重复执行幂等，错误批准scope拒绝。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n官方Alertmanager0.28.1 Windows原生进程，实际silences持久化快照、独立源/恢复数据目录及真实API抑制状态。加速维护快照间隔仅限私有验收进程；没有恢复生产目录、改默认服务、演练HA去重或验证完整灾难恢复，通知接收器无外部通道。外部取消审计由题给可信来源提供，不声称建立企业审计系统。只计此原ID实操，不把两个静默、源/恢复两进程或故障注入分别计题/原故障。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def reconcile(base,cancellations,request):\n    done=[]\n    for approved in cancellations:\n        qid=approved[\"id\"]\n        status,current=request(\"GET\",base+\"/api/v2/silence/\"+qid)\n        if status!=200:raise ValueError(\"approved silence unavailable\")\n        if current[\"status\"][\"state\"]==\"expired\":continue\n        if current[\"id\"]!=qid or current[\"matchers\"]!=approved[\"matchers\"] or current[\"endsAt\"]!=approved[\"endsAt\"]:raise ValueError(\"restored scope or deadline differs from reviewed cancellation\")\n        status,_=request(\"DELETE\",base+\"/api/v2/silence/\"+qid)\n        if status!=200:raise RuntimeError(\"cancel request rejected\")\n        status,after=request(\"GET\",base+\"/api/v2/silence/\"+qid)\n        if status!=200 or after[\"status\"][\"state\"]!=\"expired\":raise RuntimeError(\"cancel not effective\")\n        done.append(qid)\n    return done\n"
+    },
+    "negative_files": {
+      "task.py": "def reconcile(base,cancellations,request):\n    return []\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "官方Alertmanager0.28.1与Python，Windows私有进程及独立持久化目录，无系统服务变更",
+      "operation": "实现reconcile(base,cancellations,request)。cancellations是恢复点之外保存的、经审批的取消记录，每条含精确id/matchers/endsAt；request返回HTTP状态及JSON。逐条GET /api/v2/silence/{id}，无记录或非200则ValueError，已expired跳过；否则核对id、完整matcher列表及原期限与审批完全相同，不符ValueError且该条不得删除。只对批准且匹配的ID发DELETE，非200抛RuntimeError，再GET确认expired后计入返回ID列表。不得批量清掉其他活动静默，不能从旧备份自身反推哪些静默曾被取消，不改原审批输入。真实测试创建两个维护静默、保存silences原生持久化文件，取消其中一个并证明真实告警解除抑制；从旧文件恢复到另一独立数据目录后同ID重新active并真实抑制告警，执行对账只取消该ID、保留另一维护静默及范围，重复执行幂等，错误批准scope拒绝。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "官方Alertmanager0.28.1 Windows原生进程，实际silences持久化快照、独立源/恢复数据目录及真实API抑制状态。加速维护快照间隔仅限私有验收进程；没有恢复生产目录、改默认服务、演练HA去重或验证完整灾难恢复，通知接收器无外部通道。外部取消审计由题给可信来源提供，不声称建立企业审计系统。只计此原ID实操，不把两个静默、源/恢复两进程或故障注入分别计题/原故障。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "alertmanager"
+        ],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/silence_restore_fixture.py": "\"\"\"Owned persistent Alertmanager processes with one-second snapshots, no HA or external receivers.\"\"\"\nimport contextlib,datetime,json,pathlib,shutil,socket,subprocess,time,urllib.error,urllib.request\ndef request(method,url,payload=None):\n req=urllib.request.Request(url,data=json.dumps(payload).encode() if payload is not None else (b'' if method in ['POST','DELETE'] else None),method=method,headers={'Content-Type':'application/json'})\n try:\n  with urllib.request.urlopen(req,timeout=3) as response:status,raw=response.status,response.read().decode()\n except urllib.error.HTTPError as e:status,raw=e.code,e.read().decode()\n try:return status,json.loads(raw)\n except ValueError:return status,raw\ndef wait_for(condition,seconds=6):\n until=time.monotonic()+seconds\n while time.monotonic()<until:\n  if condition():return\n  time.sleep(.05)\n raise AssertionError('native silence persistence or state witness absent')\n@contextlib.contextmanager\ndef native(root,data):\n root=pathlib.Path(root);root.mkdir();data=pathlib.Path(data);data.mkdir(exist_ok=True)\n config=root/'config.json';config.write_text(json.dumps({'route':{'receiver':'private-no-notify','group_wait':'1h'},'receivers':[{'name':'private-no-notify'}]}),encoding='utf8')\n with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]\n base='http://127.0.0.1:'+str(port);binary=shutil.which('alertmanager') or shutil.which('alertmanager.exe')\n with (root/'native.log').open('wb') as log:\n  proc=subprocess.Popen([binary,'--config.file='+str(config),'--storage.path='+str(data),'--data.maintenance-interval=1s','--web.listen-address=127.0.0.1:'+str(port),'--cluster.listen-address=','--log.level=error'],stdout=log,stderr=subprocess.STDOUT)\n  try:\n   def ready():\n    if proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: silence process startup')\n    try:return request('GET',base+'/-/ready')[0]==200\n    except OSError:return False\n   wait_for(ready);yield base\n  finally:\n   if proc.poll() is None:proc.terminate()\n   try:proc.wait(timeout=4)\n   except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\ndef silence(base,value):\n now=datetime.datetime.now(datetime.timezone.utc)\n payload=dict(matchers=[dict(name='instance',value=value,isRegex=False,isEqual=True)],startsAt=(now-datetime.timedelta(minutes=1)).isoformat(),endsAt=(now+datetime.timedelta(minutes=30)).isoformat(),createdBy='private-fixture',comment='owned restore acceptance')\n status,result=request('POST',base+'/api/v2/silences',payload);assert status==200\n qid=result['silenceID'];status,row=request('GET',base+'/api/v2/silence/'+qid);assert status==200 and row['status']['state']=='active';return row\ndef alerts(base):\n now=datetime.datetime.now(datetime.timezone.utc)\n payload=[dict(labels=dict(alertname='PrivateRestore',instance=value),startsAt=now.isoformat(),endsAt=(now+datetime.timedelta(minutes=5)).isoformat()) for value in ['old-host','still-maintenance']]\n assert request('POST',base+'/api/v2/alerts',payload)[0]==200\n def get():\n  status,rows=request('GET',base+'/api/v2/alerts');assert status==200\n  return {r['labels']['instance']:r['status']['silencedBy'] for r in rows}\n wait_for(lambda:len(get())==2);return get\n",
+        "checks/check.py": "import copy,hashlib,pathlib,shutil,subprocess,sys,tempfile\nsys.path.insert(0,str(pathlib.Path.cwd()/\"checks\"))\nimport task\nfrom silence_restore_fixture import request,wait_for,native,silence,alerts\nbinary=shutil.which(\"alertmanager\") or shutil.which(\"alertmanager.exe\")\nassert binary and \"0.28.1\" in subprocess.check_output([binary,\"--version\"],stderr=subprocess.STDOUT,text=True,timeout=5)\nprint(\"NATIVE_PLATFORM_READY\",flush=True)\nwith tempfile.TemporaryDirectory(prefix=\"opsforge-silence-restore-\") as temp:\n root=pathlib.Path(temp);data=root/\"source-data\"\n with native(root/\"source\",data) as base:\n  cancelled=silence(base,\"old-host\");keep=silence(base,\"still-maintenance\");cid=cancelled[\"id\"];kid=keep[\"id\"]\n  get=alerts(base);wait_for(lambda:get()[\"old-host\"]==[cid] and get()[\"still-maintenance\"]==[kid])\n  snapshot=data/\"silences\";wait_for(lambda:snapshot.is_file() and snapshot.stat().st_size>0)\n  old=snapshot.read_bytes();old_sha=hashlib.sha256(old).hexdigest()\n  assert request(\"DELETE\",base+\"/api/v2/silence/\"+cid)[0]==200\n  wait_for(lambda:request(\"GET\",base+\"/api/v2/silence/\"+cid)[1][\"status\"][\"state\"]==\"expired\")\n  wait_for(lambda:not get()[\"old-host\"] and get()[\"still-maintenance\"]==[kid])\n restored_data=root/\"restored-data\";restored_data.mkdir();(restored_data/\"silences\").write_bytes(old)\n assert hashlib.sha256((restored_data/\"silences\").read_bytes()).hexdigest()==old_sha\n with native(root/\"restored\",restored_data) as base:\n  status,returned=request(\"GET\",base+\"/api/v2/silence/\"+cid)\n  assert status==200 and returned[\"status\"][\"state\"]==\"active\"\n  get=alerts(base);wait_for(lambda:get()[\"old-host\"]==[cid] and get()[\"still-maintenance\"]==[kid])\n  print(\"NATIVE_ALERTMANAGER_OLD_SNAPSHOT_RESTORED_CANCELLED_SILENCE_ACTIVE_AND_REAL_ALERT_SUPPRESSED_AGAIN\",flush=True)\n  approved=[{k:copy.deepcopy(cancelled[k]) for k in [\"id\",\"matchers\",\"endsAt\"]}];original=copy.deepcopy(approved)\n  print(\"STUDENT_OPERATION_ENTERED: reconcile actual restored active silence against reviewed external cancellation\",flush=True)\n  result=task.reconcile(base,approved,request)\n  assert result==[cid] and approved==original\n  wait_for(lambda:not get()[\"old-host\"] and get()[\"still-maintenance\"]==[kid])\n  assert request(\"GET\",base+\"/api/v2/silence/\"+kid)[1]==keep\n  assert task.reconcile(base,approved,request)==[]\n  print(\"NATIVE_ALERTMANAGER_CANCEL_AUDIT_RECONCILED_ONLY_APPROVED_ID_OTHER_MAINTENANCE_PRESERVED_IDEMPOTENT\",flush=True)\n  # A different still-active ID cannot be cancelled using a mismatched approval scope.\n  wrong=[{k:copy.deepcopy(keep[k]) for k in [\"id\",\"matchers\",\"endsAt\"]}];wrong[0][\"matchers\"][0][\"value\"]=\"unapproved-other-host\"\n  try:task.reconcile(base,wrong,request)\n  except ValueError:pass\n  else:raise AssertionError(\"scope-mismatched cancellation not rejected\")\n  assert request(\"GET\",base+\"/api/v2/silence/\"+kid)[1]==keep\nprint(\"NATIVE_SEMANTIC_ASSERTIONS_PASSED\",flush=True)\n"
+      }
+    },
+    "question_format": "project"
+  }
+]

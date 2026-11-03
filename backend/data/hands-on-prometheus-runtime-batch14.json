@@ -1,0 +1,87 @@
+[
+  {
+    "id": "curated-parallel-prometheus-068",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 3,
+    "topic": "TSDB存储与远端传输",
+    "title": "配置有界乱序接收窗口并验证超窗拒绝与正常恢复",
+    "answer": "```yaml\nglobal:\n  scrape_interval: 1s\nstorage:\n  tsdb:\n    out_of_order_time_window: 15s\nscrape_configs:\n- job_name: delayed-source\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  honor_timestamps: true\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\n```\n乱序窗口相对于TSDB Head已知最新时间约束乱序样本可接受迟到，不能误认为只由该序列自己的最后时间决定。启用窗口不意味着所有旧数据都能写入，也不改变查询的范围含义。honor_timestamps=false会销毁本题要保留的事件时间语义，不能算修复。超窗失败后正常时间仍可写入，验证政策而非永久损坏。\n\n原题原理：两端摄入延迟、保留、降采样、去重和查询实现可能不同。对齐时间、标签与样本分辨率，再比较已知序列。远端返回200不能证明无缺口或与本地逐样本一致。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "两端摄入延迟、保留、降采样、去重和查询实现可能不同。",
+      "对齐时间、标签与样本分辨率，再比较已知序列。",
+      "远端返回200不能证明无缺口或与本地逐样本一致。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/#tsdb"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 1s\nstorage:\n  tsdb:\n    out_of_order_time_window: 0s\nscrape_configs:\n- job_name: delayed-source\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  honor_timestamps: true\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\n",
+      "timeline.json": "[\n  {\n    \"offset_seconds\": 0,\n    \"value\": 30\n  },\n  {\n    \"offset_seconds\": -10,\n    \"value\": 20\n  },\n  {\n    \"offset_seconds\": -15,\n    \"value\": 15\n  },\n  {\n    \"offset_seconds\": -16,\n    \"value\": 14\n  },\n  {\n    \"offset_seconds\": -20,\n    \"value\": 10\n  },\n  {\n    \"offset_seconds\": 10,\n    \"value\": 40\n  }\n]\n"
+    },
+    "solution_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 1s\nstorage:\n  tsdb:\n    out_of_order_time_window: 15s\nscrape_configs:\n- job_name: delayed-source\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  honor_timestamps: true\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\n"
+    },
+    "negative_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 1s\nstorage:\n  tsdb:\n    out_of_order_time_window: 30s\nscrape_configs:\n- job_name: delayed-source\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  honor_timestamps: true\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\n"
+    },
+    "body": "## 环境与初始材料\n平台提供Prometheus 3.5与隔离HTTP指标端。timeline.json给出同一delayed_depth序列的到达顺序：先t0=30，再t0-10秒=20，再t0-15秒=15、t0-16秒=14、t0-20秒=10，最后t0+10秒=40。t0由平台设为当前时间后60秒（仅本地测试数据，用于让这条序列持有Head最新时间；不改操作系统时钟，不建议生产写未来数据）；时间戳是指标正文中的毫秒时间，不修改系统时钟。19100为隔离端口占位。\n\n## 操作任务\n在prometheus.yaml中只调整storage.tsdb.out_of_order_time_window，使允许范围达到15秒但不放宽成无限迟到。保留honor_timestamps=true、采集参数和完整目标。必须接受落后最新已接收时间10秒的样本，恰好15秒仍接受，16秒与20秒必须拒绝；拒绝后再来的新时间t0+10秒必须恢复正常入库。不能忽略原时间戳改成抓取时间，也不能通过查询过滤假装超窗样本未入库。\n\n## 产物\n提交prometheus.yaml完整配置。其余全局及采集字段保持题给值，仅调乱序窗口；允许原生解析器支持的等价时长写法。\n\n## 验收方法\n执行python3 checks/check.py，真实启动原生Prometheus并依次改变指标端返回的样本。使用原生范围向量查询检查TSDB存储的精确时间和值，接受阶段up=1；超窗阶段up=0且Targets返回时间顺序/过旧错误，该样本不得出现；最后up恢复1。结果应仅有(t0-15,15)、(t0-10,20)、(t0,30)、(t0+10,40)。初始0窗口拒绝合法迟到，错误30秒窗口接收非法迟到，两者都失败。进程仅环回监听、限资源并finally关闭。\n\n## 边界\n这里真实验证一个本地TSDB的接收政策，不声称远端产品采用相同乱序政策，也不证明两套存储查询窗口一定相同。查询成功并不说明所有输入样本已被接收；必须核对精确样本时间。没有历史block回填、修改节点时钟或向生产发送迟到数据。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-out-of-order",
+      "deliverables": [
+        "prometheus.yaml"
+      ],
+      "operation": "交付有界乱序存储政策并验证接受/超窗拒绝/恢复",
+      "verification": "原生TSDB精确样本时间和值、up与Targets错误",
+      "capability_gap": [
+        "不验证远端存储语义、历史block回填或生产容量"
+      ],
+      "failure_examples": [
+        "窗口0拒绝合法迟到",
+        "窗口30秒接收不应允许的20秒迟到",
+        "丢弃原时间戳掩盖乱序"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "features": [
+          "prometheus:v3.5"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config=copy.deepcopy(CONFIG)\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\nEXPECTED={'global': {'scrape_interval': '1s'}, 'storage': {'tsdb': {'out_of_order_time_window': '15s'}}, 'scrape_configs': [{'job_name': 'delayed-source', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'honor_timestamps': True, 'static_configs': [{'targets': ['127.0.0.1:19100']}]}]}\n\ncandidate=yaml.load(pathlib.Path('prometheus.yaml').read_text(encoding='utf-8'),Loader=Strict)\nassert isinstance(candidate,dict) and set(candidate)=={'global','storage','scrape_configs'}\nassert candidate['global']==EXPECTED['global'] and candidate['scrape_configs']==EXPECTED['scrape_configs']\nassert isinstance(candidate['storage'],dict) and set(candidate['storage'])=={'tsdb'}\nassert isinstance(candidate['storage']['tsdb'],dict) and set(candidate['storage']['tsdb'])=={'out_of_order_time_window'}\nassert isinstance(candidate['storage']['tsdb']['out_of_order_time_window'],str)\nbase=int(time.time())+60;state={'offset':0,'value':30}\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  if self.path!='/metrics':self.send_error(404);return\n  body=('# TYPE delayed_depth gauge\\ndelayed_depth{service=\"checkout\"} '+str(state['value'])+' '+str((base+state['offset'])*1000)+'\\n').encode()\n  self.send_response(200);self.send_header('Content-Type','text/plain; version=0.0.4');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n def log_message(self,*args):pass\nhttpd=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()\nCONFIG=copy.deepcopy(candidate);CONFIG['scrape_configs'][0]['static_configs'][0]['targets']=['127.0.0.1:'+str(httpd.server_port)]\ndef points(api):\n data=api('/api/v1/query',{'query':'delayed_depth[1m]','time':base+10})['data'];assert data['resultType']=='matrix'\n if not data['result']:return []\n assert len(data['result'])==1\n row=data['result'][0];assert row['metric']=={'__name__':'delayed_depth','job':'delayed-source','instance':'127.0.0.1:'+str(httpd.server_port),'service':'checkout'}\n return [(int(ts)-base,float(v)) for ts,v in row['values']]\ndef healthy(api,want):\n rows=vector(api,'up');return len(rows)==1 and float(rows[0]['value'][1])==want\ndef wait(fn):\n end=time.monotonic()+7\n while time.monotonic()<end:\n  if fn():return\n  time.sleep(.1)\n raise AssertionError('native timestamp acceptance failed: '+repr({'points':points(api),'up':vector(api,'up'),'targets':api('/api/v1/targets')['data']['activeTargets']}))\ntry:\n with tempfile.TemporaryDirectory(prefix='trusted-prom-out-of-order-') as d:\n  try:\n   with server(pathlib.Path(d),'source') as (url,api):\n    wait(lambda:healthy(api,1) and points(api)==[(0,30)])\n    state.update(offset=-10,value=20)\n    wait(lambda:healthy(api,1) and points(api)==[(-10,20),(0,30)])\n    state.update(offset=-15,value=15)\n    wait(lambda:healthy(api,1) and points(api)==[(-15,15),(-10,20),(0,30)])\n    state.update(offset=-16,value=14)\n    wait(lambda:healthy(api,0))\n    assert points(api)==[(-15,15),(-10,20),(0,30)],'one second beyond window must not enter TSDB'\n    state.update(offset=-20,value=10)\n    wait(lambda:healthy(api,0))\n    assert points(api)==[(-15,15),(-10,20),(0,30)],'outside-window sample must not enter TSDB'\n    error=api('/api/v1/targets')['data']['activeTargets'][0]['lastError'].lower()\n    assert 'old' in error or 'order' in error,error\n    state.update(offset=10,value=40)\n    wait(lambda:healthy(api,1) and points(api)==[(-15,15),(-10,20),(0,30),(10,40)])\n    effective=yaml.safe_load(api('/api/v1/status/config')['data']['yaml'])\n    assert effective['storage']['tsdb']['out_of_order_time_window']=='15s','native normalized window must be exactly the requested 15 seconds'\n  finally:print('native lifecycle:',json.dumps(STATS))\nfinally:\n httpd.shutdown();httpd.server_close();thread.join(timeout=2)\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_tsdb_bounded_out_of_order_ingestion_rejection_and_recovery",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-068",
+      "original_type": "interview",
+      "original_title": "远端存储查询成功为何仍可能与本地窗口结果不同？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

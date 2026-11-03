@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-parallel-basics-090",
+    "module": "basics",
+    "category": "计算机与环境",
+    "level": 3,
+    "topic": "操作系统与运行环境",
+    "title": "curl本地健康请求误走公司代理而显式直连成功",
+    "answer": "```python\nimport ipaddress,subprocess,urllib.parse\n\ndef probe_proxy_paths(url,proxy_url,expected_host):\n    parsed=urllib.parse.urlsplit(url);proxy=urllib.parse.urlsplit(proxy_url)\n    if parsed.scheme not in (\"http\",\"https\") or not parsed.hostname or parsed.username or parsed.password:\n        raise ValueError(\"URL must be an HTTP(S) endpoint without embedded credentials\")\n    if parsed.hostname.lower()!=expected_host.lower():raise ValueError(\"bypass hostname must match the URL host\")\n    if proxy.scheme not in (\"http\",\"https\") or not proxy.hostname:raise ValueError(\"invalid proxy URL\")\n    try:local_target=ipaddress.ip_address(parsed.hostname).is_loopback\n    except ValueError:local_target=parsed.hostname.lower().endswith(\".test\")\n    if not local_target:\n        raise ValueError(\"this diagnostic only permits loopback or reserved .test hosts\")\n    env={**__import__(\"os\").environ,\"no_proxy\":\"\",\"NO_PROXY\":\"\",\"all_proxy\":\"\",\"ALL_PROXY\":\"\"}\n    def call(extra):\n        cmd=[\"curl\",\"--silent\",\"--show-error\",\"--max-time\",\"4\",\"--max-filesize\",\"65536\",\"--output\",\"-\",\"--write-out\",\"\\n__HTTP_CODE__%{http_code}\",\"--proxy\",proxy_url,*extra,url]\n        p=subprocess.run(cmd,capture_output=True,text=True,timeout=6,env=env)\n        marker=\"\\n__HTTP_CODE__\";body,sep,code=p.stdout.rpartition(marker)\n        return {\"returncode\":p.returncode,\"http_code\":int(code) if sep and code.isdigit() else 0,\"body\":body[:65536]}\n    via_proxy=call([]);direct=call([\"--noproxy\",expected_host])\n    if via_proxy[\"returncode\"]==0 and via_proxy[\"http_code\"]==200 and direct[\"returncode\"]==0 and direct[\"http_code\"]==200:\n        diagnosis=\"both_paths_ok\"\n    elif direct[\"returncode\"]==0 and direct[\"http_code\"]==200 and (via_proxy[\"returncode\"]!=0 or via_proxy[\"http_code\"]>=400):\n        diagnosis=\"proxy_path_blocks_local_health_endpoint\"\n    else:diagnosis=\"direct_path_not_healthy_or_proxy_not_isolated\"\n    return {\"diagnosis\":diagnosis,\"proxy_http_code\":via_proxy[\"http_code\"],\"direct_http_code\":direct[\"http_code\"],\n        \"proxy_body\":via_proxy[\"body\"],\"direct_body\":direct[\"body\"],\n        \"action\":\"compare proxy environment and NO_PROXY for this exact host; use a narrow per-host bypass or add the host to the approved NO_PROXY list; do not disable the proxy globally\"}\n```\n\n原题知识说明：\n检查实际curl选项和http_proxy/HTTPS_PROXY/ALL_PROXY及no_proxy配置，确认请求是否经代理；变量支持和大小写依客户端规则。对内网目标配置准确绕过列表，核对真实对端与证书。验证代理外网与直连内网都符合策略，避免全局关代理误伤其他任务。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "检查实际curl选项和http_proxy/HTTPS_PROXY/ALL_PROXY及no_proxy配置，确认请求是否经代理；变量支持和大小写依客户端规则。",
+      "对内网目标配置准确绕过列表，核对真实对端与证书。",
+      "验证代理外网与直连内网都符合策略，避免全局关代理误伤其他任务。"
+    ],
+    "references": [
+      "https://curl.se/docs/manpage.html"
+    ],
+    "incident_signature": "basics-proxy-env-local-request-misroute",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-basics-090",
+      "original_title": "同一主机curl本地健康接口却收到公司代理错误页，显式直连成功。如何定位？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现probe_proxy_paths(url,proxy_url,expected_host)：在不改变父进程代理环境的情况下，分别经显式代理和仅对目标host的--noproxy规则请求健康端点；对比HTTP状态与有限响应体。仅当代理路径失败且直连路径成功时归因代理绕行问题，建议精确补充该主机的NO_PROXY或单目标绕行，不得全局关闭代理。\n\n## 提交产物\ntask.py\n\n## 验收方法\n真实本地HTTP代理和回环健康端点执行两路curl，对比代理502与目标域名noproxy直连200。\n\n## 能力边界\n隔离Linux中启动本地HTTP健康服务与返回502的代理服务，使用真实curl重现代理错误页/直连成功并验证定向绕行。只监听回环地址，不访问公司网络或生产服务。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import ipaddress,subprocess,urllib.parse\n\ndef probe_proxy_paths(url,proxy_url,expected_host):\n    parsed=urllib.parse.urlsplit(url);proxy=urllib.parse.urlsplit(proxy_url)\n    if parsed.scheme not in (\"http\",\"https\") or not parsed.hostname or parsed.username or parsed.password:\n        raise ValueError(\"URL must be an HTTP(S) endpoint without embedded credentials\")\n    if parsed.hostname.lower()!=expected_host.lower():raise ValueError(\"bypass hostname must match the URL host\")\n    if proxy.scheme not in (\"http\",\"https\") or not proxy.hostname:raise ValueError(\"invalid proxy URL\")\n    try:local_target=ipaddress.ip_address(parsed.hostname).is_loopback\n    except ValueError:local_target=parsed.hostname.lower().endswith(\".test\")\n    if not local_target:\n        raise ValueError(\"this diagnostic only permits loopback or reserved .test hosts\")\n    env={**__import__(\"os\").environ,\"no_proxy\":\"\",\"NO_PROXY\":\"\",\"all_proxy\":\"\",\"ALL_PROXY\":\"\"}\n    def call(extra):\n        cmd=[\"curl\",\"--silent\",\"--show-error\",\"--max-time\",\"4\",\"--max-filesize\",\"65536\",\"--output\",\"-\",\"--write-out\",\"\\n__HTTP_CODE__%{http_code}\",\"--proxy\",proxy_url,*extra,url]\n        p=subprocess.run(cmd,capture_output=True,text=True,timeout=6,env=env)\n        marker=\"\\n__HTTP_CODE__\";body,sep,code=p.stdout.rpartition(marker)\n        return {\"returncode\":p.returncode,\"http_code\":int(code) if sep and code.isdigit() else 0,\"body\":body[:65536]}\n    via_proxy=call([]);direct=call([\"--noproxy\",expected_host])\n    if via_proxy[\"returncode\"]==0 and via_proxy[\"http_code\"]==200 and direct[\"returncode\"]==0 and direct[\"http_code\"]==200:\n        diagnosis=\"both_paths_ok\"\n    elif direct[\"returncode\"]==0 and direct[\"http_code\"]==200 and (via_proxy[\"returncode\"]!=0 or via_proxy[\"http_code\"]>=400):\n        diagnosis=\"proxy_path_blocks_local_health_endpoint\"\n    else:diagnosis=\"direct_path_not_healthy_or_proxy_not_isolated\"\n    return {\"diagnosis\":diagnosis,\"proxy_http_code\":via_proxy[\"http_code\"],\"direct_http_code\":direct[\"http_code\"],\n        \"proxy_body\":via_proxy[\"body\"],\"direct_body\":direct[\"body\"],\n        \"action\":\"compare proxy environment and NO_PROXY for this exact host; use a narrow per-host bypass or add the host to the approved NO_PROXY list; do not disable the proxy globally\"}\n"
+    },
+    "negative_files": {
+      "task.py": "import ipaddress,subprocess,urllib.parse\n\ndef probe_proxy_paths(url,proxy_url,expected_host):\n    parsed=urllib.parse.urlsplit(url);proxy=urllib.parse.urlsplit(proxy_url)\n    if parsed.scheme not in (\"http\",\"https\") or not parsed.hostname or parsed.username or parsed.password:\n        raise ValueError(\"URL must be an HTTP(S) endpoint without embedded credentials\")\n    if parsed.hostname.lower()!=expected_host.lower():raise ValueError(\"bypass hostname must match the URL host\")\n    if proxy.scheme not in (\"http\",\"https\") or not proxy.hostname:raise ValueError(\"invalid proxy URL\")\n    try:local_target=ipaddress.ip_address(parsed.hostname).is_loopback\n    except ValueError:local_target=parsed.hostname.lower().endswith(\".test\")\n    if not local_target:\n        raise ValueError(\"this diagnostic only permits loopback or reserved .test hosts\")\n    env={**__import__(\"os\").environ,\"no_proxy\":\"\",\"NO_PROXY\":\"\",\"all_proxy\":\"\",\"ALL_PROXY\":\"\"}\n    def call(extra):\n        cmd=[\"curl\",\"--silent\",\"--show-error\",\"--max-time\",\"4\",\"--max-filesize\",\"65536\",\"--output\",\"-\",\"--write-out\",\"\\n__HTTP_CODE__%{http_code}\",\"--proxy\",proxy_url,*extra,url]\n        p=subprocess.run(cmd,capture_output=True,text=True,timeout=6,env=env)\n        marker=\"\\n__HTTP_CODE__\";body,sep,code=p.stdout.rpartition(marker)\n        return {\"returncode\":p.returncode,\"http_code\":int(code) if sep and code.isdigit() else 0,\"body\":body[:65536]}\n    via_proxy=call([]);direct=call([])\n    if via_proxy[\"returncode\"]==0 and via_proxy[\"http_code\"]==200 and direct[\"returncode\"]==0 and direct[\"http_code\"]==200:\n        diagnosis=\"both_paths_ok\"\n    elif direct[\"returncode\"]==0 and direct[\"http_code\"]==200 and (via_proxy[\"returncode\"]!=0 or via_proxy[\"http_code\"]>=400):\n        diagnosis=\"proxy_path_blocks_local_health_endpoint\"\n    else:diagnosis=\"direct_path_not_healthy_or_proxy_not_isolated\"\n    return {\"diagnosis\":diagnosis,\"proxy_http_code\":via_proxy[\"http_code\"],\"direct_http_code\":direct[\"http_code\"],\n        \"proxy_body\":via_proxy[\"body\"],\"direct_body\":direct[\"body\"],\n        \"action\":\"compare proxy environment and NO_PROXY for this exact host; use a narrow per-host bypass or add the host to the approved NO_PROXY list; do not disable the proxy globally\"}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现probe_proxy_paths(url,proxy_url,expected_host)：在不改变父进程代理环境的情况下，分别经显式代理和仅对目标host的--noproxy规则请求健康端点；对比HTTP状态与有限响应体。仅当代理路径失败且直连路径成功时归因代理绕行问题，建议精确补充该主机的NO_PROXY或单目标绕行，不得全局关闭代理。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "隔离Linux中启动本地HTTP健康服务与返回502的代理服务，使用真实curl重现代理错误页/直连成功并验证定向绕行。只监听回环地址，不访问公司网络或生产服务。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [
+          "curl"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'));task=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: compare proxy and direct health paths',flush=True)\nimport http.server,socketserver,threading\nclass Backend(http.server.BaseHTTPRequestHandler):\n def do_GET(self):self.send_response(200);self.end_headers();self.wfile.write(b'BACKEND_OK')\n def log_message(self,*a):pass\nclass Proxy(http.server.BaseHTTPRequestHandler):\n def do_GET(self):self.send_response(502);self.end_headers();self.wfile.write(b'COMPANY_PROXY_ERROR')\n def log_message(self,*a):pass\nbackend=socketserver.TCPServer(('127.0.0.1',0),Backend);proxy=socketserver.TCPServer(('127.0.0.1',0),Proxy)\nthreads=[threading.Thread(target=x.serve_forever,daemon=True) for x in (backend,proxy)]\nfor t in threads:t.start()\ntry:\n url=f'http://127.0.0.1:{backend.server_address[1]}/health';proxy_url=f'http://127.0.0.1:{proxy.server_address[1]}'\n result=task.probe_proxy_paths(url,proxy_url,'127.0.0.1');assert result['diagnosis']=='proxy_path_blocks_local_health_endpoint' and result['proxy_http_code']==502 and result['direct_http_code']==200 and result['direct_body']=='BACKEND_OK',result\nfinally:\n for x in (backend,proxy):x.shutdown();x.server_close()\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "basics"
+    ]
+  }
+]

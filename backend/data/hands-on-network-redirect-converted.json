@@ -1,0 +1,117 @@
+[
+  {
+    "id": "curated-feishu-60-091",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 3,
+    "topic": "浏览器导航与 HTTP 重定向",
+    "title": "实现安全的 HTTP 跳转追踪：保留方法并隔离跨源凭据",
+    "answer": "```python\nimport pathlib,urllib.parse,http.client,ipaddress,json,base64,tempfile,os\ndef checked(url):\n    if not isinstance(url,str) or any(ord(c)<32 or ord(c)==127 for c in url):raise ValueError('invalid URL')\n    p=urllib.parse.urlsplit(url)\n    try:address=ipaddress.ip_address(p.hostname or '');port=80 if p.port is None else p.port\n    except ValueError as e:raise ValueError('numeric loopback URL required') from e\n    if p.scheme!='http' or not address.is_loopback or p.username is not None or p.password is not None or not 1<=port<=65535:raise ValueError('only HTTP loopback endpoints without userinfo')\n    # Fragment is local navigation state and must never be sent in a request.\n    clean=urllib.parse.urlunsplit((p.scheme,p.netloc,p.path or '/',p.query,''))\n    target=(p.path or '/')+('?' + p.query if p.query else '')\n    return clean,(str(address),port),target\ndef execute(url,output,method='GET',body=b'',headers=None,max_redirects=5):\n    if method not in {'GET','POST'} or not isinstance(body,bytes):raise ValueError('GET/POST and bytes body required')\n    if type(max_redirects) is not int or not 0<=max_redirects<=5:raise ValueError('redirect bound must be 0..5')\n    supplied={} if headers is None else headers\n    if not isinstance(supplied,dict):raise ValueError('headers must be a mapping')\n    working={}\n    for name,value in supplied.items():\n        if not isinstance(name,str) or not isinstance(value,str) or name.lower() not in {'authorization','content-type','user-agent'} or any(ord(c)<32 or ord(c)==127 for c in name+value):raise ValueError('unsupported or unsafe header')\n        if name.lower() in working:raise ValueError('duplicate case-insensitive header')\n        working[name.lower()]=value\n    url,origin,target=checked(url);seen=set();history=[];redirects=0\n    while True:\n        key=(method,url)\n        if key in seen:raise ValueError('redirect cycle')\n        seen.add(key)\n        conn=http.client.HTTPConnection(origin[0],origin[1],timeout=.5)\n        try:\n            conn.request(method,target,body=body,headers=working)\n            response=conn.getresponse();status=response.status\n            history.append({'url':url,'method':method,'status':status})\n            if status in {301,302,303,307,308}:\n                if redirects>=max_redirects:raise ValueError('too many redirects')\n                location=response.getheader('Location')\n                if not location:raise ValueError('missing redirect location')\n                next_url,next_origin,next_target=checked(urllib.parse.urljoin(url,location))\n                if next_origin!=origin:working.pop('authorization',None)\n                if status==303 or (status in {301,302} and method=='POST'):\n                    method='GET';body=b'';working.pop('content-type',None)\n                url,origin,target=next_url,next_origin,next_target;redirects+=1\n                continue\n            payload=response.read(262145)\n            if len(payload)>262144:raise ValueError('response body too large')\n            result={'history':history,'status':status,'body_base64':base64.b64encode(payload).decode()}\n            break\n        finally:conn.close()\n    output=pathlib.Path(output);fd,temp=tempfile.mkstemp(prefix='.trace-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'w') as stream:json.dump(result,stream);stream.flush();os.fsync(stream.fileno())\n        os.replace(temp,output)\n    finally:\n        if os.path.exists(temp):os.unlink(temp)\n    return result\n```\n\n跳转不是简单重复发送原请求。必须同时处理方法变化、消息体、来源边界、片段与上限；Cookie、HTTPS降级、浏览器缓存等不在本练习实现范围，不能拿此教学客户端代替完整浏览器。\n\n原理补充：\n可能先命中浏览器/系统缓存，否则经解析器取得地址；选择路径并建立TCP+TLS或QUIC连接，校验证书和目标身份，发送包含Host/authority的HTTP请求。入口代理、应用及依赖处理后响应，浏览器继续请求资源并渲染。代理、缓存、重用连接和HTTP版本会改变步骤，排查应分阶段记录耗时。",
+    "type": "code",
+    "source": "飞书《60》技术问题改编并纠错",
+    "source_block_id": "EggGdCRbZo36gHxKNvxcRzY0nGe",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "feishu-60-reviewed",
+    "body": "## 环境与初始材料\n普通用户 Linux + Python3 标准库；提供函数骨架，验收启动两个真实回环 HTTP 端口，构造相对跳转、跨源后返回、循环及错误状态。仅练习 HTTP 跳转层，未启用 TLS，不将回环明文环境作为生产凭据传输方案，也不访问公网。\n\n## 操作任务\n实现 execute(url,output,method=\"GET\",body=b\"\",headers=None,max_redirects=5)，实际执行有限 HTTP 跳转并生成 JSON 跟踪工件。仅支持无用户信息的数字回环 HTTP URL、GET/POST、bytes请求体；最多0～5次跳转且拒绝布尔。301/302将POST转GET，303转GET并清请求体与Content-Type；307/308保留方法/体。相对Location按当前URL解析，fragment不得上网；同源保留Authorization，跨源即永久剥离，不能跳回原源后自动恢复。仅接收Authorization/Content-Type/User-Agent输入头，拒绝重复大小写字段/控制字符/其他头。循环、缺Location、非回环目标、响应超过256KiB均失败且保留旧输出；无跳转的401等状态原样记录，不自动重试认证。每次连接/读采用0.5秒空闲超时，不把它宣称为整链路总期限。\n\n## 提交产物\ntask.py，以及函数原子生成的 JSON 文件：history 的每项含 url/method/status，最终 status 与 body_base64；函数返回同一对象。不将 Authorization 值写入跟踪工件，不修改调用方 headers；所有连接和临时文件必须回收。\n\n## 验收方法\npython3 checks/check.py 通过真实HTTP服务端记录请求方法、二进制体、头与端口，核对307/308、303/302、同源/跨源凭据边界、返回原源不恢复凭据、片段移除、错误输入无请求、响应上限、循环/跳数限制、401不重试、失败不覆盖和FD回收。全部断言通过退出0；不以预制报告代替实际请求。\n\n失败示例：跨到第二端口时仍携带 Authorization，服务器会收到本不属于它的凭据，验收失败。",
+    "rubric": [
+      "可能先命中浏览器/系统缓存，否则经解析器取得地址；选择路径并建立TCP+TLS或QUIC连接，校验证书和目标身份，发送包含Host/authority的HTTP请求",
+      "入口代理、应用及依赖处理后响应，浏览器继续请求资源并渲染",
+      "代理、缓存、重用连接和HTTP版本会改变步骤，排查应分阶段记录耗时"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+      "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+      "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh",
+      "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb"
+    ],
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "EggGdCRbZo36gHxKNvxcRzY0nGe",
+        "question": "1、加入访问一个域名，www.qq.com ,说一下他的访问过程，经过什么组件"
+      }
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "EggGdCRbZo36gHxKNvxcRzY0nGe"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+        "block_ids": [
+          "GB7adsugeoNRovx8auIcOE7hn9d",
+          "KLvhdI4rDoU61YxiASvc72B0nUg",
+          "GIALdAJS9olU2uxHvzDcQ5cgnyh",
+          "JeAIdouqBoAK76x9IZZc6karnec",
+          "PIxZdjud5oVypIxaIJ3cFi4vnIe"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh",
+        "block_ids": [
+          "BeBJdE1qYoN1OnxxBTNc5cnDnjh"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "So6cdw8pmotPZcxBLO8cdr6nnHX",
+          "RMEadd7OKotlXRxlCpCcTTxznwd"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "def execute(url,output,method=\"GET\",body=b\"\",headers=None,max_redirects=5):\n    raise NotImplementedError\n",
+      "request.example.json": "{\"method\":\"POST\",\"body\":\"教学数据\",\"headers\":{\"Content-Type\":\"application/octet-stream\"}}\n"
+    },
+    "solution_files": {
+      "task.py": "import pathlib,urllib.parse,http.client,ipaddress,json,base64,tempfile,os\ndef checked(url):\n    if not isinstance(url,str) or any(ord(c)<32 or ord(c)==127 for c in url):raise ValueError('invalid URL')\n    p=urllib.parse.urlsplit(url)\n    try:address=ipaddress.ip_address(p.hostname or '');port=80 if p.port is None else p.port\n    except ValueError as e:raise ValueError('numeric loopback URL required') from e\n    if p.scheme!='http' or not address.is_loopback or p.username is not None or p.password is not None or not 1<=port<=65535:raise ValueError('only HTTP loopback endpoints without userinfo')\n    # Fragment is local navigation state and must never be sent in a request.\n    clean=urllib.parse.urlunsplit((p.scheme,p.netloc,p.path or '/',p.query,''))\n    target=(p.path or '/')+('?' + p.query if p.query else '')\n    return clean,(str(address),port),target\ndef execute(url,output,method='GET',body=b'',headers=None,max_redirects=5):\n    if method not in {'GET','POST'} or not isinstance(body,bytes):raise ValueError('GET/POST and bytes body required')\n    if type(max_redirects) is not int or not 0<=max_redirects<=5:raise ValueError('redirect bound must be 0..5')\n    supplied={} if headers is None else headers\n    if not isinstance(supplied,dict):raise ValueError('headers must be a mapping')\n    working={}\n    for name,value in supplied.items():\n        if not isinstance(name,str) or not isinstance(value,str) or name.lower() not in {'authorization','content-type','user-agent'} or any(ord(c)<32 or ord(c)==127 for c in name+value):raise ValueError('unsupported or unsafe header')\n        if name.lower() in working:raise ValueError('duplicate case-insensitive header')\n        working[name.lower()]=value\n    url,origin,target=checked(url);seen=set();history=[];redirects=0\n    while True:\n        key=(method,url)\n        if key in seen:raise ValueError('redirect cycle')\n        seen.add(key)\n        conn=http.client.HTTPConnection(origin[0],origin[1],timeout=.5)\n        try:\n            conn.request(method,target,body=body,headers=working)\n            response=conn.getresponse();status=response.status\n            history.append({'url':url,'method':method,'status':status})\n            if status in {301,302,303,307,308}:\n                if redirects>=max_redirects:raise ValueError('too many redirects')\n                location=response.getheader('Location')\n                if not location:raise ValueError('missing redirect location')\n                next_url,next_origin,next_target=checked(urllib.parse.urljoin(url,location))\n                if next_origin!=origin:working.pop('authorization',None)\n                if status==303 or (status in {301,302} and method=='POST'):\n                    method='GET';body=b'';working.pop('content-type',None)\n                url,origin,target=next_url,next_origin,next_target;redirects+=1\n                continue\n            payload=response.read(262145)\n            if len(payload)>262144:raise ValueError('response body too large')\n            result={'history':history,'status':status,'body_base64':base64.b64encode(payload).decode()}\n            break\n        finally:conn.close()\n    output=pathlib.Path(output);fd,temp=tempfile.mkstemp(prefix='.trace-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'w') as stream:json.dump(result,stream);stream.flush();os.fsync(stream.fileno())\n        os.replace(temp,output)\n    finally:\n        if os.path.exists(temp):os.unlink(temp)\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib,urllib.parse,http.client,ipaddress,json,base64,tempfile,os\ndef checked(url):\n    if not isinstance(url,str) or any(ord(c)<32 or ord(c)==127 for c in url):raise ValueError('invalid URL')\n    p=urllib.parse.urlsplit(url)\n    try:address=ipaddress.ip_address(p.hostname or '');port=80 if p.port is None else p.port\n    except ValueError as e:raise ValueError('numeric loopback URL required') from e\n    if p.scheme!='http' or not address.is_loopback or p.username is not None or p.password is not None or not 1<=port<=65535:raise ValueError('only HTTP loopback endpoints without userinfo')\n    # Fragment is local navigation state and must never be sent in a request.\n    clean=urllib.parse.urlunsplit((p.scheme,p.netloc,p.path or '/',p.query,''))\n    target=(p.path or '/')+('?' + p.query if p.query else '')\n    return clean,(str(address),port),target\ndef execute(url,output,method='GET',body=b'',headers=None,max_redirects=5):\n    if method not in {'GET','POST'} or not isinstance(body,bytes):raise ValueError('GET/POST and bytes body required')\n    if type(max_redirects) is not int or not 0<=max_redirects<=5:raise ValueError('redirect bound must be 0..5')\n    supplied={} if headers is None else headers\n    if not isinstance(supplied,dict):raise ValueError('headers must be a mapping')\n    working={}\n    for name,value in supplied.items():\n        if not isinstance(name,str) or not isinstance(value,str) or name.lower() not in {'authorization','content-type','user-agent'} or any(ord(c)<32 or ord(c)==127 for c in name+value):raise ValueError('unsupported or unsafe header')\n        if name.lower() in working:raise ValueError('duplicate case-insensitive header')\n        working[name.lower()]=value\n    url,origin,target=checked(url);seen=set();history=[];redirects=0\n    while True:\n        key=(method,url)\n        if key in seen:raise ValueError('redirect cycle')\n        seen.add(key)\n        conn=http.client.HTTPConnection(origin[0],origin[1],timeout=.5)\n        try:\n            conn.request(method,target,body=body,headers=working)\n            response=conn.getresponse();status=response.status\n            history.append({'url':url,'method':method,'status':status})\n            if status in {301,302,303,307,308}:\n                if redirects>=max_redirects:raise ValueError('too many redirects')\n                location=response.getheader('Location')\n                if not location:raise ValueError('missing redirect location')\n                next_url,next_origin,next_target=checked(urllib.parse.urljoin(url,location))\n                if False:working.pop('authorization',None)\n                if status==303 or (status in {301,302} and method=='POST'):\n                    method='GET';body=b'';working.pop('content-type',None)\n                url,origin,target=next_url,next_origin,next_target;redirects+=1\n                continue\n            payload=response.read(262145)\n            if len(payload)>262144:raise ValueError('response body too large')\n            result={'history':history,'status':status,'body_base64':base64.b64encode(payload).decode()}\n            break\n        finally:conn.close()\n    output=pathlib.Path(output);fd,temp=tempfile.mkstemp(prefix='.trace-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'w') as stream:json.dump(result,stream);stream.flush();os.fsync(stream.fileno())\n        os.replace(temp,output)\n    finally:\n        if os.path.exists(temp):os.unlink(temp)\n    return result\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(url,output,method=\"GET\",body=b\"\",headers=None,max_redirects=5)，实际执行有限 HTTP 跳转并生成 JSON 跟踪工件。仅支持无用户信息的数字回环 HTTP URL、GET/POST、bytes请求体；最多0～5次跳转且拒绝布尔。301/302将POST转GET，303转GET并清请求体与Content-Type；307/308保留方法/体。相对Location按当前URL解析，fragment不得上网；同源保留Authorization，跨源即永久剥离，不能跳回原源后自动恢复。仅接收Authorization/Content-Type/User-Agent输入头，拒绝重复大小写字段/控制字符/其他头。循环、缺Location、非回环目标、响应超过256KiB均失败且保留旧输出；无跳转的401等状态原样记录，不自动重试认证。每次连接/读采用0.5秒空闲超时，不把它宣称为整链路总期限。",
+      "deliverables": [
+        "task.py"
+      ],
+      "generated_artifacts": [
+        "JSON HTTP跳转跟踪文件"
+      ],
+      "verification": "两个真实回环HTTP服务端记录请求；核对方法/体/凭据作用域与产物，拒绝路径和FD清理",
+      "failure_examples": [
+        "跨源继续转发 Authorization 导致凭据泄漏"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,sys,json,base64,threading,http.server,contextlib,urllib.parse,os\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nrequests=[];other_url=''\nclass Handler(http.server.BaseHTTPRequestHandler):\n    def log_message(self,*args):pass\n    def do_POST(self):self.do_GET()\n    def do_GET(self):\n        body=self.rfile.read(int(self.headers.get('Content-Length','0')))\n        requests.append({'path':self.path,'method':self.command,'body':body,'auth':self.headers.get('Authorization'),'type':self.headers.get('Content-Type'),'port':self.server.server_port})\n        p=urllib.parse.urlsplit(self.path).path\n        status=200;location=None;reply=b'ok\\x00binary'\n        if p=='/post':status=307;location='/finish?q=1#section'\n        elif p=='/see-other':status=303;location='/finish'\n        elif p=='/legacy':status=302;location='/finish'\n        elif p=='/legacy301':status=301;location='/finish'\n        elif p=='/cross':status=308;location=other_url+'/return'\n        elif p=='/return':status=307;location=first_url+'/finish'\n        elif p=='/same':status=301;location='/finish'\n        elif p=='/loop':status=302;location='/loop'\n        elif p=='/hop':status=302;location='/same'\n        elif p=='/missing':status=302\n        elif p=='/unsafe':status=302;location='http://192.0.2.99:1234/'\n        elif p=='/userinfo':status=302;location='http://user:pass@127.0.0.1/'\n        elif p=='/big':reply=b'x'*262145\n        elif p=='/denied':status=401;reply=b'denied'\n        self.send_response(status)\n        if location:self.send_header('Location',location)\n        self.send_header('Content-Length',str(len(reply)));self.end_headers()\n        try:self.wfile.write(reply)\n        except (BrokenPipeError,ConnectionResetError):pass\n@contextlib.contextmanager\ndef server():\n    s=http.server.HTTPServer(('127.0.0.1',0),Handler);t=threading.Thread(target=lambda:s.serve_forever(poll_interval=.01));t.start()\n    try:yield 'http://127.0.0.1:'+str(s.server_port)\n    finally:s.shutdown();s.server_close();t.join(1);assert not t.is_alive()\nbaseline=len(os.listdir('/proc/self/fd'))\nwith server() as first_url,server() as other_url:\n    def run(path,method='GET',body=b'',headers=None,limit=5):\n        requests.clear();r=task.execute(first_url+path,'trace.json',method,body,headers,limit)\n        assert r==json.loads(pathlib.Path('trace.json').read_text())\n        assert not list(pathlib.Path('.').glob('.trace-*'))\n        return r,list(requests)\n    headers={'Authorization':'Bearer private-token','Content-Type':'application/octet-stream'}\n    snapshot=dict(headers)\n    r,rows=run('/post','POST',b'payload\\x00',headers)\n    assert [(x['method'],x['path'],x['body']) for x in rows]==[('POST','/post',b'payload\\x00'),('POST','/finish?q=1',b'payload\\x00')]\n    assert all(x['auth']=='Bearer private-token' for x in rows)\n    assert [x['status'] for x in r['history']]==[307,200]\n    assert base64.b64decode(r['body_base64'])==b'ok\\x00binary'\n    assert headers==snapshot and 'private-token' not in pathlib.Path('trace.json').read_text()\n    for path in ['/see-other','/legacy','/legacy301']:\n        _,rows=run(path,'POST',b'data',headers)\n        assert rows[1]['method']=='GET' and rows[1]['body']==b'' and rows[1]['type'] is None\n    r,rows=run('/cross','POST',b'kept',headers)\n    assert [x['auth'] for x in rows]==['Bearer private-token',None,None],rows\n    assert all(x['method']=='POST' and x['body']==b'kept' for x in rows)\n    _,rows=run('/same',headers=headers);assert rows[-1]['auth']=='Bearer private-token'\n    r,rows=run('/denied',headers=headers);assert r['status']==401 and len(rows)==1\n    for path,limit in [('/loop',5),('/hop',1),('/missing',5),('/unsafe',5),('/userinfo',5),('/big',5),('/same',0)]:\n        pathlib.Path('trace.json').write_text('KEEP');requests.clear()\n        try:task.execute(first_url+path,'trace.json',max_redirects=limit)\n        except ValueError:pass\n        else:raise AssertionError('invalid redirect/response accepted: '+path)\n        assert pathlib.Path('trace.json').read_text()=='KEEP'\n        assert not list(pathlib.Path('.').glob('.trace-*'))\n        if path in {'/unsafe','/userinfo'}:assert len(requests)==1\n    for bad in [{'Host':'evil'},{'Authorization':'x\\r\\nInjected: y'},{'Authorization':'a','authorization':'b'}]:\n        requests.clear()\n        try:task.execute(first_url+'/finish','trace.json',headers=bad)\n        except ValueError:pass\n        else:raise AssertionError('unsafe input header accepted')\n        assert not requests\n    for limit in [-1,6,True]:\n        try:task.execute(first_url+'/finish','trace.json',max_redirects=limit)\n        except ValueError:pass\n        else:raise AssertionError('unsafe redirect bound accepted')\n\n    requests.clear()\n    for url in ['http://127.0.0.1:0/','http://127.0.0.1:99999/','https://127.0.0.1/','http://localhost/','http://a:b@127.0.0.1/','http://127.0.0.1/\\r\\nbad']:\n        pathlib.Path('trace.json').write_text('KEEP')\n        try:task.execute(url,'trace.json')\n        except ValueError:pass\n        else:raise AssertionError('unsafe initial URL accepted: '+repr(url))\n        assert pathlib.Path('trace.json').read_text()=='KEEP'\n    assert not requests\n\nassert len(os.listdir('/proc/self/fd'))==baseline,'HTTP connections leaked'\nprint('PASS: actual redirect method/body semantics, authorization origin boundary, binary trace and bounded hops')\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": []
+      }
+    },
+    "case_signature": "network-http-redirect|method-rewrite-cross-origin-credentials-trace",
+    "conversion": {
+      "original_id": "curated-feishu-60-091",
+      "original_title": "浏览器访问HTTPS域名时，从解析到页面显示通常经过哪些阶段？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

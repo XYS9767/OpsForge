@@ -1,0 +1,69 @@
+[
+  {
+    "id": "curated-parallel-gcp-103",
+    "module": "gcp",
+    "category": "GCP",
+    "level": 3,
+    "topic": "托管数据与消息",
+    "title": "BigQuery要求分区过滤时LIMIT和业务条件为何仍不够",
+    "answer": "```python\nimport re\n\ndef top_split(text,word):\n    parts=[];start=0;depth=0;quote=None;i=0;upper=text.upper();needle=\" \"+word.upper()+\" \"\n    while i<len(text):\n        c=text[i]\n        if quote:\n            if c==quote:\n                if i+1<len(text) and text[i+1]==quote:i+=2;continue\n                quote=None\n        elif c in \"'\\\"`\":quote=c\n        elif c=='(':depth+=1\n        elif c==')':depth-=1\n        elif depth==0 and upper.startswith(needle,i):\n            parts.append(text[start:i].strip());i+=len(needle);start=i;continue\n        i+=1\n    if parts:parts.append(text[start:].strip());return parts\n    return [text.strip()]\n\ndef find_where(sql):\n    clean=re.sub(r\"--[^\\n]*|/\\*.*?\\*/\",\" \",sql,flags=re.S)\n    m=re.search(r\"\\bWHERE\\b\",clean,re.I)\n    if not m:return \"\"\n    start=m.end();depth=0;quote=None;i=start;tail=clean[start:]\n    while i<len(clean):\n        c=clean[i]\n        if quote:\n            if c==quote:\n                if i+1<len(clean) and clean[i+1]==quote:i+=2;continue\n                quote=None\n        elif c in \"'\\\"`\":quote=c\n        elif c=='(':depth+=1\n        elif c==')':depth-=1\n        elif depth==0:\n            clause=re.match(r\"\\s+(GROUP\\s+BY|ORDER\\s+BY|LIMIT|QUALIFY|WINDOW)\\b\",clean[i:],re.I)\n            if clause:return clean[start:i].strip()\n        i+=1\n    return clean[start:].strip()\n\ndef atom_has_partition_filter(atom,column):\n    col=r\"(?:`?\"+re.escape(column)+r\"`?)\"\n    return bool(re.search(r\"(?<![\\w.])\"+col+r\"\\s*(?:=|>=|<=|>|<)\\s*(?:DATE\\s*)?(?:TIMESTAMP\\s*)?(?:@\\w+|\\?|['\\\"].*?['\\\"]|CURRENT_DATE\\s*\\(\\s*\\))\",atom,re.I))\n\ndef partition_filter_report(sql,partition_column):\n    where=find_where(sql)\n    if not where:return {\"accepted\":False,\"reason\":\"where_clause_missing\",\"action\":\"add a direct filter on the partition column\"}\n    disjuncts=top_split(where,\"OR\")\n    failures=[]\n    for index,branch in enumerate(disjuncts):\n        conjunctions=top_split(branch,\"AND\")\n        if not any(atom_has_partition_filter(atom,partition_column) for atom in conjunctions):failures.append(index)\n    return {\"accepted\":not failures,\"reason\":\"partition_filter_present_in_every_or_branch\" if not failures else \"partition_filter_missing_from_or_branch\",\n        \"unfiltered_or_branches\":failures,\"action\":\"add a direct, pruning-compatible partition-column predicate to every OR branch; validate with BigQuery dry run and compare result rows\"}\n```\n\n原题知识说明：\n桌面推演，未在生产执行。查看表require_partition_filter及分区列，确认现有业务条件不能用于分区裁剪，LIMIT也不满足该要求。由开发添加语义正确且可用于分区消除的分区列谓词，注意OR组合不能让无关分支绕开约束。用dry run验证查询可规划与估计扫描字节，再核对同一业务时间范围的结果；不默认关闭成本保护。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Google Cloud官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现partition_filter_report(sql,partition_column)：识别SQL WHERE并忽略注释/字符串中的伪关键字；直接可裁剪的分区列比较必须出现在每个OR分支中。业务条件、LIMIT或只在一个OR分支中的过滤不算通过；将分区列包入函数不视为可裁剪谓词。输出需提示用BigQuery dry run验证扫描量及业务结果。\n\n## 提交产物\ntask.py\n\n## 验收方法\n验证无分区谓词、仅部分OR分支有过滤、所有分支均过滤和函数包裹列的区别。\n\n## 能力边界\n使用受限SQL谓词样例测试本地结构规则，不连接BigQuery、不执行真实dry run；复杂语法或查询参数化需在BigQuery验证，离线通过不证明查询可规划。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [],
+    "incident_signature": "bigquery-required-partition-filter-unmet",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-gcp-103",
+      "original_title": "BigQuery报必须提供分区过滤，查询已有业务条件和LIMIT，为何仍失败？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import re\n\ndef top_split(text,word):\n    parts=[];start=0;depth=0;quote=None;i=0;upper=text.upper();needle=\" \"+word.upper()+\" \"\n    while i<len(text):\n        c=text[i]\n        if quote:\n            if c==quote:\n                if i+1<len(text) and text[i+1]==quote:i+=2;continue\n                quote=None\n        elif c in \"'\\\"`\":quote=c\n        elif c=='(':depth+=1\n        elif c==')':depth-=1\n        elif depth==0 and upper.startswith(needle,i):\n            parts.append(text[start:i].strip());i+=len(needle);start=i;continue\n        i+=1\n    if parts:parts.append(text[start:].strip());return parts\n    return [text.strip()]\n\ndef find_where(sql):\n    clean=re.sub(r\"--[^\\n]*|/\\*.*?\\*/\",\" \",sql,flags=re.S)\n    m=re.search(r\"\\bWHERE\\b\",clean,re.I)\n    if not m:return \"\"\n    start=m.end();depth=0;quote=None;i=start;tail=clean[start:]\n    while i<len(clean):\n        c=clean[i]\n        if quote:\n            if c==quote:\n                if i+1<len(clean) and clean[i+1]==quote:i+=2;continue\n                quote=None\n        elif c in \"'\\\"`\":quote=c\n        elif c=='(':depth+=1\n        elif c==')':depth-=1\n        elif depth==0:\n            clause=re.match(r\"\\s+(GROUP\\s+BY|ORDER\\s+BY|LIMIT|QUALIFY|WINDOW)\\b\",clean[i:],re.I)\n            if clause:return clean[start:i].strip()\n        i+=1\n    return clean[start:].strip()\n\ndef atom_has_partition_filter(atom,column):\n    col=r\"(?:`?\"+re.escape(column)+r\"`?)\"\n    return bool(re.search(r\"(?<![\\w.])\"+col+r\"\\s*(?:=|>=|<=|>|<)\\s*(?:DATE\\s*)?(?:TIMESTAMP\\s*)?(?:@\\w+|\\?|['\\\"].*?['\\\"]|CURRENT_DATE\\s*\\(\\s*\\))\",atom,re.I))\n\ndef partition_filter_report(sql,partition_column):\n    where=find_where(sql)\n    if not where:return {\"accepted\":False,\"reason\":\"where_clause_missing\",\"action\":\"add a direct filter on the partition column\"}\n    disjuncts=top_split(where,\"OR\")\n    failures=[]\n    for index,branch in enumerate(disjuncts):\n        conjunctions=top_split(branch,\"AND\")\n        if not any(atom_has_partition_filter(atom,partition_column) for atom in conjunctions):failures.append(index)\n    return {\"accepted\":not failures,\"reason\":\"partition_filter_present_in_every_or_branch\" if not failures else \"partition_filter_missing_from_or_branch\",\n        \"unfiltered_or_branches\":failures,\"action\":\"add a direct, pruning-compatible partition-column predicate to every OR branch; validate with BigQuery dry run and compare result rows\"}\n"
+    },
+    "negative_files": {
+      "task.py": "import re\n\ndef top_split(text,word):\n    parts=[];start=0;depth=0;quote=None;i=0;upper=text.upper();needle=\" \"+word.upper()+\" \"\n    while i<len(text):\n        c=text[i]\n        if quote:\n            if c==quote:\n                if i+1<len(text) and text[i+1]==quote:i+=2;continue\n                quote=None\n        elif c in \"'\\\"`\":quote=c\n        elif c=='(':depth+=1\n        elif c==')':depth-=1\n        elif depth==0 and upper.startswith(needle,i):\n            parts.append(text[start:i].strip());i+=len(needle);start=i;continue\n        i+=1\n    if parts:parts.append(text[start:].strip());return parts\n    return [text.strip()]\n\ndef find_where(sql):\n    clean=re.sub(r\"--[^\\n]*|/\\*.*?\\*/\",\" \",sql,flags=re.S)\n    m=re.search(r\"\\bWHERE\\b\",clean,re.I)\n    if not m:return \"\"\n    start=m.end();depth=0;quote=None;i=start;tail=clean[start:]\n    while i<len(clean):\n        c=clean[i]\n        if quote:\n            if c==quote:\n                if i+1<len(clean) and clean[i+1]==quote:i+=2;continue\n                quote=None\n        elif c in \"'\\\"`\":quote=c\n        elif c=='(':depth+=1\n        elif c==')':depth-=1\n        elif depth==0:\n            clause=re.match(r\"\\s+(GROUP\\s+BY|ORDER\\s+BY|LIMIT|QUALIFY|WINDOW)\\b\",clean[i:],re.I)\n            if clause:return clean[start:i].strip()\n        i+=1\n    return clean[start:].strip()\n\ndef atom_has_partition_filter(atom,column):\n    col=r\"(?:`?\"+re.escape(column)+r\"`?)\"\n    return bool(re.search(r\"(?<![\\w.])\"+col+r\"\\s*(?:=|>=|<=|>|<)\\s*(?:DATE\\s*)?(?:TIMESTAMP\\s*)?(?:@\\w+|\\?|['\\\"].*?['\\\"]|CURRENT_DATE\\s*\\(\\s*\\))\",atom,re.I))\n\ndef partition_filter_report(sql,partition_column):\n    where=find_where(sql)\n    if not where:return {\"accepted\":False,\"reason\":\"where_clause_missing\",\"action\":\"add a direct filter on the partition column\"}\n    disjuncts=top_split(where,\"OR\")\n    failures=[]\n    for index,branch in enumerate(disjuncts):\n        conjunctions=top_split(branch,\"AND\")\n        if False:failures.append(index)\n    return {\"accepted\":not failures,\"reason\":\"partition_filter_present_in_every_or_branch\" if not failures else \"partition_filter_missing_from_or_branch\",\n        \"unfiltered_or_branches\":failures,\"action\":\"add a direct, pruning-compatible partition-column predicate to every OR branch; validate with BigQuery dry run and compare result rows\"}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现partition_filter_report(sql,partition_column)：识别SQL WHERE并忽略注释/字符串中的伪关键字；直接可裁剪的分区列比较必须出现在每个OR分支中。业务条件、LIMIT或只在一个OR分支中的过滤不算通过；将分区列包入函数不视为可裁剪谓词。输出需提示用BigQuery dry run验证扫描量及业务结果。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "使用受限SQL谓词样例测试本地结构规则，不连接BigQuery、不执行真实dry run；复杂语法或查询参数化需在BigQuery验证，离线通过不证明查询可规划。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'));task=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: inspect BigQuery partition-filter branches',flush=True)\ngood=task.partition_filter_report(\"SELECT * FROM `p.d.t` WHERE event_date >= DATE '2026-01-01' AND status='ok' LIMIT 50\",'event_date');assert good['accepted']\nmissing=task.partition_filter_report(\"SELECT * FROM t WHERE status='ok' LIMIT 50\",'event_date');assert not missing['accepted'] and missing['reason']=='partition_filter_missing_from_or_branch'\nunsafe=task.partition_filter_report(\"SELECT * FROM t WHERE event_date >= DATE '2026-01-01' OR status='urgent'\",'event_date');assert not unsafe['accepted'] and unsafe['unfiltered_or_branches']==[1]\nbranches=task.partition_filter_report(\"SELECT * FROM t WHERE (event_date >= DATE '2026-01-01' AND status='ok') OR (event_date < DATE '2027-01-01' AND status='urgent')\",'event_date');assert branches['accepted']\nwrapped=task.partition_filter_report(\"SELECT * FROM t WHERE DATE(event_date)=DATE '2026-01-01'\",'event_date');assert not wrapped['accepted']\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "gcp"
+    ]
+  }
+]

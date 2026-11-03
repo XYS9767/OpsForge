@@ -1,0 +1,477 @@
+[
+  {
+    "id": "curated-ansible-expansion-007",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "执行 Ansible ping 并区分模块响应与 ICMP",
+    "level": 0,
+    "type": "code",
+    "title": "执行 Ansible ping 并区分模块响应与 ICMP",
+    "body": "## 操作环境\nLinux普通用户、ansible-core与Python3/PyYAML。localhost本地连接、forks=1；仅写临时workspace，不提权、不连接真实服务器。涉及秘密的内容全部为教学假值。\n\n## 操作任务\n用ansible.builtin.ping传入probe_value并把模块响应写probe.json，字段value和changed；正常值须原样返回且changed=false。当data=crash时模块应失败，不生成成功报告。不能调用系统ping替代。本题local连接只证明模块执行，不证明SSH可达。\n\n## 提交产物\nplaybook.yaml。辅助文件保持原样，不能以文字说明代替配置。\n\n## 验收方法\n真实ansible-playbook执行参数变化、正常和失败路径；按文件内容、错误退出、权限或日志内容验收。只覆盖题目明确声明的本地行为。",
+    "answer": "### playbook.yaml\n```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Exercise Python module transport, not ICMP\n      ansible.builtin.ping:\n        data: '{{ probe_value }}'\n      register: probe\n    - name: Save the module response\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/probe.json'\n        content: '{{ {\"value\": probe.ping, \"changed\": probe.changed} | to_json }}'\n        mode: '0600'\n```\n\nAnsible ping是执行Python模块并返回pong或指定data，不发送ICMP。crash为该模块提供的失败测试入口，不能忽略失败后仍生成成功结果。",
+    "rubric": [
+      "该模块验证 Ansible 的连接和模块执行能力，常返回 pong，并非发送 ICMP"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html",
+      "https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/set_fact_module.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - ansible.builtin.debug:\n        msg: TODO\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Exercise Python module transport, not ICMP\n      ansible.builtin.ping:\n        data: '{{ probe_value }}'\n      register: probe\n    - name: Save the module response\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/probe.json'\n        content: '{{ {\"value\": probe.ping, \"changed\": probe.changed} | to_json }}'\n        mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Exercise Python module transport, not ICMP\n      ansible.builtin.ping:\n        data: pong\n      register: probe\n    - name: Save the module response\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/probe.json'\n        content: '{{ {\"value\": probe.ping, \"changed\": probe.changed} | to_json }}'\n        mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "用ansible.builtin.ping传入probe_value并把模块响应写probe.json，字段value和changed；正常值须原样返回且changed=false。当data=crash时模块应失败，不生成成功报告。不能调用系统ping替代。本题local连接只证明模块执行，不证明SSH可达。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生Ansible控制流与实际产物验收",
+      "failure_examples": [
+        "Ansible ping是执行Python模块并返回pong或指定data，不发送ICMP。crash为该模块提供的失败测试入口，不能忽略失败后仍生成成功结果。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nMATERIAL_ROOT=Path.cwd()\nEXTRA_ARGS=[]\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    \n    for filename in []:\n        target=root/filename;target.parent.mkdir(parents=True,exist_ok=True)\n        target.write_text((MATERIAL_ROOT/filename).read_text())\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    command.extend(EXTRA_ARGS)\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nfor value in ['hello','中文探针']:\n    with tempfile.TemporaryDirectory() as tmp:\n        root=Path(tmp);run(root,{'probe_value':value});assert json.loads((root/'probe.json').read_text())=={'value':value,'changed':False}\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);run(root,{'probe_value':'crash'},expected=1);assert not (root/'probe.json').exists()\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-007",
+      "original_type": "interview",
+      "original_title": "ansible.builtin.ping 与网络 ICMP ping 有什么区别？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-facts-roles-curated-ansible-expansion-007"
+  },
+  {
+    "id": "curated-ansible-expansion-009",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "在同名 collection 模块存在时明确选择 builtin copy",
+    "level": 0,
+    "type": "code",
+    "title": "在同名 collection 模块存在时明确选择 builtin copy",
+    "body": "## 操作环境\nLinux普通用户、ansible-core与Python3/PyYAML。localhost本地连接、forks=1；仅写临时workspace，不提权、不连接真实服务器。涉及秘密的内容全部为教学假值。\n\n## 操作任务\n题目本地collection training.shadow的copy模块故意与内置模块同名且会报错，辅助文件及play的collections列表不得改。编辑任务，用完整模块名调用真正内置copy，生成approved.txt、0600、相同文本二次执行无变化。不能删除教学模块或调用shell绕开模块命名。\n\n## 提交产物\nplaybook.yaml。辅助文件保持原样，不能以文字说明代替配置。\n\n## 验收方法\n真实ansible-playbook执行参数变化、正常和失败路径；按文件内容、错误退出、权限或日志内容验收。只覆盖题目明确声明的本地行为。",
+    "answer": "### playbook.yaml\n```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  collections: [training.shadow]\n  tasks:\n    - name: Use the explicitly named builtin copy implementation\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/approved.txt'\n        content: '{{ approved_text }}'\n        mode: '0600'\n```\n\nFQCN同时说明collection和模块，避免短名因collections搜索顺序解析成不同实现。本题只验证collection命名；不要泛化为所有内置action插件内部调用都不受本地library影响。",
+    "rubric": [
+      "它明确 collection namespace 与模块名，减少同名模块解析歧义并便于文档定位"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html",
+      "https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/set_fact_module.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "collections/ansible_collections/training/shadow/plugins/modules/copy.py": "#!/usr/bin/python\nfrom ansible.module_utils.basic import AnsibleModule\ndef main():\n    module=AnsibleModule(argument_spec={'dest':{'type':'str'},'content':{'type':'str'},'mode':{'type':'str'}})\n    module.fail_json(msg='Teaching local copy module shadowed the short name')\nif __name__=='__main__':main()\n",
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  collections: [training.shadow]\n  tasks:\n    - name: Use the explicitly named builtin copy implementation\n      copy:\n        dest: '{{ workspace }}/approved.txt'\n        content: '{{ approved_text }}'\n        mode: '0600'\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  collections: [training.shadow]\n  tasks:\n    - name: Use the explicitly named builtin copy implementation\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/approved.txt'\n        content: '{{ approved_text }}'\n        mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  collections: [training.shadow]\n  tasks:\n    - name: Use the explicitly named builtin copy implementation\n      copy:\n        dest: '{{ workspace }}/approved.txt'\n        content: '{{ approved_text }}'\n        mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "题目本地collection training.shadow的copy模块故意与内置模块同名且会报错，辅助文件及play的collections列表不得改。编辑任务，用完整模块名调用真正内置copy，生成approved.txt、0600、相同文本二次执行无变化。不能删除教学模块或调用shell绕开模块命名。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生Ansible控制流与实际产物验收",
+      "failure_examples": [
+        "FQCN同时说明collection和模块，避免短名因collections搜索顺序解析成不同实现。本题只验证collection命名；不要泛化为所有内置action插件内部调用都不受本地library影响。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nMATERIAL_ROOT=Path.cwd()\nEXTRA_ARGS=[]\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    \n    for filename in ['collections/ansible_collections/training/shadow/plugins/modules/copy.py']:\n        target=root/filename;target.parent.mkdir(parents=True,exist_ok=True)\n        target.write_text((MATERIAL_ROOT/filename).read_text())\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    command.extend(EXTRA_ARGS)\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nimport stat\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);run(root,{'approved_text':'explicit module\\n'})\n    assert (root/'approved.txt').read_text()=='explicit module\\n' and stat.S_IMODE((root/'approved.txt').stat().st_mode)==0o600\n    unchanged(run(root,{'approved_text':'explicit module\\n'}))\n    assert 'ansible.builtin.copy' in yaml.safe_load(source)[0]['tasks'][0]\n    assert yaml.safe_load(source)[0]['collections']==['training.shadow']\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-009",
+      "original_type": "interview",
+      "original_title": "FQCN 形式 ansible.builtin.copy 有什么作用？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-facts-roles-curated-ansible-expansion-009"
+  },
+  {
+    "id": "curated-ansible-expansion-051",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "追踪异步作业完成后才记录成功并回收元数据",
+    "level": 2,
+    "type": "code",
+    "title": "追踪异步作业完成后才记录成功并回收元数据",
+    "body": "## 操作环境\nLinux普通用户、ansible-core与Python3/PyYAML。localhost本地连接、forks=1；仅写临时workspace，不提权、不连接真实服务器。涉及秘密的内容全部为教学假值。\n\n## 操作任务\nworker.py是0.3秒教学作业，payload=fail时退出4。使用async/poll:0启动，保存job ID并通过async_status等待真实完成，成功写receipt.json finished=true/rc=0，回收完成作业元数据。失败不能写成功receipt。异步目录必须放在workspace/async-jobs，不能向共享用户目录遗留记录。\n\n## 提交产物\nplaybook.yaml。辅助文件保持原样，不能以文字说明代替配置。\n\n## 验收方法\n真实ansible-playbook执行参数变化、正常和失败路径；按文件内容、错误退出、权限或日志内容验收。只覆盖题目明确声明的本地行为。",
+    "answer": "### playbook.yaml\n```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  vars:\n    ansible_async_dir: '{{ workspace }}/async-jobs'\n  tasks:\n    - name: Start a short isolated asynchronous job\n      ansible.builtin.command:\n        argv: ['{{ ansible_python_interpreter }}', '{{ workspace }}/worker.py', '{{ workspace }}/finished.txt', '{{ payload }}']\n      async: 10\n      poll: 0\n      register: launched\n    - name: Wait for the actual job completion\n      ansible.builtin.async_status:\n        jid: '{{ launched.ansible_job_id }}'\n      register: job\n      until: job.finished\n      retries: 10\n      delay: 1\n    - name: Require successful completion before recording status\n      ansible.builtin.assert:\n        that: job.rc == 0\n    - name: Write completion receipt\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/receipt.json'\n        content: '{{ {\"finished\": job.finished | bool, \"rc\": job.rc} | to_json }}'\n        mode: '0600'\n    - name: Remove completed job metadata\n      ansible.builtin.async_status:\n        jid: '{{ launched.ansible_job_id }}'\n        mode: cleanup\n```\n\npoll:0只表示已启动，不能据此宣布完成。保存ansible_job_id并async_status重试，检查rc；cleanup清理记录，不是终止运行中进程。此题作业已在失败/成功路径退出，最后临时目录统一销毁。",
+    "rubric": [
+      "异步启动后不等待完成，调用方需要保存 job ID 并通过 async_status 等检查最终结果和超时"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html",
+      "https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/set_fact_module.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "worker.py": "import sys,time\nfrom pathlib import Path\ntime.sleep(0.3)\nif sys.argv[2]=='fail':raise SystemExit(4)\nPath(sys.argv[1]).write_text(sys.argv[2])\n",
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - ansible.builtin.debug:\n        msg: TODO\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  vars:\n    ansible_async_dir: '{{ workspace }}/async-jobs'\n  tasks:\n    - name: Start a short isolated asynchronous job\n      ansible.builtin.command:\n        argv: ['{{ ansible_python_interpreter }}', '{{ workspace }}/worker.py', '{{ workspace }}/finished.txt', '{{ payload }}']\n      async: 10\n      poll: 0\n      register: launched\n    - name: Wait for the actual job completion\n      ansible.builtin.async_status:\n        jid: '{{ launched.ansible_job_id }}'\n      register: job\n      until: job.finished\n      retries: 10\n      delay: 1\n    - name: Require successful completion before recording status\n      ansible.builtin.assert:\n        that: job.rc == 0\n    - name: Write completion receipt\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/receipt.json'\n        content: '{{ {\"finished\": job.finished | bool, \"rc\": job.rc} | to_json }}'\n        mode: '0600'\n    - name: Remove completed job metadata\n      ansible.builtin.async_status:\n        jid: '{{ launched.ansible_job_id }}'\n        mode: cleanup\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  vars:\n    ansible_async_dir: '{{ workspace }}/async-jobs'\n  tasks:\n  - name: Start a short isolated asynchronous job\n    ansible.builtin.command:\n      argv:\n      - '{{ ansible_python_interpreter }}'\n      - '{{ workspace }}/worker.py'\n      - '{{ workspace }}/finished.txt'\n      - '{{ payload }}'\n    async: 10\n    poll: 0\n    register: launched\n  - ansible.builtin.copy:\n      dest: '{{ workspace }}/receipt.json'\n      content: '{\"finished\": true, \"rc\": 0}'\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "worker.py是0.3秒教学作业，payload=fail时退出4。使用async/poll:0启动，保存job ID并通过async_status等待真实完成，成功写receipt.json finished=true/rc=0，回收完成作业元数据。失败不能写成功receipt。异步目录必须放在workspace/async-jobs，不能向共享用户目录遗留记录。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生Ansible控制流与实际产物验收",
+      "failure_examples": [
+        "poll:0只表示已启动，不能据此宣布完成。保存ansible_job_id并async_status重试，检查rc；cleanup清理记录，不是终止运行中进程。此题作业已在失败/成功路径退出，最后临时目录统一销毁。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nMATERIAL_ROOT=Path.cwd()\nEXTRA_ARGS=[]\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    \n    for filename in ['worker.py']:\n        target=root/filename;target.parent.mkdir(parents=True,exist_ok=True)\n        target.write_text((MATERIAL_ROOT/filename).read_text())\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    command.extend(EXTRA_ARGS)\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nfor value in ['approved-value','fail']:\n    with tempfile.TemporaryDirectory() as tmp:\n        root=Path(tmp);run(root,{'payload':value},expected=1 if value=='fail' else 0)\n        if value=='fail':assert not (root/'receipt.json').exists()\n        else:\n            assert (root/'finished.txt').read_text()==value\n            assert json.loads((root/'receipt.json').read_text())=={'finished':True,'rc':0}\n            assert not list((root/'async-jobs').glob('*'))\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-051",
+      "original_type": "interview",
+      "original_title": "async 与 poll: 0 对长任务的管理意味着什么？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-facts-roles-curated-ansible-expansion-051"
+  },
+  {
+    "id": "extra-ansible-02",
+    "title": "用 creates 防止重复执行且验证真实副作用",
+    "answer": "### playbook.yaml\n```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Build the artifact once in its own working directory\n      ansible.builtin.command:\n        argv: ['{{ ansible_python_interpreter }}', '{{ workspace }}/builder.py', '{{ expected_value }}']\n        chdir: '{{ workspace }}/build dir'\n        creates: output.txt\n```\n\ncommand argv避免shell拆词与元字符求值，chdir限定工作目录，creates定义是否需要运行。changed_when只改变报告状态，不能消除真实副作用。",
+    "level": 2,
+    "module": "ansible",
+    "category": "Ansible",
+    "type": "code",
+    "version": 2,
+    "body": "## 操作环境\nLinux普通用户、ansible-core与Python3/PyYAML。localhost本地连接、forks=1；仅写临时workspace，不提权、不连接真实服务器。涉及秘密的内容全部为教学假值。\n\n## 操作任务\nbuilder.py会追加calls.log并生成output.txt。必须在workspace/build dir中执行，argv保持带空格和分号的参数为一个参数；仅output.txt不存在时执行。二次执行不应追加calls.log；删除产物后应重新运行。不能仅changed_when:false隐藏重复执行。\n\n## 提交产物\nplaybook.yaml。辅助文件保持原样，不能以文字说明代替配置。\n\n## 验收方法\n真实ansible-playbook执行参数变化、正常和失败路径；按文件内容、错误退出、权限或日志内容验收。只覆盖题目明确声明的本地行为。",
+    "hints": [
+      "先说明概念与边界，再给出判断依据。"
+    ],
+    "has_answer": true,
+    "source": "OpsForge 原创扩展问答",
+    "rubric": [
+      "原理准确",
+      "判断有依据",
+      "说明适用边界"
+    ],
+    "answer_style": "spoken",
+    "related_modules": [
+      "ansible"
+    ],
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "difficulty": "进阶",
+    "topic": "用 creates 防止重复执行且验证真实副作用",
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "files": {
+      "builder.py": "import sys\nfrom pathlib import Path\nPath('calls.log').open('a').write('called\\n')\nPath('output.txt').write_text(sys.argv[1])\n",
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - ansible.builtin.debug:\n        msg: TODO\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Build the artifact once in its own working directory\n      ansible.builtin.command:\n        argv: ['{{ ansible_python_interpreter }}', '{{ workspace }}/builder.py', '{{ expected_value }}']\n        chdir: '{{ workspace }}/build dir'\n        creates: output.txt\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n  - name: Build the artifact once in its own working directory\n    ansible.builtin.command:\n      argv:\n      - '{{ ansible_python_interpreter }}'\n      - '{{ workspace }}/builder.py'\n      - '{{ expected_value }}'\n      chdir: '{{ workspace }}/build dir'\n    changed_when: false\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "builder.py会追加calls.log并生成output.txt。必须在workspace/build dir中执行，argv保持带空格和分号的参数为一个参数；仅output.txt不存在时执行。二次执行不应追加calls.log；删除产物后应重新运行。不能仅changed_when:false隐藏重复执行。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生Ansible控制流与实际产物验收",
+      "failure_examples": [
+        "command argv避免shell拆词与元字符求值，chdir限定工作目录，creates定义是否需要运行。changed_when只改变报告状态，不能消除真实副作用。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nMATERIAL_ROOT=Path.cwd()\nEXTRA_ARGS=[]\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    \n    for filename in ['builder.py']:\n        target=root/filename;target.parent.mkdir(parents=True,exist_ok=True)\n        target.write_text((MATERIAL_ROOT/filename).read_text())\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    command.extend(EXTRA_ARGS)\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);work=root/'build dir';work.mkdir();value='quoted value; not a shell command'\n    run(root,{'expected_value':value});assert (work/'output.txt').read_text()==value and (work/'calls.log').read_text()=='called\\n'\n    unchanged(run(root,{'expected_value':value}));assert (work/'calls.log').read_text()=='called\\n'\n    (work/'output.txt').unlink();run(root,{'expected_value':value});assert (work/'calls.log').read_text()=='called\\ncalled\\n'\n    assert not (root/'output.txt').exists()\n"
+      }
+    },
+    "conversion": {
+      "original_id": "extra-ansible-02",
+      "original_type": "interview",
+      "original_title": "为什么 shell 任务容易每次都显示 changed？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-facts-roles-extra-ansible-02",
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html",
+      "https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/set_fact_module.html"
+    ]
+  },
+  {
+    "id": "curated-advanced-ansible-005",
+    "module": "ansible",
+    "category": "Ansible",
+    "level": 4,
+    "topic": "修复跨角色同名 handler 被错误解析的问题",
+    "title": "修复跨角色同名 handler 被错误解析的问题",
+    "body": "## 操作环境\nLinux普通用户、ansible-core与Python3/PyYAML。localhost本地连接、forks=1；仅写临时workspace，不提权、不连接真实服务器。涉及秘密的内容全部为教学假值。\n\n## 操作任务\nalpha和beta都定义名为apply的handler。只更新alpha.conf时只允许触发alpha.applied，beta.applied不得产生。修改alpha任务的notify，保留两个角色及处理器名称。alpha内容未变时不应触发任何handler，变化后再激活正确角色。\n\n## 提交产物\nroles/alpha/tasks/main.yml。辅助文件保持原样，不能以文字说明代替配置。\n\n## 验收方法\n真实ansible-playbook执行参数变化、正常和失败路径；按文件内容、错误退出、权限或日志内容验收。只覆盖题目明确声明的本地行为。",
+    "answer": "### roles/alpha/tasks/main.yml\n```yaml\n- name: Update alpha owned file\n  ansible.builtin.copy:\n    dest: '{{ workspace }}/alpha.conf'\n    content: '{{ release_value }}'\n    mode: '0600'\n  notify: 'alpha : apply'\n```\n\nhandler名称在play范围可冲突，使用role_name : handler_name限定角色。保留另一个角色并测试其文件不变化，不能只看整体退出0。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "说明实际执行位置、身份或变量层次",
+      "给出可观察的正反验收证据",
+      "限定失败停止条件与回退不能逆转的状态"
+    ],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_reuse_roles.html",
+      "https://docs.ansible.com/projects/ansible/latest/collections/ansible/builtin/set_fact_module.html"
+    ],
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "files": {
+      "playbook.yaml": "- hosts: localhost\n  connection: local\n  gather_facts: false\n  roles:\n    - alpha\n    - beta\n",
+      "roles/beta/tasks/main.yml": "- name: Keep beta idle for this change\n  ansible.builtin.debug:\n    msg: beta is not changing\n",
+      "roles/alpha/handlers/main.yml": "- name: apply\n  ansible.builtin.copy:\n    dest: '{{ workspace }}/alpha.applied'\n    content: '{{ release_value }}'\n    mode: '0600'\n",
+      "roles/beta/handlers/main.yml": "- name: apply\n  ansible.builtin.copy:\n    dest: '{{ workspace }}/beta.applied'\n    content: '{{ release_value }}'\n    mode: '0600'\n",
+      "roles/alpha/tasks/main.yml": "- name: Update alpha owned file\n  ansible.builtin.copy:\n    dest: '{{ workspace }}/alpha.conf'\n    content: '{{ release_value }}'\n    mode: '0600'\n  notify: apply\n"
+    },
+    "solution_files": {
+      "roles/alpha/tasks/main.yml": "- name: Update alpha owned file\n  ansible.builtin.copy:\n    dest: '{{ workspace }}/alpha.conf'\n    content: '{{ release_value }}'\n    mode: '0600'\n  notify: 'alpha : apply'\n"
+    },
+    "negative_files": {
+      "roles/alpha/tasks/main.yml": "- name: Update alpha owned file\n  ansible.builtin.copy:\n    dest: '{{ workspace }}/alpha.conf'\n    content: '{{ release_value }}'\n    mode: '0600'\n  notify: 'beta : apply'\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "alpha和beta都定义名为apply的handler。只更新alpha.conf时只允许触发alpha.applied，beta.applied不得产生。修改alpha任务的notify，保留两个角色及处理器名称。alpha内容未变时不应触发任何handler，变化后再激活正确角色。",
+      "deliverables": [
+        "roles/alpha/tasks/main.yml"
+      ],
+      "verification": "原生Ansible控制流与实际产物验收",
+      "failure_examples": [
+        "handler名称在play范围可冲突，使用role_name : handler_name限定角色。保留另一个角色并测试其文件不变化，不能只看整体退出0。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nMATERIAL_ROOT=Path.cwd()\nEXTRA_ARGS=[]\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    \n    for filename in ['roles/beta/tasks/main.yml', 'roles/alpha/handlers/main.yml', 'roles/beta/handlers/main.yml', 'roles/alpha/tasks/main.yml']:\n        target=root/filename;target.parent.mkdir(parents=True,exist_ok=True)\n        target.write_text((MATERIAL_ROOT/filename).read_text())\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    command.extend(EXTRA_ARGS)\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);run(root,{'release_value':'A'});assert (root/'alpha.applied').read_text()=='A' and not (root/'beta.applied').exists()\n    (root/'alpha.applied').unlink();unchanged(run(root,{'release_value':'A'}));assert not (root/'alpha.applied').exists()\n    run(root,{'release_value':'B'});assert (root/'alpha.applied').read_text()=='B' and not (root/'beta.applied').exists()\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-advanced-ansible-005",
+      "original_type": "interview",
+      "original_title": "多个角色使用同名handler时，notify为何可能调用另一个角色的处理器？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-facts-roles-curated-advanced-ansible-005"
+  },
+  {
+    "id": "src-99cd321fae405a96",
+    "title": "Ansible故障修复：真实no_log与允许字段审计回调",
+    "answer": "修复敏感任务no_log并选择允许字段，而不是序列化_result后过滤。保留no_log/失败/跳过事件，真实copy changed值与逐事件追加。不能以审计文件未泄漏代替默认stdout和Ansible log_path的检查。",
+    "category": "Ansible",
+    "difficulty": "进阶",
+    "section": "高级",
+    "type": "case",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md",
+      "topics/ansible/README.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "增量深化现有唯一程序合同：真实初始泄漏复现、默认输出保护、动态别名/changed/追加与实际运行验收。",
+    "original_category": "Ansible",
+    "original_title": "什么是回调插件？ 使用回调插件可以实现什么？",
+    "module": "ansible",
+    "topic": "编写只记录允许字段的 Ansible 审计回调",
+    "level": 2,
+    "body": "## 操作任务\n修复真实Ansible审计泄漏故障。初态play未加no_log，debug/fail输出教学假秘密，callback还序列化整个_result。可信故障镜像必须先用原生ansible-playbook复现stdout、ansible.log与raw审计三处泄漏，再验修复后的同类行为。不是仅将题型改为case，也不能只让审计文件不含秘密而放任默认输出泄漏。\n\n修改playbook.yaml和callback_plugins/audit_events.py。保留给定targets/local/become:false、四个稳定非秘密任务名与模块动作；只允许原有debug/copy/fail，不增加其他动作/委托/变量覆盖/提权。不得更改copy的私有目标{{ practice_dir }}/public.txt。对包含fake_secret的debug/fail及跳过任务适当使用no_log；audit-change保留公开内容public_value的copy与0600权限。controller回调聚合记录ok/failed/skipped，ignore_errors的失败仍记failed且play继续。\n\n每条JSONL必须恰为task/host/status/changed，task取真实get_name、host为真实inventory别名、status为对应事件、changed为真实结果布尔值（包括copy第一次true和重复相同内容false）。不记录msg、stdout、invocation、raw或秘密；仅允许预先给定的安全任务名/主机名，不声称no_log会清理任务名。OPSFORGE_AUDIT_PATH是练习专用目标，逐事件追加，不截断已有记录，首次创建0600。不能跳过no_log任务事件、失败事件或skipped事件来避免泄漏。\n\n## 产物\nplaybook.yaml、callback_plugins/audit_events.py。运行产物为每个alias独立练习目录的public.txt、允许字段events.jsonl与本练习Ansible日志。教学假值仅来自可信私有输入文件，不要求Vault/生产凭据加密。\n\n## 环境与验收方法\n非root Linux、ansible-core、Python/PyYAML；实际ansible-playbook，私有inventory aliases、connection=local、forks=1。ANSIBLE_CONFIG/HOME/local及remote temp/log都只作用本子进程与临时练习目录，保留默认配置；无远程部署、无become。两组变化别名、相同公开内容重复执行及内容更新，检查原生callback事件（另有不可编辑aggregate观察器逐条对照）、真实copy结果/权限、追加/0600与stdout/stderr/ansible.log/events均无随机假秘密。初故障由可信镜像真实复现；四路线与独立错误实现均使用原生运行。这里只验证所给模块和日志通道，不宣称任意第三方插件/恶意任务名/ANSIBLE_DEBUG或全系统秘密隔离。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "playbook.yaml": "- name: Private callback exercise\n  hosts: targets\n  connection: local\n  gather_facts: false\n  become: false\n  tasks:\n    - name: audit-success\n      ansible.builtin.debug:\n        msg: '{{ fake_secret }}'\n    - name: audit-change\n      ansible.builtin.copy:\n        content: '{{ public_value }}'\n        dest: '{{ practice_dir }}/public.txt'\n        mode: '0600'\n    - name: audit-skipped\n      ansible.builtin.debug:\n        msg: '{{ fake_secret }}'\n      when: false\n    - name: audit-failed\n      ansible.builtin.fail:\n        msg: '{{ fake_secret }}'\n      ignore_errors: true\n",
+      "callback_plugins/audit_events.py": "import json\nimport os\nfrom ansible.plugins.callback import CallbackBase\n\n\nclass CallbackModule(CallbackBase):\n    CALLBACK_VERSION = 2.0\n    CALLBACK_TYPE = 'aggregate'\n    CALLBACK_NAME = 'audit_events'\n    CALLBACK_NEEDS_ENABLED = True\n\n    def emit(self, result, status):\n        row = {'task': result._task.get_name(), 'host': result._host.get_name(),\n               'status': status, 'changed': bool(result._result.get('changed', False)), 'raw':result._result}\n        descriptor = os.open(os.environ['OPSFORGE_AUDIT_PATH'], os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)\n        with os.fdopen(descriptor, 'a', encoding='utf8') as stream:\n            stream.write(json.dumps(row, ensure_ascii=False) + '\\n')\n            stream.flush()\n\n    def v2_runner_on_ok(self, result):\n        self.emit(result, 'ok')\n\n    def v2_runner_on_failed(self, result, ignore_errors=False):\n        self.emit(result, 'failed')\n\n    def v2_runner_on_skipped(self, result):\n        self.emit(result, 'skipped')\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Private callback exercise\n  hosts: targets\n  connection: local\n  gather_facts: false\n  become: false\n  tasks:\n    - name: audit-success\n      ansible.builtin.debug:\n        msg: '{{ fake_secret }}'\n      no_log: true\n    - name: audit-change\n      ansible.builtin.copy:\n        content: '{{ public_value }}'\n        dest: '{{ practice_dir }}/public.txt'\n        mode: '0600'\n    - name: audit-skipped\n      ansible.builtin.debug:\n        msg: '{{ fake_secret }}'\n      when: false\n      no_log: true\n    - name: audit-failed\n      ansible.builtin.fail:\n        msg: '{{ fake_secret }}'\n      ignore_errors: true\n      no_log: true\n",
+      "callback_plugins/audit_events.py": "import json\nimport os\nfrom ansible.plugins.callback import CallbackBase\n\n\nclass CallbackModule(CallbackBase):\n    CALLBACK_VERSION = 2.0\n    CALLBACK_TYPE = 'aggregate'\n    CALLBACK_NAME = 'audit_events'\n    CALLBACK_NEEDS_ENABLED = True\n\n    def emit(self, result, status):\n        row = {'task': result._task.get_name(), 'host': result._host.get_name(),\n               'status': status, 'changed': bool(result._result.get('changed', False))}\n        descriptor = os.open(os.environ['OPSFORGE_AUDIT_PATH'], os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)\n        with os.fdopen(descriptor, 'a', encoding='utf8') as stream:\n            stream.write(json.dumps(row, ensure_ascii=False) + '\\n')\n            stream.flush()\n\n    def v2_runner_on_ok(self, result):\n        self.emit(result, 'ok')\n\n    def v2_runner_on_failed(self, result, ignore_errors=False):\n        self.emit(result, 'failed')\n\n    def v2_runner_on_skipped(self, result):\n        self.emit(result, 'skipped')\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Private callback exercise\n  hosts: targets\n  connection: local\n  gather_facts: false\n  become: false\n  tasks:\n    - name: audit-success\n      ansible.builtin.debug:\n        msg: '{{ fake_secret }}'\n      no_log: true\n    - name: audit-change\n      ansible.builtin.copy:\n        content: '{{ public_value }}'\n        dest: '{{ practice_dir }}/public.txt'\n        mode: '0600'\n    - name: audit-skipped\n      ansible.builtin.debug:\n        msg: '{{ fake_secret }}'\n      when: false\n      no_log: true\n    - name: audit-failed\n      ansible.builtin.fail:\n        msg: '{{ fake_secret }}'\n      ignore_errors: true\n      no_log: true\n",
+      "callback_plugins/audit_events.py": "import json\nimport os\nfrom ansible.plugins.callback import CallbackBase\n\n\nclass CallbackModule(CallbackBase):\n    CALLBACK_VERSION = 2.0\n    CALLBACK_TYPE = 'aggregate'\n    CALLBACK_NAME = 'audit_events'\n    CALLBACK_NEEDS_ENABLED = True\n\n    def emit(self, result, status):\n        row = {'task': result._task.get_name(), 'host': result._host.get_name(),\n               'status': status, 'changed': bool(result._result.get('changed', False)), 'raw':result._result}\n        descriptor = os.open(os.environ['OPSFORGE_AUDIT_PATH'], os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)\n        with os.fdopen(descriptor, 'a', encoding='utf8') as stream:\n            stream.write(json.dumps(row, ensure_ascii=False) + '\\n')\n            stream.flush()\n\n    def v2_runner_on_ok(self, result):\n        self.emit(result, 'ok')\n\n    def v2_runner_on_failed(self, result, ignore_errors=False):\n        self.emit(result, 'failed')\n\n    def v2_runner_on_skipped(self, result):\n        self.emit(result, 'skipped')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "私有Linux本地Ansible；无远程/提权。",
+      "operation": "复现原始泄漏，修复play与callback，实际验证多别名/失败/跳过/changed/重复追加。",
+      "deliverables": [
+        "playbook.yaml",
+        "callback_plugins/audit_events.py"
+      ],
+      "verification": "真实ansible-playbook输出、日志、事件与文件证据。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json\nimport os\nfrom pathlib import Path\nimport re\nimport secrets\nimport shutil\nimport stat\nimport subprocess\nimport sys\nimport tempfile\nimport yaml\n\nMATERIAL = Path.cwd()\nSOURCE = (MATERIAL/'playbook.yaml').read_text()\nPLUGIN = (MATERIAL/'callback_plugins/audit_events.py').read_text()\nTRUTH = (MATERIAL/'checks/native_truth.py').read_text()\nFAULT_SOURCE = (MATERIAL/'checks/fault-playbook.yaml').read_text()\ndocument=yaml.safe_load(SOURCE)\nassert isinstance(document,list) and len(document)==1\nfor play in document:\n    assert play.get('hosts')=='targets' and play.get('connection')=='local' and play.get('become') is False\n    assert set(play)<= {'name','hosts','connection','gather_facts','become','tasks'}\n    for task in play['tasks']:\n        assert set(task)<={'name','ansible.builtin.debug','ansible.builtin.copy','ansible.builtin.fail','no_log','when','ignore_errors'}\n        action={'audit-success':'ansible.builtin.debug','audit-change':'ansible.builtin.copy','audit-skipped':'ansible.builtin.debug','audit-failed':'ansible.builtin.fail'}[task['name']]\n        assert action in task and len(set(task)&{'ansible.builtin.debug','ansible.builtin.copy','ansible.builtin.fail'})==1,'preserve native task actions'\n        if 'ansible.builtin.copy' in task:\n            assert task['ansible.builtin.copy']['dest']=='{{ practice_dir }}/public.txt','private destination required'\nBUGGY_PLUGIN = '''import json,os\nfrom ansible.plugins.callback import CallbackBase\nclass CallbackModule(CallbackBase):\n CALLBACK_VERSION=2.0\n CALLBACK_TYPE='aggregate'\n CALLBACK_NAME='audit_events'\n CALLBACK_NEEDS_ENABLED=True\n def emit(self,result,status):\n  with open(os.environ['OPSFORGE_AUDIT_PATH'],'a') as stream:stream.write(json.dumps({'task':result._task.get_name(),'host':result._host.get_name(),'status':status,'changed':bool(result._result.get('changed',False)),'raw':result._result})+'\\\\n')\n def v2_runner_on_ok(self,result):self.emit(result,'ok')\n def v2_runner_on_failed(self,result,ignore_errors=False):self.emit(result,'failed')\n def v2_runner_on_skipped(self,result):self.emit(result,'skipped')\n'''\n\n\ndef run(root, aliases, source, plugin, secret, iteration):\n    root.mkdir(parents=True, exist_ok=True)\n    home = root/'home'; home.mkdir(exist_ok=True)\n    (root/'callback_plugins').mkdir(exist_ok=True)\n    (root/'callback_plugins/audit_events.py').write_text(plugin)\n    (root/'callback_plugins/native_truth.py').write_text(TRUTH)\n    (root/'playbook.yaml').write_text(source)\n    hosts = {}\n    for alias in aliases:\n        private = root/alias; private.mkdir(exist_ok=True)\n        hosts[alias] = {'ansible_connection':'local','ansible_python_interpreter':sys.executable,\n                        'practice_dir':str(private),'ansible_remote_tmp':str(private/'remote-tmp')}\n    (root/'inventory.json').write_text(json.dumps({'all':{'children':{'targets':{'hosts':hosts}}}}))\n    (root/'input.json').write_text(json.dumps({'fake_secret':secret,'public_value':'safe-'+str(iteration)}))\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\ncallbacks_enabled=audit_events,native_truth\\ncallback_plugins=./callback_plugins\\nretry_files_enabled=False\\nforks=1\\n')\n    env={key:value for key,value in os.environ.items() if not key.startswith('ANSIBLE_') and key not in ('HOME','OPSFORGE_AUDIT_PATH')}\n    env.update(HOME=str(home),ANSIBLE_CONFIG=str(root/'ansible.cfg'),ANSIBLE_LOCAL_TEMP=str(root/'local-tmp'),\n               ANSIBLE_REMOTE_TEMP=str(root/'remote-tmp'),ANSIBLE_LOG_PATH=str(root/'ansible.log'),\n               ANSIBLE_NOCOLOR='1',ANSIBLE_INVENTORY_ENABLED='yaml',OPSFORGE_AUDIT_PATH=str(root/'events.jsonl'),\n               OPSFORGE_NATIVE_AUDIT=str(root/'native.jsonl'))\n    result=subprocess.run(['ansible-playbook','-i','inventory.json','playbook.yaml','-e','@input.json'],\n                          cwd=root,env=env,capture_output=True,text=True,timeout=35)\n    assert result.returncode==0, result.stdout+result.stderr\n    assert 'PLAY RECAP' in result.stdout, 'native playbook execution did not complete'\n    return result, (root/'events.jsonl').read_text(), (root/'ansible.log').read_text()\n\n\nwith tempfile.TemporaryDirectory(prefix='opsforge-callback-') as temporary:\n    root=Path(temporary); secret='fake-secret-'+secrets.token_hex(20)\n    fault=FAULT_SOURCE\n    # A trusted, deliberately broken image demonstrates the actual original leak,\n    # independently of whether the learner has fixed its editable starter files.\n    output,raw,log=run(root/'fault',['fault_alias'],fault,BUGGY_PLUGIN,secret,1)\n    assert secret in output.stdout and secret in log and secret in raw, 'initial leak not reproduced'\n    print('ORIGINAL_FAULT_REPRODUCED:stdout+ansible.log+raw-audit')\n    for batch,aliases in enumerate((['node_a','node_b'],['alias_z'])):\n        case=root/('repair-'+str(batch)); secret='fake-secret-'+secrets.token_hex(20)\n        for iteration in (1,1,2):\n            prior=(case/'events.jsonl').read_text() if (case/'events.jsonl').exists() else ''\n            native_prior=(case/'native.jsonl').read_text() if (case/'native.jsonl').exists() else ''\n            output,raw,log=run(case,aliases,SOURCE,PLUGIN,secret,iteration)\n            assert secret not in output.stdout+output.stderr+raw+log, 'secret escaped permitted channels'\n            assert raw.startswith(prior), 'audit file was truncated instead of appended'\n            rows=[json.loads(line) for line in raw[len(prior):].splitlines()]\n            native=[json.loads(line) for line in (case/'native.jsonl').read_text()[len(native_prior):].splitlines()]\n            assert rows==native,'student audit must equal independent real callback events'\n            expected={(host,task) for host in aliases for task in ('audit-success','audit-change','audit-skipped','audit-failed')}\n            assert len(rows)==len(expected) and {(row['host'],row['task']) for row in rows}==expected, rows\n            for row in rows:\n                assert set(row)=={'task','host','status','changed'},row\n                assert type(row['changed']) is bool,row\n                expected_status={'audit-success':'ok','audit-change':'ok','audit-skipped':'skipped','audit-failed':'failed'}[row['task']]\n                assert row['status']==expected_status,row\n                changed=row['task']=='audit-change' and (iteration==2 or not prior)\n                assert row['changed'] is changed,row\n            assert stat.S_IMODE((case/'events.jsonl').stat().st_mode)==0o600\n            for host in aliases:\n                assert (case/host/'public.txt').read_text()=='safe-'+str(iteration)\n                assert stat.S_IMODE((case/host/'public.txt').stat().st_mode)==0o600\n            assert all(re.search(r'failed=0\\b',line) for line in output.stdout.split('PLAY RECAP')[-1].splitlines() if ': ok=' in line)\n        print('STUDENT_OPERATION_ENTERED:callback:'+','.join(aliases))\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED')\n",
+        "checks/native_truth.py": "import json\nimport os\nfrom ansible.plugins.callback import CallbackBase\n\n\nclass CallbackModule(CallbackBase):\n    CALLBACK_VERSION=2.0\n    CALLBACK_TYPE='aggregate'\n    CALLBACK_NAME='native_truth'\n    CALLBACK_NEEDS_ENABLED=True\n\n    def emit(self,result,status):\n        row={'task':result._task.get_name(),'host':result._host.get_name(),'status':status,\n             'changed':bool(result._result.get('changed',False))}\n        with open(os.environ['OPSFORGE_NATIVE_AUDIT'],'a') as stream:stream.write(json.dumps(row)+'\\n')\n\n    def v2_runner_on_ok(self,result):self.emit(result,'ok')\n    def v2_runner_on_failed(self,result,ignore_errors=False):self.emit(result,'failed')\n    def v2_runner_on_skipped(self,result):self.emit(result,'skipped')\n",
+        "checks/fault-playbook.yaml": "- name: Private callback exercise\n  hosts: targets\n  connection: local\n  gather_facts: false\n  become: false\n  tasks:\n    - name: audit-success\n      ansible.builtin.debug:\n        msg: '{{ fake_secret }}'\n    - name: audit-change\n      ansible.builtin.copy:\n        content: '{{ public_value }}'\n        dest: '{{ practice_dir }}/public.txt'\n        mode: '0600'\n    - name: audit-skipped\n      ansible.builtin.debug:\n        msg: '{{ fake_secret }}'\n      when: false\n    - name: audit-failed\n      ansible.builtin.fail:\n        msg: '{{ fake_secret }}'\n      ignore_errors: true\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-99cd321fae405a96",
+      "original_type": "source",
+      "original_title": "什么是回调插件？ 使用回调插件可以实现什么？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-facts-roles-src-99cd321fae405a96",
+    "references": [
+      "https://docs.ansible.com/projects/ansible-core/stable-2.22/reference_appendices/logging.html",
+      "https://docs.ansible.com/projects/ansible-core/stable-2.21/plugins/callback.html"
+    ],
+    "question_format": "case",
+    "workitem_id": "question:src-99cd321fae405a96"
+  }
+]

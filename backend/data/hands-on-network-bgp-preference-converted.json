@@ -1,0 +1,80 @@
+[
+  {
+    "id": "curated-network-completion-022",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 2,
+    "topic": "BGP导入策略与控制平面回切",
+    "title": "用真实BGP双路径验证LOCAL_PREF优先于AS_PATH",
+    "answer": "```bird\nfilter primary_policy { bgp_local_pref = 200; accept; }\nfilter standby_policy { bgp_local_pref = 100; accept; }\n```\n\n较大的LOCAL_PREF在AS_PATH长度比较之前生效。它表达本AS内部的出口策略，不等于篡改或认证路径。会话撤回后原路径不再参与比较，备用路径可成为最优；原路径恢复后重新按偏好选路。原生验收使用真实BGP控制平面，而黑洞下一跳不承担业务转发。\n参考：[BIRD官方v2.14文档源](https://github.com/CZ-NIC/bird/blob/v2.14/doc/bird.sgml)。\n\n原题原理说明：\nLOCAL_PREF 常用于自治系统内部表达出站路径偏好，数值更高通常更优；AS_PATH 描述经过的自治系统，可用于环路检测和策略，长度常参与后续选路。完整优先级受实现和策略影响，不应把最短 AS_PATH 当成唯一判断。",
+    "type": "code",
+    "source": "OpsForge 原创网络专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\n非root Linux、BIRD 2和ip命令；policy.conf初始误将两路LOCAL_PREF均设为100。平台管理3个临时实例和独立控制socket，仅回环高端口，无Kernel/Direct/OSPF协议，也不改变系统路由。内部静态黑洞下一跳仅让BIRD可解析测试路径，不代表真实数据转发。\n\n## 操作任务\n修复policy.conf中的两个BIRD导入过滤器：primary_policy设LOCAL_PREF=200，standby_policy设100，均保留路由其他属性后accept。主路由真实AS_PATH为65001 65198 65199，备路由为65002；两者并存时主路由仍应胜出。验收再禁用主BGP会话，观察备路由成为最优；恢复主会话后应回切。不得更改AS_PATH或通过减少候选路由伪造选路。\n\n## 提交产物\npolicy.conf，内容仅为题给的两个过滤器（可调整空白，数值必须正确）。平台执行生成route-observations.json，保存双路径、撤回、恢复三阶段真实状态。\n\n## 验收方法\npython3 checks/check.py启动3个非root BIRD 2实例，通过回环高端口交换真实BGP UPDATE，用birdc读取两条路径的AS_PATH/LOCAL_PREF与最优标记，再验证withdraw/恢复。随机测试前缀，比较运行前后内核路由不变，最后回收全部进程。只验BIRD内部控制平面，不发送业务转发流量。 所有断言通过退出0。\n\n失败示例：把LOCAL_PREF设为相同值会由较短AS_PATH的备用路由胜出；将主路由偏好设为50同样不满足主备意图。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "files": {
+      "policy.conf": "filter primary_policy { bgp_local_pref = 100; accept; }\nfilter standby_policy { bgp_local_pref = 100; accept; }\n"
+    },
+    "solution_files": {
+      "policy.conf": "filter primary_policy { bgp_local_pref = 200; accept; }\nfilter standby_policy { bgp_local_pref = 100; accept; }\n"
+    },
+    "negative_files": {
+      "policy.conf": "filter primary_policy { bgp_local_pref = 50; accept; }\nfilter standby_policy { bgp_local_pref = 100; accept; }\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bird",
+          "birdc",
+          "ip"
+        ],
+        "features": [
+          "bird:v2"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,socket,time,re,json,os,secrets\npolicy=pathlib.Path('policy.conf').read_text()\ngrammar=r'\\s*filter primary_policy\\s*\\{\\s*bgp_local_pref\\s*=\\s*(\\d+);\\s*accept;\\s*\\}\\s*filter standby_policy\\s*\\{\\s*bgp_local_pref\\s*=\\s*(\\d+);\\s*accept;\\s*\\}\\s*'\nassert re.fullmatch(grammar,policy),'submit the two stated import filters only'\nassert os.getuid()!=0,'unprivileged test is required'\nbefore=subprocess.check_output(['ip','-j','route','show','table','all'])\nports=[];reservers=[]\nfor _ in range(4):\n    s=socket.socket();s.bind(('127.0.0.1',0));ports.append(s.getsockname()[1]);reservers.append(s)\nfor s in reservers:s.close()\nprefix='198.18.'+str(secrets.randbelow(200)+1)+'.0/24'\nprocesses=[];logs=[]\ndef call(node,*args):\n    result=subprocess.run(['birdc','-s',node+'.ctl',*args],capture_output=True,text=True,timeout=2)\n    assert result.returncode==0 or (args[:3]==('show','route','for') and 'Network not found' in result.stdout),(result.stdout,result.stderr)\n    return result.stdout\ndef await_value(fn,predicate,seconds=5):\n    end=time.monotonic()+seconds;value=None\n    while time.monotonic()<end:\n        assert all(p.poll() is None for p in processes),[pathlib.Path(n+'.log').read_text() for n in ('a','b','c')]\n        value=fn()\n        if predicate(value):return value\n        time.sleep(.03)\n    raise AssertionError(value)\ndef selected(text,name):return any('*' in line and '['+name+' ' in line for line in text.splitlines())\nconfigs={}\nfor i,node in enumerate(('a','b')):\n    prepend='bgp_path.prepend(65199); bgp_path.prepend(65198);' if i==0 else ''\n    configs[node]=f\"\"\"\nlog stderr all;\nrouter id 192.0.2.{i+1};\nprotocol static seed {{ ipv4; route {prefix} blackhole; }}\nprotocol bgp uplink {{\n local 127.0.0.1 port {ports[i]} as {65001+i};\n neighbor 127.0.0.1 port {ports[2+i]} as 65010;\n multihop; strict bind on; connect retry time 1; connect delay time 1;\n ipv4 {{ import none; next hop keep;\n export filter {{ if net = {prefix} then {{ bgp_next_hop=192.0.2.254; {prepend} accept; }} reject; }};\n }};\n}}\n\"\"\"\nconfigs['c']='log stderr all;\\nrouter id 192.0.2.10;\\ninclude \"policy.conf\";\\nprotocol static igp { ipv4; route 192.0.2.254/32 blackhole; }\\n'\nfor i,name in enumerate(('primary','standby')):\n    configs['c']+=f\"\"\"\nprotocol bgp {name} {{\n local 127.0.0.1 port {ports[2+i]} as 65010;\n neighbor 127.0.0.1 port {ports[i]} as {65001+i};\n multihop; passive on; strict bind on; connect retry time 1; connect delay time 1;\n ipv4 {{ import filter {name}_policy; export none; }};\n}}\n\"\"\"\ntry:\n    for node,config in configs.items():\n        pathlib.Path(node+'.conf').write_text(config)\n        checked=subprocess.run(['bird','-p','-c',node+'.conf'],capture_output=True,text=True,timeout=3)\n        assert checked.returncode==0,checked.stderr\n    for node in ('c','a','b'):\n        handle=open(node+'.log','w');logs.append(handle)\n        processes.append(subprocess.Popen(['bird','-f','-c',node+'.conf','-s',node+'.ctl','-P',node+'.pid'],stdout=handle,stderr=handle))\n    await_value(lambda:all(pathlib.Path(n+'.ctl').exists() for n in configs),bool)\n    both=await_value(lambda:call('c','show','route','for',prefix,'all'),lambda text:'[primary ' in text and '[standby ' in text)\n    assert selected(both,'primary'),'higher LOCAL_PREF must beat the shorter standby AS_PATH: '+both\n    assert 'BGP.as_path: 65001 65198 65199' in both and 'BGP.as_path: 65002' in both,both\n    assert 'BGP.local_pref: 200' in both and 'BGP.local_pref: 100' in both,both\n    call('c','disable','primary')\n    backup=await_value(lambda:call('c','show','route','for',prefix,'all'),lambda text:selected(text,'standby') and '[primary ' not in text)\n    call('c','enable','primary')\n    restored=await_value(lambda:call('c','show','route','for',prefix,'all'),lambda text:selected(text,'primary') and '[standby ' in text)\n    pathlib.Path('route-observations.json').write_text(json.dumps({'prefix':prefix,'both':both,'withdraw_primary':backup,'restored':restored,'forwarding_verified':False},indent=2))\nfinally:\n    for p in processes:\n        if p.poll() is None:p.terminate()\n    for p in processes:\n        try:p.wait(timeout=2)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=2)\n    for h in logs:h.close()\n    assert before==subprocess.check_output(['ip','-j','route','show','table','all']),'kernel route tables must not change'\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "修复policy.conf中的两个BIRD导入过滤器：primary_policy设LOCAL_PREF=200，standby_policy设100，均保留路由其他属性后accept。主路由真实AS_PATH为65001 65198 65199，备路由为65002；两者并存时主路由仍应胜出。验收再禁用主BGP会话，观察备路由成为最优；恢复主会话后应回切。不得更改AS_PATH或通过减少候选路由伪造选路。",
+      "deliverables": [
+        "policy.conf"
+      ],
+      "generated_artifacts": [
+        "route-observations.json"
+      ],
+      "verification": "python3 checks/check.py启动3个非root BIRD 2实例，通过回环高端口交换真实BGP UPDATE，用birdc读取两条路径的AS_PATH/LOCAL_PREF与最优标记，再验证withdraw/恢复。随机测试前缀，比较运行前后内核路由不变，最后回收全部进程。只验BIRD内部控制平面，不发送业务转发流量。",
+      "failure_examples": [
+        "把LOCAL_PREF设为相同值会由较短AS_PATH的备用路由胜出；将主路由偏好设为50同样不满足主备意图。"
+      ]
+    },
+    "case_signature": "curated-network-completion-022|native-bgp-local-pref-before-path-length-withdraw-restore",
+    "conversion": {
+      "original_id": "curated-network-completion-022",
+      "original_title": "BGP 的 LOCAL_PREF 与 AS_PATH 在选路中的作用如何区分？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

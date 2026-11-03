@@ -1,0 +1,70 @@
+[
+  {
+    "id": "curated-python-completion-052",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 4,
+    "topic": "对象与程序组织",
+    "title": "生成器数据源只遍历一次并逐项检查",
+    "answer": "```python\ndef scan_targets(targets,check):\n    if not callable(check):raise ValueError('check callback required')\n    total=passed=0;failures=[]\n    iterator=iter(targets)\n    while True:\n        try:item=next(iterator)\n        except StopIteration:break\n        except Exception as exc:return {'total':total,'passed':passed,'failures':failures,'complete':False,'iteration_error':type(exc).__name__}\n        index=total;total+=1\n        try:\n            if check(item):passed+=1\n            else:failures.append({'index':index,'error':'check returned false'})\n        except Exception as exc:failures.append({'index':index,'error':type(exc).__name__})\n    return {'total':total,'passed':passed,'failures':failures,'complete':True,'iteration_error':None}\n```\n\n原题知识说明：\n确认第一次计数已耗尽生成器。按数据规模选择一次遍历同时计数与执行、重新创建迭代器或受限物化缓存；测试空集、单条及大批量，汇总必须来自实际完成结果，不能只复用预估总数。",
+    "type": "code",
+    "source": "OpsForge Python运维开发补充题",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "python-completion-20261021",
+    "body": "## 操作任务\n实现scan_targets(targets,check)，对任意迭代器仅获取一次迭代器并逐项流式检查，不预先统计或物化全部输入。记录已处理数量、通过数、单项失败；检查回调异常后继续，迭代器本身中断时返回部分进度并明确complete=false及错误类型。\n\n## 提交产物\ntask.py\n\n## 验收方法\n在隔离Python 3.11真实进程中使用单次迭代器和惰性生成器，验证逐条交错处理、局部失败与迭代中断部分进度。\n\n## 能力边界\n只验证单进程迭代和检查回调合同；进度仅存在返回值中，不保证进程崩溃后的持久恢复，也不保证check回调的外部副作用可撤销。\n\n## 故障初态与公开复现\n初态故障：task.py 先遍历生成器计数，再次遍历时已无目标，实际检查回调为0。先运行 python3 reproduce.py，比较真实 yield/check 事件与报告；修复为原 scan_targets 合同要求的单次逐项流式检查后，复现脚本应退出0。仍仅验证单进程迭代与部分进度，不增加持久化或外部副作用回滚义务。",
+    "rubric": [
+      "Python语义准确",
+      "资源与错误处理明确",
+      "验证覆盖边界"
+    ],
+    "hints": [],
+    "references": [],
+    "incident_signature": "python:iterator-double-consume",
+    "related_modules": [
+      "python"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-python-completion-052",
+      "original_title": "工具先用生成器统计目标数，再遍历它执行检查，报告显示目标数正常但实际检查为0。如何修复？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "def scan_targets(targets,check):\n    if not callable(check):raise ValueError('check callback required')\n    estimated=0\n    for target in targets:estimated+=1\n    passed=0;errors=[]\n    for index,target in enumerate(targets):\n        try:\n            if check(target):passed+=1\n            else:errors.append({'index':index,'error':'check returned false'})\n        except Exception as error:errors.append({'index':index,'error':type(error).__name__})\n    return {'total':estimated,'passed':passed,'failures':errors,'complete':True,'iteration_error':None}\n",
+      "reproduce.py": "\"\"\"Real one-shot generator: count-first initial code leaves no work for checks.\"\"\"\nimport json\nimport task\n\nyielded=[];checked=[];sequence=[]\ndef targets():\n    for index in range(4):\n        yielded.append(index);sequence.append(['yield',index]);yield index\ndef check(index):\n    checked.append(index);sequence.append(['check',index]);return index%2==0\nreport=task.scan_targets(targets(),check)\nexpected_sequence=[item for index in range(4)for item in (['yield',index],['check',index])]\nchecks={'source_really_yielded_four':yielded==[0,1,2,3],\n        'each_business_check_really_called':checked==[0,1,2,3],\n        'streaming_interleaving':sequence==expected_sequence,\n        'progress_matches_real_checks':report=={'total':4,'passed':2,'failures':[{'index':1,'error':'check returned false'},{'index':3,'error':'check returned false'}],'complete':True,'iteration_error':None}}\nprint(json.dumps({'checks':checks,'yielded':yielded,'checked':checked,'events':sequence,'report':report},sort_keys=True),flush=True)\nraise SystemExit(0 if all(checks.values())else 1)\n"
+    },
+    "solution_files": {
+      "task.py": "def scan_targets(targets,check):\n    if not callable(check):raise ValueError('check callback required')\n    total=passed=0;failures=[]\n    iterator=iter(targets)\n    while True:\n        try:item=next(iterator)\n        except StopIteration:break\n        except Exception as exc:return {'total':total,'passed':passed,'failures':failures,'complete':False,'iteration_error':type(exc).__name__}\n        index=total;total+=1\n        try:\n            if check(item):passed+=1\n            else:failures.append({'index':index,'error':'check returned false'})\n        except Exception as exc:failures.append({'index':index,'error':type(exc).__name__})\n    return {'total':total,'passed':passed,'failures':failures,'complete':True,'iteration_error':None}\n"
+    },
+    "negative_files": {
+      "task.py": "def scan_targets(targets,check):\n    if not callable(check):raise ValueError('check callback required')\n    total=sum(1 for _ in targets);passed=0;failures=[]\n    for index,item in enumerate(targets):\n        try:\n            if check(item):passed+=1\n            else:failures.append({'index':index,'error':'check returned false'})\n        except Exception as exc:failures.append({'index':index,'error':type(exc).__name__})\n    return {'total':total,'passed':passed,'failures':failures,'complete':True,'iteration_error':None}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现scan_targets(targets,check)，对任意迭代器仅获取一次迭代器并逐项流式检查，不预先统计或物化全部输入。记录已处理数量、通过数、单项失败；检查回调异常后继续，迭代器本身中断时返回部分进度并明确complete=false及错误类型。\n初态故障：task.py 先遍历生成器计数，再次遍历时已无目标，实际检查回调为0。先运行 python3 reproduce.py，比较真实 yield/check 事件与报告；修复为原 scan_targets 合同要求的单次逐项流式检查后，复现脚本应退出0。仍仅验证单进程迭代与部分进度，不增加持久化或外部副作用回滚义务。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "只验证单进程迭代和检查回调合同；进度仅存在返回值中，不保证进程崩溃后的持久恢复，也不保证check回调的外部副作用可撤销。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: one-pass generator processing',flush=True)\nclass Once:\n def __init__(self,items):self.items=items;self.calls=0\n def __iter__(self):\n  self.calls+=1\n  if self.calls>1:raise AssertionError('source iterated more than once')\n  yield from self.items\nseen=[];source=Once([1,2,3,4])\ndef check(value):\n seen.append(value)\n if value==3:raise RuntimeError('bad row')\n return value%2==0\nr=task.scan_targets(source,check)\nassert source.calls==1 and seen==[1,2,3,4] and r=={'total':4,'passed':2,'failures':[{'index':0,'error':'check returned false'},{'index':2,'error':'RuntimeError'}],'complete':True,'iteration_error':None},r\nchecked=[]\ndef lazy():\n for i in range(3):\n  if i and checked[-1]!=i-1:raise AssertionError('consumer buffered instead of streaming')\n  yield i\n  if i==2:raise OSError('source broke')\npartial=task.scan_targets(lazy(),lambda x:checked.append(x) or True)\nassert partial['total']==3 and partial['passed']==3 and not partial['complete'] and partial['iteration_error']=='OSError'\nempty=task.scan_targets(iter(()),lambda x:True);assert empty['total']==0 and empty['complete']\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "case"
+  }
+]

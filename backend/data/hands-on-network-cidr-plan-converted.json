@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-network-completion-001",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 2,
+    "topic": "IPv4前缀与地址规划自动化",
+    "title": "生成IPv4子网规划工件，正确处理/31与/32",
+    "answer": "```python\nimport pathlib,json,ipaddress,tempfile,os\ndef build():\n    source=pathlib.Path('subnets.json');output=pathlib.Path('plan.json')\n    if source.is_symlink() or output.is_symlink() or (output.exists() and not output.is_file()):raise ValueError('regular files required')\n    if source.stat().st_size>65536:raise ValueError('input too large')\n    rows=json.loads(source.read_text())\n    if not isinstance(rows,list) or len(rows)>128:raise ValueError('expected at most 128 subnets')\n    networks=[];result=[]\n    for row in rows:\n        if not isinstance(row,dict) or set(row)!={'cidr','mode'}:raise ValueError('row schema')\n        if not isinstance(row['cidr'],str) or not isinstance(row['mode'],str):raise ValueError('text fields')\n        network=ipaddress.ip_network(row['cidr'],strict=True)\n        if network.version!=4:raise ValueError('IPv4 only')\n        if any(network.overlaps(other) for other in networks):raise ValueError('overlapping inventory')\n        networks.append(network)\n        mode=row['mode'];length=network.prefixlen;total=network.num_addresses\n        if mode=='lan' and length<=30:first=int(network.network_address)+1;count=total-2\n        elif mode=='point_to_point' and length==31:first=int(network.network_address);count=2\n        elif mode=='host' and length==32:first=int(network.network_address);count=1\n        else:raise ValueError('mode/prefix mismatch')\n        result.append({'cidr':str(network),'mode':mode,'address_count':total,'usable_count':count,\n                       'first':str(ipaddress.IPv4Address(first)),'last':str(ipaddress.IPv4Address(first+count-1))})\n    with tempfile.NamedTemporaryFile('w',dir='.',delete=False,encoding='utf-8') as handle:\n        temporary=handle.name;json.dump(result,handle,sort_keys=True);handle.flush();os.fsync(handle.fileno())\n    try:os.replace(temporary,output)\n    finally:\n        if os.path.exists(temporary):os.unlink(temporary)\n    return result\n```\n\n点对点/31与单主机/32必须结合用途处理，LAN中的网络/广播排除规则不能无条件套用。清单重叠检查可在真正发布地址配置前拦截规划冲突，但不检查远端设备或现网已分配地址。\n\n原题原理说明：\n/27 留5位主机位，共32个地址；传统普通广播子网通常扣除网络和广播地址，剩30个。/31 点到点链路与 /32 主机路由语义不同，云平台也可能额外保留地址。计算可分配数量前应明确链路类型和提供商规则。",
+    "type": "code",
+    "source": "OpsForge 原创网络专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\n普通Linux工作区和Python3标准库，不依赖网络或root。提供planner.py骨架和含LAN/点对点/单主机样例的subnets.json。\n\n## 操作任务\n实现planner.py的build()，把subnets.json里的IPv4规划数组转换为plan.json并返回同一数组。每项只有cidr/mode：lan仅允许/0～/30，排除网络/广播地址；point_to_point仅允许/31，两地址均计入；host仅允许/32，单地址计入。输出每项cidr、mode、address_count、usable_count、first、last，顺序与输入相同。必须拒绝不规范网段（主机位非零）、IPv6、模式不匹配、重复/重叠、未知字段、非字符串，不能把/31和/32机械减二。用整数计算，不能遍历所有地址；空清单输出[]。 输入最多128项、64KiB；固定输入/输出符号链接或非普通输出文件应拒绝。非法规划抛ValueError并保留旧plan.json，通过验证后用同目录临时文件替换输出。\n\n## 提交产物\nplanner.py完整实现；运行生成结构化plan.json。样例subnets.json为练习素材，验收会替换成独立输入。\n\n## 验收方法\npython3 checks/check.py核对/27、/31、/32的完整工件，随机/24～/30计算以及/0在2秒内完成；验证重叠、非规范前缀和模式等坏输入时旧plan.json逐字节保留，并检查固定文件符号链接保护。运行产物可直接供规划表或后续配置生成消费，未在任何接口分配地址。 全部断言通过退出0。这里的usable_count仅是题定子网模式的地址数量，不代表全局可路由、云厂商实际可分配数量或已成功分配。\n\n失败示例：统一address_count-2会把/31算成0、/32算成负数；只检查相等而不检查包含会漏掉/24与其中/25的规划冲突。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [
+      "https://www.rfc-editor.org/info/rfc3021/"
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "planner.py": "def build():\n    raise NotImplementedError\n",
+      "subnets.json": "[\n  {\n    \"cidr\": \"10.8.2.0/27\",\n    \"mode\": \"lan\"\n  },\n  {\n    \"cidr\": \"10.8.4.0/31\",\n    \"mode\": \"point_to_point\"\n  },\n  {\n    \"cidr\": \"10.8.5.7/32\",\n    \"mode\": \"host\"\n  }\n]\n"
+    },
+    "solution_files": {
+      "planner.py": "import pathlib,json,ipaddress,tempfile,os\ndef build():\n    source=pathlib.Path('subnets.json');output=pathlib.Path('plan.json')\n    if source.is_symlink() or output.is_symlink() or (output.exists() and not output.is_file()):raise ValueError('regular files required')\n    if source.stat().st_size>65536:raise ValueError('input too large')\n    rows=json.loads(source.read_text())\n    if not isinstance(rows,list) or len(rows)>128:raise ValueError('expected at most 128 subnets')\n    networks=[];result=[]\n    for row in rows:\n        if not isinstance(row,dict) or set(row)!={'cidr','mode'}:raise ValueError('row schema')\n        if not isinstance(row['cidr'],str) or not isinstance(row['mode'],str):raise ValueError('text fields')\n        network=ipaddress.ip_network(row['cidr'],strict=True)\n        if network.version!=4:raise ValueError('IPv4 only')\n        if any(network.overlaps(other) for other in networks):raise ValueError('overlapping inventory')\n        networks.append(network)\n        mode=row['mode'];length=network.prefixlen;total=network.num_addresses\n        if mode=='lan' and length<=30:first=int(network.network_address)+1;count=total-2\n        elif mode=='point_to_point' and length==31:first=int(network.network_address);count=2\n        elif mode=='host' and length==32:first=int(network.network_address);count=1\n        else:raise ValueError('mode/prefix mismatch')\n        result.append({'cidr':str(network),'mode':mode,'address_count':total,'usable_count':count,\n                       'first':str(ipaddress.IPv4Address(first)),'last':str(ipaddress.IPv4Address(first+count-1))})\n    with tempfile.NamedTemporaryFile('w',dir='.',delete=False,encoding='utf-8') as handle:\n        temporary=handle.name;json.dump(result,handle,sort_keys=True);handle.flush();os.fsync(handle.fileno())\n    try:os.replace(temporary,output)\n    finally:\n        if os.path.exists(temporary):os.unlink(temporary)\n    return result\n"
+    },
+    "negative_files": {
+      "planner.py": "import pathlib,json,ipaddress,tempfile,os\ndef build():\n    source=pathlib.Path('subnets.json');output=pathlib.Path('plan.json')\n    if source.is_symlink() or output.is_symlink() or (output.exists() and not output.is_file()):raise ValueError('regular files required')\n    if source.stat().st_size>65536:raise ValueError('input too large')\n    rows=json.loads(source.read_text())\n    if not isinstance(rows,list) or len(rows)>128:raise ValueError('expected at most 128 subnets')\n    networks=[];result=[]\n    for row in rows:\n        if not isinstance(row,dict) or set(row)!={'cidr','mode'}:raise ValueError('row schema')\n        if not isinstance(row['cidr'],str) or not isinstance(row['mode'],str):raise ValueError('text fields')\n        network=ipaddress.ip_network(row['cidr'],strict=True)\n        if network.version!=4:raise ValueError('IPv4 only')\n        if any(network.overlaps(other) for other in networks):raise ValueError('overlapping inventory')\n        networks.append(network)\n        mode=row['mode'];length=network.prefixlen;total=network.num_addresses\n        if mode=='lan' and length<=30:first=int(network.network_address)+1;count=total-2\n        elif mode=='point_to_point' and length==31:first=int(network.network_address);count=total-2\n        elif mode=='host' and length==32:first=int(network.network_address);count=total-2\n        else:raise ValueError('mode/prefix mismatch')\n        result.append({'cidr':str(network),'mode':mode,'address_count':total,'usable_count':count,\n                       'first':str(ipaddress.IPv4Address(first)),'last':str(ipaddress.IPv4Address(first+count-1))})\n    with tempfile.NamedTemporaryFile('w',dir='.',delete=False,encoding='utf-8') as handle:\n        temporary=handle.name;json.dump(result,handle,sort_keys=True);handle.flush();os.fsync(handle.fileno())\n    try:os.replace(temporary,output)\n    finally:\n        if os.path.exists(temporary):os.unlink(temporary)\n    return result\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "test_files": {
+        "checks/check.py": "import pathlib,json,sys,secrets,time\nsys.path.insert(0,str(pathlib.Path.cwd()));import planner\nsource=pathlib.Path('subnets.json');output=pathlib.Path('plan.json')\ndef execute(rows):\n    source.write_text(json.dumps(rows));original=source.read_bytes()\n    result=planner.build();assert source.read_bytes()==original\n    assert result==json.loads(output.read_text());return result\nrows=[{'cidr':'10.8.2.0/27','mode':'lan'},{'cidr':'10.8.4.0/31','mode':'point_to_point'},{'cidr':'10.8.5.7/32','mode':'host'}]\nexpected=[{'cidr':'10.8.2.0/27','mode':'lan','address_count':32,'usable_count':30,'first':'10.8.2.1','last':'10.8.2.30'},\n          {'cidr':'10.8.4.0/31','mode':'point_to_point','address_count':2,'usable_count':2,'first':'10.8.4.0','last':'10.8.4.1'},\n          {'cidr':'10.8.5.7/32','mode':'host','address_count':1,'usable_count':1,'first':'10.8.5.7','last':'10.8.5.7'}]\nassert execute(rows)==expected\nfor _ in range(8):\n    octet=secrets.randbelow(200)+10;prefix=secrets.choice([24,25,26,27,28,29,30]);size=1<<(32-prefix)\n    result=execute([{'cidr':f'192.0.{octet}.0/{prefix}','mode':'lan'}])[0]\n    assert result=={'cidr':f'192.0.{octet}.0/{prefix}','mode':'lan','address_count':size,'usable_count':size-2,'first':f'192.0.{octet}.1','last':f'192.0.{octet}.{size-2}'}\nstart=time.monotonic();whole=execute([{'cidr':'0.0.0.0/0','mode':'lan'}])[0]\nassert time.monotonic()-start<2,'do not enumerate IPv4 address space'\nassert whole['address_count']==4294967296 and whole['usable_count']==4294967294 and whole['first']=='0.0.0.1' and whole['last']=='255.255.255.254'\nassert execute([])==[]\noutput.write_text('previous approved plan');previous=output.read_bytes()\ninvalid=[\n    [{'cidr':'10.0.0.0/31','mode':'lan'}],\n    [{'cidr':'10.0.0.1/32','mode':'point_to_point'}],\n    [{'cidr':'10.0.0.0/24','mode':'host'}],\n    [{'cidr':'10.0.0.1/24','mode':'lan'}],\n    [{'cidr':'2001:db8::/64','mode':'lan'}],\n    [{'cidr':'10.0.0.0/24','mode':'lan'},{'cidr':'10.0.0.128/25','mode':'lan'}],\n    [{'cidr':'10.0.0.0/24','mode':'lan'}]*2,\n    [{'cidr':'10.0.0.0/24','mode':'unknown'}],\n    [{'cidr':1234,'mode':'lan'}],\n    [{'cidr':'10.0.0.0/24','mode':True}],\n    [{'cidr':'10.0.0.0/24','mode':'lan','extra':True}],\n    {},[{}]*129\n]\nfor rows in invalid:\n    source.write_text(json.dumps(rows))\n    try:planner.build()\n    except ValueError:pass\n    else:raise AssertionError(rows)\n    assert output.read_bytes()==previous,'failed plan replaced approved artifact'\nsource.write_text(' '*65537)\ntry:planner.build()\nexcept ValueError:pass\nelse:raise AssertionError('oversize accepted')\nassert output.read_bytes()==previous\nsource.write_text(json.dumps([]))\nfor name in ('subnets.json','plan.json'):\n    path=pathlib.Path(name);saved=pathlib.Path(name+'.saved');path.rename(saved);before=saved.read_bytes();path.symlink_to(saved.name)\n    try:\n        try:planner.build()\n        except ValueError:pass\n        else:raise AssertionError('symlink accepted')\n        assert saved.read_bytes()==before\n    finally:path.unlink();saved.rename(path)\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现planner.py的build()，把subnets.json里的IPv4规划数组转换为plan.json并返回同一数组。每项只有cidr/mode：lan仅允许/0～/30，排除网络/广播地址；point_to_point仅允许/31，两地址均计入；host仅允许/32，单地址计入。输出每项cidr、mode、address_count、usable_count、first、last，顺序与输入相同。必须拒绝不规范网段（主机位非零）、IPv6、模式不匹配、重复/重叠、未知字段、非字符串，不能把/31和/32机械减二。用整数计算，不能遍历所有地址；空清单输出[]。",
+      "deliverables": [
+        "planner.py"
+      ],
+      "generated_artifacts": [
+        "plan.json"
+      ],
+      "verification": "python3 checks/check.py核对/27、/31、/32的完整工件，随机/24～/30计算以及/0在2秒内完成；验证重叠、非规范前缀和模式等坏输入时旧plan.json逐字节保留，并检查固定文件符号链接保护。运行产物可直接供规划表或后续配置生成消费，未在任何接口分配地址。",
+      "failure_examples": [
+        "统一address_count-2会把/31算成0、/32算成负数；只检查相等而不检查包含会漏掉/24与其中/25的规划冲突。"
+      ]
+    },
+    "case_signature": "curated-network-completion-001|ipv4-planning-artifact-lan-p2p31-host32-no-enumeration",
+    "conversion": {
+      "original_id": "curated-network-completion-001",
+      "original_title": "IPv4 的 /27 前缀覆盖多少地址，为什么不能把所有网段的可用地址都机械减二？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

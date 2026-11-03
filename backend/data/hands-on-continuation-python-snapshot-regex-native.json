@@ -1,0 +1,71 @@
+[
+  {
+    "id": "curated-advanced-python-005",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 4,
+    "topic": "对象与程序组织",
+    "title": "真实frozen嵌套可变陷阱：建立稳定快照缓存键，显式类型相等与循环拒绝",
+    "body": "## 操作任务\n实现snapshot(value)，为仅含精确str/int/bool/None/list/tuple/dict的配置返回递归不可变tuple快照；每层为(type.__name__,payload)，list/tuple payload为子快照tuple，dict只许字符串键并按键排序为(key,快照)tuple。保留True与1、list与tuple区别；拒绝其他类型及循环ValueError，但共享且无环引用合法。不改输入、不保存可变引用、不用repr或unsafe_hash。平台真实frozen dataclass先复现嵌套可变及hash失败，再验证缓存键在原配置变更后稳定且新快照不同。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实CPython dataclass、字典hash缓存、嵌套修改和类型边界；闭合配置域，不承诺任意对象序列化、跨进程稳定hash或弱引用LRU所有权。",
+    "answer": "```python\ndef snapshot(value):\n    active=set()\n    def freeze(v):\n        kind=type(v)\n        if kind in (str,int,bool,type(None)):return (kind.__name__,v)\n        if kind not in (list,tuple,dict):raise ValueError('unsupported key value')\n        identity=id(v)\n        if identity in active:raise ValueError('cyclic value')\n        active.add(identity)\n        try:\n            if kind is dict:\n                if any(type(k) is not str for k in v):raise ValueError('string mapping keys required')\n                result=tuple((k,freeze(v[k])) for k in sorted(v))\n            else:result=tuple(freeze(item) for item in v)\n            return (kind.__name__,result)\n        finally:active.remove(identity)\n    return freeze(value)\n```\n\n原题知识说明：\nfrozen主要阻止通常的字段重新赋值，不会递归冻结字段引用的列表、字典或自定义对象；生成或强制生成hash也不能把不稳定业务身份变成安全键。键进入dict或set后，如果参与相等或哈希的状态变化，会破坏查找与去重预期；unsafe_hash的名字不等于自动复制或深冻结。应分别决定哪些字段构成身份、是否允许可变附属信息以及参与比较和哈希的字段集合，必要时使用独立的不可变键对象。推演嵌套列表变化、两个相等对象不同构建路径、继承字段和默认工厂，验证同一业务对象始终能找到且不同对象不会被误合并。不能简单把所有字段转换成字符串后做键，以免编码歧义和隐式性能成本。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "明确语言运行时与业务合同的边界",
+      "给出可区分正确与失败的具体样例",
+      "说明资源或数据恢复限制"
+    ],
+    "references": [
+      "https://docs.python.org/3/library/dataclasses.html#frozen-instances"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-python-005",
+      "original_title": "frozen dataclass作为缓存键时，为什么仍要分析嵌套可变字段、相等规则和哈希稳定性？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def snapshot(value):\n    active=set()\n    def freeze(v):\n        kind=type(v)\n        if kind in (str,int,bool,type(None)):return (kind.__name__,v)\n        if kind not in (list,tuple,dict):raise ValueError('unsupported key value')\n        identity=id(v)\n        if identity in active:raise ValueError('cyclic value')\n        active.add(identity)\n        try:\n            if kind is dict:\n                if any(type(k) is not str for k in v):raise ValueError('string mapping keys required')\n                result=tuple((k,freeze(v[k])) for k in sorted(v))\n            else:result=tuple(freeze(item) for item in v)\n            return (kind.__name__,result)\n        finally:active.remove(identity)\n    return freeze(value)\n"
+    },
+    "negative_files": {
+      "task.py": "def snapshot(value):\n    active=set()\n    def freeze(v):\n        kind=type(v)\n        if kind in (str,int,bool,type(None)):return (kind.__name__,v)\n        if kind not in (list,tuple,dict):raise ValueError('unsupported key value')\n        identity=id(v)\n        if identity in active:raise ValueError('cyclic value')\n        active.add(identity)\n        try:\n            if kind is dict:\n                if any(type(k) is not str for k in v):raise ValueError('string mapping keys required')\n                result=tuple((k,freeze(v[k])) for k in sorted(v))\n            else:result=tuple(freeze(item) for item in v)\n            return (kind.__name__,result)\n        finally:active.remove(identity)\n    return ('shallow',tuple(value.items())) if type(value) is dict else freeze(value)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现snapshot(value)，为仅含精确str/int/bool/None/list/tuple/dict的配置返回递归不可变tuple快照；每层为(type.__name__,payload)，list/tuple payload为子快照tuple，dict只许字符串键并按键排序为(key,快照)tuple。保留True与1、list与tuple区别；拒绝其他类型及循环ValueError，但共享且无环引用合法。不改输入、不保存可变引用、不用repr或unsafe_hash。平台真实frozen dataclass先复现嵌套可变及hash失败，再验证缓存键在原配置变更后稳定且新快照不同。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实CPython dataclass、字典hash缓存、嵌套修改和类型边界；闭合配置域，不承诺任意对象序列化、跨进程稳定hash或弱引用LRU所有权。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 20,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,copy,dataclasses\nsys.path.insert(0,os.getcwd());import task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\n@dataclasses.dataclass(frozen=True)\nclass Frozen:\n config:dict\nsource={'limits':[1,2],'enabled':True,'nested':{'zones':('a','b')}};wrapped=Frozen(source)\ntry:hash(wrapped)\nexcept TypeError:pass\nelse:raise AssertionError('fixture frozen nested dict unexpectedly hashable')\nsource['limits'].append(3);assert wrapped.config['limits']==[1,2,3]\nprint('NATIVE_FROZEN_DATACLASS_NESTED_MUTATION_AND_HASH_FAILURE_REPRODUCED',flush=True)\nprint('STUDENT_OPERATION_ENTERED:deep_snapshot_stable_hash_and_explicit_equality',flush=True)\ntry:\n before=copy.deepcopy(source);key=task.snapshot(wrapped.config);h=hash(key);cache={key:'first'}\n assert source==before\n clone={'nested':{'zones':('a','b')},'enabled':True,'limits':[1,2,3]}\n assert task.snapshot(clone)==key and hash(task.snapshot(clone))==h and cache[task.snapshot(clone)]=='first'\n source['limits'][0]=99;source['nested']['zones']=('changed',)\n assert hash(key)==h and cache[key]=='first' and task.snapshot(source)!=key\n assert task.snapshot(True)!=task.snapshot(1) and task.snapshot(False)!=task.snapshot(0)\n assert task.snapshot([1,2])!=task.snapshot((1,2))\n shared=[1];assert task.snapshot({'a':shared,'b':shared})==task.snapshot({'a':[1],'b':[1]})\n cycle=[];cycle.append(cycle)\n class Foreign:\n  def __repr__(self):raise AssertionError('must not serialize arbitrary objects')\n for bad in (cycle,{1:'bad'},float('nan'),1.5,{1,2},Foreign()):\n  try:task.snapshot(bad)\n  except ValueError:pass\n  else:raise AssertionError('unsupported or cyclic key value accepted')\n assert task.snapshot({'valid':None})==('dict',(('valid',('NoneType',None)),))\nexcept Exception as error:raise AssertionError('student immutable snapshot key contract failed') from error\nprint('NATIVE_STABLE_SNAPSHOT_DICT_ORDER_TYPE_IDENTITY_ALIAS_AND_CYCLE_BOUNDARIES',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "python"
+    ]
+  }
+]

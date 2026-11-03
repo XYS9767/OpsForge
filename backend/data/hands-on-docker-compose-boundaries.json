@@ -1,0 +1,222 @@
+[
+  {
+    "id": "curated-docker-compose-include-path-model",
+    "module": "docker",
+    "category": "Docker / 容器",
+    "version": 1,
+    "type": "code",
+    "title": "修复include项目目录：每个团队读取自己的配置来源",
+    "answer": "### compose.yaml\n```yaml\ninclude:\n  - teams/alpha/compose.yaml\n  - teams/beta/compose.yaml\n```\n\n将include的project_directory错误指定到根目录，会让两个团队复用根runtime.env和根config/app.cfg。短格式以被包含文件所在目录作为项目目录；全局变量优先级与相对路径所有权是两件事。\n\n原理补充：\n每个include文件有自身项目目录；相对绑定挂载和env_file据此解析。全局插值环境可覆盖子项目默认.env。此配置题不是既有L5多团队运行验收项目的替代。",
+    "topic": "Compose include独立项目目录与相对路径",
+    "language": "configuration",
+    "level": 3,
+    "review_status": "reviewed",
+    "has_answer": true,
+    "files": {
+      "compose.yaml": "include:\n  - path: teams/alpha/compose.yaml\n    project_directory: .\n  - path: teams/beta/compose.yaml\n    project_directory: .\n",
+      ".env": "IMAGE_TAG=root-shadow\n",
+      "runtime.env": "TEAM=root-shadow\n",
+      "config/app.cfg": "root-shadow-only\n",
+      "teams/alpha/compose.yaml": "services:\n  alpha:\n    image: \"registry.example.invalid/app:${IMAGE_TAG:?tag required}\"\n    env_file: runtime.env\n    volumes: [./config/app.cfg:/app/config:ro]\n",
+      "teams/alpha/.env": "IMAGE_TAG=alpha-local\n",
+      "teams/alpha/runtime.env": "TEAM=alpha\n",
+      "teams/alpha/config/app.cfg": "owned-by=alpha\n",
+      "teams/beta/compose.yaml": "services:\n  beta:\n    image: \"registry.example.invalid/app:${IMAGE_TAG:?tag required}\"\n    env_file: runtime.env\n    volumes: [./config/app.cfg:/app/config:ro]\n",
+      "teams/beta/.env": "IMAGE_TAG=beta-local\n",
+      "teams/beta/runtime.env": "TEAM=beta\n",
+      "teams/beta/config/app.cfg": "owned-by=beta\n"
+    },
+    "solution_files": {
+      "compose.yaml": "include:\n  - teams/alpha/compose.yaml\n  - teams/beta/compose.yaml\n"
+    },
+    "negative_files": {
+      "compose.yaml": "include:\n  - path: teams/alpha/compose.yaml\n    project_directory: .\n  - path: teams/beta/compose.yaml\n    project_directory: .\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "docker-compose"
+        ],
+        "features": [
+          "docker-compose:v5.1"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,pathlib,subprocess,hashlib,yaml\nroot=pathlib.Path.cwd()\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n    keys=set()\n    for k,v in node.value:\n        if k.tag=='tag:yaml.org,2002:merge':continue\n        key=loader.construct_object(k,deep=deep)\n        assert isinstance(key,str) and key not in keys,'duplicate/nonstring YAML key'\n        keys.add(key)\n    loader.flatten_mapping(node)\n    return yaml.SafeLoader.construct_mapping(loader,node,deep=deep)\ndef tagged(loader,node):\n    if isinstance(node,yaml.SequenceNode):return loader.construct_sequence(node,deep=True)\n    if isinstance(node,yaml.MappingNode):return mapping(loader,node,True)\n    return loader.construct_scalar(node)\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\nStrict.add_constructor('!override',tagged);Strict.add_constructor('!reset',tagged)\ndef parse(name,allow_runtime_env=False):\n    p=root/name;assert p.is_file() and not p.is_symlink() and p.stat().st_size<32768\n    value=yaml.load(p.read_text(),Loader=Strict);assert isinstance(value,dict)\n    assert set(value)<={'services','networks','volumes','name'},'no include/extends/build or unrelated input source'\n    for service in value.get('services',{}).values():\n        assert isinstance(service,dict) and set(service)<={'image','command','ports','environment','volumes','networks','env_file','depends_on','profiles','healthcheck'},'only the stated model fields are permitted'\n        if 'env_file' in service:\n            assert allow_runtime_env,'environment source is not part of this task'\n            entries=service['env_file'] if isinstance(service['env_file'],list) else [service['env_file']]\n            assert len(entries)==1\n            entry=entries[0]\n            assert entry=='runtime.env' or (isinstance(entry,dict) and set(entry)<={'path','required'} and entry.get('path')=='runtime.env' and entry.get('required',True) is True),'external environment sources are forbidden'\n    return value\ndef native(files,flags=(),variables=None,envfile=None,project='opsforge-model'):\n    env={k:v for k,v in os.environ.items() if not k.upper().startswith(('DOCKER_','COMPOSE_')) and k not in ('APP_PORT','IMAGE_TAG','APP_LOG_LEVEL','APP_TOKEN','LOG_LEVEL','EMPTY')}\n    env.update(DOCKER_HOST='tcp://127.0.0.1:1',COMPOSE_DISABLE_ENV_FILE='true')\n    env.update(variables or {})\n    args=['docker-compose','--project-name',project,'--project-directory',str(root),*flags]\n    if envfile:args+=['--env-file',envfile]\n    for name in files:args+=['-f',name]\n    result=subprocess.run([*args,'config','--format','json'],cwd=root,env=env,capture_output=True,text=True,timeout=5)\n    assert result.returncode==0,result.stderr\n    return json.loads(result.stdout)\n\nimport secrets\ndef local_path(value,allowed):\n    assert isinstance(value,str) and value and not any(c in value for c in ('\\\\',':','$','\\x00')),'only literal relative fixture paths'\n    path=pathlib.PurePosixPath(value)\n    assert not path.is_absolute() and '..' not in path.parts,'path traversal or absolute source'\n    normalized=str(path)\n    assert normalized in allowed,'source outside the fixture allowlist'\n    resolved=(root/normalized).resolve()\n    assert resolved==root.resolve() or root.resolve() in resolved.parents,'source escapes workspace'\n    return normalized\ncandidate=root/'compose.yaml';assert candidate.is_file() and not candidate.is_symlink() and candidate.stat().st_size<32768\nconfig=yaml.load(candidate.read_text(),Loader=Strict);assert isinstance(config,dict) and set(config)=={'include'}\nentries=config['include'];assert isinstance(entries,list) and len(entries)==2\npaths=[]\nfor entry in entries:\n    if isinstance(entry,str):path=entry\n    else:\n        assert isinstance(entry,dict) and set(entry)<={'path','project_directory','env_file'}\n        path=entry['path']\n        if isinstance(path,list):assert len(path)==1;path=path[0]\n        if 'project_directory' in entry:local_path(entry['project_directory'], ('.','teams/alpha','teams/beta'))\n        if 'env_file' in entry:\n            values=entry['env_file'] if isinstance(entry['env_file'],list) else [entry['env_file']]\n            assert len(values)==1;local_path(values[0], ('.env','teams/alpha/.env','teams/beta/.env'))\n    paths.append(local_path(path, ('teams/alpha/compose.yaml','teams/beta/compose.yaml')))\nassert set(paths)=={'teams/alpha/compose.yaml','teams/beta/compose.yaml'}\nhashes={'.env': 'bdc795ef2025c1bb38c3c632e26247356fa3fd5063681bec8d6cf46b694e37dc', 'runtime.env': 'dcfd66c63d997008291b87fa7ad163d2b38bc94a89f27b03daebc84eca2ceacc', 'config/app.cfg': '5f4d4d48aa45e09015e7ef99870198088e3279f66658bf6302188d981bfbd4f9', 'teams/alpha/compose.yaml': 'e7d13914f9227ea77bbb11e228ae313e777667e5721f1fa71396fd000f16a569', 'teams/alpha/.env': '2be51b754b2a1589bb38d8763f9d9e753d508e38f630c4a36fd55bad2e6c61fb', 'teams/alpha/runtime.env': 'd3527c258678f9548fbf3a46be2379ff4ac33a80fef033465db0fbe5fa1ad168', 'teams/alpha/config/app.cfg': 'fde1f7744ff03b678331a9a05cadd1809a31bcc5177852c69165764c8af4c523', 'teams/beta/compose.yaml': 'f1cd6c4dcb7363ea91bd8250f1cd9a8fead029014e0e9a537cecb7006a28fb4c', 'teams/beta/.env': '9bc3439dc4439a4fa356d1df432b47586d9a0d15ac6770c3263737935ebb3fac', 'teams/beta/runtime.env': '9950d0c7724e8d18df2676a67c00eb766d1abf792e5786696dc2bf8558d1522e', 'teams/beta/config/app.cfg': '3d349f273d217180fd8d69b54fa9d78a61151438e9afda672b18dd5e7b7f12b2'}\nfor name,digest in hashes.items():assert hashlib.sha256((root/name).read_bytes()).hexdigest()==digest\noriginal=candidate.read_bytes()\nfor global_tag in (None,'global-'+secrets.token_hex(4)):\n    variables={} if global_tag is None else {'IMAGE_TAG':global_tag}\n    model=native(['compose.yaml'],variables=variables);assert set(model['services'])=={'alpha','beta'}\n    for team,service in model['services'].items():\n        assert service['image']=='registry.example.invalid/app:'+(global_tag or team+'-local')\n        assert service['environment']=={'TEAM':team}\n        mounts=service['volumes'];assert len(mounts)==1\n        mount=mounts[0];assert mount['type']=='bind' and mount['target']=='/app/config' and mount['read_only'] is True\n        assert pathlib.Path(mount['source']).resolve()==(root/'teams'/team/'config/app.cfg').resolve(),'include paths must resolve in the owning subproject'\n        assert not service.get('ports')\n    assert candidate.read_bytes()==original\n    for name,digest in hashes.items():assert hashlib.sha256((root/name).read_bytes()).hexdigest()==digest\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "body": "## 环境与初始材料\n平台提供普通用户的独立Docker Compose 5.1 CLI和题给文件。仅使用config渲染与校验，不连接Docker Engine，不拉镜像、不创建容器、网络或卷。全部镜像名仅作为模型数据。YAML映射键须唯一且为字符串，每个提交文件小于32KiB；仅编辑指定产物，其他材料只读。本题允许题定include及子项目已有env_file；禁止extends、build和任何题外/远程来源。\n\n## 操作任务\n只编辑根compose.yaml的include列表，加载teams/alpha/compose.yaml和teams/beta/compose.yaml各一次。两个子项目的相对挂载config/app.cfg、runtime.env与默认.env都应归属于各自团队目录；默认镜像标签分别alpha-local和beta-local，运行环境TEAM分别alpha和beta。显式传入全局IMAGE_TAG时，两镜像都应采用该值，但TEAM和挂载来源不能改变。禁止复制或重写子文件、添加根服务来掩盖路径错误。可使用短格式，或等价的path/project_directory/env_file长格式；路径必须限于题给的相对目录与文件。\n\n## 提交产物\n`compose.yaml`。\n\n## 验收方法\n实际Compose5.1 config加载两个独立子模型；分别在无全局IMAGE_TAG和存在全局覆盖时核对镜像、运行环境、绝对挂载源与只读标志。根目录专门放有同名诱饵配置，必须不被误用。全部原材料和提交文件保持不变。这里只证明模型来源解析，不证明真实容器读取或共享网络访问。\n\n模型通过不等于容器已运行；真实网络连通、健康检查执行和数据持久化不在本题验收范围。\n等价的 ./ 相对路径写法允许；拒绝绝对路径、上级目录跳转、变量化路径与题外文件。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "只编辑根compose.yaml的include列表，加载teams/alpha/compose.yaml和teams/beta/compose.yaml各一次。两个子项目的相对挂载config/app.cfg、runtime.env与默认.env都应归属于各自团队目录；默认镜像标签分别alpha-local和beta-local，运行环境TEAM分别alpha和beta。显式传入全局IMAGE_TAG时，两镜像都应采用该值，但TEAM和挂载来源不能改变。禁止复制或重写子文件、添加根服务来掩盖路径错误。可使用短格式，或等价的path/project_directory/env_file长格式；路径必须限于题给的相对目录与文件。",
+      "deliverables": [
+        "compose.yaml"
+      ],
+      "verification": "实际Compose5.1 config加载两个独立子模型；分别在无全局IMAGE_TAG和存在全局覆盖时核对镜像、运行环境、绝对挂载源与只读标志。根目录专门放有同名诱饵配置，必须不被误用。全部原材料和提交文件保持不变。这里只证明模型来源解析，不证明真实容器读取或共享网络访问。 接受等价 ./ 路径，拒绝路径越界。",
+      "failure_examples": [
+        "将include的project_directory错误指定到根目录，会让两个团队复用根runtime.env和根config/app.cfg。短格式以被包含文件所在目录作为项目目录；全局变量优先级与相对路径所有权是两件事。"
+      ]
+    },
+    "case_signature": "curated-docker-compose-include-path-model|Compose include独立项目目录与相对路径",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "references": [
+      "https://docs.docker.com/reference/compose-file/include/"
+    ],
+    "rubric": [
+      "真实CLI接受配置并得到规定的最终模型",
+      "动态材料与边界组合正确",
+      "只读原材料不变且不访问Engine"
+    ],
+    "source": "OpsForge原创Compose配置工件；既有curated-advanced-docker-020真实运行项目继续保留"
+  },
+  {
+    "id": "curated-docker-runtime-033",
+    "module": "docker",
+    "category": "Docker / 容器",
+    "level": 2,
+    "topic": "Compose外部资源身份与项目命名边界",
+    "title": "交付跨项目稳定外部资源引用与项目专属缓存",
+    "answer": "### compose.yaml\n```yaml\nservices:\n  db:\n    image: postgres:16-alpine\n    volumes: [dbdata:/var/lib/postgresql/data]\n    networks: [shared]\n  worker:\n    image: busybox:1.36\n    volumes: [cache:/cache]\n    networks: [default]\nvolumes:\n  dbdata:\n    external: true\n    name: \"${DB_VOLUME:?DB_VOLUME required}\"\n  cache: {}\nnetworks:\n  shared:\n    external: true\n    name: \"${SHARED_NETWORK:?SHARED_NETWORK required}\"\n  default: {}\n```\n\n仅name固定而没有external:true，仍是Compose管理的资源；external声明与稳定名称必须同时具备。项目专属cache/default则应保留自动项目命名。外部资源的实际创建与存续应由运维另行核对，本题不连接Engine。\n\n原理补充：\n项目名参与默认资源命名与隔离，改变目录、-p或相关变量可能产生另一套网络和卷。明确固定项目标识并检查实际资源名；外部或显式命名卷有不同规则，不能把同一个逻辑volume键当成同一实际卷。",
+    "type": "code",
+    "source": "OpsForge 容器运行管理补充题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "docker-runtime-completion-20261021",
+    "body": "## 环境与初始材料\n平台提供普通用户的独立Docker Compose 5.1 CLI和题给文件。仅使用config渲染与校验，不连接Docker Engine，不拉镜像、不创建容器、网络或卷。全部镜像名仅作为模型数据。YAML映射键须唯一且为字符串，每个提交文件小于32KiB；仅编辑指定产物，其他材料只读。禁止include、extends、build、外部env_file等额外来源。\n\n## 操作任务\n只编辑compose.yaml。db使用已由外部平台管理的DB_VOLUME具名卷和SHARED_NETWORK网络，逻辑名分别dbdata/shared，必须external:true且真实名称来自两个必填变量；不要配置外部资源driver或driver_opts。worker的cache卷与default网络应保持项目专属，随项目名改变，不能误标external或固定为另一项目名称。保留两服务镜像、唯一挂载和唯一网络，不发布端口。\n\n## 提交产物\n`compose.yaml`。\n\n## 验收方法\n用相同动态外部资源名分别渲染blue-teaching、green-teaching项目；真实模型应显示外部名称不变、external布尔值为true，而内部cache/default名称按项目变化。核对每项服务引用与挂载。config不能确认外部资源真实存在，不能作为down删除行为或数据持久化的实测证明。\n\n模型通过不等于容器已运行；真实网络连通、健康检查执行和数据持久化不在本题验收范围。\n两个资源变量分别缺失或为空时，config都必须拒绝，不能静默采用逻辑名或默认资源名。\n",
+    "rubric": [
+      "真实CLI接受配置并得到规定的最终模型",
+      "动态材料与边界组合正确",
+      "只读原材料不变且不访问Engine"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.docker.com/reference/compose-file/volumes/"
+    ],
+    "language": "configuration",
+    "files": {
+      "compose.yaml": "services:\n  db:\n    image: postgres:16-alpine\n    volumes: [dbdata:/var/lib/postgresql/data]\n    networks: [shared]\n  worker:\n    image: busybox:1.36\n    volumes: [cache:/cache]\n    networks: [default]\nvolumes:\n  dbdata:\n    external: false\n    name: \"${DB_VOLUME:?DB_VOLUME required}\"\n  cache: {}\nnetworks:\n  shared:\n    external: false\n    name: \"${SHARED_NETWORK:?SHARED_NETWORK required}\"\n  default: {}\n"
+    },
+    "solution_files": {
+      "compose.yaml": "services:\n  db:\n    image: postgres:16-alpine\n    volumes: [dbdata:/var/lib/postgresql/data]\n    networks: [shared]\n  worker:\n    image: busybox:1.36\n    volumes: [cache:/cache]\n    networks: [default]\nvolumes:\n  dbdata:\n    external: true\n    name: \"${DB_VOLUME:?DB_VOLUME required}\"\n  cache: {}\nnetworks:\n  shared:\n    external: true\n    name: \"${SHARED_NETWORK:?SHARED_NETWORK required}\"\n  default: {}\n"
+    },
+    "negative_files": {
+      "compose.yaml": "services:\n  db:\n    image: postgres:16-alpine\n    volumes: [dbdata:/var/lib/postgresql/data]\n    networks: [shared]\n  worker:\n    image: busybox:1.36\n    volumes: [cache:/cache]\n    networks: [default]\nvolumes:\n  dbdata:\n    external: false\n    name: \"${DB_VOLUME:?DB_VOLUME required}\"\n  cache: {}\nnetworks:\n  shared:\n    external: true\n    name: \"${SHARED_NETWORK:?SHARED_NETWORK required}\"\n  default: {}\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "docker-compose"
+        ],
+        "features": [
+          "docker-compose:v5.1"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,pathlib,subprocess,hashlib,yaml\nroot=pathlib.Path.cwd()\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n    keys=set()\n    for k,v in node.value:\n        if k.tag=='tag:yaml.org,2002:merge':continue\n        key=loader.construct_object(k,deep=deep)\n        assert isinstance(key,str) and key not in keys,'duplicate/nonstring YAML key'\n        keys.add(key)\n    loader.flatten_mapping(node)\n    return yaml.SafeLoader.construct_mapping(loader,node,deep=deep)\ndef tagged(loader,node):\n    if isinstance(node,yaml.SequenceNode):return loader.construct_sequence(node,deep=True)\n    if isinstance(node,yaml.MappingNode):return mapping(loader,node,True)\n    return loader.construct_scalar(node)\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\nStrict.add_constructor('!override',tagged);Strict.add_constructor('!reset',tagged)\ndef parse(name,allow_runtime_env=False):\n    p=root/name;assert p.is_file() and not p.is_symlink() and p.stat().st_size<32768\n    value=yaml.load(p.read_text(),Loader=Strict);assert isinstance(value,dict)\n    assert set(value)<={'services','networks','volumes','name'},'no include/extends/build or unrelated input source'\n    for service in value.get('services',{}).values():\n        assert isinstance(service,dict) and set(service)<={'image','command','ports','environment','volumes','networks','env_file','depends_on','profiles','healthcheck'},'only the stated model fields are permitted'\n        if 'env_file' in service:\n            assert allow_runtime_env,'environment source is not part of this task'\n            entries=service['env_file'] if isinstance(service['env_file'],list) else [service['env_file']]\n            assert len(entries)==1\n            entry=entries[0]\n            assert entry=='runtime.env' or (isinstance(entry,dict) and set(entry)<={'path','required'} and entry.get('path')=='runtime.env' and entry.get('required',True) is True),'external environment sources are forbidden'\n    return value\ndef native(files,flags=(),variables=None,envfile=None,project='opsforge-model'):\n    env={k:v for k,v in os.environ.items() if not k.upper().startswith(('DOCKER_','COMPOSE_')) and k not in ('APP_PORT','IMAGE_TAG','APP_LOG_LEVEL','APP_TOKEN','LOG_LEVEL','EMPTY','DB_VOLUME','SHARED_NETWORK')}\n    env.update(DOCKER_HOST='tcp://127.0.0.1:1',COMPOSE_DISABLE_ENV_FILE='true')\n    env.update(variables or {})\n    args=['docker-compose','--project-name',project,'--project-directory',str(root),*flags]\n    if envfile:args+=['--env-file',envfile]\n    for name in files:args+=['-f',name]\n    result=subprocess.run([*args,'config','--format','json'],cwd=root,env=env,capture_output=True,text=True,timeout=5)\n    assert result.returncode==0,result.stderr\n    return json.loads(result.stdout)\n\nimport secrets\ncandidate=parse('compose.yaml');assert set(candidate)=={'services','volumes','networks'}\nassert set(candidate['services'])=={'db','worker'}\nassert all(set(s)<={'image','volumes','networks'} for s in candidate['services'].values())\noriginal=(root/'compose.yaml').read_bytes()\nvolume='tenant-store-'+secrets.token_hex(4);network='tenant-net-'+secrets.token_hex(4)\nfor project in ('blue-teaching','green-teaching'):\n    model=native(['compose.yaml'],variables={'DB_VOLUME':volume,'SHARED_NETWORK':network},project=project)\n    assert model['name']==project and set(model['services'])=={'db','worker'}\n    assert set(model['volumes'])=={'dbdata','cache'} and set(model['networks'])=={'shared','default'}\n    external=model['volumes']['dbdata'];assert external['name']==volume and external['external'] is True\n    assert set(external)<={'name','external'}\n    local=model['volumes']['cache'];assert local['name']==project+'_cache' and not local.get('external',False)\n    shared=model['networks']['shared'];assert shared['name']==network and shared['external'] is True\n    assert not shared.get('driver') and not shared.get('driver_opts')\n    default=model['networks']['default'];assert default['name']==project+'_default' and not default.get('external',False)\n    for name,source,target,net,image in [('db','dbdata','/var/lib/postgresql/data','shared','postgres:16-alpine'),('worker','cache','/cache','default','busybox:1.36')]:\n        service=model['services'][name];assert service['image']==image and set(service['networks'])=={net}\n        assert not service.get('ports')\n        mounts=service['volumes'];assert len(mounts)==1 and mounts[0]['type']=='volume' and mounts[0]['source']==source and mounts[0]['target']==target\nassert (root/'compose.yaml').read_bytes()==original\n\n# Verify each mandatory variable independently, absent and explicitly empty.\nfor missing in ('DB_VOLUME','SHARED_NETWORK'):\n    for empty in (False,True):\n        env={k:v for k,v in os.environ.items() if not k.upper().startswith(('DOCKER_','COMPOSE_')) and k not in ('DB_VOLUME','SHARED_NETWORK')}\n        env.update(DOCKER_HOST='tcp://127.0.0.1:1',COMPOSE_DISABLE_ENV_FILE='true')\n        env.update(DB_VOLUME=volume,SHARED_NETWORK=network)\n        if empty:env[missing]=''\n        else:env.pop(missing)\n        proc=subprocess.run(['docker-compose','--project-name','blue-teaching','--project-directory',str(root),'-f','compose.yaml','config','--format','json'],cwd=root,env=env,capture_output=True,text=True,timeout=5)\n        assert proc.returncode!=0,'missing/empty mandatory variable must not silently use a fallback resource name: '+missing\nassert (root/'compose.yaml').read_bytes()==original\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "只编辑compose.yaml。db使用已由外部平台管理的DB_VOLUME具名卷和SHARED_NETWORK网络，逻辑名分别dbdata/shared，必须external:true且真实名称来自两个必填变量；不要配置外部资源driver或driver_opts。worker的cache卷与default网络应保持项目专属，随项目名改变，不能误标external或固定为另一项目名称。保留两服务镜像、唯一挂载和唯一网络，不发布端口。",
+      "deliverables": [
+        "compose.yaml"
+      ],
+      "verification": "用相同动态外部资源名分别渲染blue-teaching、green-teaching项目；真实模型应显示外部名称不变、external布尔值为true，而内部cache/default名称按项目变化。核对每项服务引用与挂载。config不能确认外部资源真实存在，不能作为down删除行为或数据持久化的实测证明。 分别验收两个必填变量缺失和空值四个失败条件。",
+      "failure_examples": [
+        "仅name固定而没有external:true，仍是Compose管理的资源；external声明与稳定名称必须同时具备。项目专属cache/default则应保留自动项目命名。外部资源的实际创建与存续应由运维另行核对，本题不连接Engine。"
+      ]
+    },
+    "case_signature": "curated-docker-runtime-033|Compose外部资源身份与项目命名边界",
+    "conversion": {
+      "original_id": "curated-docker-runtime-033",
+      "original_title": "Compose project name 对默认网络和具名卷名称有什么影响？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-docker-runtime-010",
+    "module": "docker",
+    "category": "Docker / 容器",
+    "level": 2,
+    "topic": "Compose健康检查覆盖与独立时间预算",
+    "title": "恢复被继承禁用的健康策略并区分启动宽限与探测超时",
+    "answer": "### health.override.yaml\n```yaml\nservices:\n  app:\n    healthcheck:\n      disable: false\n      test: [CMD, python3, healthcheck.py, --endpoint, \"http://127.0.0.1:8080/ready\"]\n      interval: 30s\n      timeout: 2s\n      start_period: 90s\n      start_interval: 5s\n      retries: 3\n```\n\n仅添加test或超时不会自动撤销继承的disable:true。start_period用于启动宽限，timeout限制单次探针；两者不能相互替代。模型配置正确后仍需在有Engine的独立环境验证冷启动和异常探针，本题不把这一步算作已完成。\n\n原理补充：\n启动宽限期用于容忍初始化阶段的探测失败，超时限制单次探测执行时间，间隔和重试次数决定判定节奏。过长宽限会延后发现失败，过短超时可能误判；用实际冷启动和依赖抖动验证设置。",
+    "type": "code",
+    "source": "OpsForge 容器运行管理补充题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "docker-runtime-completion-20261021",
+    "body": "## 环境与初始材料\n平台提供普通用户的独立Docker Compose 5.1 CLI和题给文件。仅使用config渲染与校验，不连接Docker Engine，不拉镜像、不创建容器、网络或卷。全部镜像名仅作为模型数据。YAML映射键须唯一且为字符串，每个提交文件小于32KiB；仅编辑指定产物，其他材料只读。禁止include、extends、build、外部env_file等额外来源。\n\n## 操作任务\n只编辑health.override.yaml的app.healthcheck，按base→override合并，保留镜像python:3.12-slim。恢复启用健康检查，命令完整替换为[CMD,python3,healthcheck.py,--endpoint,http://127.0.0.1:8080/ready]，不能残留--legacy。正常间隔30秒、单次超时2秒、启动宽限90秒、启动阶段间隔5秒、重试阈值3次。各时间作用独立，不能靠延长timeout代替启动宽限，也不能只修改test却继承disable:true。\n\n## 提交产物\n`health.override.yaml`。\n\n## 验收方法\n实际Compose config合并并检查disable状态、完整命令替换和四项规范化时长以及整型重试次数；90s和1m30s等价表示都应接受。错误例：删除override中的disable:false会继续继承禁用，即使命令与时间均正确也不合格。只验配置模型，不执行容器探针、不宣称真实启动90秒内就绪。\n\n模型通过不等于容器已运行；真实网络连通、健康检查执行和数据持久化不在本题验收范围。",
+    "rubric": [
+      "真实CLI接受配置并得到规定的最终模型",
+      "动态材料与边界组合正确",
+      "只读原材料不变且不访问Engine"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.docker.com/reference/compose-file/services/#healthcheck"
+    ],
+    "language": "configuration",
+    "files": {
+      "base.yaml": "services:\n  app:\n    image: python:3.12-slim\n    healthcheck:\n      disable: true\n      test: [CMD, python3, healthcheck.py, --legacy]\n      interval: 5s\n      timeout: 20s\n      start_period: 1s\n      retries: 1\n",
+      "health.override.yaml": "services:\n  app:\n    healthcheck:\n      timeout: 2s\n      start_period: 90s\n"
+    },
+    "solution_files": {
+      "health.override.yaml": "services:\n  app:\n    healthcheck:\n      disable: false\n      test: [CMD, python3, healthcheck.py, --endpoint, \"http://127.0.0.1:8080/ready\"]\n      interval: 30s\n      timeout: 2s\n      start_period: 90s\n      start_interval: 5s\n      retries: 3\n"
+    },
+    "negative_files": {
+      "health.override.yaml": "services:\n  app:\n    healthcheck:\n      test: [CMD, python3, healthcheck.py, --endpoint, \"http://127.0.0.1:8080/ready\"]\n      interval: 30s\n      timeout: 2s\n      start_period: 90s\n      start_interval: 5s\n      retries: 3\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "docker-compose"
+        ],
+        "features": [
+          "docker-compose:v5.1"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,pathlib,subprocess,hashlib,yaml\nroot=pathlib.Path.cwd()\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n    keys=set()\n    for k,v in node.value:\n        if k.tag=='tag:yaml.org,2002:merge':continue\n        key=loader.construct_object(k,deep=deep)\n        assert isinstance(key,str) and key not in keys,'duplicate/nonstring YAML key'\n        keys.add(key)\n    loader.flatten_mapping(node)\n    return yaml.SafeLoader.construct_mapping(loader,node,deep=deep)\ndef tagged(loader,node):\n    if isinstance(node,yaml.SequenceNode):return loader.construct_sequence(node,deep=True)\n    if isinstance(node,yaml.MappingNode):return mapping(loader,node,True)\n    return loader.construct_scalar(node)\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\nStrict.add_constructor('!override',tagged);Strict.add_constructor('!reset',tagged)\ndef parse(name,allow_runtime_env=False):\n    p=root/name;assert p.is_file() and not p.is_symlink() and p.stat().st_size<32768\n    value=yaml.load(p.read_text(),Loader=Strict);assert isinstance(value,dict)\n    assert set(value)<={'services','networks','volumes','name'},'no include/extends/build or unrelated input source'\n    for service in value.get('services',{}).values():\n        assert isinstance(service,dict) and set(service)<={'image','command','ports','environment','volumes','networks','env_file','depends_on','profiles','healthcheck'},'only the stated model fields are permitted'\n        if 'env_file' in service:\n            assert allow_runtime_env,'environment source is not part of this task'\n            entries=service['env_file'] if isinstance(service['env_file'],list) else [service['env_file']]\n            assert len(entries)==1\n            entry=entries[0]\n            assert entry=='runtime.env' or (isinstance(entry,dict) and set(entry)<={'path','required'} and entry.get('path')=='runtime.env' and entry.get('required',True) is True),'external environment sources are forbidden'\n    return value\ndef native(files,flags=(),variables=None,envfile=None,project='opsforge-model'):\n    env={k:v for k,v in os.environ.items() if not k.upper().startswith(('DOCKER_','COMPOSE_')) and k not in ('APP_PORT','IMAGE_TAG','APP_LOG_LEVEL','APP_TOKEN','LOG_LEVEL','EMPTY')}\n    env.update(DOCKER_HOST='tcp://127.0.0.1:1',COMPOSE_DISABLE_ENV_FILE='true')\n    env.update(variables or {})\n    args=['docker-compose','--project-name',project,'--project-directory',str(root),*flags]\n    if envfile:args+=['--env-file',envfile]\n    for name in files:args+=['-f',name]\n    result=subprocess.run([*args,'config','--format','json'],cwd=root,env=env,capture_output=True,text=True,timeout=5)\n    assert result.returncode==0,result.stderr\n    return json.loads(result.stdout)\n\ncandidate=parse('health.override.yaml');assert set(candidate)=={'services'} and set(candidate['services'])=={'app'}\nassert set(candidate['services']['app'])=={'healthcheck'}\nbase=root/'base.yaml';assert hashlib.sha256(base.read_bytes()).hexdigest()=='3daea4480823930285010c189611701c0b70e28b2ed9c804103a8665df1137d2'\noriginal=(root/'health.override.yaml').read_bytes()\nmodel=native(['base.yaml','health.override.yaml']);assert set(model['services'])=={'app'}\napp=model['services']['app'];assert app['image']=='python:3.12-slim'\nhealth=app['healthcheck'];assert health.get('disable',False) is False\nassert health['test']==['CMD','python3','healthcheck.py','--endpoint','http://127.0.0.1:8080/ready'],'the health command must replace, not append to, the legacy test'\nassert health['interval']=='30s' and health['timeout']=='2s' and health['start_period']=='1m30s' and health['start_interval']=='5s'\nassert type(health['retries']) is int and health['retries']==3\nassert not app.get('ports') and not app.get('volumes')\nassert hashlib.sha256(base.read_bytes()).hexdigest()=='3daea4480823930285010c189611701c0b70e28b2ed9c804103a8665df1137d2'\nassert (root/'health.override.yaml').read_bytes()==original\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "只编辑health.override.yaml的app.healthcheck，按base→override合并，保留镜像python:3.12-slim。恢复启用健康检查，命令完整替换为[CMD,python3,healthcheck.py,--endpoint,http://127.0.0.1:8080/ready]，不能残留--legacy。正常间隔30秒、单次超时2秒、启动宽限90秒、启动阶段间隔5秒、重试阈值3次。各时间作用独立，不能靠延长timeout代替启动宽限，也不能只修改test却继承disable:true。",
+      "deliverables": [
+        "health.override.yaml"
+      ],
+      "verification": "实际Compose config合并并检查disable状态、完整命令替换和四项规范化时长以及整型重试次数；90s和1m30s等价表示都应接受。错误例：删除override中的disable:false会继续继承禁用，即使命令与时间均正确也不合格。只验配置模型，不执行容器探针、不宣称真实启动90秒内就绪。",
+      "failure_examples": [
+        "仅添加test或超时不会自动撤销继承的disable:true。start_period用于启动宽限，timeout限制单次探针；两者不能相互替代。模型配置正确后仍需在有Engine的独立环境验证冷启动和异常探针，本题不把这一步算作已完成。"
+      ]
+    },
+    "case_signature": "curated-docker-runtime-010|Compose健康检查覆盖与独立时间预算",
+    "conversion": {
+      "original_id": "curated-docker-runtime-010",
+      "original_title": "健康检查的启动宽限期与检查超时分别解决什么问题？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

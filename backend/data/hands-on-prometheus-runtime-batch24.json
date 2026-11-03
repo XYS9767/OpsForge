@@ -1,0 +1,97 @@
+[
+  {
+    "id": "curated-advanced-prometheus-004",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 4,
+    "topic": "TSDB存储与远端传输",
+    "title": "分离历史回填证据与当前告警，并验证选择性恢复不重放历史通知",
+    "answer": "```yaml\ngroups:\n- name: present-health\n  interval: 500ms\n  rules:\n  - alert: CurrentQueueHigh\n    expr: queue_depth{job=\"queue\"} > 5\n    for: 1s\n    labels:\n      severity: warning\n```\n```promql\nsum by(service) (queue_depth{job=\"queue\"})\n```\n规则使用当前评估时刻的值，告警状态不从历史高值自动重放。历史API查询通过评估时间参数选择过去，表达式本身不需要offset。保留当前恢复语义，确保b/f解除时不会误清仍故障的c。\n\n原题原理：规则通常按评估时刻读取当时可用数据，迟到写入改变历史查询并不自动重放过去的规则状态机。应区分数据到达、样本时间戳和规则评估时间，核对允许乱序窗口及相关资源成本。需要历史审计时建立独立回放流程，不能把补图当通知已完整。验收迟到样本、评估跳过和历史回放结果，回放告警必须标明历史性质，避免触发真实值班升级。恢复时先保障实时链路，再报告缺失通知窗口；放大乱序时间窗口也不能追溯所有丢失样本或自动恢复过去pending状态。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/storage/#backfilling-from-openmetrics-format",
+      "https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/",
+      "https://prometheus.io/docs/prometheus/latest/querying/api/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: present-health\n  interval: 500ms\n  rules:\n  - alert: CurrentQueueHigh\n    expr: queue_depth{job=\"queue\"} offset 1d > 5\n    for: 1s\n    labels:\n      severity: warning\n",
+      "history.promql": "sum by(service) (queue_depth{job=\"queue\"})\n",
+      "scenario.json": "{\n  \"past\": {\n    \"a\": 20,\n    \"b\": 0,\n    \"c\": 20,\n    \"d\": 0,\n    \"e\": 20,\n    \"f\": 0\n  },\n  \"current\": {\n    \"a\": 0,\n    \"b\": 12,\n    \"c\": 12,\n    \"d\": 0,\n    \"e\": 5,\n    \"f\": 6\n  },\n  \"threshold\": \"strictly greater than 5\",\n  \"recovery1\": {\n    \"b\": 0,\n    \"f\": 5\n  },\n  \"recovery2\": {\n    \"c\": 0\n  }\n}\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: present-health\n  interval: 500ms\n  rules:\n  - alert: CurrentQueueHigh\n    expr: queue_depth{job=\"queue\"} > 5\n    for: 1s\n    labels:\n      severity: warning\n",
+      "history.promql": "sum by(service) (queue_depth{job=\"queue\"})\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: present-health\n  interval: 500ms\n  rules:\n  - alert: CurrentQueueHigh\n    expr: max_over_time(queue_depth{job=\"queue\"}[25h]) > 5\n    for: 1s\n    labels:\n      severity: warning\n",
+      "history.promql": "sum by(service) (queue_depth{job=\"queue\"})\n"
+    },
+    "body": "## 环境与初始材料\n平台用原生promtool生成约一天前的真实TSDB数据块，再启动隔离Prometheus抓取当前queue_depth。scenario.json给出六个服务的历史/当前值，包含历史高当前低、历史低当前高、两者都高/低，以及当前恰等于阈值5和刚超过阈值6。所有材料均为合成数据，不导入生产数据、不更改系统时钟。\n\n## 操作任务\n修复rules.yaml：CurrentQueueHigh应依据当前queue_depth{job=\"queue\"}严格大于5持续1秒告警，保留service、job、instance和severity=warning。不要为补发一天前的告警添加offset 1d，也不要把25小时最高值当当前故障。保留present-health组每500ms评估。\n交付history.promql，按service输出队列值，只保留service标签。该表达式在指定历史评估时刻应展示历史数据，在当前评估时刻应展示当前值，不得写固定offset或固定值。平台随后恢复b、f但保持c故障，最后恢复c，告警须分别解除而不是一次性忽略全部服务。\n\n## 产物\n提交rules.yaml和history.promql。历史查询是事故证据查询，当前告警是实时状态机，两者不混用。题目不要求或允许发送真实外部通知；验收读取原生Prometheus告警状态。\n\n## 验收方法\n运行python3 checks/check.py。真实导入历史OpenMetrics为TSDB块，原生API在过去与现在分别核对六服务完整标签和值。当前仅b/c/f可以firing，历史曾高的a/e不能因回填而重放告警；5不触发而6触发。恢复b/f后仅c仍firing，恢复c后全部解除，历史查询证据仍保留。offset 1d和长窗口历史最大值两种错误都失败；等价表达式可通过原生行为检查。\n\n## 边界\n回填历史样本恢复了可查询数据，不会自动把规则评估时间倒回过去，也不会补发当时通知。若需历史事故复盘，应独立分析历史时间轴并标记为复盘结果，不向实时通知链路伪造事故。这里只验证小规模本地数据与告警状态，不宣称远端通知、生产回填或全部迟到数据问题已解决。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-historical-blocks-and-current-alerts",
+      "deliverables": [
+        "rules.yaml",
+        "history.promql"
+      ],
+      "operation": "分离历史证据查询与当前告警状态并验证逐服务恢复",
+      "verification": "原生TSDB历史查询、六服务四象限、阈值边界和实际告警生命周期",
+      "capability_gap": [
+        "未发送真实通知",
+        "非生产历史回填规模验收"
+      ],
+      "failure_examples": [
+        "用offset重放历史故障",
+        "长窗口历史峰值误当当前故障",
+        "阈值等于5被触发",
+        "一次性清掉仍故障的其他服务"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus",
+          "promtool"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "prometheus:v3.5",
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1s','evaluation_interval':'500ms'},'scrape_configs':[JOB],'rule_files':[str(root/'live-rules.yaml')]}\n (root/'live-rules.yaml').write_text(yaml.safe_dump(RULES),encoding='utf-8')\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\n\nRULES=yaml.load(pathlib.Path('rules.yaml').read_text(encoding='utf-8'),Loader=Strict)\nassert isinstance(RULES,dict) and set(RULES)=={'groups'} and len(RULES['groups'])==1\ng=RULES['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']=='present-health' and g['interval']=='500ms' and len(g['rules'])==1\nr=g['rules'][0];assert set(r)=={'alert','expr','for','labels'} and r['alert']=='CurrentQueueHigh' and r['for']=='1s' and r['labels']=={'severity':'warning'} and isinstance(r['expr'],str) and 0<len(r['expr'])<=1000\nexpr=pathlib.Path('history.promql').read_text(encoding='utf-8').strip();assert 0<len(expr)<=1000\npast={'a':20,'b':0,'c':20,'d':0,'e':20,'f':0};state={'a':0,'b':12,'c':12,'d':0,'e':5,'f':6}\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  body=('\\n'.join('queue_depth{service=\"'+s+'\"} '+str(v) for s,v in state.items())+'\\n').encode()\n  self.send_response(200);self.send_header('Content-Type','text/plain; version=0.0.4');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n def log_message(self,*args):pass\nhttpd=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()\nJOB={'job_name':'queue','scrape_interval':'1s','static_configs':[{'targets':['127.0.0.1:'+str(httpd.server_port)]}],'relabel_configs':[{'target_label':'instance','replacement':'fixture'}]}\ndef wait(fn,message):\n end=time.monotonic()+10\n while time.monotonic()<end:\n  value=fn()\n  if value:return value\n  time.sleep(.1)\n raise AssertionError(message)\ndef mapping(rows,expected):\n assert len(rows)==len(expected)\n result={}\n for r in rows:\n  assert set(r['metric'])=={'service'}\n  s=r['metric']['service'];assert s not in result;result[s]=float(r['value'][1])\n assert result==expected,(result,expected)\ndef current_alerts(api,services):\n rows=api('/api/v1/alerts')['data']['alerts']\n if len(rows)!=len(services) or any(x['state']!='firing' for x in rows):return False\n got=set()\n for x in rows:\n  labels=x['labels'];assert set(labels)=={'alertname','instance','job','severity','service'}\n  assert all(labels[k]==v for k,v in {'alertname':'CurrentQueueHigh','instance':'fixture','job':'queue','severity':'warning'}.items())\n  got.add(labels['service'])\n return got==services\ntry:\n with tempfile.TemporaryDirectory(prefix='trusted-prom-history-alert-') as d:\n  root=pathlib.Path(d);base=int(time.time())-86400-10\n  body='# TYPE queue_depth gauge\\n'+'\\n'.join('queue_depth{instance=\"fixture\",job=\"queue\",service=\"'+s+'\"} '+str(v)+' '+str(base+t) for s,v in past.items() for t in range(6))+'\\n# EOF\\n'\n  (root/'history.om').write_bytes(body.encode())\n  try:\n   run_command([shutil.which('promtool'),'tsdb','create-blocks-from','openmetrics',str(root/'history.om'),str(root/'source')],root)\n   assert block_ids(root/'source'),'real historical TSDB blocks missing'\n   with server(root,'source') as (url,api):\n    mapping(vector(api,expr,base+3),past)\n    wait(lambda:len(vector(api,'queue_depth{job=\"queue\"}'))==6,'current gauges missing')\n    mapping(vector(api,expr),state)\n    wait(lambda:current_alerts(api,{'b','c','f'}),'alerts must reflect current condition, not old imported samples')\n    assert not current_alerts(api,{'a','c','e'})\n    state.update(b=0,f=5)\n    wait(lambda:current_alerts(api,{'c'}),'current recoveries must clear b/f while c stays firing')\n    mapping(vector(api,expr),state);mapping(vector(api,expr,base+3),past)\n    state['c']=0\n    wait(lambda:not api('/api/v1/alerts')['data']['alerts'],'final recovery must clear all current alerts')\n    assert len(vector(api,'queue_depth',base+3))==6,'historical evidence must remain available after current alert recovery'\n    print('native historical/current quadrants and threshold=5/6 verified; imported history did not replay notifications')\n  finally:print('native lifecycle:',json.dumps(STATS))\nfinally:httpd.shutdown();httpd.server_close();thread.join(timeout=2)\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "historical_tsdb_backfill_does_not_replay_live_alerts_current_past_quadrants_and_selective_recovery",
+    "conversion": {
+      "original_id": "curated-advanced-prometheus-004",
+      "original_type": "interview",
+      "original_title": "接收迟到样本后历史图补齐了，为何当时本应触发的Prometheus告警没有自动补发？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

@@ -1,0 +1,224 @@
+[
+  {
+    "id": "curated-parallel-elk-093",
+    "module": "elk",
+    "category": "ELK / EFK",
+    "level": 3,
+    "topic": "文档模型与映射",
+    "title": "真实mapping冲突恢复：HTTP200内逐项400留存，显式keyword新索引回放切别名",
+    "answer": "```python\nimport json,re\ndef migrate(request,case,pending):\n    if any(not isinstance(case[key],str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,60}',case[key]) for key in ('old','new','alias')):raise ValueError('literal approved index/alias names required')\n    def call(method,path,body):\n        status,value=request(method,path,body)\n        if status not in (200,201):raise RuntimeError('approved mapping migration request failed')\n        return value\n    call('PUT','/'+case['new'],dict(settings=dict(number_of_shards=1,number_of_replicas=0),mappings=dict(properties=dict(status=dict(type='keyword')))))\n    result=call('POST','/_reindex?wait_for_completion=true&refresh=true',{'source':{'index':case['old']},'dest':{'index':case['new']},'script':{'lang':'painless','source':'ctx._source.status = ctx._source.status.toString()'}})\n    if result.get('failures'):raise RuntimeError('partial reindex failure')\n    for event in pending:\n        body=dict(event['_source']);body['status']=str(body['status'])\n        call('PUT','/'+case['new']+'/_doc/'+event['_id']+'?refresh=true',body)\n    call('POST','/_aliases',{'actions':[{'remove':{'index':case['old'],'alias':case['alias']}},{'add':{'index':case['new'],'alias':case['alias'],'is_write_index':True}}]})\n```\n\n原题知识说明：\n桌面推演，未在生产执行。核对首批样本、动态mapping和Bulk逐项错误，确认字段推断与契约不符。保留拒绝事件，在新索引显式定义合适类型并回放切别名；验收历史和新格式，不能直接修改既有字段类型。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Elastic官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现migrate(request,case,pending)，case为批准old/new/alias且仅小写字母开头、后续小写字母数字_-、最长61；非法ValueError。新索引1 shard/0 replicas并显式status=keyword；真实_reindex将旧status转字符串、检查failures，再按稳定ID回放保存的拒绝事件，最后原子将写别名从old移至new且is_write_index=true。不得改旧字段类型、删旧索引、丢原Bulk已成功项或丢拒绝事件。request返回(status,JSON)，非成功必须抛RuntimeError。不改case/pending。平台真实动态long冲突、Bulk HTTP200内400/201并存，恢复后历史/拒绝/未来字符串均可查询且旧索引数据不变。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实固定Elasticsearch8.19.7隔离单节点与Painless/reindex/Bulk/alias，原始拒绝事件由实际返回对应输入留存。只验证受控静止写窗口迁移，不宣称生产并发双写、跨集群或原索引删除审批已完成。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-reindex"
+    ],
+    "incident_signature": "elk:dynamic-mapping-first-value-wrong",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-elk-093",
+      "original_title": "首条日志把status映射成long，后续字符串状态全部mapper_parsing_exception，如何恢复？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json,re\ndef migrate(request,case,pending):\n    if any(not isinstance(case[key],str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,60}',case[key]) for key in ('old','new','alias')):raise ValueError('literal approved index/alias names required')\n    def call(method,path,body):\n        status,value=request(method,path,body)\n        if status not in (200,201):raise RuntimeError('approved mapping migration request failed')\n        return value\n    call('PUT','/'+case['new'],dict(settings=dict(number_of_shards=1,number_of_replicas=0),mappings=dict(properties=dict(status=dict(type='keyword')))))\n    result=call('POST','/_reindex?wait_for_completion=true&refresh=true',{'source':{'index':case['old']},'dest':{'index':case['new']},'script':{'lang':'painless','source':'ctx._source.status = ctx._source.status.toString()'}})\n    if result.get('failures'):raise RuntimeError('partial reindex failure')\n    for event in pending:\n        body=dict(event['_source']);body['status']=str(body['status'])\n        call('PUT','/'+case['new']+'/_doc/'+event['_id']+'?refresh=true',body)\n    call('POST','/_aliases',{'actions':[{'remove':{'index':case['old'],'alias':case['alias']}},{'add':{'index':case['new'],'alias':case['alias'],'is_write_index':True}}]})\n"
+    },
+    "negative_files": {
+      "task.py": "import json,re\ndef migrate(request,case,pending):\n    if any(not isinstance(case[key],str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,60}',case[key]) for key in ('old','new','alias')):raise ValueError('literal approved index/alias names required')\n    def call(method,path,body):\n        status,value=request(method,path,body)\n        if status not in (200,201):raise RuntimeError('approved mapping migration request failed')\n        return value\n    call('PUT','/'+case['new'],dict(settings=dict(number_of_shards=1,number_of_replicas=0),mappings=dict(properties=dict(status=dict(type='long')))))\n    result=call('POST','/_reindex?wait_for_completion=true&refresh=true',{'source':{'index':case['old']},'dest':{'index':case['new']},'script':{'lang':'painless','source':'ctx._source.status = ctx._source.status.toString()'}})\n    if result.get('failures'):raise RuntimeError('partial reindex failure')\n    for event in pending:\n        body=dict(event['_source']);body['status']=str(body['status'])\n        call('PUT','/'+case['new']+'/_doc/'+event['_id']+'?refresh=true',body)\n    call('POST','/_aliases',{'actions':[{'remove':{'index':case['old'],'alias':case['alias']}},{'add':{'index':case['new'],'alias':case['alias'],'is_write_index':True}}]})\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像+只读官方Elasticsearch8.19.7目录，显式2GiB教学预算；不构建镜像",
+      "operation": "实现migrate(request,case,pending)，case为批准old/new/alias且仅小写字母开头、后续小写字母数字_-、最长61；非法ValueError。新索引1 shard/0 replicas并显式status=keyword；真实_reindex将旧status转字符串、检查failures，再按稳定ID回放保存的拒绝事件，最后原子将写别名从old移至new且is_write_index=true。不得改旧字段类型、删旧索引、丢原Bulk已成功项或丢拒绝事件。request返回(status,JSON)，非成功必须抛RuntimeError。不改case/pending。平台真实动态long冲突、Bulk HTTP200内400/201并存，恢复后历史/拒绝/未来字符串均可查询且旧索引数据不变。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实固定Elasticsearch8.19.7隔离单节点与Painless/reindex/Bulk/alias，原始拒绝事件由实际返回对应输入留存。只验证受控静止写窗口迁移，不宣称生产并发双写、跨集群或原索引删除审批已完成。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "elasticsearch"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/elasticsearch_native.py": "\"\"\"Owned nonroot Elasticsearch8.19.7, private config/data/ports and bounded Java memory.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.error\nimport yaml\n\ndef free_port():\n    with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Elasticsearch:\n    def __enter__(self):\n        executable=shutil.which('elasticsearch')\n        if not executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned Elasticsearch8.19.7 required')\n        if os.geteuid()==0:raise RuntimeError('nonroot Elasticsearch fixture required')\n        self.temp=tempfile.TemporaryDirectory(prefix='of-elasticsearch-');self.root=pathlib.Path(self.temp.name);self.process=None;self.log=None\n        try:\n            tool=pathlib.Path(os.environ.get('OPSF_ELASTICSEARCH_HOME',str(pathlib.Path(executable).resolve().parents[1]))).resolve()\n            config=self.root/'config';shutil.copytree(tool/'config',config)\n            for folder in ('data','logs','tmp'):(self.root/folder).mkdir()\n            self.port=free_port();transport=free_port()\n            while transport==self.port:transport=free_port()\n            settings={'cluster.name':'opsforge-private','node.name':'owned-node','path.data':str(self.root/'data'),'path.logs':str(self.root/'logs'),\n                'network.host':'127.0.0.1','http.port':self.port,'transport.port':transport,'discovery.type':'single-node',\n                'xpack.security.enabled':False,'xpack.ml.enabled':False,'xpack.watcher.enabled':False,\n                'node.roles':['master','data','ingest'],'node.store.allow_mmap':False,'ingest.geoip.downloader.enabled':False,\n                'cluster.routing.allocation.disk.threshold_enabled':False,'http.max_content_length':'8mb'}\n            (config/'elasticsearch.yml').write_text(yaml.safe_dump(settings,sort_keys=False))\n            hostname=socket.gethostname();assert not any(c in hostname for c in '\\r\\n')\n            hosts=self.root/'jvm-hosts';hosts.write_text('127.0.0.1 localhost '+hostname+'\\n')\n            env={**os.environ,'CLI_JAVA_OPTS':'-Djdk.net.hosts.file='+str(hosts),'ES_PATH_CONF':str(config),'ES_TMPDIR':str(self.root/'tmp'),\n                'ES_JAVA_OPTS':'-Xms256m -Xmx256m -XX:MaxDirectMemorySize=128m -XX:ActiveProcessorCount=2 -Djdk.net.hosts.file='+str(hosts)}\n            # Keystore contains only this disposable node's bootstrap metadata, no external credentials.\n            initialized=subprocess.run([str(tool/'bin/elasticsearch-keystore'),'create'],env=env,cwd=self.root,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15)\n            if initialized.returncode:raise RuntimeError('private empty keystore initialization failed: '+initialized.stderr[-1500:])\n            self.log=(self.root/'startup.log').open('wb')\n            self.process=subprocess.Popen([executable],env=env,cwd=self.root,stdin=subprocess.DEVNULL,stdout=self.log,stderr=self.log)\n            self.base='http://127.0.0.1:'+str(self.port);deadline=time.monotonic()+65\n            while time.monotonic()<deadline:\n                if self.process.poll() is not None:raise RuntimeError('private Elasticsearch startup failed: '+(self.root/'startup.log').read_text(errors='replace')[-6000:])\n                try:\n                    status,document=self.request('GET','/')\n                    if status==200:\n                        assert document['version']['number']=='8.19.7';break\n                except (OSError,urllib.error.URLError):pass\n                time.sleep(.15)\n            else:raise RuntimeError('private Elasticsearch readiness deadline: '+(self.root/'startup.log').read_text(errors='replace')[-4000:])\n            print('NATIVE_ELASTICSEARCH_READY:8.19.7',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,method,path,body=None,content_type='application/json'):\n        data=body.encode() if isinstance(body,str) else (json.dumps(body).encode() if body is not None else None)\n        request=urllib.request.Request(self.base+path,data=data,method=method,headers={'Content-Type':content_type})\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        try:\n            with opener.open(request,timeout=5) as response:raw=response.read();return response.status,json.loads(raw) if raw else None\n        except urllib.error.HTTPError as response:\n            try:return response.code,json.loads(response.read())\n            finally:response.close()\n    def __exit__(self,*args):\n        if self.process is not None:\n            if self.process.poll() is None:self.process.terminate()\n            try:self.process.wait(timeout=8)\n            except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=3)\n        if self.log:self.log.close()\n        self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy,time,secrets\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom elasticsearch_native import Elasticsearch\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef create(server,index,extra=None):\n settings=dict(number_of_shards=1,number_of_replicas=0);settings.update(extra or {})\n status,value=server.request('PUT','/'+index,dict(settings=settings));assert status==200,(status,value)\ndef docs(server,index):\n status,value=server.request('GET','/'+index+'/_search?size=1000&track_total_hits=true');assert status==200,(status,value)\n return {row['_id']:row['_source'] for row in value['hits']['hits']}\ndef bulk(server,index,records):\n lines=[]\n for event in records:lines.extend([json.dumps({'index':{'_index':index,'_id':event['_id']}}),json.dumps(event['_source'])])\n return server.request('POST','/_bulk?refresh=true','\\n'.join(lines)+'\\n',content_type='application/x-ndjson')\nwith Elasticsearch() as server:\n case=dict(old='mapping_old',new='mapping_new',alias='mapping_write');create(server,case['old'])\n assert server.request('POST','/_aliases',{'actions':[{'add':{'index':case['old'],'alias':case['alias'],'is_write_index':True}}]})[0]==200\n originals=[dict(_id='keep-a',_source=dict(status=200,message='original-a')),dict(_id='keep-b',_source=dict(status=404,message='original-b'))]\n status,value=bulk(server,case['alias'],originals);assert status==200 and not value['errors']\n submitted=[dict(_id='rejected',_source=dict(status='error',message='preserved-rejected-event')),dict(_id='accepted',_source=dict(status=503,message='already-accepted'))]\n status,value=bulk(server,case['alias'],submitted);assert status==200 and value['errors'] and [row['index']['status'] for row in value['items']]==[400,201]\n assert 'mapper_parsing_exception' in json.dumps(value) or 'document_parsing_exception' in json.dumps(value)\n pending=[submitted[0]];old_docs=docs(server,case['old']);assert set(old_docs)=={'keep-a','keep-b','accepted'}\n old_mapping=server.request('GET','/'+case['old']+'/_mapping')[1];assert old_mapping[case['old']]['mappings']['properties']['status']['type']=='long'\n before=copy.deepcopy((case,pending))\n print('NATIVE_ELASTICSEARCH_DYNAMIC_LONG_MAPPING_BULK_HTTP200_ONE400_ONE201_REJECTED_EVENT_RETAINED',flush=True)\n print('STUDENT_OPERATION_ENTERED:new_keyword_index_reindex_replay_then_atomic_alias_cutover',flush=True)\n try:task.migrate(server.request,case,pending)\n except Exception as error:raise AssertionError('student actual mapping migration/replay failed') from error\n expected={key:{**body,'status':str(body['status'])} for key,body in old_docs.items()};expected['rejected']=submitted[0]['_source']\n assert docs(server,case['alias'])==docs(server,case['new'])==expected,'historical/rejected records missing or source statuses not normalized'\n assert docs(server,case['old'])==old_docs and server.request('GET','/'+case['old']+'/_mapping')[1]==old_mapping\n mapping=server.request('GET','/'+case['new']+'/_mapping')[1];assert mapping[case['new']]['mappings']['properties']['status']['type']=='keyword'\n status,aliases=server.request('GET','/_alias/'+case['alias']);assert status==200 and set(aliases)=={case['new']} and aliases[case['new']]['aliases'][case['alias']]['is_write_index'] is True\n status,value=server.request('GET','/'+case['alias']+'/_search',{'query':{'term':{'status':'error'}}});assert status==200 and value['hits']['total']=={'value':1,'relation':'eq'}\n status,value=server.request('PUT','/'+case['alias']+'/_doc/future?refresh=true',dict(status='new-format',message='write-contract-control'));assert status in (200,201)\n assert server.request('GET','/'+case['new']+'/_doc/future')[0]==200 and server.request('GET','/'+case['old']+'/_doc/future')[0]==404\n assert (case,pending)==before\n print('NATIVE_MAPPING_EXPLICIT_KEYWORD_OLD_AND_REJECTED_DATA_PRESENT_OLD_INDEX_RETAINED_NEW_FORMAT_WRITES',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "elk"
+    ]
+  },
+  {
+    "id": "curated-parallel-elk-094",
+    "module": "elk",
+    "category": "ELK / EFK",
+    "level": 3,
+    "topic": "索引分片与生命周期",
+    "title": "真实多索引别名写歧义：原子指定唯一新写索引，保留两代读取并回放失败批",
+    "answer": "```python\nimport json,re\ndef repair(request,case,records):\n    if any(not isinstance(case[key],str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,60}',case[key]) for key in ('old','new','alias')):raise ValueError('literal approved alias scope required')\n    actions=[{'add':{'index':case['old'],'alias':case['alias'],'is_write_index':False}},{'add':{'index':case['new'],'alias':case['alias'],'is_write_index':True}}]\n    status,result=request('POST','/_aliases',{'actions':actions})\n    if status!=200:raise RuntimeError('atomic alias repair failed')\n    lines=[]\n    for event in records:\n        lines.extend([json.dumps({'index':{'_index':case['alias'],'_id':event['_id']}}),json.dumps(event['_source'])])\n    status,result=request('POST','/_bulk?refresh=true','\\n'.join(lines)+'\\n',content_type='application/x-ndjson')\n    if status!=200 or result.get('errors') or len(result.get('items',[]))!=len(records):raise RuntimeError('controlled failed batch replay incomplete')\n```\n\n原题知识说明：\n桌面推演，未在生产执行。读取别名元数据与错误，确认写入目标歧义。按当前代次原子调整唯一写索引并保留读范围，受控重试失败批次；验收写入落点及查询完整，不随意删旧索引。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Elastic官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现repair(request,case,records)，先按批准old/new/alias原子_aliases更新old is_write_index=false、new true，保持两者别名读取范围，再用稳定ID对原失败批发_bulk?refresh=true，NDJSON以换行结尾、逐项errors必须false且items数一致；非成功抛RuntimeError。索引/alias仅小写字母开头、后续小写数字_-、最长61，非法ValueError；不改输入。真实旧别名同时指向两索引而无唯一写索引，原批所有项400、未写入；修复后仅新代接收重试项、旧代数据和查询范围保持。不能删索引、移除旧代读范围或让两个write=true。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Elasticsearch8.19.7 aliases原子更新及Bulk逐项写入、同一稳定文档ID受控重试。没有生产账号/外部集群修改，不证明未知结果自动ID请求的幂等性。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-indices-update-aliases"
+    ],
+    "incident_signature": "elk:alias-multiple-write-index",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-elk-094",
+      "original_title": "日志写别名突然失败，别名同时指向两个索引且未确定唯一write index，怎么办？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json,re\ndef repair(request,case,records):\n    if any(not isinstance(case[key],str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,60}',case[key]) for key in ('old','new','alias')):raise ValueError('literal approved alias scope required')\n    actions=[{'add':{'index':case['old'],'alias':case['alias'],'is_write_index':False}},{'add':{'index':case['new'],'alias':case['alias'],'is_write_index':True}}]\n    status,result=request('POST','/_aliases',{'actions':actions})\n    if status!=200:raise RuntimeError('atomic alias repair failed')\n    lines=[]\n    for event in records:\n        lines.extend([json.dumps({'index':{'_index':case['alias'],'_id':event['_id']}}),json.dumps(event['_source'])])\n    status,result=request('POST','/_bulk?refresh=true','\\n'.join(lines)+'\\n',content_type='application/x-ndjson')\n    if status!=200 or result.get('errors') or len(result.get('items',[]))!=len(records):raise RuntimeError('controlled failed batch replay incomplete')\n"
+    },
+    "negative_files": {
+      "task.py": "import json,re\ndef repair(request,case,records):\n    if any(not isinstance(case[key],str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,60}',case[key]) for key in ('old','new','alias')):raise ValueError('literal approved alias scope required')\n    actions=[{'add':{'index':case['old'],'alias':case['alias'],'is_write_index':True}},{'add':{'index':case['new'],'alias':case['alias'],'is_write_index':True}}]\n    status,result=request('POST','/_aliases',{'actions':actions})\n    if status!=200:raise RuntimeError('atomic alias repair failed')\n    lines=[]\n    for event in records:\n        lines.extend([json.dumps({'index':{'_index':case['alias'],'_id':event['_id']}}),json.dumps(event['_source'])])\n    status,result=request('POST','/_bulk?refresh=true','\\n'.join(lines)+'\\n',content_type='application/x-ndjson')\n    if status!=200 or result.get('errors') or len(result.get('items',[]))!=len(records):raise RuntimeError('controlled failed batch replay incomplete')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像+只读官方Elasticsearch8.19.7目录，显式2GiB教学预算；不构建镜像",
+      "operation": "实现repair(request,case,records)，先按批准old/new/alias原子_aliases更新old is_write_index=false、new true，保持两者别名读取范围，再用稳定ID对原失败批发_bulk?refresh=true，NDJSON以换行结尾、逐项errors必须false且items数一致；非成功抛RuntimeError。索引/alias仅小写字母开头、后续小写数字_-、最长61，非法ValueError；不改输入。真实旧别名同时指向两索引而无唯一写索引，原批所有项400、未写入；修复后仅新代接收重试项、旧代数据和查询范围保持。不能删索引、移除旧代读范围或让两个write=true。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Elasticsearch8.19.7 aliases原子更新及Bulk逐项写入、同一稳定文档ID受控重试。没有生产账号/外部集群修改，不证明未知结果自动ID请求的幂等性。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "elasticsearch"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/elasticsearch_native.py": "\"\"\"Owned nonroot Elasticsearch8.19.7, private config/data/ports and bounded Java memory.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.error\nimport yaml\n\ndef free_port():\n    with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Elasticsearch:\n    def __enter__(self):\n        executable=shutil.which('elasticsearch')\n        if not executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned Elasticsearch8.19.7 required')\n        if os.geteuid()==0:raise RuntimeError('nonroot Elasticsearch fixture required')\n        self.temp=tempfile.TemporaryDirectory(prefix='of-elasticsearch-');self.root=pathlib.Path(self.temp.name);self.process=None;self.log=None\n        try:\n            tool=pathlib.Path(os.environ.get('OPSF_ELASTICSEARCH_HOME',str(pathlib.Path(executable).resolve().parents[1]))).resolve()\n            config=self.root/'config';shutil.copytree(tool/'config',config)\n            for folder in ('data','logs','tmp'):(self.root/folder).mkdir()\n            self.port=free_port();transport=free_port()\n            while transport==self.port:transport=free_port()\n            settings={'cluster.name':'opsforge-private','node.name':'owned-node','path.data':str(self.root/'data'),'path.logs':str(self.root/'logs'),\n                'network.host':'127.0.0.1','http.port':self.port,'transport.port':transport,'discovery.type':'single-node',\n                'xpack.security.enabled':False,'xpack.ml.enabled':False,'xpack.watcher.enabled':False,\n                'node.roles':['master','data','ingest'],'node.store.allow_mmap':False,'ingest.geoip.downloader.enabled':False,\n                'cluster.routing.allocation.disk.threshold_enabled':False,'http.max_content_length':'8mb'}\n            (config/'elasticsearch.yml').write_text(yaml.safe_dump(settings,sort_keys=False))\n            hostname=socket.gethostname();assert not any(c in hostname for c in '\\r\\n')\n            hosts=self.root/'jvm-hosts';hosts.write_text('127.0.0.1 localhost '+hostname+'\\n')\n            env={**os.environ,'CLI_JAVA_OPTS':'-Djdk.net.hosts.file='+str(hosts),'ES_PATH_CONF':str(config),'ES_TMPDIR':str(self.root/'tmp'),\n                'ES_JAVA_OPTS':'-Xms256m -Xmx256m -XX:MaxDirectMemorySize=128m -XX:ActiveProcessorCount=2 -Djdk.net.hosts.file='+str(hosts)}\n            # Keystore contains only this disposable node's bootstrap metadata, no external credentials.\n            initialized=subprocess.run([str(tool/'bin/elasticsearch-keystore'),'create'],env=env,cwd=self.root,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15)\n            if initialized.returncode:raise RuntimeError('private empty keystore initialization failed: '+initialized.stderr[-1500:])\n            self.log=(self.root/'startup.log').open('wb')\n            self.process=subprocess.Popen([executable],env=env,cwd=self.root,stdin=subprocess.DEVNULL,stdout=self.log,stderr=self.log)\n            self.base='http://127.0.0.1:'+str(self.port);deadline=time.monotonic()+65\n            while time.monotonic()<deadline:\n                if self.process.poll() is not None:raise RuntimeError('private Elasticsearch startup failed: '+(self.root/'startup.log').read_text(errors='replace')[-6000:])\n                try:\n                    status,document=self.request('GET','/')\n                    if status==200:\n                        assert document['version']['number']=='8.19.7';break\n                except (OSError,urllib.error.URLError):pass\n                time.sleep(.15)\n            else:raise RuntimeError('private Elasticsearch readiness deadline: '+(self.root/'startup.log').read_text(errors='replace')[-4000:])\n            print('NATIVE_ELASTICSEARCH_READY:8.19.7',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,method,path,body=None,content_type='application/json'):\n        data=body.encode() if isinstance(body,str) else (json.dumps(body).encode() if body is not None else None)\n        request=urllib.request.Request(self.base+path,data=data,method=method,headers={'Content-Type':content_type})\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        try:\n            with opener.open(request,timeout=5) as response:raw=response.read();return response.status,json.loads(raw) if raw else None\n        except urllib.error.HTTPError as response:\n            try:return response.code,json.loads(response.read())\n            finally:response.close()\n    def __exit__(self,*args):\n        if self.process is not None:\n            if self.process.poll() is None:self.process.terminate()\n            try:self.process.wait(timeout=8)\n            except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=3)\n        if self.log:self.log.close()\n        self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy,time,secrets\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom elasticsearch_native import Elasticsearch\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef create(server,index,extra=None):\n settings=dict(number_of_shards=1,number_of_replicas=0);settings.update(extra or {})\n status,value=server.request('PUT','/'+index,dict(settings=settings));assert status==200,(status,value)\ndef docs(server,index):\n status,value=server.request('GET','/'+index+'/_search?size=1000&track_total_hits=true');assert status==200,(status,value)\n return {row['_id']:row['_source'] for row in value['hits']['hits']}\ndef bulk(server,index,records):\n lines=[]\n for event in records:lines.extend([json.dumps({'index':{'_index':index,'_id':event['_id']}}),json.dumps(event['_source'])])\n return server.request('POST','/_bulk?refresh=true','\\n'.join(lines)+'\\n',content_type='application/x-ndjson')\nwith Elasticsearch() as server:\n case=dict(old='alias_old',new='alias_new',alias='events_write')\n for index in (case['old'],case['new']):create(server,index)\n assert server.request('PUT','/'+case['old']+'/_doc/historical?refresh=true',dict(value='retained-old'))[0] in (200,201)\n assert server.request('PUT','/'+case['new']+'/_doc/current?refresh=true',dict(value='retained-current'))[0] in (200,201)\n assert server.request('POST','/_aliases',{'actions':[{'add':{'index':index,'alias':case['alias']}} for index in (case['old'],case['new'])]})[0]==200\n records=[dict(_id='retry-a',_source=dict(value='failed-a')),dict(_id='retry-b',_source=dict(value='failed-b'))]\n status,value=bulk(server,case['alias'],records);assert status==200 and value['errors'] and all(row['index']['status']==400 for row in value['items'])\n assert all(server.request('GET','/'+index+'/_doc/retry-a')[0]==404 for index in (case['old'],case['new']))\n before_old=docs(server,case['old']);before_new=docs(server,case['new']);before=copy.deepcopy((case,records))\n print('NATIVE_ELASTICSEARCH_MULTI_INDEX_ALIAS_NO_UNIQUE_WRITER_REJECTED_EVERY_BULK_ITEM',flush=True)\n print('STUDENT_OPERATION_ENTERED:atomic_unique_writer_preserve_read_scope_replay_only_failed_batch',flush=True)\n try:task.repair(server.request,case,records)\n except Exception as error:raise AssertionError('student actual write alias repair/replay failed') from error\n status,aliases=server.request('GET','/_alias/'+case['alias']);assert status==200 and set(aliases)=={case['old'],case['new']},'original read scope narrowed'\n assert aliases[case['new']]['aliases'][case['alias']]['is_write_index'] is True and aliases[case['old']]['aliases'][case['alias']]['is_write_index'] is False\n expected={**before_new,**{row['_id']:row['_source'] for row in records}}\n assert docs(server,case['new'])==expected and docs(server,case['old'])==before_old\n assert docs(server,case['alias'])=={**before_old,**expected},'query lost one generation or replay incomplete'\n assert (case,records)==before\n print('NATIVE_ALIAS_ONLY_APPROVED_NEW_WRITER_BOTH_GENERATIONS_READABLE_FAILED_BATCH_STABLE_IDS_REPLAYED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "elk"
+    ]
+  },
+  {
+    "id": "curated-parallel-elk-099",
+    "module": "elk",
+    "category": "ELK / EFK",
+    "level": 3,
+    "topic": "索引分片与生命周期",
+    "title": "真实GET存在而搜索无数据：目标恢复刷新与一次边界refresh，后续128条周期可见",
+    "answer": "```python\nimport re\ndef restore(request,index):\n    if not isinstance(index,str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,60}',index):raise ValueError('literal approved index required')\n    status,result=request('PUT','/'+index+'/_settings',{'index':{'refresh_interval':'1s'}})\n    if status!=200:raise RuntimeError('approved refresh setting failed')\n    status,result=request('POST','/'+index+'/_refresh')\n    if status!=200 or result.get('_shards',{}).get('failed',0):raise RuntimeError('approved bulk boundary refresh failed')\n```\n\n原题知识说明：\n桌面推演，未在生产执行。核对导入设置与refresh状态，确认搜索视图未刷新而非写丢失。受控恢复刷新策略并验证已确认ID可检索；验收写入吞吐和检索时效，避免每条强制refresh。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Elastic官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现restore(request,index)，只对批准字面索引PUT /index/_settings设置index.refresh_interval=1s，再POST /index/_refresh一次；非200或刷新分片failed抛RuntimeError。仅小写字母开头、后续小写数字_-、最长61，非法ValueError。真实导入索引-1下已确认ID实时GET存在而搜索为空；恢复后原ID可检索，UUID/分片/副本保持。平台随后实际128条Bulk记录吞吐和周期可见耗时，不再每条强制refresh；旁索引保持-1及不可搜索，不允许全局/_refresh越界影响它。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Elasticsearch8.19.7实时GET、搜索reader、手动/周期refresh与128条有限吞吐观测；不宣称生产容量、持久化/宕机恢复、刷新实时SLA或逐条refresh吞吐压测完成。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-indices-refresh"
+    ],
+    "incident_signature": "elk:index-refresh-disabled-invisible",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-elk-099",
+      "original_title": "批量导入后按ID能GET但搜索无新增文档，refresh_interval仍为-1，如何恢复可见性？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import re\ndef restore(request,index):\n    if not isinstance(index,str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,60}',index):raise ValueError('literal approved index required')\n    status,result=request('PUT','/'+index+'/_settings',{'index':{'refresh_interval':'1s'}})\n    if status!=200:raise RuntimeError('approved refresh setting failed')\n    status,result=request('POST','/'+index+'/_refresh')\n    if status!=200 or result.get('_shards',{}).get('failed',0):raise RuntimeError('approved bulk boundary refresh failed')\n"
+    },
+    "negative_files": {
+      "task.py": "import re\ndef restore(request,index):\n    if not isinstance(index,str) or not re.fullmatch(r'[a-z][a-z0-9_-]{0,60}',index):raise ValueError('literal approved index required')\n    status,result=request('PUT','/'+index+'/_settings',{'index':{'refresh_interval':'-1'}})\n    if status!=200:raise RuntimeError('approved refresh setting failed')\n    status,result=request('POST','/'+index+'/_refresh')\n    if status!=200 or result.get('_shards',{}).get('failed',0):raise RuntimeError('approved bulk boundary refresh failed')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像+只读官方Elasticsearch8.19.7目录，显式2GiB教学预算；不构建镜像",
+      "operation": "实现restore(request,index)，只对批准字面索引PUT /index/_settings设置index.refresh_interval=1s，再POST /index/_refresh一次；非200或刷新分片failed抛RuntimeError。仅小写字母开头、后续小写数字_-、最长61，非法ValueError。真实导入索引-1下已确认ID实时GET存在而搜索为空；恢复后原ID可检索，UUID/分片/副本保持。平台随后实际128条Bulk记录吞吐和周期可见耗时，不再每条强制refresh；旁索引保持-1及不可搜索，不允许全局/_refresh越界影响它。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Elasticsearch8.19.7实时GET、搜索reader、手动/周期refresh与128条有限吞吐观测；不宣称生产容量、持久化/宕机恢复、刷新实时SLA或逐条refresh吞吐压测完成。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "elasticsearch"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/elasticsearch_native.py": "\"\"\"Owned nonroot Elasticsearch8.19.7, private config/data/ports and bounded Java memory.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.error\nimport yaml\n\ndef free_port():\n    with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Elasticsearch:\n    def __enter__(self):\n        executable=shutil.which('elasticsearch')\n        if not executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned Elasticsearch8.19.7 required')\n        if os.geteuid()==0:raise RuntimeError('nonroot Elasticsearch fixture required')\n        self.temp=tempfile.TemporaryDirectory(prefix='of-elasticsearch-');self.root=pathlib.Path(self.temp.name);self.process=None;self.log=None\n        try:\n            tool=pathlib.Path(os.environ.get('OPSF_ELASTICSEARCH_HOME',str(pathlib.Path(executable).resolve().parents[1]))).resolve()\n            config=self.root/'config';shutil.copytree(tool/'config',config)\n            for folder in ('data','logs','tmp'):(self.root/folder).mkdir()\n            self.port=free_port();transport=free_port()\n            while transport==self.port:transport=free_port()\n            settings={'cluster.name':'opsforge-private','node.name':'owned-node','path.data':str(self.root/'data'),'path.logs':str(self.root/'logs'),\n                'network.host':'127.0.0.1','http.port':self.port,'transport.port':transport,'discovery.type':'single-node',\n                'xpack.security.enabled':False,'xpack.ml.enabled':False,'xpack.watcher.enabled':False,\n                'node.roles':['master','data','ingest'],'node.store.allow_mmap':False,'ingest.geoip.downloader.enabled':False,\n                'cluster.routing.allocation.disk.threshold_enabled':False,'http.max_content_length':'8mb'}\n            (config/'elasticsearch.yml').write_text(yaml.safe_dump(settings,sort_keys=False))\n            hostname=socket.gethostname();assert not any(c in hostname for c in '\\r\\n')\n            hosts=self.root/'jvm-hosts';hosts.write_text('127.0.0.1 localhost '+hostname+'\\n')\n            env={**os.environ,'CLI_JAVA_OPTS':'-Djdk.net.hosts.file='+str(hosts),'ES_PATH_CONF':str(config),'ES_TMPDIR':str(self.root/'tmp'),\n                'ES_JAVA_OPTS':'-Xms256m -Xmx256m -XX:MaxDirectMemorySize=128m -XX:ActiveProcessorCount=2 -Djdk.net.hosts.file='+str(hosts)}\n            # Keystore contains only this disposable node's bootstrap metadata, no external credentials.\n            initialized=subprocess.run([str(tool/'bin/elasticsearch-keystore'),'create'],env=env,cwd=self.root,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15)\n            if initialized.returncode:raise RuntimeError('private empty keystore initialization failed: '+initialized.stderr[-1500:])\n            self.log=(self.root/'startup.log').open('wb')\n            self.process=subprocess.Popen([executable],env=env,cwd=self.root,stdin=subprocess.DEVNULL,stdout=self.log,stderr=self.log)\n            self.base='http://127.0.0.1:'+str(self.port);deadline=time.monotonic()+65\n            while time.monotonic()<deadline:\n                if self.process.poll() is not None:raise RuntimeError('private Elasticsearch startup failed: '+(self.root/'startup.log').read_text(errors='replace')[-6000:])\n                try:\n                    status,document=self.request('GET','/')\n                    if status==200:\n                        assert document['version']['number']=='8.19.7';break\n                except (OSError,urllib.error.URLError):pass\n                time.sleep(.15)\n            else:raise RuntimeError('private Elasticsearch readiness deadline: '+(self.root/'startup.log').read_text(errors='replace')[-4000:])\n            print('NATIVE_ELASTICSEARCH_READY:8.19.7',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,method,path,body=None,content_type='application/json'):\n        data=body.encode() if isinstance(body,str) else (json.dumps(body).encode() if body is not None else None)\n        request=urllib.request.Request(self.base+path,data=data,method=method,headers={'Content-Type':content_type})\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        try:\n            with opener.open(request,timeout=5) as response:raw=response.read();return response.status,json.loads(raw) if raw else None\n        except urllib.error.HTTPError as response:\n            try:return response.code,json.loads(response.read())\n            finally:response.close()\n    def __exit__(self,*args):\n        if self.process is not None:\n            if self.process.poll() is None:self.process.terminate()\n            try:self.process.wait(timeout=8)\n            except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=3)\n        if self.log:self.log.close()\n        self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy,time,secrets\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom elasticsearch_native import Elasticsearch\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef create(server,index,extra=None):\n settings=dict(number_of_shards=1,number_of_replicas=0);settings.update(extra or {})\n status,value=server.request('PUT','/'+index,dict(settings=settings));assert status==200,(status,value)\ndef docs(server,index):\n status,value=server.request('GET','/'+index+'/_search?size=1000&track_total_hits=true');assert status==200,(status,value)\n return {row['_id']:row['_source'] for row in value['hits']['hits']}\ndef bulk(server,index,records):\n lines=[]\n for event in records:lines.extend([json.dumps({'index':{'_index':index,'_id':event['_id']}}),json.dumps(event['_source'])])\n return server.request('POST','/_bulk?refresh=true','\\n'.join(lines)+'\\n',content_type='application/x-ndjson')\nwith Elasticsearch() as server:\n index='import_target';other='untouched_pending';create(server,index,dict(refresh_interval='-1'));create(server,other,dict(refresh_interval='-1'))\n for name in (index,other):assert server.request('PUT','/'+name+'/_doc/confirmed',dict(value=name))[0] in (200,201)\n assert server.request('GET','/'+index+'/_doc/confirmed')[1]['found'] is True and docs(server,index)=={} and docs(server,other)=={}\n settings=server.request('GET','/'+index+'/_settings')[1][index]['settings']['index'];uuid=settings['uuid']\n print('NATIVE_ELASTICSEARCH_ACK_REALTIME_GET_FOUND_BUT_SEARCH_EMPTY_REFRESH_DISABLED',flush=True)\n print('STUDENT_OPERATION_ENTERED:restore_target_refresh_policy_once_at_bulk_boundary',flush=True)\n calls=[]\n def request(method,path,body=None,**kwargs):calls.append((method,path));return server.request(method,path,body,**kwargs)\n try:task.restore(request,index)\n except Exception as error:raise AssertionError('student actual search visibility recovery failed') from error\n assert docs(server,index)=={'confirmed':dict(value=index)},'confirmed original document is still not searchable'\n assert docs(server,other)=={},'unapproved global refresh changed unrelated index visibility'\n current=server.request('GET','/'+index+'/_settings')[1][index]['settings']['index']\n assert current['uuid']==uuid and current['number_of_shards']==settings['number_of_shards'] and current['number_of_replicas']==settings['number_of_replicas'] and current['refresh_interval']=='1s'\n assert calls==[('PUT','/'+index+'/_settings'),('POST','/'+index+'/_refresh')],'refresh was not scoped and performed once at approved boundary'\n # Measure a concrete bounded batch and then observe periodic visibility without another forced refresh.\n records=[dict(_id='batch-'+str(i),_source=dict(value=i)) for i in range(128)]\n lines=[]\n for event in records:lines.extend([json.dumps({'index':{'_index':index,'_id':event['_id']}}),json.dumps(event['_source'])])\n started=time.monotonic();status,value=server.request('POST','/_bulk','\\n'.join(lines)+'\\n',content_type='application/x-ndjson');write_seconds=time.monotonic()-started\n assert status==200 and not value['errors'] and len(value['items'])==128 and all(row['index']['status']==201 for row in value['items'])\n deadline=time.monotonic()+4\n while time.monotonic()<deadline:\n  if len(docs(server,index))==129:break\n  time.sleep(.05)\n else:raise AssertionError('future confirmed batch not visible under restored periodic policy')\n visible_seconds=time.monotonic()-started\n assert docs(server,other)=={} and server.request('GET','/'+other+'/_settings')[1][other]['settings']['index']['refresh_interval']=='-1'\n print('NATIVE_ELASTICSEARCH_REFRESH_BATCH_MEASURED '+json.dumps(dict(documents=128,write_seconds=round(write_seconds,6),documents_per_second=round(128/max(write_seconds,1e-9),3),visible_seconds=round(visible_seconds,6))),flush=True)\n print('NATIVE_SEARCH_VISIBILITY_TARGET_UUID_DATA_RETAINED_FUTURE_BATCH_PERIODIC_REFRESH_OTHER_INDEX_UNCHANGED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "elk"
+    ]
+  }
+]

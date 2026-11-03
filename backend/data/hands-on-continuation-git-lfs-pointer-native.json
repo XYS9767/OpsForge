@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-parallel-git-099",
+    "module": "git",
+    "category": "Git",
+    "level": 4,
+    "topic": "仓库规模与恢复",
+    "title": "识别已检出的 Git LFS 指针并校验恢复模型制品",
+    "answer": "```python\nimport hashlib,os,pathlib,re,tempfile\n_VERSION=b\"version https://git-lfs.github.com/spec/v1\"\n_OID=re.compile(rb\"oid sha256:([0-9a-f]{64})\")\n_SIZE=re.compile(rb\"size ([0-9]+)\")\n\ndef inspect_model(path):\n    path=pathlib.Path(path)\n    data=path.read_bytes()\n    lines=data.splitlines()\n    if lines and lines[0]==_VERSION:\n        if len(lines)!=3:raise ValueError(\"malformed LFS pointer\")\n        oid=_OID.fullmatch(lines[1]);size=_SIZE.fullmatch(lines[2])\n        if not oid or not size:raise ValueError(\"malformed LFS pointer metadata\")\n        return {\"status\":\"pointer\",\"loadable\":False,\"sha256\":oid.group(1).decode(),\"size\":int(size.group(1))}\n    return {\"status\":\"artifact\",\"loadable\":True,\"sha256\":hashlib.sha256(data).hexdigest(),\"size\":len(data)}\n\ndef restore_model(pointer_path,object_path):\n    pointer_path=pathlib.Path(pointer_path);object_path=pathlib.Path(object_path)\n    metadata=inspect_model(pointer_path)\n    if metadata[\"status\"]!=\"pointer\":raise ValueError(\"target is not an LFS pointer\")\n    data=object_path.read_bytes()\n    if len(data)!=metadata[\"size\"] or hashlib.sha256(data).hexdigest()!=metadata[\"sha256\"]:\n        raise ValueError(\"object does not match pointer oid/size\")\n    temporary=None\n    try:\n        with tempfile.NamedTemporaryFile(mode=\"wb\",dir=pointer_path.parent,prefix=\".\"+pointer_path.name+\".\",suffix=\".tmp\",delete=False) as stream:\n            temporary=pathlib.Path(stream.name);stream.write(data);stream.flush();os.fsync(stream.fileno())\n        os.replace(temporary,pointer_path);temporary=None\n    finally:\n        if temporary is not None:temporary.unlink(missing_ok=True)\n    return inspect_model(pointer_path)\n```\n\n原题知识说明：\n检查该路径.gitattributes、索引blob和工作树文件，核对是否LFS指针未被smudge或显式拉取实体替换。暂停发布并保留现有可用模型，授权维护人员恢复受信LFS客户端及访问后取指定OID实体，不用最新版文件代替。验收实体摘要和size与指针一致、模型加载成功且离线恢复流程有效；Git对象完整性检查无法单独覆盖LFS实体。",
+    "type": "code",
+    "incident_signature": "git:lfs-pointer-packaged-as-binary",
+    "source": "独立编审：Git特有历史与交付故障",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "证明具体Git根因",
+      "保全工作区与历史证据",
+      "给出可复现恢复验收"
+    ],
+    "references": [
+      "https://git-lfs.com/"
+    ],
+    "related_modules": [
+      "git"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-git-099",
+      "original_title": "发布包中的模型只有三行version、oid和size文本，提交检出成功；运行时无法加载模型。如何演练处置？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现inspect_model(path)识别规范Git LFS指针并提取SHA256/size，不能把指针文本报告为可加载模型。实现restore_model(pointer_path,object_path)：只接受哈希和长度都匹配的本地对象，在目标同目录原子替换；校验失败时指针原字节保留。合同使用真实临时Git仓库证明commit/checkout干净不代表LFS对象存在；禁止访问网络。\n\n## 提交产物\ntask.py\n\n## 验收方法\n创建隔离临时Git仓库，复现干净检出LFS指针但模型加载失败；校验本地对象SHA256/长度后原子恢复。\n\n## 能力边界\n本地用真实Git记录和检出LFS指针格式，不访问远端LFS服务。检测到指针只证明元数据可读，不代表模型对象已下载；恢复只接受可信本地对象且匹配SHA256与size，原子替换成功后应由部署流程另行决定是否提交。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import hashlib,os,pathlib,re,tempfile\n_VERSION=b\"version https://git-lfs.github.com/spec/v1\"\n_OID=re.compile(rb\"oid sha256:([0-9a-f]{64})\")\n_SIZE=re.compile(rb\"size ([0-9]+)\")\n\ndef inspect_model(path):\n    path=pathlib.Path(path)\n    data=path.read_bytes()\n    lines=data.splitlines()\n    if lines and lines[0]==_VERSION:\n        if len(lines)!=3:raise ValueError(\"malformed LFS pointer\")\n        oid=_OID.fullmatch(lines[1]);size=_SIZE.fullmatch(lines[2])\n        if not oid or not size:raise ValueError(\"malformed LFS pointer metadata\")\n        return {\"status\":\"pointer\",\"loadable\":False,\"sha256\":oid.group(1).decode(),\"size\":int(size.group(1))}\n    return {\"status\":\"artifact\",\"loadable\":True,\"sha256\":hashlib.sha256(data).hexdigest(),\"size\":len(data)}\n\ndef restore_model(pointer_path,object_path):\n    pointer_path=pathlib.Path(pointer_path);object_path=pathlib.Path(object_path)\n    metadata=inspect_model(pointer_path)\n    if metadata[\"status\"]!=\"pointer\":raise ValueError(\"target is not an LFS pointer\")\n    data=object_path.read_bytes()\n    if len(data)!=metadata[\"size\"] or hashlib.sha256(data).hexdigest()!=metadata[\"sha256\"]:\n        raise ValueError(\"object does not match pointer oid/size\")\n    temporary=None\n    try:\n        with tempfile.NamedTemporaryFile(mode=\"wb\",dir=pointer_path.parent,prefix=\".\"+pointer_path.name+\".\",suffix=\".tmp\",delete=False) as stream:\n            temporary=pathlib.Path(stream.name);stream.write(data);stream.flush();os.fsync(stream.fileno())\n        os.replace(temporary,pointer_path);temporary=None\n    finally:\n        if temporary is not None:temporary.unlink(missing_ok=True)\n    return inspect_model(pointer_path)\n"
+    },
+    "negative_files": {
+      "task.py": "import hashlib,os,pathlib,re,tempfile\n_VERSION=b\"version https://git-lfs.github.com/spec/v1\"\n_OID=re.compile(rb\"oid sha256:([0-9a-f]{64})\")\n_SIZE=re.compile(rb\"size ([0-9]+)\")\n\ndef inspect_model(path):\n    path=pathlib.Path(path)\n    data=path.read_bytes()\n    lines=data.splitlines()\n    if False and lines and lines[0]==_VERSION:\n        if len(lines)!=3:raise ValueError(\"malformed LFS pointer\")\n        oid=_OID.fullmatch(lines[1]);size=_SIZE.fullmatch(lines[2])\n        if not oid or not size:raise ValueError(\"malformed LFS pointer metadata\")\n        return {\"status\":\"pointer\",\"loadable\":False,\"sha256\":oid.group(1).decode(),\"size\":int(size.group(1))}\n    return {\"status\":\"artifact\",\"loadable\":True,\"sha256\":hashlib.sha256(data).hexdigest(),\"size\":len(data)}\n\ndef restore_model(pointer_path,object_path):\n    pointer_path=pathlib.Path(pointer_path);object_path=pathlib.Path(object_path)\n    metadata=inspect_model(pointer_path)\n    if metadata[\"status\"]!=\"pointer\":raise ValueError(\"target is not an LFS pointer\")\n    data=object_path.read_bytes()\n    if len(data)!=metadata[\"size\"] or hashlib.sha256(data).hexdigest()!=metadata[\"sha256\"]:\n        raise ValueError(\"object does not match pointer oid/size\")\n    temporary=None\n    try:\n        with tempfile.NamedTemporaryFile(mode=\"wb\",dir=pointer_path.parent,prefix=\".\"+pointer_path.name+\".\",suffix=\".tmp\",delete=False) as stream:\n            temporary=pathlib.Path(stream.name);stream.write(data);stream.flush();os.fsync(stream.fileno())\n        os.replace(temporary,pointer_path);temporary=None\n    finally:\n        if temporary is not None:temporary.unlink(missing_ok=True)\n    return inspect_model(pointer_path)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现inspect_model(path)识别规范Git LFS指针并提取SHA256/size，不能把指针文本报告为可加载模型。实现restore_model(pointer_path,object_path)：只接受哈希和长度都匹配的本地对象，在目标同目录原子替换；校验失败时指针原字节保留。合同使用真实临时Git仓库证明commit/checkout干净不代表LFS对象存在；禁止访问网络。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "本地用真实Git记录和检出LFS指针格式，不访问远端LFS服务。检测到指针只证明元数据可读，不代表模型对象已下载；恢复只接受可信本地对象且匹配SHA256与size，原子替换成功后应由部署流程另行决定是否提交。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [
+          "git"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import hashlib,importlib.util,json,os,pathlib,subprocess,tempfile\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED: Git LFS pointer verification',flush=True)\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'))\ntask=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nwith tempfile.TemporaryDirectory(prefix='lfs pointer ') as d:\n root=pathlib.Path(d);repo=root/'repo';repo.mkdir();model=repo/'model.bin';object_store=root/'objects';object_store.mkdir();object_path=object_store/'expected-model'\n payload=b'MODEL\\x00'+bytes(range(64))*8;object_path.write_bytes(payload);digest=hashlib.sha256(payload).hexdigest()\n pointer=(f'version https://git-lfs.github.com/spec/v1\\noid sha256:{digest}\\nsize {len(payload)}\\n').encode();model.write_bytes(pointer)\n env={**os.environ,'GIT_CONFIG_NOSYSTEM':'1','GIT_CONFIG_GLOBAL':str(root/'gitconfig')}\n def git(*args):return subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,env=env,timeout=5)\n assert git('init','-q').returncode==0\n assert git('config','user.name','OpsForge Test').returncode==0 and git('config','user.email','opsforge@example.invalid').returncode==0\n assert git('add','--','model.bin').returncode==0 and git('commit','-qm','publish model pointer').returncode==0\n assert git('status','--porcelain').stdout=='' and git('show','HEAD:model.bin').stdout.encode()==pointer,'checkout should be clean but contain pointer text'\n def load_model(path):\n  data=path.read_bytes()\n  if data.startswith(b'version https://git-lfs.github.com/spec/v1'):raise ValueError('LFS pointer is not model data')\n  if not data.startswith(b'MODEL\\x00'):raise ValueError('invalid model magic')\n  return data\n try:load_model(model)\n except ValueError as e:assert 'LFS pointer' in str(e)\n else:raise AssertionError('pointer unexpectedly loaded as model')\n detected=task.inspect_model(model);assert detected=={'status':'pointer','loadable':False,'sha256':digest,'size':len(payload)},detected\n corrupt=object_store/'corrupt';corrupt.write_bytes(b'X'*len(payload))\n try:task.restore_model(model,corrupt)\n except ValueError:pass\n else:raise AssertionError('corrupt object accepted')\n assert model.read_bytes()==pointer,'failed verification must preserve pointer'\n restored=task.restore_model(model,object_path)\n assert restored=={'status':'artifact','loadable':True,'sha256':digest,'size':len(payload)},restored\n assert load_model(model)==payload and not list(repo.glob('.model.bin.*.tmp'))\n assert git('diff','--quiet','--','model.bin').returncode==1,'restoration must be visible as a worktree change'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

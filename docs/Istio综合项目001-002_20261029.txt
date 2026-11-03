@@ -1,0 +1,66 @@
+Istio综合项目001–002：独立规划名额，真实底层机制与明确离线范围
+
+源：backend/data/hands-on-continuation-istio-projects-native.json
+边界突变：tests/fixtures/istio_projects_mutants.json
+两个题号分别为curated-istio-continuation-project-001/002，绑定
+planned-new:istio:project:001/002。平台type=code、question_format=project、
+exercise.kind=code。两个项目只占两个名额，不按文件、步骤或测试路线扩量。
+
+项目001：证书轮换底层PKI/TLS机制
+
+四个协作产物：pki.cnf、tls_probe.py、rotate.py、rollback.py。学生必须实际
+生成RSA私钥/CSR/新CA签发的叶证书，执行OpenSSL链/用途/期限/密钥/身份检查；
+建立不可变旧代际、双根重叠代际与新服务证书代际，原子切换active。
+每个阶段都由原生OpenSSL支持的真正双向TLS连接验证，包括旧/新合法客户端、
+服务DNS与双端URI身份；可信检查器另建连接独立验证，不能靠学生打印通过。
+
+真实失败路径：新CA签名但URI不获批准的canary在切换后被拒绝，必须恢复
+前一重叠代际并重新验证旧/新合法客户端；随后干净重试能完成。过期、错CA、
+错URI、错钥材料不得改变active；受损保留代际拒绝恢复；旧fixture/基线字节
+保持；私钥0600、状态目录0700，重复prepare不覆盖。
+状态验收完成后的stdout故障属于提交后报告故障：保留可用代际并明确输出
+state committed，/dev/full路径已作为独立原生边界纳入检查。
+
+六个独立突变：新根替换旧信任、提交后canary失败不回退、私钥可被组/全局读取、
+回退不验证保留摘要、工作负载KeyUsage缺失、已签发CSR被删除。
+
+本项目明确只验证Istio证书轮换相关的底层TLS/PKI机制。每次探测新建SSLContext，
+没有istiod/SDS/Envoy，不能据此宣称真实网格证书热轮换、长连接无损或生产授权。
+与code003证书元数据读取的区别是实际签发、双方链验证、分阶段可用性和回退。
+
+项目002：多代理访问证据保全与崩溃恢复
+
+六个协作产物：schema.sql、queries.sql、evidence_common.py、importer.py、
+report.py、recover.py。实际读取捕获原始字节摘要和gzip完整CRC，使用SQLite
+跨capture的单事务存储事件、来源位置与批次。事件按proxy_id/boot_id/stream_id
+识别；相同request_id在多个代理/启动代际出现，不能合并成同一事件，也不能
+擅自称为全球唯一业务请求。重复捕获保留全部来源位置与压缩原字节摘要。
+
+只读SQL输出请求关联的代理、启动代际、revision、响应详情和来源位置链。
+429需按RL/详情的组合保守归因，未知保持unknown；null attempts不能变0，
+多个代理attempts不相加成业务重试总数。区别code010隐私清洗：本项目处理
+持久化来源链、原子性、去重冲突和恢复，不以输出几份JSON代替系统行为。
+
+真实失败路径：晚到冲突撤销此前同批次的写入；SHA正确但gzip CRC坏、截断、
+deflate损坏仍拒绝；真实os._exit(73)留下未提交SQLite回滚日志，由SQLite
+自身恢复并通过backup API获得一致副本；恢复后旧证据和报告一致，原批次可
+重试。持锁竞争明确失败，释放后可重试；只读查询执行DELETE会失败且不改库。
+报告/备份原子发布且不覆盖旧文件，输入捕获在每次导入前后逐文件核对不变。
+
+六个独立突变：忽略proxy启动代际、跳过gzip CRC、所有429归因代理、
+忽略来源SHA256、遗漏必要外键、恢复时创建不存在的源库。典型错误另外覆盖逐capture提交导致整批失败部分落盘。
+
+这是提供的、规范化的Envoy最终日志离线证据项目。原生机制是gzip、SQLite
+事务/热日志/备份、只读SQL和文件发布。没有新鲜流量采集或Envoy/Istio运行，
+不证明当前业务健康、采集完整性或跨代理时钟同步。
+
+复现（项目根目录，输出必须新路径）：
+py scripts/validate_authored_contracts.py --source backend/data/hands-on-continuation-istio-projects-native.json --wsl OpsForge-Validation-20261022 --wsl-user student --output work/istio-projects-four-routes.json
+py scripts/validate_contract_mutants.py --source backend/data/hands-on-continuation-istio-projects-native.json --mutants tests/fixtures/istio_projects_mutants.json --wsl OpsForge-Validation-20261022 --wsl-user student --output work/istio-projects-mutants.json
+
+官方依据已核对，链接同时保存在每题references：Istio CA层级与安全、Istio访问
+日志和Envoy字段格式、OpenSSL verify、Python ssl/gzip、SQLite原子提交及backup。
+当前环境没有istioctl/envoy，既有依赖它们的配置/代理验证不能以这两个项目
+替代，更不能因此提前完成其他剩余项目或模块总验收。
+
+独立复核后新增原生边界：prepare拒绝dangling既有state链接，expand探针异常也回退；真实KU/EKU/DNS/RSA2048/两天期限与CSR签名、公钥一致性逐项检查。JSONL只按LF分隔并明确CRLF/空行语义，保留字符串中合法Unicode分隔字符；编码以清单复合后缀决定，root内别名不能绕过gzip。只读SQL以authorizer阻止ATTACH旁路创建，恢复缺源不创建假库；实际插入孤儿来源行验证外键确实存在。

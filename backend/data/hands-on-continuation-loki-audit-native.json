@@ -1,0 +1,151 @@
+[
+  {
+    "id": "curated-advanced-loki-005",
+    "module": "loki",
+    "category": "Loki",
+    "level": 5,
+    "topic": "日志模型与采集",
+    "title": "真实结构化metadata检索：trace/pod不进入索引标签，原始非JSON日志仍可精确查询",
+    "body": "## 操作任务\n实现build_stream(app,entries)和query(app,trace)。entries为(timestamp_ns,line,trace_id,pod_uid)四元组列表；时间非负整数拒绝bool，line字符串，trace为32位小写十六进制，pod非空字符串，app为小写字母开头的小写字母数字连字符1..32。返回Loki push stream：stream标签仅app，每条values为[十进制纳秒字符串,原始line,{trace_id,pod_uid}]；不能把metadata塞进line、索引标签或另建每trace一个stream。query返回app流选择器之后的trace_id精确metadata过滤，不能把trace_id当索引选择器或依赖JSON解析。原生环境TSDB v13且allow_structured_metadata=true；24个不同trace/pod实际只形成一个索引stream，指定trace仍返回原始非JSON行。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Loki3.5.5结构化metadata写查及series API；验证索引流基数和字段位置，不宣称metadata零存储成本、生产费用或大规模查询速度。未部署Alloy或OTLP采集链。",
+    "answer": "```python\nimport re\ndef build_stream(app,entries):\n    if not isinstance(app,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',app):raise ValueError('application label')\n    values=[]\n    for timestamp,line,trace,pod in entries:\n        if type(timestamp) is not int or timestamp<0 or not isinstance(line,str) or not isinstance(trace,str) or not re.fullmatch(r'[0-9a-f]{32}',trace) or not isinstance(pod,str) or not pod:raise ValueError('typed log and metadata')\n        values.append([str(timestamp),line,{'trace_id':trace,'pod_uid':pod}])\n    return {'stream':{'app':app},'values':values}\ndef query(app,trace):\n    if not isinstance(app,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',app) or not isinstance(trace,str) or not re.fullmatch(r'[0-9a-f]{32}',trace):raise ValueError('safe exact metadata filter')\n    return '{app=\"'+app+'\"} | trace_id=\"'+trace+'\"'\n```\n\n原题知识说明：\n交付哪些低基数属性作为流标签、哪些高基数属性保存为structured metadata，以及追踪系统到日志的查询契约。trace ID不应为了精确查询就无界增加流数，但放入metadata后的查询能力与部署schema支持需核验。验收同一trace跨服务、多条日志缺失trace和非法格式，检查跳转能找到全部预期事件且不会跨租户。比较改造前后活跃流、chunk利用率、写入和查询字节，不能只看索引大小。交付旧日志没有metadata时的兼容搜索路径与保留窗口，既有历史不会因为新采集配置自动补全。",
+    "type": "code",
+    "source": "advanced-expansion-20261022:data:loki",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "LogQL或存储语义准确",
+      "证据可证明时间范围与完整性",
+      "明确配额、权限与无法保证的边界"
+    ],
+    "references": [
+      "https://grafana.com/docs/loki/latest/get-started/labels/structured-metadata/",
+      "https://grafana.com/docs/loki/latest/reference/loki-http-api/"
+    ],
+    "related_modules": [
+      "loki"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-loki-005",
+      "original_title": "为Loki结构化metadata承载trace ID设计检索与成本项目。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import re\ndef build_stream(app,entries):\n    if not isinstance(app,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',app):raise ValueError('application label')\n    values=[]\n    for timestamp,line,trace,pod in entries:\n        if type(timestamp) is not int or timestamp<0 or not isinstance(line,str) or not isinstance(trace,str) or not re.fullmatch(r'[0-9a-f]{32}',trace) or not isinstance(pod,str) or not pod:raise ValueError('typed log and metadata')\n        values.append([str(timestamp),line,{'trace_id':trace,'pod_uid':pod}])\n    return {'stream':{'app':app},'values':values}\ndef query(app,trace):\n    if not isinstance(app,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',app) or not isinstance(trace,str) or not re.fullmatch(r'[0-9a-f]{32}',trace):raise ValueError('safe exact metadata filter')\n    return '{app=\"'+app+'\"} | trace_id=\"'+trace+'\"'\n"
+    },
+    "negative_files": {
+      "task.py": "import re\ndef build_stream(app,entries):\n    if not isinstance(app,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',app):raise ValueError('application label')\n    values=[]\n    for timestamp,line,trace,pod in entries:\n        if type(timestamp) is not int or timestamp<0 or not isinstance(line,str) or not isinstance(trace,str) or not re.fullmatch(r'[0-9a-f]{32}',trace) or not isinstance(pod,str) or not pod:raise ValueError('typed log and metadata')\n        values.append([str(timestamp),__import__('json').dumps({'message':line,'trace_id':trace,'pod_uid':pod})])\n    return {'stream':{'app':app},'values':values}\ndef query(app,trace):\n    if not isinstance(app,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',app) or not isinstance(trace,str) or not re.fullmatch(r'[0-9a-f]{32}',trace):raise ValueError('safe exact metadata filter')\n    return '{app=\"'+app+'\"} | trace_id=\"'+trace+'\"'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现build_stream(app,entries)和query(app,trace)。entries为(timestamp_ns,line,trace_id,pod_uid)四元组列表；时间非负整数拒绝bool，line字符串，trace为32位小写十六进制，pod非空字符串，app为小写字母开头的小写字母数字连字符1..32。返回Loki push stream：stream标签仅app，每条values为[十进制纳秒字符串,原始line,{trace_id,pod_uid}]；不能把metadata塞进line、索引标签或另建每trace一个stream。query返回app流选择器之后的trace_id精确metadata过滤，不能把trace_id当索引选择器或依赖JSON解析。原生环境TSDB v13且allow_structured_metadata=true；24个不同trace/pod实际只形成一个索引stream，指定trace仍返回原始非JSON行。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Loki3.5.5结构化metadata写查及series API；验证索引流基数和字段位置，不宣称metadata零存储成本、生产费用或大规模查询速度。未部署Alloy或OTLP采集链。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "loki"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/loki_native.py": "\"\"\"Private standalone Loki 3.5.5, filesystem storage and loopback-only HTTP/gRPC.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.parse,urllib.error\nimport yaml\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Loki:\n def __init__(self,auth=False,structured=False):\n  self.binary=shutil.which('loki');self.process=None;self.auth=auth;self.structured=structured\n  if not self.binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 executable missing')\n  version=subprocess.run([self.binary,'-version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '3.5.5' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-loki-');self.root=pathlib.Path(self.temp.name);http=free_port();grpc=free_port()\n  while grpc==http:grpc=free_port()\n  self.base='http://127.0.0.1:'+str(http);self.log=(self.root/'server.log').open('wb')\n  config={'auth_enabled':self.auth,'server':{'http_listen_address':'127.0.0.1','http_listen_port':http,'grpc_listen_address':'127.0.0.1','grpc_listen_port':grpc,'log_level':'error'},\n   'common':{'instance_addr':'127.0.0.1','path_prefix':str(self.root),'replication_factor':1,'storage':{'filesystem':{'chunks_directory':str(self.root/'chunks'),'rules_directory':str(self.root/'rules')}},'ring':{'kvstore':{'store':'inmemory'}}},\n   'schema_config':{'configs':[{'from':'2020-10-24','store':'tsdb','object_store':'filesystem','schema':'v13','index':{'prefix':'index_','period':'24h'}}]},\n   'ingester':{'lifecycler':{'min_ready_duration':'0s','final_sleep':'0s','heartbeat_period':'100ms'},'wal':{'enabled':False}},\n   'limits_config':{'allow_structured_metadata':self.structured,'max_query_parallelism':2,'tsdb_max_query_parallelism':2,'split_queries_by_interval':'0s','query_timeout':'5s'},\n   'querier':{'max_concurrent':2},'analytics':{'reporting_enabled':False},'pattern_ingester':{'enabled':False},'compactor':{'working_directory':str(self.root/'compactor')}}\n  path=self.root/'config.yaml';path.write_text(yaml.safe_dump(config,sort_keys=False),encoding='utf8')\n  try:\n   self.process=subprocess.Popen([self.binary,'-config.file='+str(path)],cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'192MiB','HOME':str(self.root)})\n   self.wait(lambda:self.request('/ready')==b'ready\\n','private HTTP readiness',seconds=12)\n   print('NATIVE_LOKI_READY:3.5.5',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,data=None,tenant=None,headers=None):\n  outgoing={'Content-Type':'application/json',**(headers or {})}\n  if tenant is not None:outgoing['X-Scope-OrgID']=tenant\n  request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data,ensure_ascii=False).encode(),headers=outgoing)\n  with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as response:\n   raw=response.read();return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n def wait(self,predicate,description,seconds=5):\n  deadline=time.monotonic()+seconds\n  while time.monotonic()<deadline:\n   if self.process.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki exited: '+(self.root/'server.log').read_text(errors='replace')[-2500:])\n   try:\n    value=predicate()\n    if value:return value\n   except (OSError,urllib.error.URLError):pass\n   time.sleep(.04)\n  raise AssertionError('native Loki deadline: '+description)\n def push(self,streams,tenant=None):\n  result=self.request('/loki/api/v1/push',{'streams':streams},tenant=tenant);assert result==b''\n def logs(self,query,start,end,tenant=None):\n  params={'query':query,'start':str(start),'end':str(end),'direction':'forward','limit':'1000'}\n  result=self.request('/loki/api/v1/query_range?'+urllib.parse.urlencode(params),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='streams';return result['data']['result']\n def metric(self,query,at,tenant=None):\n  result=self.request('/loki/api/v1/query?'+urllib.parse.urlencode({'query':query,'time':str(at)}),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='vector';return result['data']['result']\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=4)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if getattr(self,'log',None):self.log.close()\n  self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,json,copy,secrets,time,urllib.parse,urllib.error\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom loki_native import Loki\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as error:raise AssertionError('student Loki operation failed') from error\nwith Loki(structured=True) as server:\n base=time.time_ns()-5*10**9;entries=[(base+i,'plain-line-'+str(i),secrets.token_hex(16),'pod-'+secrets.token_hex(6)) for i in range(24)];before=copy.deepcopy(entries)\n stream=student(task.build_stream,'trace-audit',entries)\n try:server.push([stream])\n except urllib.error.HTTPError as error:raise AssertionError('submitted push format was rejected by native Loki') from error\n assert entries==before\n selected=7;needle=entries[selected][2];query=student(task.query,'trace-audit',needle)\n assert [line for row in server.logs(query,base-1,base+100) for _,line in row['values']]==[entries[selected][1]],'trace metadata could not select the original plain line'\n assert needle not in entries[selected][1]\n assert server.logs(task.query('trace-audit',secrets.token_hex(16)),base-1,base+100)==[]\n params=urllib.parse.urlencode([('match[]','{app=\"trace-audit\"}'),('start',str(base-1)),('end',str(base+100))]);series=server.request('/loki/api/v1/series?'+params)['data']\n assert len(series)==1 and series[0].get('app')=='trace-audit' and not {'trace_id','pod_uid'}&set(series[0]),'trace/pod identity was indexed as high-cardinality stream labels'\n assert stream['stream']=={'app':'trace-audit'} and all(len(row)==3 and row[2]=={'trace_id':entries[i][2],'pod_uid':entries[i][3]} for i,row in enumerate(stream['values']))\n for invalid_app,invalid_trace in [('bad\"label',needle),('trace-audit','not-a-trace')]:\n  try:task.query(invalid_app,invalid_trace)\n  except ValueError:pass\n  else:raise AssertionError('unsafe selector interpolation accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-advanced-loki-007",
+    "module": "loki",
+    "category": "Loki",
+    "level": 5,
+    "topic": "LogQL查询与解析",
+    "title": "真实审计导出同时间戳边界：扩大页限与二分窗口，无法证明完整时明确失败",
+    "body": "## 操作任务\n实现export_audit(query,start,end,page_limit,max_limit,destination)，query是可信原生Loki回调，接收半开纳秒窗口[start,end)与limit，按forward返回最多limit条{labels,timestamp,line}。参数均整数拒绝bool，0<=start<end，1<=page_limit<=max_limit<=1000；整个导出输入已静止，不承诺并发摄取快照。返回少于limit条才证明该窗口完整；满页先扩大limit至上限，仍满则二分不重叠时间窗。缩到1纳秒仍满页时（即使恰好等于上限）必须RuntimeError且消息含incomplete，不得advance最后时间戳+1丢事件或猜测导出完整。总回调最多256次、最多20000行，失败不创建完成文件。成功按(timestamp,labels规范JSON,line)排序写独占新建UTF8 JSONL，返回{complete:True,rows:条数}。已有目标FileExistsError且不覆盖。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Loki3.5.5 query_range与同一时间戳多日志；增加limit和时间二分是有界客户端算法，不是服务端无限游标。最大limit在单纳秒仍饱和时只能明确不完整；未验证并发写入、租户限流或海量导出存储性能。",
+    "answer": "```python\nimport json,pathlib\ndef export_audit(query,start,end,page_limit,max_limit,destination):\n    if any(type(x) is not int for x in (start,end,page_limit,max_limit)) or not 0<=start<end or not 1<=page_limit<=max_limit<=1000:raise ValueError('bounded half-open query window')\n    destination=pathlib.Path(destination)\n    if destination.exists():raise FileExistsError(destination)\n    calls=0\n    def fetch(lo,hi):\n        nonlocal calls\n        limit=page_limit\n        while True:\n            calls+=1\n            if calls>256:raise RuntimeError('incomplete: query budget exceeded')\n            rows=query(lo,hi,limit)\n            if len(rows)<limit:return rows\n            if limit<max_limit:limit=min(max_limit,limit*2);continue\n            if hi-lo==1:raise RuntimeError('incomplete: saturated timestamp cannot be proven complete')\n            middle=(lo+hi)//2\n            return fetch(lo,middle)+fetch(middle,hi)\n    rows=fetch(start,end)\n    if len(rows)>20000:raise RuntimeError('incomplete: output memory budget exceeded')\n    rows.sort(key=lambda row:(row['timestamp'],json.dumps(row['labels'],sort_keys=True),row['line']))\n    with destination.open('x',encoding='utf8') as stream:\n        for row in rows:stream.write(json.dumps(row,ensure_ascii=False,sort_keys=True)+'\\n')\n    return {'complete':True,'rows':len(rows)}\n```\n\n原题知识说明：\n交付时间范围、标签分区、导出行身份和批次完整性清单。只把下一页起点设置为上一页最后时间戳加一，可能遗漏该时间戳尚未返回的行；重复边界查询又必须处理去重，且不能假设HTTP API提供通用稳定游标。验收构造大量同纳秒日志、多流和相同行文本，检查按标签或更细业务分区拆分是否能完整覆盖。若单个不可再分集合仍超过接口限制，应使用被验证的导出路径或源数据归档，明确无法证明完整，不能假装翻页成功。交付限流、重复检测及来源对账，审计结论不以返回条数少于预想作为完成标志。",
+    "type": "code",
+    "source": "advanced-expansion-20261022:data:loki",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "LogQL或存储语义准确",
+      "证据可证明时间范围与完整性",
+      "明确配额、权限与无法保证的边界"
+    ],
+    "references": [
+      "https://grafana.com/docs/loki/latest/reference/loki-http-api/"
+    ],
+    "related_modules": [
+      "loki"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-loki-007",
+      "original_title": "设计Loki审计导出，处理同一时间戳日志超过单次limit的边界。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json,pathlib\ndef export_audit(query,start,end,page_limit,max_limit,destination):\n    if any(type(x) is not int for x in (start,end,page_limit,max_limit)) or not 0<=start<end or not 1<=page_limit<=max_limit<=1000:raise ValueError('bounded half-open query window')\n    destination=pathlib.Path(destination)\n    if destination.exists():raise FileExistsError(destination)\n    calls=0\n    def fetch(lo,hi):\n        nonlocal calls\n        limit=page_limit\n        while True:\n            calls+=1\n            if calls>256:raise RuntimeError('incomplete: query budget exceeded')\n            rows=query(lo,hi,limit)\n            if len(rows)<limit:return rows\n            if limit<max_limit:limit=min(max_limit,limit*2);continue\n            if hi-lo==1:raise RuntimeError('incomplete: saturated timestamp cannot be proven complete')\n            middle=(lo+hi)//2\n            return fetch(lo,middle)+fetch(middle,hi)\n    rows=fetch(start,end)\n    if len(rows)>20000:raise RuntimeError('incomplete: output memory budget exceeded')\n    rows.sort(key=lambda row:(row['timestamp'],json.dumps(row['labels'],sort_keys=True),row['line']))\n    with destination.open('x',encoding='utf8') as stream:\n        for row in rows:stream.write(json.dumps(row,ensure_ascii=False,sort_keys=True)+'\\n')\n    return {'complete':True,'rows':len(rows)}\n"
+    },
+    "negative_files": {
+      "task.py": "import json,pathlib\ndef export_audit(query,start,end,page_limit,max_limit,destination):\n    if any(type(x) is not int for x in (start,end,page_limit,max_limit)) or not 0<=start<end or not 1<=page_limit<=max_limit<=1000:raise ValueError('bounded half-open query window')\n    destination=pathlib.Path(destination)\n    if destination.exists():raise FileExistsError(destination)\n    calls=0\n    def fetch(lo,hi):\n        nonlocal calls\n        limit=page_limit\n        while True:\n            calls+=1\n            if calls>256:raise RuntimeError('incomplete: query budget exceeded')\n            rows=query(lo,hi,limit)\n            if rows:return rows # silently accepted a truncated first page\n            if not rows:return rows\n            if limit<max_limit:limit=min(max_limit,limit*2);continue\n            if hi-lo==1:raise RuntimeError('incomplete: saturated timestamp cannot be proven complete')\n            middle=(lo+hi)//2\n            return fetch(lo,middle)+fetch(middle,hi)\n    rows=fetch(start,end)\n    if len(rows)>20000:raise RuntimeError('incomplete: output memory budget exceeded')\n    rows.sort(key=lambda row:(row['timestamp'],json.dumps(row['labels'],sort_keys=True),row['line']))\n    with destination.open('x',encoding='utf8') as stream:\n        for row in rows:stream.write(json.dumps(row,ensure_ascii=False,sort_keys=True)+'\\n')\n    return {'complete':True,'rows':len(rows)}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现export_audit(query,start,end,page_limit,max_limit,destination)，query是可信原生Loki回调，接收半开纳秒窗口[start,end)与limit，按forward返回最多limit条{labels,timestamp,line}。参数均整数拒绝bool，0<=start<end，1<=page_limit<=max_limit<=1000；整个导出输入已静止，不承诺并发摄取快照。返回少于limit条才证明该窗口完整；满页先扩大limit至上限，仍满则二分不重叠时间窗。缩到1纳秒仍满页时（即使恰好等于上限）必须RuntimeError且消息含incomplete，不得advance最后时间戳+1丢事件或猜测导出完整。总回调最多256次、最多20000行，失败不创建完成文件。成功按(timestamp,labels规范JSON,line)排序写独占新建UTF8 JSONL，返回{complete:True,rows:条数}。已有目标FileExistsError且不覆盖。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Loki3.5.5 query_range与同一时间戳多日志；增加limit和时间二分是有界客户端算法，不是服务端无限游标。最大limit在单纳秒仍饱和时只能明确不完整；未验证并发写入、租户限流或海量导出存储性能。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "loki"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/loki_native.py": "\"\"\"Private standalone Loki 3.5.5, filesystem storage and loopback-only HTTP/gRPC.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.parse,urllib.error\nimport yaml\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Loki:\n def __init__(self,auth=False,structured=False):\n  self.binary=shutil.which('loki');self.process=None;self.auth=auth;self.structured=structured\n  if not self.binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 executable missing')\n  version=subprocess.run([self.binary,'-version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '3.5.5' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-loki-');self.root=pathlib.Path(self.temp.name);http=free_port();grpc=free_port()\n  while grpc==http:grpc=free_port()\n  self.base='http://127.0.0.1:'+str(http);self.log=(self.root/'server.log').open('wb')\n  config={'auth_enabled':self.auth,'server':{'http_listen_address':'127.0.0.1','http_listen_port':http,'grpc_listen_address':'127.0.0.1','grpc_listen_port':grpc,'log_level':'error'},\n   'common':{'instance_addr':'127.0.0.1','path_prefix':str(self.root),'replication_factor':1,'storage':{'filesystem':{'chunks_directory':str(self.root/'chunks'),'rules_directory':str(self.root/'rules')}},'ring':{'kvstore':{'store':'inmemory'}}},\n   'schema_config':{'configs':[{'from':'2020-10-24','store':'tsdb','object_store':'filesystem','schema':'v13','index':{'prefix':'index_','period':'24h'}}]},\n   'ingester':{'lifecycler':{'min_ready_duration':'0s','final_sleep':'0s','heartbeat_period':'100ms'},'wal':{'enabled':False}},\n   'limits_config':{'allow_structured_metadata':self.structured,'max_query_parallelism':2,'tsdb_max_query_parallelism':2,'split_queries_by_interval':'0s','query_timeout':'5s'},\n   'querier':{'max_concurrent':2},'analytics':{'reporting_enabled':False},'pattern_ingester':{'enabled':False},'compactor':{'working_directory':str(self.root/'compactor')}}\n  path=self.root/'config.yaml';path.write_text(yaml.safe_dump(config,sort_keys=False),encoding='utf8')\n  try:\n   self.process=subprocess.Popen([self.binary,'-config.file='+str(path)],cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'192MiB','HOME':str(self.root)})\n   self.wait(lambda:self.request('/ready')==b'ready\\n','private HTTP readiness',seconds=12)\n   print('NATIVE_LOKI_READY:3.5.5',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,data=None,tenant=None,headers=None):\n  outgoing={'Content-Type':'application/json',**(headers or {})}\n  if tenant is not None:outgoing['X-Scope-OrgID']=tenant\n  request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data,ensure_ascii=False).encode(),headers=outgoing)\n  with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as response:\n   raw=response.read();return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n def wait(self,predicate,description,seconds=5):\n  deadline=time.monotonic()+seconds\n  while time.monotonic()<deadline:\n   if self.process.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki exited: '+(self.root/'server.log').read_text(errors='replace')[-2500:])\n   try:\n    value=predicate()\n    if value:return value\n   except (OSError,urllib.error.URLError):pass\n   time.sleep(.04)\n  raise AssertionError('native Loki deadline: '+description)\n def push(self,streams,tenant=None):\n  result=self.request('/loki/api/v1/push',{'streams':streams},tenant=tenant);assert result==b''\n def logs(self,query,start,end,tenant=None):\n  params={'query':query,'start':str(start),'end':str(end),'direction':'forward','limit':'1000'}\n  result=self.request('/loki/api/v1/query_range?'+urllib.parse.urlencode(params),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='streams';return result['data']['result']\n def metric(self,query,at,tenant=None):\n  result=self.request('/loki/api/v1/query?'+urllib.parse.urlencode({'query':query,'time':str(at)}),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='vector';return result['data']['result']\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=4)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if getattr(self,'log',None):self.log.close()\n  self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,json,copy,secrets,time,urllib.parse,urllib.error\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom loki_native import Loki\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as error:raise AssertionError('student Loki operation failed') from error\nwith Loki() as server,tempfile.TemporaryDirectory() as directory:\n base=time.time_ns()-5*10**9;root=pathlib.Path(directory);payloads=[]\n for name,groups in [('burst',[(1,9)]),('many',[(1,11),(2,11),(3,11)]),('saturated',[(1,12)])]:\n  values=[]\n  for offset,count in groups:\n   for i in range(count):values.append([str(base+offset),name+'-'+str(offset)+'-'+str(i)])\n  payloads.append({'stream':{'app':name},'values':values})\n server.push(payloads)\n calls=[]\n def callback(app):\n  def run(start,end,limit):\n   assert base<=start<end<=base+4 and 1<=limit<=20,'query crossed approved export bounds'\n   calls.append((start,end,limit))\n   params=urllib.parse.urlencode({'query':'{app=\"'+app+'\"}','start':str(start),'end':str(end),'direction':'forward','limit':str(limit)})\n   data=server.request('/loki/api/v1/query_range?'+params)['data'];assert data['resultType']=='streams'\n   return [{'labels':row['stream'],'timestamp':int(timestamp),'line':line} for row in data['result'] for timestamp,line in row['values']]\n  return run\n print('STUDENT_OPERATION_ENTERED:export_audit',flush=True)\n for name,count,max_limit in [('burst',9,20),('many',33,12)]:\n  destination=root/(name+'.jsonl');result=task.export_audit(callback(name),base,base+4,3,max_limit,destination)\n  exported=[json.loads(line) for line in destination.read_text(encoding='utf8').splitlines()]\n  observed=server.logs('{app=\"'+name+'\"}',base,base+4)\n  expected=[{'labels':row['stream'],'timestamp':int(timestamp),'line':line} for row in observed for timestamp,line in row['values']]\n  pushed=[(int(timestamp),line) for p in payloads if p['stream']['app']==name for timestamp,line in p['values']]\n  assert sorted((row['timestamp'],row['line']) for row in expected)==sorted(pushed),'native corpus differed from the known pushed events'\n  expected.sort(key=lambda row:(row['timestamp'],json.dumps(row['labels'],sort_keys=True),row['line']))\n  assert result=={'complete':True,'rows':count} and exported==expected,'same-timestamp or split-window events were dropped or repeated'\n ambiguous=root/'saturated.jsonl'\n try:task.export_audit(callback('saturated'),base,base+4,3,12,ambiguous)\n except RuntimeError as error:assert 'incomplete' in str(error)\n else:raise AssertionError('an exactly full maximum timestamp page was declared complete')\n assert not ambiguous.exists(),'failed export left a misleading completion artifact'\n marker=root/'existing';marker.write_bytes(b'original')\n try:task.export_audit(callback('burst'),base,base+4,3,20,marker)\n except FileExistsError:pass\n else:raise AssertionError('previous export was overwritten')\n assert marker.read_bytes()==b'original'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

@@ -1,0 +1,240 @@
+[
+  {
+    "id": "curated-parallel-ceph-004",
+    "module": "ceph",
+    "category": "Ceph",
+    "level": 0,
+    "topic": "架构与数据放置",
+    "title": "真实RADOS pool对象键：斜杠和点点是字面身份，不按文件夹切割",
+    "answer": "```python\ndef write_objects(io,rows):\n    names=[row['name'] for row in rows]\n    if any(not isinstance(name,str) or not name or '\\x00' in name for name in names) or len(set(names))!=len(names):raise ValueError('unique nonempty literal object keys required')\n    if any(not isinstance(row['body'],bytes) for row in rows):raise ValueError('binary object bodies required')\n    for row in rows:io.write_full(row['name'],row['body'])\n```\n\n原题知识说明：\n不能，pool是定义副本、CRUSH规则和PG等策略的逻辑对象集合。对象映射到OSD不保留普通目录层次，应使用产品接口管理。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Ceph Squid 官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现write_objects(io,rows)。先完整校验rows中name为非空不含NUL的唯一str、body为bytes，非法ValueError且不能部分写入；随后对每个原name直接io.write_full(name,body)。不得按路径取basename、规范化斜杠、切namespace或写本地文件。不改输入或已有保护对象。真实RADOS中a/item与b/item不同对象，../outside和UTF8键也是不透明对象名，二进制原样回读。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Ceph16.2.15私有MON/内存型OSD/RADOS读写，pool中的对象键不是POSIX路径。实验关闭Cephx，仅本容器隔离网络；不验证生产账号权限、磁盘耐久、物理文件布局或生产容灾。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://docs.ceph.com/en/pacific/rados/api/python/"
+    ],
+    "related_modules": [
+      "ceph"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-ceph-004",
+      "original_title": "Ceph pool可以被当成物理文件夹吗？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def write_objects(io,rows):\n    names=[row['name'] for row in rows]\n    if any(not isinstance(name,str) or not name or '\\x00' in name for name in names) or len(set(names))!=len(names):raise ValueError('unique nonempty literal object keys required')\n    if any(not isinstance(row['body'],bytes) for row in rows):raise ValueError('binary object bodies required')\n    for row in rows:io.write_full(row['name'],row['body'])\n"
+    },
+    "negative_files": {
+      "task.py": "def write_objects(io,rows):\n    names=[row['name'] for row in rows]\n    if any(not isinstance(name,str) or not name or '\\x00' in name for name in names) or len(set(names))!=len(names):raise ValueError('unique nonempty literal object keys required')\n    if any(not isinstance(row['body'],bytes) for row in rows):raise ValueError('binary object bodies required')\n    for row in rows:io.write_full(row['name'].rsplit('/',1)[-1],row['body'])\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像与只读官方Ceph16.2.15，显式2GiB预算，私有MON/内存型OSD；不构建镜像",
+      "operation": "实现write_objects(io,rows)。先完整校验rows中name为非空不含NUL的唯一str、body为bytes，非法ValueError且不能部分写入；随后对每个原name直接io.write_full(name,body)。不得按路径取basename、规范化斜杠、切namespace或写本地文件。不改输入或已有保护对象。真实RADOS中a/item与b/item不同对象，../outside和UTF8键也是不透明对象名，二进制原样回读。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Ceph16.2.15私有MON/内存型OSD/RADOS读写，pool中的对象键不是POSIX路径。实验关闭Cephx，仅本容器隔离网络；不验证生产账号权限、磁盘耐久、物理文件布局或生产容灾。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "ceph",
+          "ceph-mon",
+          "ceph-osd",
+          "ceph-authtool",
+          "monmaptool"
+        ],
+        "python_modules": [
+          "rados"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/ceph_cluster_native.py": "\"\"\"Experimental nonroot, private MON/memstore OSD; no question or incident credit.\"\"\"\nimport json,os,pathlib,socket,subprocess,tempfile,time,uuid\nimport rados\nassert os.geteuid()==1000\nTOOL=pathlib.Path('/opt/opsforge-ceph')\nENV={**os.environ,'LD_LIBRARY_PATH':str(TOOL/'usr/lib/x86_64-linux-gnu/ceph')+':'+str(TOOL/'usr/lib/x86_64-linux-gnu')+':'+str(TOOL/'lib/x86_64-linux-gnu'),'PYTHONPATH':str(TOOL/'usr/lib/python3/dist-packages')}\ndef command(name,*args,timeout=20):\n result=subprocess.run([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,capture_output=True,text=True,timeout=timeout)\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\ndef port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\nclass PrivateCeph:\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-private-ceph-');self.root=pathlib.Path(self.temp.name);self.processes=[];self.logs=[];self.client=None\n  try:\n   self.fsid=str(uuid.uuid4());self.monport=port();self.config=self.root/'ceph.conf';self.monmap=self.root/'monmap';self.mondata=self.root/'mon.a';self.mondata.mkdir()\n   (self.root/'run').mkdir();(self.root/'crash').mkdir()\n   self.config.write_text('''[global]\nfsid = {fsid}\nmon initial members = a\nmon host = 127.0.0.1:{port}\nauth cluster required = none\nauth service required = none\nauth client required = none\npublic addr = 127.0.0.1\ncluster addr = 127.0.0.1\nms bind ipv4 = true\nms bind ipv6 = false\nms async op threads = 1\nlog to stderr = true\nlog to file = false\nrun dir = {root}/run\ncrash dir = {root}/crash\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nadmin socket = {root}/$name.asok\npid file = {root}/$name.pid\nkeyring = {root}/$name.keyring\nmon data avail crit = 0\nmon data avail warn = 0\nmon allow pool delete = true\nmon allow pool size one = true\nosd pool default size = 1\nosd pool default min size = 1\nosd pool default pg num = 1\nosd pool default pgp num = 1\nosd pool default pg autoscale mode = off\nosd crush chooseleaf type = 0\nrados mon op timeout = 3\nrados osd op timeout = 3\n[mon.a]\nmon data = {root}/mon.a\nmon addr = 127.0.0.1:{port}\n[osd]\nosd objectstore = memstore\nosd data = {root}/osd.$id\nkeyring = {root}/osd.$id/keyring\nosd memory target = 134217728\nmemstore device bytes = 134217728\nosd op num shards = 1\nosd op num threads per shard = 1\nosd op num shards hdd = 1\nosd op num threads per shard hdd = 1\nosd op num shards ssd = 1\nosd op num threads per shard ssd = 1\nosd recovery max active = 1\nosd max backfills = 1\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\n'''.format(fsid=self.fsid,port=self.monport,root=self.root,tool=TOOL))\n   command('monmaptool','--create','--fsid',self.fsid,'--add','a','127.0.0.1:'+str(self.monport),self.monmap)\n   command('ceph-authtool','--create-keyring',self.root/'mon.keyring','--gen-key','-n','mon.')\n   command('ceph-mon','--mkfs','-i','a','-c',self.config,'--monmap',self.monmap,'--mon-data',self.mondata,'--keyring',self.root/'mon.keyring')\n   monitor=self.start('ceph-mon','-f','-i','a','-c',self.config,'--mon-data',self.mondata,'--setuser','1000','--setgroup','1000')\n   deadline=time.monotonic()+20;last=None\n   while time.monotonic()<deadline:\n    if monitor.poll() is not None:raise RuntimeError('private MON exited before readiness: '+self.log_tail())\n    try:\n     status=json.loads(command('ceph','--admin-daemon',self.root/'mon.a.asok','mon_status',timeout=3))\n     if status.get('state') not in ('leader','peon'):time.sleep(.2);continue\n     assert status['monmap']['fsid']==self.fsid;break\n    except Exception as error:\n     last=error\n     time.sleep(.2)\n   else:raise RuntimeError('private MON readiness failed: '+str(last)+' '+self.log_tail())\n   print('NATIVE_PRIVATE_CEPH_MON_READY '+json.dumps({'fsid':self.fsid,'uid':os.geteuid(),'quorum':status.get('quorum'),'network':'none-loopback-only'}),flush=True)\n   self.client=rados.Rados(conffile=str(self.config),name='client.admin');self.client.connect(timeout=3)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def start(self,name,*args):\n  log=(self.root/(name+'-'+str(len(self.processes))+'.log')).open('wb');self.logs.append(log)\n  process=subprocess.Popen([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,stdin=subprocess.DEVNULL,stdout=log,stderr=log);self.processes.append(process)\n  return process\n def mon(self,prefix,**kwargs):\n  rc,out,err=self.client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kwargs}),b'')\n  if rc:raise RuntimeError('private mon command '+prefix+' failed: '+str(rc)+' '+str(err))\n  try:return json.loads(out)\n  except json.JSONDecodeError:return out.decode().strip()\n def add_osd(self):\n  osduuid=str(uuid.uuid4());created=self.mon('osd create',uuid=osduuid);osdid=int(created['osdid'] if isinstance(created,dict) else created);data=self.root/('osd.'+str(osdid));data.mkdir()\n  command('ceph-osd','--mkfs','--mkkey','-i',osdid,'-c',self.config,'--osd-uuid',osduuid,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  process=self.start('ceph-osd','-f','-i',osdid,'-c',self.config,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  deadline=time.monotonic()+20\n  while time.monotonic()<deadline:\n   if process.poll() is not None:raise RuntimeError('private OSD exited: '+self.log_tail())\n   status=self.mon('osd dump');row=next((row for row in status['osds'] if row['osd']==osdid),None)\n   if row and row['up']==1 and row['in']==1:break\n   time.sleep(.2)\n  else:raise RuntimeError('private OSD readiness timeout: '+self.log_tail())\n  print('NATIVE_PRIVATE_CEPH_MEMSTORE_OSD_READY '+str(osdid),flush=True);return osdid\n def log_tail(self):\n  return '\\n'.join(path.read_text(errors='replace')[-2500:] for path in self.root.glob('*.log'))\n def __exit__(self,*args):\n  if self.client:\n   try:self.client.shutdown()\n   except Exception:pass\n  for process in reversed(self.processes):\n   if process.poll() is None:process.terminate()\n   try:process.wait(timeout=8)\n   except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)\n  for log in self.logs:log.close()\n  self.temp.cleanup()\n\nfor executable in ('ceph-mon','ceph-osd'):\n assert 'ceph version 16.2.15 ' in command(executable,'--version')\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy,rados\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom ceph_cluster_native import PrivateCeph\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\ndef all_objects(io):return {obj.key:io.read(obj.key) for obj in io.list_objects()}\ndef omap(io,name):\n with rados.ReadOpCtx() as op:\n  values,unused=io.get_omap_vals(op,'','',100);io.operate_read_op(op,name);return dict(values)\nwith PrivateCeph() as cluster:\n cluster.add_osd();cluster.client.create_pool('owned_objects')\n with cluster.client.open_ioctx('owned_objects') as io:\n  io.write_full('protected',b'keep-existing')\n  rows=[{'name':'a/item','body':b'a-binary\\x00\\xff'},{'name':'b/item','body':b'different-b'},{'name':'../outside','body':b'opaque-not-a-filesystem-path'},{'name':'目录/事件','body':b'utf8-key'}];before=copy.deepcopy(rows)\n  print('NATIVE_CEPH_REAL_POOL_IO_READY_KEYS_ARE_OPAQUE_NOT_DIRECTORY_HIERARCHY',flush=True)\n  print('STUDENT_OPERATION_ENTERED:write_actual_rados_literal_slash_dotdot_utf8_keys_without_basename_collision',flush=True)\n  try:task.write_objects(io,rows)\n  except Exception as error:raise AssertionError('student actual RADOS object-key write failed') from error\n  expected={'protected':b'keep-existing',**{row['name']:row['body'] for row in rows}}\n  assert all_objects(io)==expected,'object key treated as filesystem path or basename instead of opaque RADOS identity'\n  for invalid in ([{'name':'bad\\x00key','body':b'x'}],[{'name':'','body':b'x'}],[rows[0],rows[0]],[{'name':'bad-type','body':'text'}]):\n   try:task.write_objects(io,invalid)\n   except ValueError:pass\n   else:raise AssertionError('invalid/ambiguous keys accepted')\n   assert all_objects(io)==expected\n  assert rows==before\n  print('NATIVE_RADOS_SLASH_KEYS_SAME_BASENAME_DISTINCT_DOTDOT_OPAQUE_UTF8_BINARY_PROTECTED_OBJECT_RETAINED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "src-8288a736c92e63f7",
+    "title": "真实OMAP与对象数据分离：单WriteOp补改元数据键，保留body和xattr",
+    "answer": "```python\nimport rados\ndef patch_omap(io,name,updates,removed):\n    if set(updates)&set(removed):raise ValueError('update/remove scopes overlap')\n    if any(not isinstance(key,str) or not key or '\\x00' in key for key in [*updates,*removed]) or any(not isinstance(value,bytes) for value in updates.values()):raise ValueError('literal OMAP keys and binary values required')\n    with rados.WriteOpCtx() as op:\n        io.remove_omap_keys(op,list(removed))\n        io.set_omap(op,list(updates),list(updates.values()))\n        io.operate_write_op(op,name)\n```\n\n原题知识说明：\nOMAP 是 Ceph RADOS 对象附带的有序键值映射，用于保存某些应用元数据。它不同于普通对象内容和扩展属性，过大的 OMAP 可能影响性能与维护。应使用对应产品工具诊断，不能把清空 OMAP 当通用修复。",
+    "category": "Ceph",
+    "difficulty": "入门",
+    "section": "Apache Hadoop",
+    "type": "code",
+    "has_answer": true,
+    "source": "README.md",
+    "sources": [
+      "README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "original_category": "Ceph",
+    "original_title": "什么是 OMAP？",
+    "module": "ceph",
+    "topic": "架构与数据放置",
+    "level": 2,
+    "body": "## 操作任务\n实现patch_omap(io,name,updates,removed)。两集合不能相交，所有键为非空不含NUL str、更新值bytes，否则ValueError且零提交。用rados.WriteOpCtx在同一对象单次操作中remove_omap_keys、set_omap并operate_write_op一次；保留其他OMAP键、对象body、xattr及其他对象，不改输入。真实二进制OMAP值含NUL/FF，删除不存在键可安全完成，禁止把OMAP JSON覆盖对象body或clear_omap清空保护键。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Ceph16.2.15单MON/内存型OSD上的实际OMAP WriteOp、binary值、body/xattr独立访问；不把内存型实验声称BlueStore性能、RBD或RGW large-OMAP治理，也不证明跨对象事务。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "ceph"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "src-8288a736c92e63f7",
+      "original_title": "什么是 OMAP？",
+      "original_type": "source"
+    },
+    "references": [
+      "https://docs.ceph.com/en/pacific/rados/api/python/"
+    ],
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import rados\ndef patch_omap(io,name,updates,removed):\n    if set(updates)&set(removed):raise ValueError('update/remove scopes overlap')\n    if any(not isinstance(key,str) or not key or '\\x00' in key for key in [*updates,*removed]) or any(not isinstance(value,bytes) for value in updates.values()):raise ValueError('literal OMAP keys and binary values required')\n    with rados.WriteOpCtx() as op:\n        io.remove_omap_keys(op,list(removed))\n        io.set_omap(op,list(updates),list(updates.values()))\n        io.operate_write_op(op,name)\n"
+    },
+    "negative_files": {
+      "task.py": "def patch_omap(io,name,updates,removed):\n    io.write_full(name,b'wrong-object-body-instead-of-omap')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像与只读官方Ceph16.2.15，显式2GiB预算，私有MON/内存型OSD；不构建镜像",
+      "operation": "实现patch_omap(io,name,updates,removed)。两集合不能相交，所有键为非空不含NUL str、更新值bytes，否则ValueError且零提交。用rados.WriteOpCtx在同一对象单次操作中remove_omap_keys、set_omap并operate_write_op一次；保留其他OMAP键、对象body、xattr及其他对象，不改输入。真实二进制OMAP值含NUL/FF，删除不存在键可安全完成，禁止把OMAP JSON覆盖对象body或clear_omap清空保护键。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Ceph16.2.15单MON/内存型OSD上的实际OMAP WriteOp、binary值、body/xattr独立访问；不把内存型实验声称BlueStore性能、RBD或RGW large-OMAP治理，也不证明跨对象事务。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "ceph",
+          "ceph-mon",
+          "ceph-osd",
+          "ceph-authtool",
+          "monmaptool"
+        ],
+        "python_modules": [
+          "rados"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/ceph_cluster_native.py": "\"\"\"Experimental nonroot, private MON/memstore OSD; no question or incident credit.\"\"\"\nimport json,os,pathlib,socket,subprocess,tempfile,time,uuid\nimport rados\nassert os.geteuid()==1000\nTOOL=pathlib.Path('/opt/opsforge-ceph')\nENV={**os.environ,'LD_LIBRARY_PATH':str(TOOL/'usr/lib/x86_64-linux-gnu/ceph')+':'+str(TOOL/'usr/lib/x86_64-linux-gnu')+':'+str(TOOL/'lib/x86_64-linux-gnu'),'PYTHONPATH':str(TOOL/'usr/lib/python3/dist-packages')}\ndef command(name,*args,timeout=20):\n result=subprocess.run([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,capture_output=True,text=True,timeout=timeout)\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\ndef port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\nclass PrivateCeph:\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-private-ceph-');self.root=pathlib.Path(self.temp.name);self.processes=[];self.logs=[];self.client=None\n  try:\n   self.fsid=str(uuid.uuid4());self.monport=port();self.config=self.root/'ceph.conf';self.monmap=self.root/'monmap';self.mondata=self.root/'mon.a';self.mondata.mkdir()\n   (self.root/'run').mkdir();(self.root/'crash').mkdir()\n   self.config.write_text('''[global]\nfsid = {fsid}\nmon initial members = a\nmon host = 127.0.0.1:{port}\nauth cluster required = none\nauth service required = none\nauth client required = none\npublic addr = 127.0.0.1\ncluster addr = 127.0.0.1\nms bind ipv4 = true\nms bind ipv6 = false\nms async op threads = 1\nlog to stderr = true\nlog to file = false\nrun dir = {root}/run\ncrash dir = {root}/crash\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nadmin socket = {root}/$name.asok\npid file = {root}/$name.pid\nkeyring = {root}/$name.keyring\nmon data avail crit = 0\nmon data avail warn = 0\nmon allow pool delete = true\nmon allow pool size one = true\nosd pool default size = 1\nosd pool default min size = 1\nosd pool default pg num = 1\nosd pool default pgp num = 1\nosd pool default pg autoscale mode = off\nosd crush chooseleaf type = 0\nrados mon op timeout = 3\nrados osd op timeout = 3\n[mon.a]\nmon data = {root}/mon.a\nmon addr = 127.0.0.1:{port}\n[osd]\nosd objectstore = memstore\nosd data = {root}/osd.$id\nkeyring = {root}/osd.$id/keyring\nosd memory target = 134217728\nmemstore device bytes = 134217728\nosd op num shards = 1\nosd op num threads per shard = 1\nosd op num shards hdd = 1\nosd op num threads per shard hdd = 1\nosd op num shards ssd = 1\nosd op num threads per shard ssd = 1\nosd recovery max active = 1\nosd max backfills = 1\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\n'''.format(fsid=self.fsid,port=self.monport,root=self.root,tool=TOOL))\n   command('monmaptool','--create','--fsid',self.fsid,'--add','a','127.0.0.1:'+str(self.monport),self.monmap)\n   command('ceph-authtool','--create-keyring',self.root/'mon.keyring','--gen-key','-n','mon.')\n   command('ceph-mon','--mkfs','-i','a','-c',self.config,'--monmap',self.monmap,'--mon-data',self.mondata,'--keyring',self.root/'mon.keyring')\n   monitor=self.start('ceph-mon','-f','-i','a','-c',self.config,'--mon-data',self.mondata,'--setuser','1000','--setgroup','1000')\n   deadline=time.monotonic()+20;last=None\n   while time.monotonic()<deadline:\n    if monitor.poll() is not None:raise RuntimeError('private MON exited before readiness: '+self.log_tail())\n    try:\n     status=json.loads(command('ceph','--admin-daemon',self.root/'mon.a.asok','mon_status',timeout=3))\n     if status.get('state') not in ('leader','peon'):time.sleep(.2);continue\n     assert status['monmap']['fsid']==self.fsid;break\n    except Exception as error:\n     last=error\n     time.sleep(.2)\n   else:raise RuntimeError('private MON readiness failed: '+str(last)+' '+self.log_tail())\n   print('NATIVE_PRIVATE_CEPH_MON_READY '+json.dumps({'fsid':self.fsid,'uid':os.geteuid(),'quorum':status.get('quorum'),'network':'none-loopback-only'}),flush=True)\n   self.client=rados.Rados(conffile=str(self.config),name='client.admin');self.client.connect(timeout=3)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def start(self,name,*args):\n  log=(self.root/(name+'-'+str(len(self.processes))+'.log')).open('wb');self.logs.append(log)\n  process=subprocess.Popen([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,stdin=subprocess.DEVNULL,stdout=log,stderr=log);self.processes.append(process)\n  return process\n def mon(self,prefix,**kwargs):\n  rc,out,err=self.client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kwargs}),b'')\n  if rc:raise RuntimeError('private mon command '+prefix+' failed: '+str(rc)+' '+str(err))\n  try:return json.loads(out)\n  except json.JSONDecodeError:return out.decode().strip()\n def add_osd(self):\n  osduuid=str(uuid.uuid4());created=self.mon('osd create',uuid=osduuid);osdid=int(created['osdid'] if isinstance(created,dict) else created);data=self.root/('osd.'+str(osdid));data.mkdir()\n  command('ceph-osd','--mkfs','--mkkey','-i',osdid,'-c',self.config,'--osd-uuid',osduuid,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  process=self.start('ceph-osd','-f','-i',osdid,'-c',self.config,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  deadline=time.monotonic()+20\n  while time.monotonic()<deadline:\n   if process.poll() is not None:raise RuntimeError('private OSD exited: '+self.log_tail())\n   status=self.mon('osd dump');row=next((row for row in status['osds'] if row['osd']==osdid),None)\n   if row and row['up']==1 and row['in']==1:break\n   time.sleep(.2)\n  else:raise RuntimeError('private OSD readiness timeout: '+self.log_tail())\n  print('NATIVE_PRIVATE_CEPH_MEMSTORE_OSD_READY '+str(osdid),flush=True);return osdid\n def log_tail(self):\n  return '\\n'.join(path.read_text(errors='replace')[-2500:] for path in self.root.glob('*.log'))\n def __exit__(self,*args):\n  if self.client:\n   try:self.client.shutdown()\n   except Exception:pass\n  for process in reversed(self.processes):\n   if process.poll() is None:process.terminate()\n   try:process.wait(timeout=8)\n   except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)\n  for log in self.logs:log.close()\n  self.temp.cleanup()\n\nfor executable in ('ceph-mon','ceph-osd'):\n assert 'ceph version 16.2.15 ' in command(executable,'--version')\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy,rados\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom ceph_cluster_native import PrivateCeph\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\ndef all_objects(io):return {obj.key:io.read(obj.key) for obj in io.list_objects()}\ndef omap(io,name):\n with rados.ReadOpCtx() as op:\n  values,unused=io.get_omap_vals(op,'','',100);io.operate_read_op(op,name);return dict(values)\nwith PrivateCeph() as cluster:\n cluster.add_osd();cluster.client.create_pool('owned_omap')\n with cluster.client.open_ioctx('owned_omap') as io:\n  name='metadata-owner';body=b'original-object-data\\x00\\xff';io.write_full(name,body);io.set_xattr(name,'owner',b'keep-xattr')\n  io.write_full('protected',b'other-object')\n  with rados.WriteOpCtx() as op:io.set_omap(op,['keep','updated','delete'],[b'keep-binary\\x00\\xff',b'old',b'drop']);io.operate_write_op(op,name)\n  updates={'updated':b'new-binary\\x00\\xff','added':b'added'};removed=['delete','absent'];before=copy.deepcopy((updates,removed));commits=[]\n  class Counted:\n   def __getattr__(self,key):return getattr(io,key)\n   def operate_write_op(self,op,obj):commits.append(obj);return io.operate_write_op(op,obj)\n  print('NATIVE_CEPH_OBJECT_DATA_XATTR_AND_OMAP_DISTINCT_REAL_BINARY_STATES_READY',flush=True)\n  print('STUDENT_OPERATION_ENTERED:single_object_writeop_patch_omap_keep_body_xattr_other_keys_other_objects',flush=True)\n  try:task.patch_omap(Counted(),name,updates,removed)\n  except Exception as error:raise AssertionError('student actual OMAP metadata patch failed') from error\n  expected={'keep':b'keep-binary\\x00\\xff',**updates}\n  assert omap(io,name)==expected and io.read(name)==body and io.get_xattr(name,'owner')==b'keep-xattr' and io.read('protected')==b'other-object','OMAP keys, body, xattr or unrelated object corrupted'\n  assert commits==[name] and (updates,removed)==before\n  try:task.patch_omap(Counted(),name,{'overlap':b'x'},['overlap'])\n  except ValueError:pass\n  else:raise AssertionError('overlapping metadata scope accepted')\n  assert commits==[name] and omap(io,name)==expected\n  print('NATIVE_OMAP_ONE_REAL_ATOMIC_WRITEOP_BINARY_VALUES_BODY_XATTR_KEEP_KEY_OTHER_OBJECT_UNCHANGED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-ceph-007",
+    "module": "ceph",
+    "category": "Ceph",
+    "level": 0,
+    "topic": "性能容量与安全运维",
+    "title": "真实HEALTH_WARN仍可有限读写：保留告警，只验证批准探针并清理",
+    "answer": "```python\ndef probe(io,health,name,payload):\n    io.write_full(name,payload)\n    try:\n        actual=io.read(name)\n        if actual!=payload:raise RuntimeError('approved probe did not read back exact bytes')\n    finally:io.remove_object(name)\n    return {'health_status':health['status'],'probe_io_succeeded':True}\n```\n\n原题知识说明：\n不是，可能是冗余、容量、版本或维护提示；需查看具体health detail及业务状态。验收告警原因和影响，不能一概静音或重启。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Ceph Squid 官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现probe(io,health,name,payload)：向批准name write_full原payload，read精确字节校验，finally remove_object清理；读回不同RuntimeError。返回{health_status:原health.status,probe_io_succeeded:true}。不能因HEALTH_WARN直接判定不可用，也不能只读status便宣称IO成功、改告警或碰保护对象。不改health。真实无副本教学pool产生POOL_NO_REDUNDANCY WARN，实际一组write/read/remove成功；结论只覆盖此探针。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Ceph16.2.15私有MON/内存型单OSD的POOL_NO_REDUNDANCY WARN与有限真实RADOS探针并存。关闭Cephx的隔离教学环境，不宣称生产有冗余/安全认证/所有对象客户端可用或故障已恢复；原始故障复核零加量。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://docs.ceph.com/en/pacific/rados/operations/health-checks/"
+    ],
+    "related_modules": [
+      "ceph"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-ceph-007",
+      "original_title": "Ceph HEALTH_WARN是否必然意味着应用当前无法读写？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def probe(io,health,name,payload):\n    io.write_full(name,payload)\n    try:\n        actual=io.read(name)\n        if actual!=payload:raise RuntimeError('approved probe did not read back exact bytes')\n    finally:io.remove_object(name)\n    return {'health_status':health['status'],'probe_io_succeeded':True}\n"
+    },
+    "negative_files": {
+      "task.py": "def probe(io,health,name,payload):\n    if health['status']!='HEALTH_OK':raise RuntimeError('warning incorrectly treated as total outage')\n    io.write_full(name,payload)\n    try:\n        actual=io.read(name)\n        if actual!=payload:raise RuntimeError('approved probe did not read back exact bytes')\n    finally:io.remove_object(name)\n    return {'health_status':health['status'],'probe_io_succeeded':True}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像与只读官方Ceph16.2.15，显式2GiB预算，私有MON/内存型OSD；不构建镜像",
+      "operation": "实现probe(io,health,name,payload)：向批准name write_full原payload，read精确字节校验，finally remove_object清理；读回不同RuntimeError。返回{health_status:原health.status,probe_io_succeeded:true}。不能因HEALTH_WARN直接判定不可用，也不能只读status便宣称IO成功、改告警或碰保护对象。不改health。真实无副本教学pool产生POOL_NO_REDUNDANCY WARN，实际一组write/read/remove成功；结论只覆盖此探针。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Ceph16.2.15私有MON/内存型单OSD的POOL_NO_REDUNDANCY WARN与有限真实RADOS探针并存。关闭Cephx的隔离教学环境，不宣称生产有冗余/安全认证/所有对象客户端可用或故障已恢复；原始故障复核零加量。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "ceph",
+          "ceph-mon",
+          "ceph-osd",
+          "ceph-authtool",
+          "monmaptool"
+        ],
+        "python_modules": [
+          "rados"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/ceph_cluster_native.py": "\"\"\"Experimental nonroot, private MON/memstore OSD; no question or incident credit.\"\"\"\nimport json,os,pathlib,socket,subprocess,tempfile,time,uuid\nimport rados\nassert os.geteuid()==1000\nTOOL=pathlib.Path('/opt/opsforge-ceph')\nENV={**os.environ,'LD_LIBRARY_PATH':str(TOOL/'usr/lib/x86_64-linux-gnu/ceph')+':'+str(TOOL/'usr/lib/x86_64-linux-gnu')+':'+str(TOOL/'lib/x86_64-linux-gnu'),'PYTHONPATH':str(TOOL/'usr/lib/python3/dist-packages')}\ndef command(name,*args,timeout=20):\n result=subprocess.run([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,capture_output=True,text=True,timeout=timeout)\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\ndef port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\nclass PrivateCeph:\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-private-ceph-');self.root=pathlib.Path(self.temp.name);self.processes=[];self.logs=[];self.client=None\n  try:\n   self.fsid=str(uuid.uuid4());self.monport=port();self.config=self.root/'ceph.conf';self.monmap=self.root/'monmap';self.mondata=self.root/'mon.a';self.mondata.mkdir()\n   (self.root/'run').mkdir();(self.root/'crash').mkdir()\n   self.config.write_text('''[global]\nfsid = {fsid}\nmon initial members = a\nmon host = 127.0.0.1:{port}\nauth cluster required = none\nauth service required = none\nauth client required = none\npublic addr = 127.0.0.1\ncluster addr = 127.0.0.1\nms bind ipv4 = true\nms bind ipv6 = false\nms async op threads = 1\nlog to stderr = true\nlog to file = false\nrun dir = {root}/run\ncrash dir = {root}/crash\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nadmin socket = {root}/$name.asok\npid file = {root}/$name.pid\nkeyring = {root}/$name.keyring\nmon data avail crit = 0\nmon data avail warn = 0\nmon allow pool delete = true\nmon allow pool size one = true\nosd pool default size = 1\nosd pool default min size = 1\nosd pool default pg num = 1\nosd pool default pgp num = 1\nosd pool default pg autoscale mode = off\nosd crush chooseleaf type = 0\nrados mon op timeout = 3\nrados osd op timeout = 3\n[mon.a]\nmon data = {root}/mon.a\nmon addr = 127.0.0.1:{port}\n[osd]\nosd objectstore = memstore\nosd data = {root}/osd.$id\nkeyring = {root}/osd.$id/keyring\nosd memory target = 134217728\nmemstore device bytes = 134217728\nosd op num shards = 1\nosd op num threads per shard = 1\nosd op num shards hdd = 1\nosd op num threads per shard hdd = 1\nosd op num shards ssd = 1\nosd op num threads per shard ssd = 1\nosd recovery max active = 1\nosd max backfills = 1\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\n'''.format(fsid=self.fsid,port=self.monport,root=self.root,tool=TOOL))\n   command('monmaptool','--create','--fsid',self.fsid,'--add','a','127.0.0.1:'+str(self.monport),self.monmap)\n   command('ceph-authtool','--create-keyring',self.root/'mon.keyring','--gen-key','-n','mon.')\n   command('ceph-mon','--mkfs','-i','a','-c',self.config,'--monmap',self.monmap,'--mon-data',self.mondata,'--keyring',self.root/'mon.keyring')\n   monitor=self.start('ceph-mon','-f','-i','a','-c',self.config,'--mon-data',self.mondata,'--setuser','1000','--setgroup','1000')\n   deadline=time.monotonic()+20;last=None\n   while time.monotonic()<deadline:\n    if monitor.poll() is not None:raise RuntimeError('private MON exited before readiness: '+self.log_tail())\n    try:\n     status=json.loads(command('ceph','--admin-daemon',self.root/'mon.a.asok','mon_status',timeout=3))\n     if status.get('state') not in ('leader','peon'):time.sleep(.2);continue\n     assert status['monmap']['fsid']==self.fsid;break\n    except Exception as error:\n     last=error\n     time.sleep(.2)\n   else:raise RuntimeError('private MON readiness failed: '+str(last)+' '+self.log_tail())\n   print('NATIVE_PRIVATE_CEPH_MON_READY '+json.dumps({'fsid':self.fsid,'uid':os.geteuid(),'quorum':status.get('quorum'),'network':'none-loopback-only'}),flush=True)\n   self.client=rados.Rados(conffile=str(self.config),name='client.admin');self.client.connect(timeout=3)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def start(self,name,*args):\n  log=(self.root/(name+'-'+str(len(self.processes))+'.log')).open('wb');self.logs.append(log)\n  process=subprocess.Popen([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,stdin=subprocess.DEVNULL,stdout=log,stderr=log);self.processes.append(process)\n  return process\n def mon(self,prefix,**kwargs):\n  rc,out,err=self.client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kwargs}),b'')\n  if rc:raise RuntimeError('private mon command '+prefix+' failed: '+str(rc)+' '+str(err))\n  try:return json.loads(out)\n  except json.JSONDecodeError:return out.decode().strip()\n def add_osd(self):\n  osduuid=str(uuid.uuid4());created=self.mon('osd create',uuid=osduuid);osdid=int(created['osdid'] if isinstance(created,dict) else created);data=self.root/('osd.'+str(osdid));data.mkdir()\n  command('ceph-osd','--mkfs','--mkkey','-i',osdid,'-c',self.config,'--osd-uuid',osduuid,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  process=self.start('ceph-osd','-f','-i',osdid,'-c',self.config,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  deadline=time.monotonic()+20\n  while time.monotonic()<deadline:\n   if process.poll() is not None:raise RuntimeError('private OSD exited: '+self.log_tail())\n   status=self.mon('osd dump');row=next((row for row in status['osds'] if row['osd']==osdid),None)\n   if row and row['up']==1 and row['in']==1:break\n   time.sleep(.2)\n  else:raise RuntimeError('private OSD readiness timeout: '+self.log_tail())\n  print('NATIVE_PRIVATE_CEPH_MEMSTORE_OSD_READY '+str(osdid),flush=True);return osdid\n def log_tail(self):\n  return '\\n'.join(path.read_text(errors='replace')[-2500:] for path in self.root.glob('*.log'))\n def __exit__(self,*args):\n  if self.client:\n   try:self.client.shutdown()\n   except Exception:pass\n  for process in reversed(self.processes):\n   if process.poll() is None:process.terminate()\n   try:process.wait(timeout=8)\n   except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)\n  for log in self.logs:log.close()\n  self.temp.cleanup()\n\nfor executable in ('ceph-mon','ceph-osd'):\n assert 'ceph version 16.2.15 ' in command(executable,'--version')\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy,rados\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom ceph_cluster_native import PrivateCeph\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\ndef all_objects(io):return {obj.key:io.read(obj.key) for obj in io.list_objects()}\ndef omap(io,name):\n with rados.ReadOpCtx() as op:\n  values,unused=io.get_omap_vals(op,'','',100);io.operate_read_op(op,name);return dict(values)\nwith PrivateCeph() as cluster:\n cluster.add_osd();cluster.client.create_pool('owned_health_probe')\n with cluster.client.open_ioctx('owned_health_probe') as io:\n  io.write_full('protected',b'existing-data')\n  health=cluster.mon('status')['health'];assert health['status']=='HEALTH_WARN' and 'POOL_NO_REDUNDANCY' in health['checks']\n  before=copy.deepcopy(health);name='approved-probe';payload=b'known-rados-probe\\x00\\xff';calls=[]\n  class Counted:\n   def write_full(self,key,value):calls.append(('write_full',key,value));return io.write_full(key,value)\n   def read(self,key):calls.append(('read',key));return io.read(key)\n   def remove_object(self,key):calls.append(('remove_object',key));return io.remove_object(key)\n  print('NATIVE_CEPH_REAL_HEALTH_WARN_POOL_NO_REDUNDANCY_WHILE_PROTECTED_OBJECT_READS',flush=True)\n  assert io.read('protected')==b'existing-data'\n  print('STUDENT_OPERATION_ENTERED:retain_actual_warning_then_verify_only_approved_probe_write_read_cleanup',flush=True)\n  try:result=task.probe(Counted(),health,name,payload)\n  except Exception as error:raise AssertionError('student actual warning/IO distinction failed') from error\n  assert result=={'health_status':'HEALTH_WARN','probe_io_succeeded':True}\n  assert calls==[('write_full',name,payload),('read',name),('remove_object',name)],'availability asserted without actual bounded IO probe'\n  assert all_objects(io)=={'protected':b'existing-data'} and health==before\n  assert cluster.mon('status')['health']['status']=='HEALTH_WARN','warning was hidden to make probe look healthy'\n  print('NATIVE_HEALTH_WARN_PRESERVED_ONE_REAL_RADOS_PROBE_SUCCEEDED_NO_ALL_CLUSTER_AVAILABILITY_CLAIM',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

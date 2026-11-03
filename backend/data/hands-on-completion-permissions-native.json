@@ -1,0 +1,511 @@
+[
+  {
+    "id": "curated-permissions-completion-042",
+    "module": "permissions",
+    "category": "用户、权限与安全",
+    "level": 4,
+    "topic": "文件访问控制",
+    "title": "Linux POSIX ACL mask：修复目标用户写入并保持其他有效权限",
+    "answer": "```python\nimport os\nimport stat\nimport subprocess\n\ndef repair_acl(path,uid):\n    metadata=os.lstat(path)\n    if not stat.S_ISREG(metadata.st_mode) or isinstance(uid,bool) or not isinstance(uid,int) or uid<=0 or uid==metadata.st_uid:raise ValueError('regular file and distinct target uid required')\n    raw=subprocess.run(['getfacl','-cpn','--',os.fspath(path)],check=True,capture_output=True,text=True).stdout\n    entries={}\n    for line in raw.splitlines():\n        line=line.split('#',1)[0].strip()\n        if not line:continue\n        kind,name,perms=line.split(':')\n        entries[(kind,name)]=perms\n    oldmask=entries.get(('mask',''),'rwx')\n    changes=[]\n    for (kind,name),perms in entries.items():\n        if kind=='group' or (kind=='user' and name and name!=str(uid)):\n            effective=''.join(c if c!='-' and c==oldmask[i] else '-' for i,c in enumerate(perms))\n            changes.append(kind+':'+name+':'+effective)\n    changes.extend(['user:'+str(uid)+':rwx','mask::rwx'])\n    subprocess.run(['setfacl','-m',','.join(changes),'--',os.fspath(path)],check=True,capture_output=True,text=True)\n```\n\n原题参考要点：\n查看 ACL mask 及变更记录，确认组类权限调整改变了 mask，限制了命名用户的有效权限。恢复经批准的最小 mask 并逐项核对其他命名用户/组，避免无意扩大权限；验证新建和已有条目及默认 ACL。不能简单删除 ACL 后开放所有用户写入。",
+    "type": "code",
+    "source": "OpsForge 原创权限与安全专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "pack": "permissions-completion-20261021",
+    "body": "## 环境与初始材料\nLinux原生POSIX ACL，由非root文件属主操作私有临时文件；不创建账号、不切换默认身份。\n\n## 操作任务\n实现 repair_acl(path, uid)。path 为本人拥有的普通文件，uid为非布尔正整数且不同于属主。调用真实 getfacl/setfacl 读取修改access ACL；将目标命名用户设为rwx并修复mask，但必须保留 owner、other和其他所有group-class条目的原有效权限，不能通过扩大mask使旁人的写权限意外生效。保留文件内容、inode、uid、gid；重复执行幂等。此题用内核ACL元数据及getfacl effective结果验收，不冒称已切换为其他账号进行实际登录访问。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "hints": [],
+    "references": [],
+    "incident_signature": "permissions-posix-acl-mask-clipped-after-chmod",
+    "exercise_mode": "tabletop",
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\nimport stat\nimport subprocess\n\ndef repair_acl(path,uid):\n    metadata=os.lstat(path)\n    if not stat.S_ISREG(metadata.st_mode) or isinstance(uid,bool) or not isinstance(uid,int) or uid<=0 or uid==metadata.st_uid:raise ValueError('regular file and distinct target uid required')\n    raw=subprocess.run(['getfacl','-cpn','--',os.fspath(path)],check=True,capture_output=True,text=True).stdout\n    entries={}\n    for line in raw.splitlines():\n        line=line.split('#',1)[0].strip()\n        if not line:continue\n        kind,name,perms=line.split(':')\n        entries[(kind,name)]=perms\n    oldmask=entries.get(('mask',''),'rwx')\n    changes=[]\n    for (kind,name),perms in entries.items():\n        if kind=='group' or (kind=='user' and name and name!=str(uid)):\n            effective=''.join(c if c!='-' and c==oldmask[i] else '-' for i,c in enumerate(perms))\n            changes.append(kind+':'+name+':'+effective)\n    changes.extend(['user:'+str(uid)+':rwx','mask::rwx'])\n    subprocess.run(['setfacl','-m',','.join(changes),'--',os.fspath(path)],check=True,capture_output=True,text=True)\n"
+    },
+    "negative_files": {
+      "task.py": "import os,subprocess\ndef repair_acl(path,uid):\n    subprocess.run(['setfacl','-m','u:'+str(uid)+':rwx,m::rwx',os.fspath(path)],check=True)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 repair_acl(path, uid)。path 为本人拥有的普通文件，uid为非布尔正整数且不同于属主。调用真实 getfacl/setfacl 读取修改access ACL；将目标命名用户设为rwx并修复mask，但必须保留 owner、other和其他所有group-class条目的原有效权限，不能通过扩大mask使旁人的写权限意外生效。保留文件内容、inode、uid、gid；重复执行幂等。此题用内核ACL元数据及getfacl effective结果验收，不冒称已切换为其他账号进行实际登录访问。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux原生POSIX ACL，由非root文件属主操作私有临时文件；不创建账号、不切换默认身份。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,pathlib,stat,subprocess,sys,tempfile\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert os.getuid()!=0,'verify as unprivileged owner'\ndef acl(path):\n    raw=subprocess.run(['getfacl','-cpn','--',str(path)],check=True,capture_output=True,text=True).stdout\n    result={}\n    for line in raw.splitlines():\n        line=line.split('#',1)[0].strip()\n        if line:\n            kind,name,perms=line.split(':');result[(kind,name)]=perms\n    return result\ndef effective(entries,key):\n    bits=entries[key]\n    if key[0]=='group' or key[0]=='user' and key[1]:\n        mask=entries.get(('mask',''),'rwx');return ''.join(c if c!='-' and c==mask[i] else '-' for i,c in enumerate(bits))\n    return bits\nwith tempfile.TemporaryDirectory(prefix='opsforge-acl-') as directory:\n    path=pathlib.Path(directory)/'shared';path.write_bytes(b'private-data')\n    target=65534;peer=65533\n    subprocess.run(['setfacl','-m','u::rw-,u:'+str(target)+':rwx,u:'+str(peer)+':rw-,g::rw-,g:65532:rwx,m::r-x,o::---',str(path)],check=True)\n    before=acl(path);metadata=path.stat();assert effective(before,('user',str(target)))=='r-x'\n    task.repair_acl(path,target)\n    after=acl(path)\n    assert effective(after,('user',str(target)))=='rwx'\n    for key in before:\n        if key not in [('mask',''),('user',str(target))]:assert effective(after,key)==effective(before,key),(key,before,after)\n    latest=path.stat();assert (latest.st_ino,latest.st_uid,latest.st_gid)==(metadata.st_ino,metadata.st_uid,metadata.st_gid)\n    assert path.read_bytes()==b'private-data'\n    task.repair_acl(path,target);assert acl(path)==after,'not idempotent'\nprint('native ACL: stored masked denial, target rwx, all peer effective permissions preserved and idempotence passed')\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "getfacl",
+          "setfacl"
+        ]
+      }
+    },
+    "conversion": {
+      "original_id": "curated-permissions-completion-042",
+      "original_type": "case",
+      "original_title": "共享目录授权用户 alice:rwx，但 getfacl 显示 effective:r-x，写入失败发生在一次 chmod 后。如何修复？",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_curated-permissions-completion-042",
+    "case_signature": "native_completion|curated-permissions-completion-042"
+  },
+  {
+    "id": "curated-permissions-completion-043",
+    "module": "permissions",
+    "category": "用户、权限与安全",
+    "level": 4,
+    "topic": "文件访问控制",
+    "title": "Linux SSH StrictModes前置：修复私有目录模式并拒绝符号链接",
+    "answer": "```python\nimport os\nimport stat\nfrom pathlib import Path\n\ndef secure_ssh_home(home):\n    home=Path(home)\n    paths=[(home,True,0o700),(home/'.ssh',True,0o700),(home/'.ssh'/'authorized_keys',False,0o600)]\n    for path,directory,mode in paths:\n        try:metadata=os.lstat(path)\n        except OSError:raise ValueError('missing path') from None\n        correct=stat.S_ISDIR(metadata.st_mode) if directory else stat.S_ISREG(metadata.st_mode)\n        if not correct or metadata.st_uid!=os.geteuid():raise ValueError('unsafe path')\n    for path,directory,mode in paths:os.chmod(path,mode,follow_symlinks=False)\n```\n\n原题参考要点：\n核对登录用户、主目录、.ssh 和 authorized_keys 的属主/模式及 sshd StrictModes 日志，恢复该平台要求的安全权限。保留已验证恢复通道并用新会话测试，不能靠关闭 StrictModes 绕过检查。追踪造成权限变化的部署步骤，避免后续再次覆盖。",
+    "type": "code",
+    "source": "OpsForge 原创权限与安全专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "pack": "permissions-completion-20261021",
+    "body": "## 环境与初始材料\nLinux原生文件mode和lstat；非root本人私有临时目录。仅SSH StrictModes文件前置，不建立SSH服务。\n\n## 操作任务\n实现 secure_ssh_home(home)，对本人拥有且不含符号链接的 home/.ssh/authorized_keys 目录链分别设置0700、0700、0600。操作前必须一次性检查三者的类型、属主和符号链接，非法状态 ValueError 并不得发生任何模式变更；保留内容、inode、uid/gid。只处理传入实验目录，不写真实用户主目录。此题验证内核mode和路径安全前置，不将其当作已完成SSH真实登录或SELinux验收。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "hints": [],
+    "references": [
+      "https://man.openbsd.org/sshd_config"
+    ],
+    "incident_signature": "permissions-ssh-strictmodes-rejects-writable-home",
+    "exercise_mode": "tabletop",
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\nimport stat\nfrom pathlib import Path\n\ndef secure_ssh_home(home):\n    home=Path(home)\n    paths=[(home,True,0o700),(home/'.ssh',True,0o700),(home/'.ssh'/'authorized_keys',False,0o600)]\n    for path,directory,mode in paths:\n        try:metadata=os.lstat(path)\n        except OSError:raise ValueError('missing path') from None\n        correct=stat.S_ISDIR(metadata.st_mode) if directory else stat.S_ISREG(metadata.st_mode)\n        if not correct or metadata.st_uid!=os.geteuid():raise ValueError('unsafe path')\n    for path,directory,mode in paths:os.chmod(path,mode,follow_symlinks=False)\n"
+    },
+    "negative_files": {
+      "task.py": "import os\nfrom pathlib import Path\ndef secure_ssh_home(home):\n    root=Path(home)\n    os.chmod(root,0o700);os.chmod(root/'.ssh',0o700);os.chmod(root/'.ssh'/'authorized_keys',0o600)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 secure_ssh_home(home)，对本人拥有且不含符号链接的 home/.ssh/authorized_keys 目录链分别设置0700、0700、0600。操作前必须一次性检查三者的类型、属主和符号链接，非法状态 ValueError 并不得发生任何模式变更；保留内容、inode、uid/gid。只处理传入实验目录，不写真实用户主目录。此题验证内核mode和路径安全前置，不将其当作已完成SSH真实登录或SELinux验收。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux原生文件mode和lstat；非root本人私有临时目录。仅SSH StrictModes文件前置，不建立SSH服务。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,pathlib,stat,sys,tempfile\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nwith tempfile.TemporaryDirectory(prefix='opsforge-sshmode-') as directory:\n    root=pathlib.Path(directory);home=root/'home';home.mkdir(mode=0o777);ssh=home/'.ssh';ssh.mkdir(mode=0o777)\n    key=ssh/'authorized_keys';key.write_text('ssh-ed25519 AAAA isolated-test\\n');os.chmod(key,0o666)\n    snapshots={p:(p.stat().st_ino,p.stat().st_uid,p.stat().st_gid) for p in [home,ssh,key]}\n    task.secure_ssh_home(home)\n    assert [stat.S_IMODE(p.stat().st_mode) for p in [home,ssh,key]]==[0o700,0o700,0o600]\n    assert all((p.stat().st_ino,p.stat().st_uid,p.stat().st_gid)==snapshots[p] for p in snapshots)\n    assert key.read_text()=='ssh-ed25519 AAAA isolated-test\\n'\n    task.secure_ssh_home(home)\n    key.unlink();outside=root/'outside';outside.write_text('leave untouched');os.chmod(outside,0o666);key.symlink_to(outside)\n    os.chmod(home,0o755);os.chmod(ssh,0o755)\n    try:task.secure_ssh_home(home)\n    except ValueError:pass\n    else:raise AssertionError('followed symlink')\n    assert stat.S_IMODE(outside.stat().st_mode)==0o666\n    assert stat.S_IMODE(home.stat().st_mode)==0o755 and stat.S_IMODE(ssh.stat().st_mode)==0o755,'partial mutation before validation'\nprint('native SSH modes: restrictive inode modes, content/owner retention, idempotence and no symlink/partial mutation passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "curated-permissions-completion-043",
+      "original_type": "case",
+      "original_title": "部署工具将用户主目录改成组可写后，SSH 公钥登录被拒绝，服务端提示 bad ownership or modes。如何处理？",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_curated-permissions-completion-043",
+    "case_signature": "native_completion|curated-permissions-completion-043"
+  },
+  {
+    "id": "src-88e5cb05f876c1b4",
+    "title": "混合加密：原生RSA-OAEP封装AES-GCM会话密钥",
+    "answer": "```python\nimport os\nfrom cryptography.hazmat.primitives import serialization,hashes\nfrom cryptography.hazmat.primitives.asymmetric import rsa,padding\nfrom cryptography.hazmat.primitives.ciphers.aead import AESGCM\n\ndef seal(public_pem,plaintext,aad=b''):\n    if any(not isinstance(value,bytes) for value in (public_pem,plaintext,aad)):raise ValueError('bytes required')\n    try:key=serialization.load_pem_public_key(public_pem)\n    except (ValueError,TypeError):raise ValueError('invalid public key') from None\n    if not isinstance(key,rsa.RSAPublicKey) or key.key_size<2048:raise ValueError('RSA-2048 or stronger required')\n    symmetric=os.urandom(32);nonce=os.urandom(12)\n    wrapped=key.encrypt(symmetric,padding.OAEP(mgf=padding.MGF1(hashes.SHA256()),algorithm=hashes.SHA256(),label=None))\n    return {'wrapped_key':wrapped,'nonce':nonce,'ciphertext':AESGCM(symmetric).encrypt(nonce,plaintext,aad)}\n```\n\n原题参考要点：\n原题“异步/同步加密”应为非对称/对称加密。对称加密使用共享秘密，适合高效保护大量数据；非对称使用公私钥关系，可支持密钥协商或签名等，但具体算法用途不同。现代协议常混合使用，不能把数字签名简单称为私钥加密全部数据。",
+    "category": "用户、权限与安全",
+    "difficulty": "入门",
+    "section": "安全 - 攻击、威胁和漏洞",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/security/README.md",
+    "sources": [
+      "topics/security/README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "original_category": "安全",
+    "original_title": "异步加密和同步加密有什么区别？",
+    "module": "permissions",
+    "topic": "凭据、证书与密钥",
+    "level": 0,
+    "body": "## 环境与初始材料\nLinux原生cryptography/OpenSSL后端，临时生成RSA测试密钥；无网络、无真实生产密钥。\n\n## 操作任务\n实现 seal(public_pem, plaintext, aad=b'')，仅接受bytes。读取RSA公钥且位数至少2048，生成32字节随机会话密钥和12字节随机nonce；RSA-OAEP使用SHA256和MGF1-SHA256封装密钥，AESGCM用该密钥加密明文并认证aad。返回 {'wrapped_key':bytes,'nonce':bytes,'ciphertext':bytes}。空明文有效，大明文不能直接用RSA加密；重复加密不得复用nonce/密钥。非法参数/非RSA/短密钥ValueError。此题验证真实密码库往返与篡改拒绝，不是生产密钥管理服务。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\nfrom cryptography.hazmat.primitives import serialization,hashes\nfrom cryptography.hazmat.primitives.asymmetric import rsa,padding\nfrom cryptography.hazmat.primitives.ciphers.aead import AESGCM\n\ndef seal(public_pem,plaintext,aad=b''):\n    if any(not isinstance(value,bytes) for value in (public_pem,plaintext,aad)):raise ValueError('bytes required')\n    try:key=serialization.load_pem_public_key(public_pem)\n    except (ValueError,TypeError):raise ValueError('invalid public key') from None\n    if not isinstance(key,rsa.RSAPublicKey) or key.key_size<2048:raise ValueError('RSA-2048 or stronger required')\n    symmetric=os.urandom(32);nonce=os.urandom(12)\n    wrapped=key.encrypt(symmetric,padding.OAEP(mgf=padding.MGF1(hashes.SHA256()),algorithm=hashes.SHA256(),label=None))\n    return {'wrapped_key':wrapped,'nonce':nonce,'ciphertext':AESGCM(symmetric).encrypt(nonce,plaintext,aad)}\n"
+    },
+    "negative_files": {
+      "task.py": "from cryptography.hazmat.primitives import serialization,hashes\nfrom cryptography.hazmat.primitives.asymmetric import padding\ndef seal(public_pem,plaintext,aad=b''):\n    key=serialization.load_pem_public_key(public_pem)\n    return {'wrapped_key':b'','nonce':bytes(12),'ciphertext':key.encrypt(plaintext,padding.OAEP(mgf=padding.MGF1(hashes.SHA256()),algorithm=hashes.SHA256(),label=None))}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 seal(public_pem, plaintext, aad=b'')，仅接受bytes。读取RSA公钥且位数至少2048，生成32字节随机会话密钥和12字节随机nonce；RSA-OAEP使用SHA256和MGF1-SHA256封装密钥，AESGCM用该密钥加密明文并认证aad。返回 {'wrapped_key':bytes,'nonce':bytes,'ciphertext':bytes}。空明文有效，大明文不能直接用RSA加密；重复加密不得复用nonce/密钥。非法参数/非RSA/短密钥ValueError。此题验证真实密码库往返与篡改拒绝，不是生产密钥管理服务。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux原生cryptography/OpenSSL后端，临时生成RSA测试密钥；无网络、无真实生产密钥。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,sys\nfrom cryptography.hazmat.primitives import serialization,hashes\nfrom cryptography.hazmat.primitives.asymmetric import rsa,padding,ed25519\nfrom cryptography.hazmat.primitives.ciphers.aead import AESGCM\nfrom cryptography.exceptions import InvalidTag\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nprivate=rsa.generate_private_key(public_exponent=65537,key_size=2048)\ndef pem(key):return key.public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)\npublic=pem(private.public_key());nonces=set();keys=set()\nfor plaintext in [b'',b'secret',bytes(range(256))*40]:\n    for repeat in range(2):\n        output=task.seal(public,plaintext,b'approved-context')\n        assert set(output)=={'wrapped_key','nonce','ciphertext'}\n        assert all(isinstance(value,bytes) for value in output.values())\n        symmetric=private.decrypt(output['wrapped_key'],padding.OAEP(mgf=padding.MGF1(hashes.SHA256()),algorithm=hashes.SHA256(),label=None))\n        assert len(symmetric)==32 and len(output['nonce'])==12\n        assert symmetric not in keys and output['nonce'] not in nonces\n        keys.add(symmetric);nonces.add(output['nonce'])\n        cipher=AESGCM(symmetric)\n        assert cipher.decrypt(output['nonce'],output['ciphertext'],b'approved-context')==plaintext\n        for data,aad in [(output['ciphertext'][:-1]+bytes([output['ciphertext'][-1]^1]),b'approved-context'),(output['ciphertext'],b'wrong-context')]:\n            try:cipher.decrypt(output['nonce'],data,aad)\n            except InvalidTag:pass\n            else:raise AssertionError('tamper not detected')\nfor key in [b'invalid',pem(rsa.generate_private_key(public_exponent=65537,key_size=1024).public_key()),pem(ed25519.Ed25519PrivateKey.generate().public_key())]:\n    try:task.seal(key,b'data')\n    except ValueError:pass\n    else:raise AssertionError('invalid encryption key')\nprint('native crypto: RSA-OAEP/AES-GCM real decrypt, large/empty messages, nonce/key uniqueness and tamper/AAD rejection passed')\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "cryptography"
+        ]
+      }
+    },
+    "conversion": {
+      "original_id": "src-88e5cb05f876c1b4",
+      "original_type": "source",
+      "original_title": "对称加密与非对称密码机制有什么区别，为什么通常混合使用？",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_src-88e5cb05f876c1b4",
+    "case_signature": "native_completion|src-88e5cb05f876c1b4"
+  },
+  {
+    "id": "src-58d1a7dd10742c02",
+    "title": "TLS 原生握手：验证信任根和主机名，拒绝未验证加密",
+    "answer": "```python\nimport socket\nimport ssl\n\ndef tls_exchange(host,port,cafile,server_name,timeout=1.0):\n    context=ssl.create_default_context(cafile=cafile)\n    context.minimum_version=ssl.TLSVersion.TLSv1_2\n    with socket.create_connection((host,port),timeout=timeout) as raw:\n        with context.wrap_socket(raw,server_hostname=server_name) as encrypted:\n            encrypted.sendall(b'ping')\n            data=bytearray()\n            while len(data)<4:\n                part=encrypted.recv(4-len(data))\n                if not part:raise EOFError('incomplete TLS response')\n                data.extend(part)\n            return bytes(data)\n```\n\n原题参考要点：\nTLS 在通信双方间协商密钥、验证身份并保护数据机密性与完整性。安全取决于受支持版本、证书/主机名校验、密钥管理和正确实现；它不隐藏所有流量元数据，也不验证业务内容本身无害。",
+    "category": "用户、权限与安全",
+    "difficulty": "入门",
+    "section": "安全 - 攻击、威胁和漏洞",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/security/README.md",
+    "sources": [
+      "topics/security/README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "original_category": "安全",
+    "original_title": "解释 TLS",
+    "module": "permissions",
+    "topic": "凭据、证书与密钥",
+    "level": 0,
+    "body": "## 环境与初始材料\nLinux原生Python ssl/OpenSSL回环TLS与临时自签测试证书；仅隔离目标，不调用外部云服务。\n\n## 操作任务\n实现 tls_exchange(host,port,cafile,server_name,timeout=1.0)。用 ssl.create_default_context(cafile=cafile) 创建客户端上下文，保持 CERT_REQUIRED 和check_hostname，minimum_version至少TLSv1_2。连接唯一传入目标，wrap_socket(server_hostname=server_name)，发送b'ping'并接收恰好4字节响应后关闭连接返回bytes；EOF不足4字节抛 EOFError。TLS证书/名称/信任链失败应原样抛ssl异常，不回退明文或忽略验证。验收只使用回环私有临时证书，不能扫描外网。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import socket\nimport ssl\n\ndef tls_exchange(host,port,cafile,server_name,timeout=1.0):\n    context=ssl.create_default_context(cafile=cafile)\n    context.minimum_version=ssl.TLSVersion.TLSv1_2\n    with socket.create_connection((host,port),timeout=timeout) as raw:\n        with context.wrap_socket(raw,server_hostname=server_name) as encrypted:\n            encrypted.sendall(b'ping')\n            data=bytearray()\n            while len(data)<4:\n                part=encrypted.recv(4-len(data))\n                if not part:raise EOFError('incomplete TLS response')\n                data.extend(part)\n            return bytes(data)\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,ssl\ndef tls_exchange(host,port,cafile,server_name,timeout=1.0):\n    context=ssl._create_unverified_context()\n    with socket.create_connection((host,port),timeout=timeout) as raw:\n        with context.wrap_socket(raw,server_hostname=server_name) as secure:\n            secure.sendall(b'ping');return secure.recv(4)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 tls_exchange(host,port,cafile,server_name,timeout=1.0)。用 ssl.create_default_context(cafile=cafile) 创建客户端上下文，保持 CERT_REQUIRED 和check_hostname，minimum_version至少TLSv1_2。连接唯一传入目标，wrap_socket(server_hostname=server_name)，发送b'ping'并接收恰好4字节响应后关闭连接返回bytes；EOF不足4字节抛 EOFError。TLS证书/名称/信任链失败应原样抛ssl异常，不回退明文或忽略验证。验收只使用回环私有临时证书，不能扫描外网。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux原生Python ssl/OpenSSL回环TLS与临时自签测试证书；仅隔离目标，不调用外部云服务。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,socket,ssl,subprocess,sys,tempfile,threading\nfrom unittest.mock import patch\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nwith tempfile.TemporaryDirectory(prefix='opsforge-tls-') as directory:\n    root=pathlib.Path(directory)\n    for label in ['trusted','other']:\n        subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(root/(label+'.key')),'-out',str(root/(label+'.crt')),'-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost','-days','1'],check=True,capture_output=True,timeout=8)\n    def exchange(certificate,hostname,expected,reply=b'pong'):\n        context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.minimum_version=ssl.TLSVersion.TLSv1_2\n        context.load_cert_chain(root/(certificate+'.crt'),root/(certificate+'.key'))\n        listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(1);listener.settimeout(3)\n        port=listener.getsockname()[1];errors=[]\n        def server():\n            try:\n                raw,_=listener.accept()\n                with raw:\n                    with context.wrap_socket(raw,server_side=True) as secure:\n                        assert secure.recv(4)==b'ping'\n                        secure.sendall(reply)\n            except ssl.SSLError:pass\n            except Exception as error:errors.append(repr(error))\n            finally:listener.close()\n        thread=threading.Thread(target=server,daemon=True);thread.start()\n        try:\n            result=task.tls_exchange('127.0.0.1',port,str(root/'trusted.crt'),hostname,.5)\n            assert expected=='ok' and result==b'pong',('unexpected acceptance',expected,result)\n        except ssl.SSLCertVerificationError:\n            assert expected=='untrusted'\n        except EOFError:assert expected=='eof'\n        finally:thread.join(timeout=4)\n        assert not thread.is_alive() and not errors,errors\n    original=ssl.create_default_context;observed=[]\n    def configured(*args,**kwargs):\n        value=original(*args,**kwargs);observed.append(value);return value\n    with patch.object(ssl,'create_default_context',side_effect=configured):exchange('trusted','localhost','ok')\n    assert observed and observed[0].check_hostname and observed[0].verify_mode==ssl.CERT_REQUIRED and observed[0].minimum_version>=ssl.TLSVersion.TLSv1_2\n    exchange('trusted','wrong.invalid','untrusted')\n    exchange('other','localhost','untrusted')\n    exchange('trusted','localhost','eof',reply=b'po')\nprint('native TLS: actual loopback handshake, trust roots, hostname, protocol floor and partial EOF rejection passed')\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "openssl"
+        ]
+      }
+    },
+    "conversion": {
+      "original_id": "src-58d1a7dd10742c02",
+      "original_type": "source",
+      "original_title": "解释 TLS",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_src-58d1a7dd10742c02",
+    "case_signature": "native_completion|src-58d1a7dd10742c02"
+  },
+  {
+    "id": "src-d07023b2614962bf",
+    "title": "AES-GCM nonce分配：跨进程锁与持久化计数器避免重启复用",
+    "answer": "```python\nimport fcntl\nimport json\nimport os\nfrom pathlib import Path\nimport re\nimport tempfile\n\ndef next_nonce(state_path):\n    path=Path(state_path)\n    lock=os.open(str(path)+'.lock',os.O_CREAT|os.O_RDWR|os.O_CLOEXEC|os.O_NOFOLLOW,0o600)\n    try:\n        fcntl.flock(lock,fcntl.LOCK_EX)\n        try:\n            descriptor=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)\n            with os.fdopen(descriptor,'r',encoding='ascii') as source:state=json.load(source)\n        except FileNotFoundError:state={'prefix':os.urandom(4).hex(),'next':0}\n        except (json.JSONDecodeError,UnicodeError):raise ValueError('invalid nonce state') from None\n        if not isinstance(state,dict) or set(state)!= {'prefix','next'} or not isinstance(state['prefix'],str) or not re.fullmatch('[0-9a-f]{8}',state['prefix']) or type(state['next']) is not int or not 0<=state['next']<=2**64:raise ValueError('invalid nonce state')\n        if state['next']==2**64:raise OverflowError('nonce counter exhausted')\n        nonce=bytes.fromhex(state['prefix'])+state['next'].to_bytes(8,'big')\n        state['next']+=1\n        descriptor,temporary=tempfile.mkstemp(prefix='.nonce-',dir=path.parent)\n        try:\n            with os.fdopen(descriptor,'w',encoding='ascii') as destination:\n                json.dump(state,destination,separators=(',',':'));destination.flush();os.fsync(destination.fileno())\n            os.replace(temporary,path)\n            directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)\n            try:os.fsync(directory)\n            finally:os.close(directory)\n        finally:\n            try:os.unlink(temporary)\n            except FileNotFoundError:pass\n        return nonce\n    finally:os.close(lock)\n```\n\n原题参考要点：\nNonce 是在特定协议/密钥上下文中要求不重复或满足规定随机性的值，用于防重放或保证加密安全。具体要求依算法，某些 AEAD 中同一密钥重复 nonce 会严重破坏安全；不能随意把时间戳或常量作为通用 nonce。",
+    "category": "用户、权限与安全",
+    "difficulty": "入门",
+    "section": "安全 - 攻击、威胁和漏洞",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/security/README.md",
+    "sources": [
+      "topics/security/README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "original_category": "安全",
+    "original_title": "什么是Nonce？",
+    "module": "permissions",
+    "topic": "凭据、证书与密钥",
+    "level": 2,
+    "body": "## 环境与初始材料\nLinux原生fcntl flock、fsync与原子替换；本人私有临时目录、独立子进程。只验证单个状态文件共享的分配器。\n\n## 操作任务\n实现 next_nonce(state_path)，用于同一密钥下集中保管的nonce状态。路径父目录为本人私有目录。使用独立稳定的state_path+'.lock'文件取得fcntl.LOCK_EX；状态JSON为 {'prefix':8位小写hex,'next':非布尔整数0..2**64}。首次创建生成4随机字节prefix；返回 prefix字节+当前next的8字节big-endian。必须先把next+1以同目录0600临时文件fsync、os.replace并fsync父目录后才返回；损坏状态ValueError且不能重置，next==2**64时OverflowError。不得锁被replace的状态inode，跨进程应唯一。此题不证明硬件断电持久性，不允许拷贝/回滚该状态后在同一密钥下继续使用；prefix仅32位，独立分配器不能共享同一密钥。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import fcntl\nimport json\nimport os\nfrom pathlib import Path\nimport re\nimport tempfile\n\ndef next_nonce(state_path):\n    path=Path(state_path)\n    lock=os.open(str(path)+'.lock',os.O_CREAT|os.O_RDWR|os.O_CLOEXEC|os.O_NOFOLLOW,0o600)\n    try:\n        fcntl.flock(lock,fcntl.LOCK_EX)\n        try:\n            descriptor=os.open(path,os.O_RDONLY|os.O_NOFOLLOW)\n            with os.fdopen(descriptor,'r',encoding='ascii') as source:state=json.load(source)\n        except FileNotFoundError:state={'prefix':os.urandom(4).hex(),'next':0}\n        except (json.JSONDecodeError,UnicodeError):raise ValueError('invalid nonce state') from None\n        if not isinstance(state,dict) or set(state)!= {'prefix','next'} or not isinstance(state['prefix'],str) or not re.fullmatch('[0-9a-f]{8}',state['prefix']) or type(state['next']) is not int or not 0<=state['next']<=2**64:raise ValueError('invalid nonce state')\n        if state['next']==2**64:raise OverflowError('nonce counter exhausted')\n        nonce=bytes.fromhex(state['prefix'])+state['next'].to_bytes(8,'big')\n        state['next']+=1\n        descriptor,temporary=tempfile.mkstemp(prefix='.nonce-',dir=path.parent)\n        try:\n            with os.fdopen(descriptor,'w',encoding='ascii') as destination:\n                json.dump(state,destination,separators=(',',':'));destination.flush();os.fsync(destination.fileno())\n            os.replace(temporary,path)\n            directory=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY)\n            try:os.fsync(directory)\n            finally:os.close(directory)\n        finally:\n            try:os.unlink(temporary)\n            except FileNotFoundError:pass\n        return nonce\n    finally:os.close(lock)\n"
+    },
+    "negative_files": {
+      "task.py": "import json\nfrom pathlib import Path\ndef next_nonce(state_path):\n    path=Path(state_path)\n    if path.exists():state=json.loads(path.read_text())\n    else:state={'prefix':'00000000','next':0}\n    nonce=bytes.fromhex(state['prefix'])+state['next'].to_bytes(8,'big')\n    # incorrect: counter never advances, so every call reuses a nonce\n    path.write_text(json.dumps(state))\n    return nonce\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 next_nonce(state_path)，用于同一密钥下集中保管的nonce状态。路径父目录为本人私有目录。使用独立稳定的state_path+'.lock'文件取得fcntl.LOCK_EX；状态JSON为 {'prefix':8位小写hex,'next':非布尔整数0..2**64}。首次创建生成4随机字节prefix；返回 prefix字节+当前next的8字节big-endian。必须先把next+1以同目录0600临时文件fsync、os.replace并fsync父目录后才返回；损坏状态ValueError且不能重置，next==2**64时OverflowError。不得锁被replace的状态inode，跨进程应唯一。此题不证明硬件断电持久性，不允许拷贝/回滚该状态后在同一密钥下继续使用；prefix仅32位，独立分配器不能共享同一密钥。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux原生fcntl flock、fsync与原子替换；本人私有临时目录、独立子进程。只验证单个状态文件共享的分配器。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import concurrent.futures,json,os,pathlib,stat,subprocess,sys,tempfile\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nwith tempfile.TemporaryDirectory(prefix='opsforge-nonce-') as directory:\n    path=pathlib.Path(directory)/'state.json'\n    first=task.next_nonce(path);second=task.next_nonce(path)\n    assert isinstance(first,bytes) and len(first)==12 and first[:4]==second[:4]\n    assert int.from_bytes(first[4:],'big')==0 and int.from_bytes(second[4:],'big')==1\n    code=\"import task,sys;print(task.next_nonce(sys.argv[1]).hex())\"\n    def allocate(index):\n        result=subprocess.run([sys.executable,'-c',code,str(path)],capture_output=True,text=True,timeout=4,check=True)\n        return bytes.fromhex(result.stdout.strip())\n    with concurrent.futures.ThreadPoolExecutor(max_workers=6) as workers:nonces=list(workers.map(allocate,range(24)))\n    assert len(set(nonces))==24\n    assert all(nonce[:4]==first[:4] for nonce in nonces)\n    assert sorted(int.from_bytes(nonce[4:],'big') for nonce in nonces)==list(range(2,26))\n    assert stat.S_IMODE(path.stat().st_mode)==0o600\n    saved=json.loads(path.read_text());assert saved['next']==26\n    for bad in [{'prefix':'zzzzzzzz','next':0},{'prefix':'01020304','next':True},{'prefix':'01020304','next':-1}]:\n        path.write_text(json.dumps(bad));before=path.read_bytes()\n        try:task.next_nonce(path)\n        except ValueError:pass\n        else:raise AssertionError('corrupt state reset')\n        assert path.read_bytes()==before\n    path.write_text(json.dumps({'prefix':'01020304','next':2**64-1}))\n    assert task.next_nonce(path)==bytes.fromhex('01020304')+bytes([255])*8\n    try:task.next_nonce(path)\n    except OverflowError:pass\n    else:raise AssertionError('counter wrapped')\nprint('native nonce allocation: stable flock inode, 24 concurrent processes, persistence/restart, 0600 state, corruption and exhaustion passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "src-d07023b2614962bf",
+      "original_type": "source",
+      "original_title": "什么是Nonce？",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_src-d07023b2614962bf",
+    "case_signature": "native_completion|src-d07023b2614962bf"
+  },
+  {
+    "id": "src-401c3f6642520f7d",
+    "title": "Git公开仓库保护：扫描真实暂存blob而非仅看工作区",
+    "answer": "```python\nimport os\nimport re\nimport subprocess\n\ndef staged_secret_paths(repo):\n    def git(*args):return subprocess.run(['git','-C',os.fspath(repo),*args],check=True,capture_output=True).stdout\n    entries=git('ls-files','--stage','-z')\n    matches=[]\n    for record in entries.split(b'\\x00'):\n        if not record:continue\n        metadata,path=record.split(b'\\t',1)\n        mode,oid,stage=metadata.split()\n        if stage!=b'0':raise ValueError('unmerged index')\n        if mode not in (b'100644',b'100755'):continue\n        data=git('cat-file','blob',oid.decode('ascii'))\n        if re.search(rb'OPSF_SECRET_[A-Z0-9]{16}',data):matches.append(os.fsdecode(path))\n    return sorted(matches)\n```\n\n原题参考要点：\n公共代码仓库需禁止秘密和个人敏感数据提交，开启分支保护、最小权限、MFA、依赖/秘密扫描及发布审计。发现泄密要先撤销轮换凭据再处理历史，删除文件不等于旧密钥失效；不可信 PR 不应获得发布凭据。",
+    "category": "用户、权限与安全",
+    "difficulty": "入门",
+    "section": "安全 - 攻击、威胁和漏洞",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/security/README.md",
+    "sources": [
+      "topics/security/README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "original_category": "安全",
+    "original_title": "描述如何保护公共存储库",
+    "module": "permissions",
+    "topic": "授权策略与安全治理",
+    "level": 3,
+    "body": "## 环境与初始材料\nLinux原生Git，本人临时仓库与明显虚构的教学秘密标记；只读索引审计，不创建提交、不推送外网。\n\n## 操作任务\n实现 staged_secret_paths(repo)，只读审计实际Git索引的stage0普通文件（100644/100755）。用git ls-files --stage -z取对象ID并git cat-file blob读取索引版本，找出含教学测试秘密模式 OPSF_SECRET_[A-Z0-9]{16} 的路径，按路径排序返回list[str]。已暂存但工作区已清理的秘密仍应报出；仅工作区未暂存的秘密不应误报；不跟随符号链接、不读取submodule。遇未合并stage应ValueError，git错误不得静默成功。不写Git索引或修改文件。本题模式只用于教学，不宣称已发现所有生产秘密或清除历史泄漏。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\nimport re\nimport subprocess\n\ndef staged_secret_paths(repo):\n    def git(*args):return subprocess.run(['git','-C',os.fspath(repo),*args],check=True,capture_output=True).stdout\n    entries=git('ls-files','--stage','-z')\n    matches=[]\n    for record in entries.split(b'\\x00'):\n        if not record:continue\n        metadata,path=record.split(b'\\t',1)\n        mode,oid,stage=metadata.split()\n        if stage!=b'0':raise ValueError('unmerged index')\n        if mode not in (b'100644',b'100755'):continue\n        data=git('cat-file','blob',oid.decode('ascii'))\n        if re.search(rb'OPSF_SECRET_[A-Z0-9]{16}',data):matches.append(os.fsdecode(path))\n    return sorted(matches)\n"
+    },
+    "negative_files": {
+      "task.py": "from pathlib import Path\nimport re\ndef staged_secret_paths(repo):\n    return sorted(p.name for p in Path(repo).glob('*') if p.is_file() and re.search(r'OPSF_SECRET_[A-Z0-9]{16}',p.read_text()))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 staged_secret_paths(repo)，只读审计实际Git索引的stage0普通文件（100644/100755）。用git ls-files --stage -z取对象ID并git cat-file blob读取索引版本，找出含教学测试秘密模式 OPSF_SECRET_[A-Z0-9]{16} 的路径，按路径排序返回list[str]。已暂存但工作区已清理的秘密仍应报出；仅工作区未暂存的秘密不应误报；不跟随符号链接、不读取submodule。遇未合并stage应ValueError，git错误不得静默成功。不写Git索引或修改文件。本题模式只用于教学，不宣称已发现所有生产秘密或清除历史泄漏。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux原生Git，本人临时仓库与明显虚构的教学秘密标记；只读索引审计，不创建提交、不推送外网。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,sys,tempfile\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nwith tempfile.TemporaryDirectory(prefix='opsforge-index-') as directory:\n    root=pathlib.Path(directory)\n    def git(*args):return subprocess.run(['git','-C',str(root),*args],capture_output=True,check=True).stdout\n    git('init','--quiet');secret='OPSF_SECRET_0123456789ABCDEF'\n    for name in ['tracked.txt','space name.txt','line\\nname.txt']:\n        (root/name).write_text(secret)\n    (root/'clean.txt').write_text('no secrets');(root/'.gitignore').write_text('tracked.txt\\n')\n    git('add','-f','tracked.txt','space name.txt','line\\nname.txt');git('add','clean.txt','.gitignore')\n    (root/'tracked.txt').write_text('working tree fixed, index still unsafe')\n    (root/'clean.txt').write_text(secret)\n    before_index=(root/'.git/index').read_bytes()\n    assert task.staged_secret_paths(root)==['line\\nname.txt','space name.txt','tracked.txt']\n    assert (root/'.git/index').read_bytes()==before_index,'read-only audit changed index'\n    git('add','tracked.txt','space name.txt','line\\nname.txt')\n    assert task.staged_secret_paths(root)==['line\\nname.txt','space name.txt']\nprint('native Git index: staged blobs, worktree mismatch, ignored tracked path, NUL/newline names and unchanged index passed')\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      }
+    },
+    "conversion": {
+      "original_id": "src-401c3f6642520f7d",
+      "original_type": "source",
+      "original_title": "描述如何保护公共存储库",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_src-401c3f6642520f7d",
+    "case_signature": "native_completion|src-401c3f6642520f7d"
+  },
+  {
+    "id": "src-90d1354ba4424c2d",
+    "title": "本地秘密读取：内核fd验证属主、0600策略与拒绝链接",
+    "answer": "```python\nimport os\nimport stat\n\ndef load_secret(path):\n    try:descriptor=os.open(path,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW)\n    except OSError:raise ValueError('secret unavailable') from None\n    try:\n        metadata=os.fstat(descriptor)\n        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid!=os.geteuid() or stat.S_IMODE(metadata.st_mode)&0o077:raise ValueError('insecure secret file')\n        data=bytearray()\n        while len(data)<4097:\n            part=os.read(descriptor,4097-len(data))\n            if not part:break\n            data.extend(part)\n        if not 1<=len(data)<=4096:raise ValueError('secret size')\n        try:value=bytes(data).decode('utf-8').strip()\n        except UnicodeDecodeError:raise ValueError('secret encoding') from None\n        if not value:raise ValueError('empty secret')\n        return value\n    finally:os.close(descriptor)\n```\n\n原题参考要点：\n优先集中秘密管理和短期身份凭据，按应用/环境隔离权限，建立轮换与撤销流程。配置只保存引用，日志和备份脱敏/加密，禁止在仓库硬编码或多人共享管理员密码；轮换前验证消费者更新和旧凭据回收。",
+    "category": "用户、权限与安全",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "2026-10-25：保留原题ID和来源，原生Linux独立验收；见随包平台参考、初始、错误及提前退出四路记录。",
+    "original_category": "安全",
+    "original_title": "如何在不同的工具和平台中管理密码?",
+    "module": "permissions",
+    "topic": "凭据、证书与密钥",
+    "level": 2,
+    "body": "## 环境与初始材料\nLinux原生open/fstat/O_NOFOLLOW，非root用户私有临时文件；不修改默认身份和真实凭据。\n\n## 操作任务\n实现 load_secret(path)，用 os.open(O_RDONLY|O_CLOEXEC|O_NOFOLLOW)打开本人私有普通文件，再用fstat在同一个fd验证 st_uid==geteuid 且group/other权限均为0，不允许先stat后随意open的TOCTOU。读最多4097字节；文件1..4096字节、UTF-8且strip后非空，返回去首尾空白字符串。非法文件/权限/链接/内容抛ValueError，不输出秘密，不读取外部环境变量。所有分支关闭fd；不替代集中式秘密管理与轮换。\n\n## 提交产物\ntask.py。提交可运行实现，不以文字说明代替。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区使用真实内核/文件操作执行边界与错误实现反例；参考实现需通过，初始骨架和错误实现需失败。验收范围限定为本题合同。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "原生环境行为满足任务合同",
+      "不修改宿主/其他进程或任意外部路径",
+      "正常、边界、独立错误实现均有可重放证据"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-e4479a97d37cf122",
+        "title": "如何在不同的工具和平台中管理敏感信息（如密码）？",
+        "category": "安全",
+        "source": "topics/security/README.md",
+        "sources": [
+          "topics/security/README.md"
+        ]
+      }
+    ],
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement native task contract\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os\nimport stat\n\ndef load_secret(path):\n    try:descriptor=os.open(path,os.O_RDONLY|os.O_CLOEXEC|os.O_NOFOLLOW)\n    except OSError:raise ValueError('secret unavailable') from None\n    try:\n        metadata=os.fstat(descriptor)\n        if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid!=os.geteuid() or stat.S_IMODE(metadata.st_mode)&0o077:raise ValueError('insecure secret file')\n        data=bytearray()\n        while len(data)<4097:\n            part=os.read(descriptor,4097-len(data))\n            if not part:break\n            data.extend(part)\n        if not 1<=len(data)<=4096:raise ValueError('secret size')\n        try:value=bytes(data).decode('utf-8').strip()\n        except UnicodeDecodeError:raise ValueError('secret encoding') from None\n        if not value:raise ValueError('empty secret')\n        return value\n    finally:os.close(descriptor)\n"
+    },
+    "negative_files": {
+      "task.py": "from pathlib import Path\ndef load_secret(path):return Path(path).read_text().strip()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 load_secret(path)，用 os.open(O_RDONLY|O_CLOEXEC|O_NOFOLLOW)打开本人私有普通文件，再用fstat在同一个fd验证 st_uid==geteuid 且group/other权限均为0，不允许先stat后随意open的TOCTOU。读最多4097字节；文件1..4096字节、UTF-8且strip后非空，返回去首尾空白字符串。非法文件/权限/链接/内容抛ValueError，不输出秘密，不读取外部环境变量。所有分支关闭fd；不替代集中式秘密管理与轮换。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py 原生Linux执行、边界和反例检查",
+      "validation_scope": "Linux原生open/fstat/O_NOFOLLOW，非root用户私有临时文件；不修改默认身份和真实凭据。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,pathlib,sys,tempfile\nfrom unittest.mock import patch\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nwith tempfile.TemporaryDirectory(prefix='opsforge-secret-') as directory:\n    root=pathlib.Path(directory);path=root/'secret';path.write_text('  isolated-value  ');os.chmod(path,0o600)\n    assert task.load_secret(path)=='isolated-value'\n    os.chmod(path,0o400);assert task.load_secret(path)=='isolated-value'\n    for mode in [0o644,0o640,0o604]:\n        os.chmod(path,mode)\n        try:task.load_secret(path)\n        except ValueError:pass\n        else:raise AssertionError('group/other access accepted')\n    os.chmod(path,0o600)\n    link=root/'link';link.symlink_to(path)\n    for candidate in [link,root,root/'missing']:\n        try:task.load_secret(candidate)\n        except ValueError:pass\n        else:raise AssertionError('unsafe file accepted')\n    for data in [b'',b'  ',bytes([255]),b'x'*4097]:\n        path.write_bytes(data)\n        try:task.load_secret(path)\n        except ValueError:pass\n        else:raise AssertionError('invalid secret content')\n    path.write_bytes(b'x'*4096);assert task.load_secret(path)=='x'*4096\n    real=os.fstat;seen=[]\n    def stat_fd(fd):seen.append(fd);return real(fd)\n    with patch.object(os,'fstat',side_effect=stat_fd):assert task.load_secret(path)=='x'*4096\n    assert seen,'must validate the actual opened descriptor'\nprint('native secret fd: private modes, owner/fstat, nofollow, UTF8/length bounds and read-only files passed')\n"
+      },
+      "timeout": 30
+    },
+    "conversion": {
+      "original_id": "src-90d1354ba4424c2d",
+      "original_type": "source",
+      "original_title": "如何在不同的工具和平台中管理密码?",
+      "preserve_history": true
+    },
+    "semantic_root": "native_completion_src-90d1354ba4424c2d",
+    "case_signature": "native_completion|src-90d1354ba4424c2d"
+  }
+]

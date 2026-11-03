@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-parallel-aws-049",
+    "module": "aws",
+    "category": "AWS 云模拟",
+    "level": 2,
+    "topic": "身份权限与加密",
+    "title": "离线密钥轮换实操：逻辑Key不变，旧AES-GCM密文仍用历史材料解密",
+    "answer": "```python\nimport copy,json,secrets\nfrom cryptography.hazmat.primitives.ciphers.aead import AESGCM\n\ndef aad(key_id,version):\n    return json.dumps([key_id,version],separators=(',',':')).encode()\n\ndef rotate_material(store,key_id,new_material):\n    if key_id not in store:raise ValueError('unknown logical key')\n    if not isinstance(new_material,bytes) or len(new_material)!=32:raise ValueError('fresh 256-bit teaching material required')\n    if new_material in store[key_id]['materials'].values():raise ValueError('material must actually change')\n    result=copy.deepcopy(store);key=result[key_id];version=max(key['materials'])+1\n    key['materials'][version]=new_material;key['current']=version\n    return result\n\ndef encrypt(store,key_id,plaintext):\n    if key_id not in store:raise ValueError('unknown logical key')\n    key=store[key_id];version=key['current'];nonce=secrets.token_bytes(12)\n    ciphertext=AESGCM(key['materials'][version]).encrypt(nonce,plaintext,aad(key_id,version))\n    return {'key_id':key_id,'material_version':version,'nonce':nonce.hex(),'ciphertext':ciphertext.hex()}\n\ndef decrypt(store,envelope):\n    key_id=envelope['key_id'];version=envelope['material_version']\n    if key_id not in store or version not in store[key_id]['materials']:raise ValueError('required historical logical key/material unavailable')\n    material=store[key_id]['materials'][version]\n    return AESGCM(material).decrypt(bytes.fromhex(envelope['nonce']),bytes.fromhex(envelope['ciphertext']),aad(key_id,version))\n```\n\n原题知识说明：\n受支持自动轮换在同一逻辑key下管理材料并保留旧数据解密能力；新建key是新身份，需要授权和数据迁移计划。适用类型与设置查官方能力，不能混淆二者的删除风险。",
+    "type": "code",
+    "source": "独立编审：AWS服务机制与配置审查",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "解释AWS特定机制",
+      "明确权限、故障域或恢复验证边界"
+    ],
+    "references": [
+      "https://docs.aws.amazon.com/kms/latest/developerguide/rotate-keys.html"
+    ],
+    "related_modules": [
+      "aws"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-aws-049",
+      "original_title": "KMS自动轮换与新建key后切换应用有什么区别？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现rotate_material(store,key_id,new_material)、encrypt(store,key_id,plaintext)、decrypt(store,envelope)。这是公开材料的本地教学keyring，不是AWS SDK或KMS密文格式。store为已规范化字典：逻辑key_id映射current正整数版本和materials{版本:32字节key}。rotate_material返回深拷贝，只对指定逻辑key增加max(version)+1及current，保留全部历史材料和其他key；new_material须32字节bytes且不同于已有材料，否则ValueError。encrypt用当前版本真实AESGCM和新12字节系统随机nonce，AAD为json.dumps([key_id,version],separators=(comma,colon)).encode()，返回恰含key_id,material_version,nonce十六进制,ciphertext十六进制。decrypt必须按密文绑定的逻辑key和历史材料版本选择，不能用当前材料或应用别名替代；未知key/material须ValueError，篡改须认证失败。应用将别名从A切B只改变未来加密目标，不得改写旧密文或声称旧key可删除。输入保持不变，验证两次轮换、新旧二进制载荷、别名切换及历史key缺失。AAD序列化逗号冒号分别为字符串\",\"和\":\"。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n离线云模拟，真实本地AES-GCM仅演示稳定逻辑身份与历史材料保留；教学材料可见，AWS托管材料实际不可导出，解密材料由KMS自动选择，客户不能指定内部版本。本题格式不是KMS CiphertextBlob，无KMS API/HSM、IAM、传播、轮换日程或生产数据重加密实测；未宣称轮换能修复已泄露DEK或删除历史key。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy,json,secrets\nfrom cryptography.hazmat.primitives.ciphers.aead import AESGCM\n\ndef aad(key_id,version):\n    return json.dumps([key_id,version],separators=(',',':')).encode()\n\ndef rotate_material(store,key_id,new_material):\n    if key_id not in store:raise ValueError('unknown logical key')\n    if not isinstance(new_material,bytes) or len(new_material)!=32:raise ValueError('fresh 256-bit teaching material required')\n    if new_material in store[key_id]['materials'].values():raise ValueError('material must actually change')\n    result=copy.deepcopy(store);key=result[key_id];version=max(key['materials'])+1\n    key['materials'][version]=new_material;key['current']=version\n    return result\n\ndef encrypt(store,key_id,plaintext):\n    if key_id not in store:raise ValueError('unknown logical key')\n    key=store[key_id];version=key['current'];nonce=secrets.token_bytes(12)\n    ciphertext=AESGCM(key['materials'][version]).encrypt(nonce,plaintext,aad(key_id,version))\n    return {'key_id':key_id,'material_version':version,'nonce':nonce.hex(),'ciphertext':ciphertext.hex()}\n\ndef decrypt(store,envelope):\n    key_id=envelope['key_id'];version=envelope['material_version']\n    if key_id not in store or version not in store[key_id]['materials']:raise ValueError('required historical logical key/material unavailable')\n    material=store[key_id]['materials'][version]\n    return AESGCM(material).decrypt(bytes.fromhex(envelope['nonce']),bytes.fromhex(envelope['ciphertext']),aad(key_id,version))\n"
+    },
+    "negative_files": {
+      "task.py": "import copy,json,secrets\nfrom cryptography.hazmat.primitives.ciphers.aead import AESGCM\n\ndef aad(key_id,version):\n    return json.dumps([key_id,version],separators=(',',':')).encode()\n\ndef rotate_material(store,key_id,new_material):\n    if key_id not in store:raise ValueError('unknown logical key')\n    if not isinstance(new_material,bytes) or len(new_material)!=32:raise ValueError('fresh 256-bit teaching material required')\n    if new_material in store[key_id]['materials'].values():raise ValueError('material must actually change')\n    result=copy.deepcopy(store);key=result[key_id];version=max(key['materials'])+1\n    key['materials']={version:new_material};key['current']=version\n    return result\n\ndef encrypt(store,key_id,plaintext):\n    if key_id not in store:raise ValueError('unknown logical key')\n    key=store[key_id];version=key['current'];nonce=secrets.token_bytes(12)\n    ciphertext=AESGCM(key['materials'][version]).encrypt(nonce,plaintext,aad(key_id,version))\n    return {'key_id':key_id,'material_version':version,'nonce':nonce.hex(),'ciphertext':ciphertext.hex()}\n\ndef decrypt(store,envelope):\n    key_id=envelope['key_id'];version=envelope['material_version']\n    if key_id not in store or version not in store[key_id]['materials']:raise ValueError('required historical logical key/material unavailable')\n    material=store[key_id]['materials'][version]\n    return AESGCM(material).decrypt(bytes.fromhex(envelope['nonce']),bytes.fromhex(envelope['ciphertext']),aad(key_id,version))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现rotate_material(store,key_id,new_material)、encrypt(store,key_id,plaintext)、decrypt(store,envelope)。这是公开材料的本地教学keyring，不是AWS SDK或KMS密文格式。store为已规范化字典：逻辑key_id映射current正整数版本和materials{版本:32字节key}。rotate_material返回深拷贝，只对指定逻辑key增加max(version)+1及current，保留全部历史材料和其他key；new_material须32字节bytes且不同于已有材料，否则ValueError。encrypt用当前版本真实AESGCM和新12字节系统随机nonce，AAD为json.dumps([key_id,version],separators=(comma,colon)).encode()，返回恰含key_id,material_version,nonce十六进制,ciphertext十六进制。decrypt必须按密文绑定的逻辑key和历史材料版本选择，不能用当前材料或应用别名替代；未知key/material须ValueError，篡改须认证失败。应用将别名从A切B只改变未来加密目标，不得改写旧密文或声称旧key可删除。输入保持不变，验证两次轮换、新旧二进制载荷、别名切换及历史key缺失。AAD序列化逗号冒号分别为字符串\",\"和\":\"。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "离线云模拟，真实本地AES-GCM仅演示稳定逻辑身份与历史材料保留；教学材料可见，AWS托管材料实际不可导出，解密材料由KMS自动选择，客户不能指定内部版本。本题格式不是KMS CiphertextBlob，无KMS API/HSM、IAM、传播、轮换日程或生产数据重加密实测；未宣称轮换能修复已泄露DEK或删除历史key。",
+      "validation_kind": "offline_cloud_model"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [
+          "cryptography"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import copy,os,secrets,sys\nsys.path.insert(0,os.getcwd())\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('OFFLINE_CLOUD_SCOPE:NO_CLOUD_API_REQUESTS',flush=True)\nimport task\nfrom cryptography.exceptions import InvalidTag\na='logical-a-'+secrets.token_hex(4);b='logical-b-'+secrets.token_hex(4)\nstore={a:{'current':1,'materials':{1:secrets.token_bytes(32)}},b:{'current':1,'materials':{1:secrets.token_bytes(32)}}}\nbefore=copy.deepcopy(store);plain=b'old binary payload\\x00'+secrets.token_bytes(19)\nold=task.encrypt(store,a,plain);old_before=copy.deepcopy(old)\nassert old['key_id']==a and old['material_version']==1 and task.decrypt(store,old)==plain\nprint('STUDENT_OPERATION_ENTERED:rotate_same_logical_key_preserve_historical_material_and_ciphertext_not_alias_reencrypt',flush=True)\nfresh=secrets.token_bytes(32);rotated=task.rotate_material(store,a,fresh)\nassert store==before and old==old_before and rotated[b]==before[b]\nassert rotated[a]['current']==2 and rotated[a]['materials']=={1:before[a]['materials'][1],2:fresh},'rotation removed old material or changed another key'\ntry:recovered=task.decrypt(rotated,old)\nexcept InvalidTag as error:raise AssertionError('current material cannot replace historical material required by old ciphertext') from error\nassert recovered==plain,'historical plaintext changed'\nnew_plain=b'new payload'+secrets.token_bytes(17);new=task.encrypt(rotated,a,new_plain)\nassert new['key_id']==a and new['material_version']==2 and task.decrypt(rotated,new)==new_plain\n# Moving the application's alias creates a different future target, not a rewrite of old ciphertext identity.\nalias={'active':a};alias['active']=b\nother=task.encrypt(rotated,alias['active'],b'after alias change')\nassert other['key_id']==b and other['material_version']==1\nassert task.decrypt(rotated,old)==plain and task.decrypt(rotated,new)==new_plain and old==old_before\nmissing=copy.deepcopy(rotated);del missing[a]\ntry:task.decrypt(missing,old)\nexcept ValueError:pass\nelse:raise AssertionError('switching alias magically replaced deleted historical key')\ncorrupt=copy.deepcopy(old);raw=bytearray.fromhex(corrupt['ciphertext']);raw[-1]^=1;corrupt['ciphertext']=raw.hex()\ntry:task.decrypt(rotated,corrupt)\nexcept (InvalidTag,ValueError):pass\nelse:raise AssertionError('authenticated ciphertext corruption accepted')\nwrong_key=copy.deepcopy(old);wrong_key['key_id']=b\ntry:task.decrypt(rotated,wrong_key)\nexcept (InvalidTag,ValueError):pass\nelse:raise AssertionError('envelope rebound to another logical key')\nfor material in (b'too-short',fresh,bytearray(32)):\n snapshot=copy.deepcopy(rotated)\n try:task.rotate_material(rotated,a,material)\n except ValueError:pass\n else:raise AssertionError('invalid or unchanged rotation material accepted')\n assert rotated==snapshot\ntwice=task.rotate_material(rotated,a,secrets.token_bytes(32))\nassert twice[a]['current']==3 and len(twice[a]['materials'])==3\nassert task.decrypt(twice,old)==plain and task.decrypt(twice,new)==new_plain\nassert store==before and old==old_before and alias=={'active':b}\nprint('OFFLINE_KMS_STABLE_LOGICAL_KEY_NEW_MATERIAL_OLD_AEAD_CIPHERTEXT_DECRYPTS_ALIAS_SWITCH_DOES_NOT_REWRITE_OR_REPLACE_OLD_KEY',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "practice"
+  }
+]

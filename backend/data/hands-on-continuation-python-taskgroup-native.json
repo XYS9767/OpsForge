@@ -1,0 +1,72 @@
+[
+  {
+    "id": "curated-advanced-python-001",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 4,
+    "topic": "并发与异步控制",
+    "title": "真实TaskGroup失败边界：同时异常分组、已完成结果与外部取消收尾",
+    "body": "## 操作任务\n实现async collect(jobs)，jobs为保持输入顺序的name→无参数协程工厂映射。结构化并发执行；普通子任务失败应取消并等待兄弟任务清理。返回{results:明确成功任务的name→结果,errors:递归展开普通ExceptionGroup叶节点的(异常类名,str)排序列表,cancelled:已取消任务名称排序列表}。None和0成功结果必须保留。外部CancelledError必须在子任务清理后继续传播，不能当成功报告；不返回尚未确定结果。验证同时两种普通异常、嵌套异常组、空批次、外部取消以及已落地副作用仍保留；gather(return_exceptions=True)不能直接满足失败取消合同。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\nLinux CPython3.11+真实事件循环与协程，不模拟asyncio异常传播。不证明数据库事务回滚、远端写入的严格一次或线程可被强制停止；已完成副作用不会因ExceptionGroup自动撤销。与有限并发/同键共享请求题区别在异常组叶节点、同时失败和结构化生命周期。",
+    "answer": "```python\nimport asyncio\n\nasync def collect(jobs):\n    tasks={}\n    errors=[]\n    def leaves(error):\n        if isinstance(error,BaseExceptionGroup):\n            for child in error.exceptions:leaves(child)\n        else:errors.append((type(error).__name__,str(error)))\n    try:\n        async with asyncio.TaskGroup() as group:\n            for name,factory in jobs.items():tasks[name]=group.create_task(factory())\n    except ExceptionGroup as group:leaves(group)\n    return {'results':{name:t.result() for name,t in tasks.items() if not t.cancelled() and t.exception() is None},'errors':sorted(errors),'cancelled':sorted(name for name,t in tasks.items() if t.cancelled())}\n```\n\n原题知识说明：\nTaskGroup提供结构化任务生命周期，退出上下文前等待组内任务收尾；一个任务出现普通异常会触发其他任务取消，相关失败可能以异常组报告。gather收集异常为值时则不自动具有相同的兄弟任务取消合同，不能只替换调用名就假设业务结果一致。需要明确任务是同一原子业务步骤还是彼此独立的检查：前者可整体失败，后者可在各任务边界把预期业务错误转为结果，再让真正程序错误终止组。取消仍要求协程在可取消位置响应，吞掉CancelledError会破坏退出预期。推演同时失败、外部取消及某任务已产生副作用的情形，异常组不是事务回滚证明；只保留明确已完成结果，未决项须单独处理。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "明确语言运行时与业务合同的边界",
+      "给出可区分正确与失败的具体样例",
+      "说明资源或数据恢复限制"
+    ],
+    "references": [
+      "https://docs.python.org/3.11/library/asyncio-task.html#task-groups",
+      "https://docs.python.org/3.11/library/exceptions.html#ExceptionGroup"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-python-001",
+      "original_title": "Python 3.11+的TaskGroup为何不能等同gather(return_exceptions=True)，对子任务失败与部分结果应怎样推理？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import asyncio\n\nasync def collect(jobs):\n    tasks={}\n    errors=[]\n    def leaves(error):\n        if isinstance(error,BaseExceptionGroup):\n            for child in error.exceptions:leaves(child)\n        else:errors.append((type(error).__name__,str(error)))\n    try:\n        async with asyncio.TaskGroup() as group:\n            for name,factory in jobs.items():tasks[name]=group.create_task(factory())\n    except ExceptionGroup as group:leaves(group)\n    return {'results':{name:t.result() for name,t in tasks.items() if not t.cancelled() and t.exception() is None},'errors':sorted(errors),'cancelled':sorted(name for name,t in tasks.items() if t.cancelled())}\n"
+    },
+    "negative_files": {
+      "task.py": "import asyncio\nasync def collect(jobs):\n    values=await asyncio.gather(*(factory() for factory in jobs.values()),return_exceptions=True)\n    return {'results':{name:value for name,value in zip(jobs,values) if not isinstance(value,BaseException)},'errors':sorted((type(value).__name__,str(value)) for value in values if isinstance(value,BaseException)),'cancelled':[]}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现async collect(jobs)，jobs为保持输入顺序的name→无参数协程工厂映射。结构化并发执行；普通子任务失败应取消并等待兄弟任务清理。返回{results:明确成功任务的name→结果,errors:递归展开普通ExceptionGroup叶节点的(异常类名,str)排序列表,cancelled:已取消任务名称排序列表}。None和0成功结果必须保留。外部CancelledError必须在子任务清理后继续传播，不能当成功报告；不返回尚未确定结果。验证同时两种普通异常、嵌套异常组、空批次、外部取消以及已落地副作用仍保留；gather(return_exceptions=True)不能直接满足失败取消合同。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "Linux CPython3.11+真实事件循环与协程，不模拟asyncio异常传播。不证明数据库事务回滚、远端写入的严格一次或线程可被强制停止；已完成副作用不会因ExceptionGroup自动撤销。与有限并发/同键共享请求题区别在异常组叶节点、同时失败和结构化生命周期。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 20,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import sys,os,asyncio\nsys.path.insert(0,os.getcwd());import task\nassert sys.platform=='linux' and os.geteuid()!=0 and sys.version_info>=(3,11)\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED:structured_group_failures_and_cancellation',flush=True)\nasync def main():\n async def invoke(jobs):\n  try:return await asyncio.wait_for(task.collect(jobs),1.5)\n  except Exception as error:raise AssertionError('student group collector failed or did not finish cleanup') from error\n gate=asyncio.Event();never=asyncio.Event();started=[];events=[]\n async def committed():events.append('effect-already-committed');return 17\n async def bad_one():started.append('one');await gate.wait();raise ValueError('invalid-a')\n async def bad_two():started.append('two');await gate.wait();raise TypeError('invalid-b')\n async def waiting():\n  started.append('waiting')\n  try:await never.wait();events.append('must-not-commit')\n  finally:await asyncio.sleep(0);events.append('cleanup-finished')\n runner=asyncio.create_task(invoke(dict(committed=committed,one=bad_one,two=bad_two,waiting=waiting)))\n for _ in range(100):\n  if len(started)==3:break\n  await asyncio.sleep(.001)\n assert len(started)==3,'tasks not started concurrently';gate.set();result=await runner\n assert result==dict(results={'committed':17},errors=[('TypeError','invalid-b'),('ValueError','invalid-a')],cancelled=['waiting']),result\n assert events==['effect-already-committed','cleanup-finished'],'failure is not rollback; cancellation must finish cleanup'\n async def nested():raise ExceptionGroup('nested',[ValueError('inner'),ExceptionGroup('deeper',[LookupError('leaf')])])\n assert await invoke({'nested':nested})==dict(results={},errors=[('LookupError','leaf'),('ValueError','inner')],cancelled=[])\n async def one():return None\n async def two():return 0\n assert await invoke({'one':one,'two':two})==dict(results={'one':None,'two':0},errors=[],cancelled=[])\n assert await invoke({})==dict(results={},errors=[],cancelled=[])\n entered=asyncio.Event();closed=asyncio.Event()\n async def external():\n  entered.set()\n  try:await asyncio.Event().wait()\n  finally:await asyncio.sleep(0);closed.set()\n outer=asyncio.create_task(task.collect({'external':external}));await asyncio.wait_for(entered.wait(),1);outer.cancel()\n try:await asyncio.wait_for(outer,1)\n except asyncio.CancelledError:pass\n else:raise AssertionError('external cancellation was turned into success')\n assert closed.is_set() and outer.cancelled(),'external cancellation left child cleanup pending'\n assert not [t for t in asyncio.all_tasks() if t is not asyncio.current_task() and not t.done()],'orphan task leaked'\n print('NATIVE_TASKGROUP_SIMULTANEOUS_ERRORS_NESTED_LEAVES_PARTIAL_EFFECTS_EXTERNAL_CANCEL_CLEANUP',flush=True)\nasyncio.run(main())\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "python"
+    ]
+  }
+]

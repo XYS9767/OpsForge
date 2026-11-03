@@ -1,0 +1,75 @@
+[
+  {
+    "id": "curated-parallel-redis-044",
+    "module": "redis",
+    "category": "Redis",
+    "level": 2,
+    "topic": "复制与集群",
+    "title": "真实无持久化主节点空启动：副本也被同步为空，重启前设置失败关闭门禁",
+    "answer": "```python\ndef guarded_restart(command,restart):\n    save=command('CONFIG','GET','save')[1]\n    aof=command('CONFIG','GET','appendonly')[1]\n    if not save.strip() and aof!='yes':raise RuntimeError('nonpersistent primary restart refused; replicas are not an independent restart backup')\n    return restart()\n```\n\n原题知识说明：\n副本会同步新主节点的空数据集，复制不会自动把旧数据反灌回来。应明确主节点持久化及故障恢复策略，测试空启动风险并保留独立备份；不要先重启再寻找副本数据。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现guarded_restart(command,restart)。只读CONFIG GET save和appendonly。save.strip()为空且appendonly不等于yes时，RuntimeError且绝不调用restart；不能把字符串no当True而认为启用。其他情况只调用restart()一次并返回实际结果，不修改配置或切主从。真实私有主副本先复现无持久化主节点重启为空，副本也经全量同步清空；重建合成数据后门禁拒绝相同危险重启。受控安全路径由判分器先启用RDB并实际SAVE当前全部数据，再验证允许重启及主副本字节。配置启用本身不证明备份新鲜或生产RPO，本门禁只排除明确关闭全部持久化的情形。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Redis7.2单主单副本、私有loopback及自有临时数据；真实stop/start和全量同步，不操作外部Redis、宿主服务或默认身份。非生产恢复流程，不把副本当独立备份；不承诺任意持久化配置、停电或业务写入窗口零丢失。和RDB文件恢复及backlog增量重同步不同。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/operate/oss_and_stack/management/replication/",
+      "https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-044",
+      "original_title": "主节点未启用持久化并自动重启为空时，副本为什么也可能清空？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def guarded_restart(command,restart):\n    save=command('CONFIG','GET','save')[1]\n    aof=command('CONFIG','GET','appendonly')[1]\n    if not save.strip() and aof!='yes':raise RuntimeError('nonpersistent primary restart refused; replicas are not an independent restart backup')\n    return restart()\n"
+    },
+    "negative_files": {
+      "task.py": "def guarded_restart(command,restart):\n    save=command('CONFIG','GET','save')[1]\n    aof=command('CONFIG','GET','appendonly')[1]\n    if False:raise RuntimeError('ignored persistence gate')\n    return restart()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现guarded_restart(command,restart)。只读CONFIG GET save和appendonly。save.strip()为空且appendonly不等于yes时，RuntimeError且绝不调用restart；不能把字符串no当True而认为启用。其他情况只调用restart()一次并返回实际结果，不修改配置或切主从。真实私有主副本先复现无持久化主节点重启为空，副本也经全量同步清空；重建合成数据后门禁拒绝相同危险重启。受控安全路径由判分器先启用RDB并实际SAVE当前全部数据，再验证允许重启及主副本字节。配置启用本身不证明备份新鲜或生产RPO，本门禁只排除明确关闭全部持久化的情形。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Redis7.2单主单副本、私有loopback及自有临时数据；真实stop/start和全量同步，不操作外部Redis、宿主服务或默认身份。非生产恢复流程，不把副本当独立备份；不承诺任意持久化配置、停电或业务写入窗口零丢失。和RDB文件恢复及backlog增量重同步不同。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 50,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/redis_cluster_native.py": "\"\"\"Private Redis7.2 TCP peers, real cluster slots and migration; no external peers.\"\"\"\nimport contextlib,socket,secrets,time\nfrom redis_native import NativeRedis\n\n\ndef free_port():\n    for _ in range(200):\n        port=20000+secrets.randbelow(19000)\n        try:\n            with socket.socket() as client,socket.socket() as bus:\n                client.bind(('127.0.0.1',port));bus.bind(('127.0.0.1',port+10000))\n            return port\n        except OSError:pass\n    raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private TCP ports unavailable')\n\n\nclass TCPRedis(NativeRedis):\n    def __init__(self,cluster=False):self.cluster=cluster;self.port=free_port();self.address='127.0.0.1:'+str(self.port)\n    def start(self):\n        if not getattr(self,'configured',False):\n            with self.config.open('a',encoding='utf8') as stream:\n                stream.write('\\nport '+str(self.port)+'\\nbind 127.0.0.1\\nrepl-diskless-sync-delay 0\\n')\n                if self.cluster:\n                    stream.write('cluster-enabled yes\\ncluster-config-file cluster.conf\\ncluster-node-timeout 1000\\ncluster-announce-ip 127.0.0.1\\ncluster-announce-port '+str(self.port)+'\\ncluster-announce-bus-port '+str(self.port+10000)+'\\n')\n            self.configured=True\n        super().start()\n\n\nclass Cluster:\n    def __enter__(self):\n        self.stack=contextlib.ExitStack()\n        try:\n            self.used_slots=set()\n            self.source=self.stack.enter_context(TCPRedis(cluster=True))\n            self.target=self.stack.enter_context(TCPRedis(cluster=True))\n            self.source_id=self.source.command('CLUSTER','MYID');self.target_id=self.target.command('CLUSTER','MYID')\n            self.source.command('CLUSTER','ADDSLOTSRANGE',0,8191)\n            self.target.command('CLUSTER','ADDSLOTSRANGE',8192,16383)\n            self.source.command('CLUSTER','MEET','127.0.0.1',self.target.port)\n            deadline=time.monotonic()+8\n            while time.monotonic()<deadline:\n                if all('cluster_state:ok' in server.command('CLUSTER','INFO') and server.command('CLUSTER','NODES').count('\\n')==2 for server in [self.source,self.target]):\n                    print('NATIVE_CLUSTER_READY:2-private-masters',flush=True);return self\n                time.sleep(.02)\n            raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private cluster did not converge')\n        except BaseException:self.stack.close();raise\n    def __exit__(self,*args):self.stack.close()\n    def tag(self):\n        for _ in range(1000):\n            tag='of_'+secrets.token_hex(8);slot=self.source.command('CLUSTER','KEYSLOT','{'+tag+'}:x')\n            if slot<8192 and slot not in self.used_slots:\n                self.used_slots.add(slot);return tag,slot\n        raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: could not select source slot')\n    def begin(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'IMPORTING',self.source_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'MIGRATING',self.target_id)\n    def move(self,key):\n        assert self.source.command('MIGRATE','127.0.0.1',self.target.port,key,0,2000)=='OK'\n    def finish(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n    def connect(self,address):\n        if address==self.source.address:return self.source.client()\n        if address==self.target.address:return self.target.client()\n        raise AssertionError('unexpected peer outside private cluster')\n",
+        "checks/check.py": "import os,sys,pathlib,time\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import token\nfrom redis_cluster_native import TCPRedis\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\ndef info(server):return dict(line.split(':',1) for line in server.command('INFO','replication').splitlines() if ':' in line)\nwith TCPRedis() as primary,TCPRedis() as replica:\n primary.command('CONFIG','SET','repl-diskless-sync','yes');key=token('primary-data');value=token('original')\n primary.command('SET',key,value);replica.command('REPLICAOF','127.0.0.1',primary.port)\n def synced(expected):\n  deadline=time.monotonic()+8\n  while time.monotonic()<deadline:\n   p=info(primary);r=info(replica)\n   if r.get('master_link_status')=='up' and r.get('master_replid')==p.get('master_replid') and replica.command('GET',key)==expected:return\n   time.sleep(.02)\n  raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private replication state did not converge')\n synced(value);assert not (primary.root/'snapshot.rdb').exists()\n assert primary.command('CONFIG','GET','save')[1]=='' and primary.command('CONFIG','GET','appendonly')[1]=='no'\n primary.stop();primary.start();assert primary.command('GET',key) is None\n synced(None);assert replica.command('DBSIZE')==0\n print('NATIVE_REAL_FAULT_NONPERSISTENT_PRIMARY_RESTARTED_EMPTY_REPLICA_FULLSYNC_EMPTIED_TOO',flush=True)\n primary.command('SET',key,value);synced(value);calls=[]\n def restart():calls.append('actual-restart');primary.stop();primary.start();return primary.command('PING')\n def readonly(*parts):\n  assert parts in (('CONFIG','GET','save'),('CONFIG','GET','appendonly')),'restart gate may only inspect approved persistence settings'\n  return primary.command(*parts)\n print('STUDENT_OPERATION_ENTERED:refuse_nonpersistent_primary_restart_before_invoking_actual_callback',flush=True)\n try:task.guarded_restart(readonly,restart)\n except RuntimeError:pass\n else:raise AssertionError('unsafe restart was not refused')\n assert calls==[] and primary.command('GET',key)==value and replica.command('GET',key)==value,'gate allowed empty-primary restart or disturbed replica'\n # This safe path has an explicitly prepared current SAVE; the gate itself does not prove a production RPO.\n primary.command('CONFIG','SET','save','3600 1');assert primary.command('SAVE')=='OK'\n print('STUDENT_OPERATION_ENTERED:allow_only_persistence_enabled_current_snapshot_prepared_restart',flush=True)\n try:result=task.guarded_restart(readonly,restart)\n except Exception as error:raise AssertionError('approved persistent restart failed') from error\n assert result=='PONG' and calls==['actual-restart'] and primary.command('GET',key)==value\n synced(value);assert replica.command('GET',key)==value\n print('NATIVE_PRIMARY_EMPTY_RESTART_PROPAGATES_TO_REPLICA_GATE_PREVENTS_REPEAT_EXPLICIT_CURRENT_RDB_SAFE_RESTART_RETAINS_DATA',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

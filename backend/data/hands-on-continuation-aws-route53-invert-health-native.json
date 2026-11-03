@@ -1,0 +1,70 @@
+[
+  {
+    "id": "curated-parallel-aws-101",
+    "module": "aws",
+    "category": "AWS 云模拟",
+    "level": 4,
+    "topic": "网络路由与入口",
+    "title": "主站正常却持续返回备站，健康检查启用了Invert",
+    "answer": "```python\ndef evaluate_failover(raw_primary_healthy,invert,primary_record,secondary_record):\n    if not isinstance(raw_primary_healthy,bool) or not isinstance(invert,bool):raise ValueError(\"health inputs must be boolean\")\n    if not primary_record or not secondary_record:raise ValueError(\"both failover records are required\")\n    effective_primary=not raw_primary_healthy if invert else raw_primary_healthy\n    selected=primary_record if effective_primary else secondary_record\n    return {\"effective_primary_healthy\":effective_primary,\"selected_record\":selected,\n        \"unexpected_backup\":bool(raw_primary_healthy and invert),\n        \"action\":\"if the raw health probe succeeds but invert is enabled, verify the intended inversion policy; correct it only after comparing raw probe and effective health, then verify authoritative DNS answers\"}\n```\n\n原题知识说明：\n核对failover记录、关联health check和反转设置，把原始探测与最终健康状态分开。按批准策略修正反转语义并考虑DNS缓存窗口，不直接删除备站。验收主站健康和故障两种状态、恢复与缓存过期行为，确认记录角色与业务切换意图一致。",
+    "type": "code",
+    "incident_signature": "aws:route53-failover-healthcheck-inverted",
+    "source": "独立编审：AWS特定服务根因",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "用服务配置与审计证明根因",
+      "保持权限/数据安全边界",
+      "验证恢复及拒绝路径"
+    ],
+    "references": [],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-aws-101",
+      "original_title": "主站正常却一直返回备站，Route53健康检查启用了Invert，原始探测实际成功。如何桌面处置？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现evaluate_failover(raw_primary_healthy,invert,primary_record,secondary_record)：将探针原始健康结果按Route 53 health check的invert布尔值计算有效健康状态，再确定主备记录。raw探测成功但invert=true时，必须解释该反转如何把流量导向备站；先核对反转意图，再给出修复和DNS答案验证步骤。\n\n## 提交产物\ntask.py\n\n## 验收方法\n复现探针成功时invert将有效健康反转至备站，并对照修复及主站真实故障路径。\n\n## 能力边界\n依据离线合成健康状态与failover记录验证逻辑；不调用Route 53、不修改DNS，不宣称真实探测或缓存答案已恢复。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def evaluate_failover(raw_primary_healthy,invert,primary_record,secondary_record):\n    if not isinstance(raw_primary_healthy,bool) or not isinstance(invert,bool):raise ValueError(\"health inputs must be boolean\")\n    if not primary_record or not secondary_record:raise ValueError(\"both failover records are required\")\n    effective_primary=not raw_primary_healthy if invert else raw_primary_healthy\n    selected=primary_record if effective_primary else secondary_record\n    return {\"effective_primary_healthy\":effective_primary,\"selected_record\":selected,\n        \"unexpected_backup\":bool(raw_primary_healthy and invert),\n        \"action\":\"if the raw health probe succeeds but invert is enabled, verify the intended inversion policy; correct it only after comparing raw probe and effective health, then verify authoritative DNS answers\"}\n"
+    },
+    "negative_files": {
+      "task.py": "def evaluate_failover(raw_primary_healthy,invert,primary_record,secondary_record):\n    if not isinstance(raw_primary_healthy,bool) or not isinstance(invert,bool):raise ValueError(\"health inputs must be boolean\")\n    if not primary_record or not secondary_record:raise ValueError(\"both failover records are required\")\n    effective_primary=raw_primary_healthy\n    selected=primary_record if effective_primary else secondary_record\n    return {\"effective_primary_healthy\":effective_primary,\"selected_record\":selected,\n        \"unexpected_backup\":bool(raw_primary_healthy and invert),\n        \"action\":\"if the raw health probe succeeds but invert is enabled, verify the intended inversion policy; correct it only after comparing raw probe and effective health, then verify authoritative DNS answers\"}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现evaluate_failover(raw_primary_healthy,invert,primary_record,secondary_record)：将探针原始健康结果按Route 53 health check的invert布尔值计算有效健康状态，再确定主备记录。raw探测成功但invert=true时，必须解释该反转如何把流量导向备站；先核对反转意图，再给出修复和DNS答案验证步骤。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "依据离线合成健康状态与failover记录验证逻辑；不调用Route 53、不修改DNS，不宣称真实探测或缓存答案已恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'));task=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: evaluate inverted Route 53 health check',flush=True)\nfault=task.evaluate_failover(True,True,'primary.example','backup.example');assert not fault['effective_primary_healthy'] and fault['selected_record']=='backup.example' and fault['unexpected_backup']\nfixed=task.evaluate_failover(True,False,'primary.example','backup.example');assert fixed['effective_primary_healthy'] and fixed['selected_record']=='primary.example' and not fixed['unexpected_backup']\ndown=task.evaluate_failover(False,False,'primary.example','backup.example');assert not down['effective_primary_healthy'] and down['selected_record']=='backup.example'\ntry:task.evaluate_failover('true',False,'primary','backup')\nexcept ValueError:pass\nelse:raise AssertionError('string health value accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "aws"
+    ]
+  }
+]

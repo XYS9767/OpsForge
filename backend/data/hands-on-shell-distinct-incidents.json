@@ -1,0 +1,151 @@
+[
+  {
+    "id": "curated-parallel-shell-074",
+    "module": "shell",
+    "category": "Shell",
+    "level": 4,
+    "topic": "命中关键字却报失败：修复早退消费者导致的 SIGPIPE",
+    "title": "命中关键字却报失败：修复早退消费者导致的 SIGPIPE",
+    "answer": "```bash\n#!/usr/bin/env bash\nset +e\nbash -- \"$2\" | grep -F -- \"$1\" >/dev/null\nst=(\"${PIPESTATUS[@]}\")\nif (( st[0] != 0 )); then exit \"${st[0]}\"; fi\nif (( st[1] == 0 )); then printf 'MATCH\n'\nelif (( st[1] == 1 )); then printf 'MISS\n'\nelse exit \"${st[1]}\"; fi\n```\n\n提前退出的消费者会关闭管道；pipefail 不能区分预期早退与真正上游失败。使用会读完整个输入的固定字符串匹配，再立即保存各段退出码，优先保留生产者失败。",
+    "type": "code",
+    "incident_signature": "curated-parallel-shell-074|命中关键字却报失败：修复早退消费者导致的 SIGPIPE",
+    "source": "OpsForge 原重复故障题重新编审",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "用现场证据证明对应Shell机制",
+      "区分止损与开发修复",
+      "给出成功与失败边界的验收"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "curated-parallel-shell-074|命中关键字却报失败：修复早退消费者导致的 SIGPIPE",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\nset -o pipefail\nbash \"$2\" | grep -Fq -- \"$1\" || exit \"$?\"\nprintf 'MATCH\n'\n"
+    },
+    "solution_files": {
+      "task.sh": "#!/usr/bin/env bash\nset +e\nbash -- \"$2\" | grep -F -- \"$1\" >/dev/null\nst=(\"${PIPESTATUS[@]}\")\nif (( st[0] != 0 )); then exit \"${st[0]}\"; fi\nif (( st[1] == 0 )); then printf 'MATCH\n'\nelif (( st[1] == 1 )); then printf 'MISS\n'\nelse exit \"${st[1]}\"; fi\n"
+    },
+    "negative_files": {
+      "task.sh": "#!/usr/bin/env bash\nbash \"$2\" | grep -F -- \"$1\" >/dev/null || true\nprintf 'MATCH\n'\n"
+    },
+    "run": "python3 checks/check.py",
+    "body": "## 环境与初始材料\n隔离 Bash 4.4+、GNU grep、Python 3；仅使用题目临时目录和本机进程。\n\n## 操作任务\n监控包装器用 producer | grep -q 配合 pipefail，关键字在首行且后面数据很长时反而失败。实现 task.sh PATTERN PRODUCER：用 Bash 执行给定生产者脚本，按字面量查找 PATTERN，必须完整消费输出；生产者退出 0 时输出且仅输出 MATCH 或 MISS 加换行，退出 0。生产者非零退出时原样返回其退出码，不输出成功/未命中结论。生产者路径、模式可能含空格或以 - 开头；即使已找到关键字也不能吞掉后续生产者失败。\n\n## 产物\n提交 task.sh。不得把样例内容写死，也不得调用 Python 替代要求练习的 Bash 控制流。\n\n## 验收方法\n平台实际启动 Bash，改变输入内容、退出码和分块时序，检查输出、退出码和协议边界。参考答案、初始故障和错误修复分别执行。",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "监控包装器用 producer | grep -q 配合 pipefail，关键字在首行且后面数据很长时反而失败。实现 task.sh PATTERN PRODUCER：用 Bash 执行给定生产者脚本，按字面量查找 PATTERN，必须完整消费输出；生产者退出 0 时输出且仅输出 MATCH 或 MISS 加换行，退出 0。生产者非零退出时原样返回其退出码，不输出成功/未命中结论。生产者路径、模式可能含空格或以 - 开头；即使已找到关键字也不能吞掉后续生产者失败。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Bash 原生进程、隐藏输入和协议状态验证；不访问外部服务。",
+      "failure_examples": [
+        "初始故障不得通过",
+        "掩盖退出码或丢失部分输入不得通过"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash",
+          "grep"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os, pathlib, subprocess\nbash=os.environ.get('OPSFORGE_BASH','bash')\nworker=pathlib.Path('producer with spaces.sh')\ndef check(pattern, first, code, expected, result, filename='producer with spaces.sh'):\n    global worker\n    worker=pathlib.Path(filename)\n    # Fixed prefix makes premature grep -q closure observable on every run.\n    worker.write_text(\"set -e\\nprintf '%s\\\\n' \"+repr(first)+\"\\nfor ((i=0;i<2048;i++)); do printf '%0256d\\\\n' 0; done\\nexit \"+str(code)+\"\\n\",encoding='utf-8')\n    proc=subprocess.run([bash,'task.sh',pattern,str(worker)],capture_output=True,text=True,timeout=8)\n    assert (proc.returncode,proc.stdout)==(expected,result), (proc.returncode,proc.stdout,proc.stderr[-500:])\ncheck('needle','needle',0,0,'MATCH\\n')\ncheck('[literal].*','[literal].*',0,0,'MATCH\\n')\ncheck('absent','nothing',0,0,'MISS\\n')\ncheck('-needle','-needle',0,0,'MATCH\\n')\ncheck('needle','needle',0,0,'MATCH\\n','-producer.sh')\ncheck('two words','two words',0,0,'MATCH\\n')\ncheck('needle','needle',7,7,'')\ncheck('absent','nothing',23,23,'')\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-074",
+      "original_title": "巡检日志明明处理了50项，循环外count却是0，循环位于producer | while read之后。如何桌面排查？",
+      "original_version": 1,
+      "original_sha256": "be433eb69a3d05405cf2363fa9ca6ba41588374e68b92b742d77e790f57130b7",
+      "duplicate_of": "curated-dev-shell-009",
+      "reason": "原根因已由其他真实实操覆盖，重新编排为不同机制，保留编号及原学习历史。"
+    }
+  },
+  {
+    "id": "curated-parallel-shell-076",
+    "module": "shell",
+    "category": "Shell",
+    "level": 4,
+    "topic": "分块接收中 read 超时后仍须保留半条记录",
+    "title": "分块接收中 read 超时后仍须保留半条记录",
+    "answer": "```bash\n#!/usr/bin/env bash\nbuffer=''; idle=0\nwhile :; do\n  part=''\n  IFS= read -r -t 0.05 part\n  rc=$?\n  buffer+=$part\n  if (( rc == 0 )); then\n    printf '%s\n' \"$buffer\"; buffer=''; idle=0\n  elif (( rc > 128 )); then\n    if [[ -n $part ]]; then idle=0; else ((idle+=1)); fi\n    (( idle < 20 )) || exit 75\n  else\n    [[ -z $buffer ]] && exit 0\n    exit 74\n  fi\ndone\n```\n\nread 超时不代表丢弃已读取字符；非零返回时变量仍可能含部分数据。累计这些片段，只有读到换行才提交整条记录；EOF 尾部残片和读超时必须区别处理。",
+    "type": "code",
+    "incident_signature": "curated-parallel-shell-076|分块接收中 read 超时后仍须保留半条记录",
+    "source": "OpsForge 原重复故障题重新编审",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "用现场证据证明对应Shell机制",
+      "区分止损与开发修复",
+      "给出成功与失败边界的验收"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "curated-parallel-shell-076|分块接收中 read 超时后仍须保留半条记录",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\nwhile :; do\n  IFS= read -r -t 0.05 part\n  rc=$?\n  if (( rc == 0 )); then printf '%s\n' \"$part\"\n  elif (( rc <= 128 )); then exit 0; fi\ndone\n"
+    },
+    "solution_files": {
+      "task.sh": "#!/usr/bin/env bash\nbuffer=''; idle=0\nwhile :; do\n  part=''\n  IFS= read -r -t 0.05 part\n  rc=$?\n  buffer+=$part\n  if (( rc == 0 )); then\n    printf '%s\n' \"$buffer\"; buffer=''; idle=0\n  elif (( rc > 128 )); then\n    if [[ -n $part ]]; then idle=0; else ((idle+=1)); fi\n    (( idle < 20 )) || exit 75\n  else\n    [[ -z $buffer ]] && exit 0\n    exit 74\n  fi\ndone\n"
+    },
+    "negative_files": {
+      "task.sh": "#!/usr/bin/env bash\nbuffer=''; idle=0; output=''\nfinish() { printf '%s' \"$output\"; exit \"$1\"; }\nwhile :; do\n  part=''; IFS= read -r -t 0.05 part; rc=$?; buffer+=$part\n  if (( rc == 0 )); then output+=\"$buffer\"$'\\n'; buffer=''; idle=0\n  elif (( rc > 128 )); then\n    if [[ -n $part ]]; then idle=0; else ((idle+=1)); fi\n    (( idle < 20 )) || finish 75\n  else\n    [[ -z $buffer ]] && finish 0\n    finish 74\n  fi\ndone\n"
+    },
+    "run": "python3 checks/check.py",
+    "body": "## 环境与初始材料\n隔离 Bash 4.4+、GNU grep、Python 3；仅使用题目临时目录和本机进程。\n\n## 操作任务\n边车通过管道分块发送换行分隔记录。用 read -t 0.05 的包装器在超时分支清空变量，造成半条记录丢失。实现从标准输入读取的 task.sh：每次 read 设置 0.05 秒等待，保留超时前已经收到的片段；遇到换行才原样输出完整记录和换行。保留空记录、空格、反斜杠、百分号及中文；正常 EOF 退出 0，EOF 尚有不完整尾记录则退出 74，且不得输出该残片。连续 20 次完全没有新字节的 read 超时则退出 75；已有完整记录仍保留。用 Bash read 状态和变量实现，不允许读取到 EOF 后才统一输出。\n\n## 产物\n提交 task.sh。不得把样例内容写死，也不得调用 Python 替代要求练习的 Bash 控制流。\n\n## 验收方法\n平台实际启动 Bash，改变输入内容、退出码和分块时序，检查输出、退出码和协议边界。参考答案、初始故障和错误修复分别执行。",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "边车通过管道分块发送换行分隔记录。用 read -t 0.05 的包装器在超时分支清空变量，造成半条记录丢失。实现从标准输入读取的 task.sh：每次 read 设置 0.05 秒等待，保留超时前已经收到的片段；遇到换行才原样输出完整记录和换行。保留空记录、空格、反斜杠、百分号及中文；正常 EOF 退出 0，EOF 尚有不完整尾记录则退出 74，且不得输出该残片。连续 20 次完全没有新字节的 read 超时则退出 75；已有完整记录仍保留。用 Bash read 状态和变量实现，不允许读取到 EOF 后才统一输出。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Bash 原生进程、隐藏输入和协议状态验证；不访问外部服务。",
+      "failure_examples": [
+        "初始故障不得通过",
+        "掩盖退出码或丢失部分输入不得通过"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os, subprocess, time, queue, threading\nbash=os.environ.get('OPSFORGE_BASH','bash')\ndef run(chunks, code, expected, keep_open=False):\n    proc=subprocess.Popen([bash,'task.sh'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)\n    try:\n        for data,delay in chunks:\n            proc.stdin.write(data.encode());proc.stdin.flush();time.sleep(delay)\n        if keep_open:\n            proc.wait(timeout=3)\n        proc.stdin.close();proc.stdin=None\n        out,err=proc.communicate(timeout=3)\n        assert (proc.returncode,out.decode())==(code,expected),(proc.returncode,out,err)\n    finally:\n        if proc.poll() is None:proc.kill();proc.wait(timeout=3)\nrun([('left',.15),(' right\\\\tail % 中文',.15),('\\n\\nnext\\n',0)],0,'left right\\\\tail % 中文\\n\\nnext\\n')\nrun([('complete\\npart',.15),('ial',.15)],74,'complete\\n')\nrun([],0,'')\nrun([('already\\n',0)],75,'already\\n',True)\nproc=subprocess.Popen([bash,'task.sh'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)\nreceived=queue.Queue()\ndef reader():\n    for line in iter(proc.stdout.readline,b''):received.put(line)\nthread=threading.Thread(target=reader,daemon=True);thread.start()\ntry:\n    proc.stdin.write(b'ready\\n');proc.stdin.flush()\n    assert received.get(timeout=.7)==b'ready\\n', 'complete record must arrive while input remains open'\n    proc.stdin.write(b'next');proc.stdin.flush();time.sleep(.15)\n    proc.stdin.write(b' line\\n');proc.stdin.flush()\n    assert received.get(timeout=.7)==b'next line\\n'\n    proc.stdin.close();proc.wait(timeout=2)\n    assert proc.returncode==0\nfinally:\n    if proc.poll() is None:proc.kill();proc.wait(timeout=2)\n    thread.join(timeout=2)\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-076",
+      "original_title": "资产清单末条没有换行，while read循环少执行一项且退出0。如何桌面排查？",
+      "original_version": 1,
+      "original_sha256": "d32c5e3b5a3dbae92d7051f6899ab30945f5c47c1aec93b394fc783ce0c617c8",
+      "duplicate_of": "curated-dev-shell-008",
+      "reason": "原根因已由其他真实实操覆盖，重新编排为不同机制，保留编号及原学习历史。"
+    }
+  }
+]

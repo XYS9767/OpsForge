@@ -1,0 +1,85 @@
+[
+  {
+    "id": "curated-parallel-prometheus-042",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "服务发现与标签处理",
+    "title": "接入真实HTTP服务发现并验证错误保留、空清单撤销和新目标恢复",
+    "answer": "```yaml\njob_name: inventory\nscrape_interval: 1s\nscrape_timeout: 500ms\nhttp_sd_configs:\n- url: http://127.0.0.1:19100/discover\n  refresh_interval: 1s\n```\nHTTP SD刷新错误不会用坏清单替代最近有效结果；合法空数组明确表示当前没有目标，因此必须撤销旧目标并写入失效语义。后续有效清单重新建立目标。__metrics_path__是内部抓取路径标签，generation为业务标签；不应把旧静态清单作为永久后备而阻止撤销。\n\n原题原理：先看发现对象原始元标签，再检查keep/drop及标签匹配规则，最后核对抓取job是否加载。发现和目标筛选是不同阶段，不能直接认定网络不可达。保留被丢弃目标证据。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "先看发现对象原始元标签，再检查keep/drop及标签匹配规则，最后核对抓取job是否加载。",
+      "发现和目标筛选是不同阶段，不能直接认定网络不可达。",
+      "保留被丢弃目标证据。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/http_sd/",
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/#http_sd_config"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "job.yaml": "job_name: inventory\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    generation: before\n    __metrics_path__: /before\n",
+      "discovery-examples.json": "{\n  \"before\": [\n    {\n      \"targets\": [\n        \"127.0.0.1:19100\"\n      ],\n      \"labels\": {\n        \"generation\": \"before\",\n        \"__metrics_path__\": \"/before\"\n      }\n    }\n  ],\n  \"valid_empty\": [],\n  \"malformed_targets\": [\n    {\n      \"targets\": 42\n    }\n  ],\n  \"after\": [\n    {\n      \"targets\": [\n        \"127.0.0.1:19100\"\n      ],\n      \"labels\": {\n        \"generation\": \"after\",\n        \"__metrics_path__\": \"/after\"\n      }\n    }\n  ]\n}\n"
+    },
+    "solution_files": {
+      "job.yaml": "job_name: inventory\nscrape_interval: 1s\nscrape_timeout: 500ms\nhttp_sd_configs:\n- url: http://127.0.0.1:19100/discover\n  refresh_interval: 1s\n"
+    },
+    "negative_files": {
+      "job.yaml": "job_name: inventory\nscrape_interval: 1s\nscrape_timeout: 500ms\nhttp_sd_configs:\n- url: http://127.0.0.1:19100/discover\n  refresh_interval: 30s\n"
+    },
+    "body": "## 环境与初始材料\n平台自动启动一个隔离Prometheus和受控HTTP服务发现端点。job.yaml错误地写死初始目标；discovery-examples.json展示真实端点各阶段响应。发现URL为http://127.0.0.1:19100/discover，平台把占位端口替换为临时环回端口。发现响应中的__metrics_path__决定/before或/after，普通generation标签应保留在入库序列中。\n\n## 操作任务\n把inventory作业改成HTTP服务发现，保持1秒抓取间隔、500ms抓取超时。配置发现刷新间隔为500ms到1秒（支持500ms、1s、1000ms），不要把清单复制进static_configs。配置应依次处理：初始有效before目标；503响应；HTTP200但targets字段类型错误；有效空数组；有效after目标。失败响应和空清单有不同语义，不能通过永久静态目标假装恢复。\n\n## 产物\n提交job.yaml，一个完整scrape作业映射。需要job_name、scrape_interval、scrape_timeout、http_sd_configs；发现配置只含url和refresh_interval。平台提供服务发现端、指标端及故障注入，无需学员另建Kubernetes或部署服务。\n\n## 验收方法\n运行python3 checks/check.py。真实Prometheus抓取初始inventory_value=7；连续收到503和类型错误各两次后，仍须抓取最近有效before目标且up=1。随后真正接受空数组，Targets清空、旧业务序列失效且停止对旧路径发HTTP请求。最后发现after目标，入库值11且仅保留新标签身份。检查完整标签、请求计数和每阶段结果，不以配置字段存在冒充实际发现成功。初始静态配置无法响应清单变化；30秒刷新不能达到本实验的秒级发现恢复目标。\n\n## 边界\n这里只验证受控HTTP SD协议与本地生命周期，不验证云发现凭据、生产缓存或远端网络。Targets仍up只表示保留的目标可抓，不代表服务发现后端健康；发现失败应另行监控。本题与file_sd原子文件发布、relabel筛选分别考查不同机制。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-http-service-discovery",
+      "deliverables": [
+        "job.yaml"
+      ],
+      "operation": "将静态目标替换为真实HTTP服务发现并完成故障与撤销恢复",
+      "verification": "五阶段原生Targets/TSDB与HTTP请求计数",
+      "capability_gap": [
+        "不包含云服务发现或生产故障演练"
+      ],
+      "failure_examples": [
+        "写死static_configs",
+        "刷新周期超过恢复目标",
+        "把有效空清单当成发现故障保留旧目标"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1s'},'scrape_configs':[JOB]}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\nINITIAL={'job_name': 'inventory', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'static_configs': [{'targets': ['127.0.0.1:19100'], 'labels': {'generation': 'before', '__metrics_path__': '/before'}}]}\n\ncandidate=yaml.load(pathlib.Path('job.yaml').read_text(encoding='utf-8'),Loader=Strict)\nassert isinstance(candidate,dict) and set(candidate)<=set(['job_name','scrape_interval','scrape_timeout','http_sd_configs','static_configs'])\nassert candidate.get('job_name')=='inventory' and candidate.get('scrape_interval')=='1s' and candidate.get('scrape_timeout')=='500ms'\nassert ('http_sd_configs' in candidate) != ('static_configs' in candidate)\nif 'http_sd_configs' in candidate:\n sd=candidate['http_sd_configs'];assert isinstance(sd,list) and len(sd)==1 and set(sd[0])=={'url','refresh_interval'}\n assert sd[0]['url']=='http://127.0.0.1:19100/discover' and sd[0]['refresh_interval'] in ['1s','500ms','1000ms','30s']\nelse:assert candidate==INITIAL\nstate={'phase':'before','sd_hits':{},'scrapes':{'before':0,'after':0}}\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  phase=state['phase']\n  if self.path=='/discover':\n   state['sd_hits'][phase]=state['sd_hits'].get(phase,0)+1\n   if phase=='invalid':\n    body=b'[{\"targets\":42}]';code=200\n   elif phase=='failure':body=b'temporary inventory error';code=503\n   else:\n    items=[] if phase=='empty' else [{'targets':['127.0.0.1:'+str(httpd.server_port)],'labels':{'generation':phase,'__metrics_path__':'/'+phase}}]\n    body=json.dumps(items).encode();code=200\n   self.send_response(code);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return\n  name=self.path.removeprefix('/')\n  if name not in state['scrapes']:self.send_error(404);return\n  state['scrapes'][name]+=1\n  body=('inventory_value '+('7' if name=='before' else '11')+'\\n').encode()\n  self.send_response(200);self.send_header('Content-Type','text/plain; version=0.0.4');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n def log_message(self,*args):pass\nhttpd=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()\nJOB=copy.deepcopy(candidate)\nif 'http_sd_configs' in JOB:JOB['http_sd_configs'][0]['url']='http://127.0.0.1:'+str(httpd.server_port)+'/discover'\nelse:JOB['static_configs'][0]['targets']=['127.0.0.1:'+str(httpd.server_port)]\ndef wait(fn,message,seconds=8):\n end=time.monotonic()+seconds\n while time.monotonic()<end:\n  if fn():return\n  time.sleep(.1)\n raise AssertionError(message)\ndef targets(api):return api('/api/v1/targets')['data']['activeTargets']\ndef check_value(api,generation,value):\n rows=vector(api,'inventory_value')\n return len(rows)==1 and rows[0]['metric']=={'__name__':'inventory_value','generation':generation,'instance':'127.0.0.1:'+str(httpd.server_port),'job':'inventory'} and float(rows[0]['value'][1])==value\ntry:\n with tempfile.TemporaryDirectory(prefix='trusted-prom-http-sd-') as d:\n  try:\n   with server(pathlib.Path(d),'source') as (url,api):\n    wait(lambda:check_value(api,'before',7),'initial live target missing')\n    assert len(targets(api))==1\n    for phase in ['failure','invalid']:\n     previous=state['scrapes']['before'];state['phase']=phase\n     wait(lambda:state['sd_hits'].get(phase,0)>=2,'must poll HTTP service discovery after '+phase)\n     wait(lambda:state['scrapes']['before']>=previous+2,'failed discovery must retain last known good target')\n     assert check_value(api,'before',7) and len(targets(api))==1 and targets(api)[0]['health']=='up'\n     print('preserved previous target during',phase)\n    state['phase']='empty'\n    wait(lambda:state['sd_hits'].get('empty',0)>=2 and not targets(api),'valid empty discovery must remove old target')\n    wait(lambda:not vector(api,'inventory_value'),'removed target must become stale')\n    count=state['scrapes']['before'];time.sleep(1.2);assert state['scrapes']['before']==count,'removed target still scraped'\n    state['phase']='after'\n    wait(lambda:check_value(api,'after',11),'new discovery target not active')\n    assert len(targets(api))==1 and targets(api)[0]['health']=='up' and state['scrapes']['before']==count\n    print('HTTP SD lifecycle:',json.dumps(state))\n  finally:print('native lifecycle:',json.dumps(STATS))\nfinally:httpd.shutdown();httpd.server_close();thread.join(timeout=2)\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "http_sd_failed_response_preserves_good_targets_valid_empty_removes_then_recovery",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-042",
+      "original_type": "interview",
+      "original_title": "服务发现成功但targets为空应按什么顺序检查？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

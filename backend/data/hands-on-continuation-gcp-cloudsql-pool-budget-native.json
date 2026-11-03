@@ -1,0 +1,69 @@
+[
+  {
+    "id": "curated-parallel-gcp-107",
+    "module": "gcp",
+    "category": "GCP",
+    "level": 4,
+    "topic": "GKE与CloudRun",
+    "title": "Cloud Run扩容使Cloud SQL连接总量耗尽",
+    "answer": "```python\ndef plan_cloudsql_pool(max_instances,workers_per_instance,current_pool,max_connections,reserved_connections):\n    values=(max_instances,workers_per_instance,current_pool,max_connections,reserved_connections)\n    if any(type(x) is not int for x in values):raise ValueError(\"all capacity inputs must be integers\")\n    if max_instances<1 or workers_per_instance<1 or current_pool<1 or max_connections<1 or reserved_connections<0:\n        raise ValueError(\"invalid connection capacity input\")\n    application_budget=max_connections-reserved_connections\n    if application_budget<1:raise ValueError(\"no application connection budget remains\")\n    per_worker=application_budget//(max_instances*workers_per_instance)\n    if per_worker<1:raise ValueError(\"instance concurrency exceeds available database connections\")\n    aggregate=max_instances*workers_per_instance*current_pool\n    return {\"aggregate_peak_connections\":aggregate,\"application_budget\":application_budget,\n        \"current_config_fits\":aggregate<=application_budget,\"recommended_pool_cap_per_worker\":min(current_pool,per_worker),\n        \"action\":\"bound autoscaled instances and each worker pool together; preserve an explicit administrative reserve; monitor aggregate database connections during scale-out\"}\n```\n\n原题知识说明：\n桌面推演，未在生产执行。关联Cloud Run实例数、每实例池上限与Cloud SQL连接数时间线，计算实例数乘池容量再加运维余量，识别横向扩容放大总连接预算。先限制扩容/并发并回收闲置连接，再由开发调整池和退避。验收峰值实例数下总连接有余量、请求错误恢复且重试未造成第二次冲击。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Google Cloud官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现plan_cloudsql_pool(max_instances,workers_per_instance,current_pool,max_connections,reserved_connections)：计算Cloud Run最大实例数×每实例worker并发×每worker连接池上限的聚合峰值；先扣除运维保留连接，再反推单worker安全池上限。聚合值超预算时给出联动限制扩缩容与连接池的计划；预算不足以支持每worker一个连接时明确失败，不把“单实例池未满”当作数据库总量安全。\n\n## 提交产物\ntask.py\n\n## 验收方法\n覆盖聚合过载、预算内安全配置、保留连接和零池容量拒绝。\n\n## 能力边界\n仅按输入容量上限做离线算术，不访问Cloud Run或Cloud SQL、不修改连接池/扩容配置，也不声称在线峰值已恢复。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [],
+    "incident_signature": "cloud-sql-autoscaling-pool-connection-product",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-gcp-107",
+      "original_title": "Cloud Run突发扩容后Cloud SQL连接耗尽，单实例连接池都未满，如何闭环？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def plan_cloudsql_pool(max_instances,workers_per_instance,current_pool,max_connections,reserved_connections):\n    values=(max_instances,workers_per_instance,current_pool,max_connections,reserved_connections)\n    if any(type(x) is not int for x in values):raise ValueError(\"all capacity inputs must be integers\")\n    if max_instances<1 or workers_per_instance<1 or current_pool<1 or max_connections<1 or reserved_connections<0:\n        raise ValueError(\"invalid connection capacity input\")\n    application_budget=max_connections-reserved_connections\n    if application_budget<1:raise ValueError(\"no application connection budget remains\")\n    per_worker=application_budget//(max_instances*workers_per_instance)\n    if per_worker<1:raise ValueError(\"instance concurrency exceeds available database connections\")\n    aggregate=max_instances*workers_per_instance*current_pool\n    return {\"aggregate_peak_connections\":aggregate,\"application_budget\":application_budget,\n        \"current_config_fits\":aggregate<=application_budget,\"recommended_pool_cap_per_worker\":min(current_pool,per_worker),\n        \"action\":\"bound autoscaled instances and each worker pool together; preserve an explicit administrative reserve; monitor aggregate database connections during scale-out\"}\n"
+    },
+    "negative_files": {
+      "task.py": "def plan_cloudsql_pool(max_instances,workers_per_instance,current_pool,max_connections,reserved_connections):\n    values=(max_instances,workers_per_instance,current_pool,max_connections,reserved_connections)\n    if any(type(x) is not int for x in values):raise ValueError(\"all capacity inputs must be integers\")\n    if max_instances<1 or workers_per_instance<1 or current_pool<1 or max_connections<1 or reserved_connections<0:\n        raise ValueError(\"invalid connection capacity input\")\n    application_budget=max_connections-reserved_connections\n    if application_budget<1:raise ValueError(\"no application connection budget remains\")\n    per_worker=application_budget//(max_instances*workers_per_instance)\n    if per_worker<1:raise ValueError(\"instance concurrency exceeds available database connections\")\n    aggregate=current_pool\n    return {\"aggregate_peak_connections\":aggregate,\"application_budget\":application_budget,\n        \"current_config_fits\":aggregate<=application_budget,\"recommended_pool_cap_per_worker\":min(current_pool,per_worker),\n        \"action\":\"bound autoscaled instances and each worker pool together; preserve an explicit administrative reserve; monitor aggregate database connections during scale-out\"}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现plan_cloudsql_pool(max_instances,workers_per_instance,current_pool,max_connections,reserved_connections)：计算Cloud Run最大实例数×每实例worker并发×每worker连接池上限的聚合峰值；先扣除运维保留连接，再反推单worker安全池上限。聚合值超预算时给出联动限制扩缩容与连接池的计划；预算不足以支持每worker一个连接时明确失败，不把“单实例池未满”当作数据库总量安全。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "仅按输入容量上限做离线算术，不访问Cloud Run或Cloud SQL、不修改连接池/扩容配置，也不声称在线峰值已恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'));task=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: budget Cloud SQL connections across autoscaling',flush=True)\nr=task.plan_cloudsql_pool(20,2,15,250,30);assert r['aggregate_peak_connections']==600 and r['application_budget']==220 and not r['current_config_fits'] and r['recommended_pool_cap_per_worker']==5\nok=task.plan_cloudsql_pool(4,1,20,120,20);assert ok['current_config_fits'] and ok['recommended_pool_cap_per_worker']==20\ntry:task.plan_cloudsql_pool(100,2,4,150,40)\nexcept ValueError:pass\nelse:raise AssertionError('zero per-worker connection budget accepted')\ntry:task.plan_cloudsql_pool(2,1,2,10,10)\nexcept ValueError:pass\nelse:raise AssertionError('no application budget accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "gcp"
+    ]
+  }
+]

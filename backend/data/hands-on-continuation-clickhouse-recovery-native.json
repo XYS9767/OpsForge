@@ -1,0 +1,361 @@
+[
+  {
+    "id": "curated-parallel-clickhouse-034",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 2,
+    "topic": "查询与聚合优化",
+    "title": "真实物化新跳数索引：老part原本没有索引，新part已有索引也不能冒充全覆盖",
+    "answer": "```sql\nALTER TABLE indexed MATERIALIZE INDEX idx_category SETTINGS mutations_sync=1;\n```\n\n原题知识说明：\n新增定义不必然让全部旧part立即具备索引，通常需按支持方式物化。检查DDL、物化任务和EXPLAIN索引使用，分别测试新旧数据范围。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；ClickHouse官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n已有indexed(id UInt32,batch UInt8,category String)，按batch分区。先写batch=1历史part，再ADD INDEX idx_category category TYPE set(0) GRANULARITY 1，再写batch=2新part。task.sql必须物化已有idx_category至全部历史分区，并同步等待完成，保留所有原数据。平台读取真实system.parts.secondary_indices_compressed_bytes，不能只重复ADD INDEX IF NOT EXISTS或只物化新分区。此题检查索引历史覆盖，不以小样本宣称性能提升。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实固定ClickHouse Local 25.8.1.5101单机临时目录及小数据，不启动Keeper或分布式节点，不执行生产迁移。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/sql-reference/statements/alter/skipping-index"
+    ],
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-034",
+      "original_title": "为已有ClickHouse表新增跳数索引后如何验证历史part覆盖？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "ALTER TABLE indexed MATERIALIZE INDEX idx_category SETTINGS mutations_sync=1;\n"
+    },
+    "negative_files": {
+      "task.sql": "ALTER TABLE indexed ADD INDEX IF NOT EXISTS idx_category category TYPE set(0) GRANULARITY 1;\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux及固定ClickHouse Local 25.8.1.5101，可只读挂载工具，无镜像构建",
+      "operation": "已有indexed(id UInt32,batch UInt8,category String)，按batch分区。先写batch=1历史part，再ADD INDEX idx_category category TYPE set(0) GRANULARITY 1，再写batch=2新part。task.sql必须物化已有idx_category至全部历史分区，并同步等待完成，保留所有原数据。平台读取真实system.parts.secondary_indices_compressed_bytes，不能只重复ADD INDEX IF NOT EXISTS或只物化新分区。此题检查索引历史覆盖，不以小样本宣称性能提升。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实固定ClickHouse Local 25.8.1.5101单机临时目录及小数据，不启动Keeper或分布式节点，不执行生产迁移。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 55,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n fixture=\"CREATE TABLE indexed(id UInt32,batch UInt8,category String) ENGINE=MergeTree PARTITION BY batch ORDER BY id; INSERT INTO indexed SELECT number,1,concat('cat',toString(number%7)) FROM numbers(350); ALTER TABLE indexed ADD INDEX idx_category category TYPE set(0) GRANULARITY 1; INSERT INTO indexed SELECT number+350,2,concat('cat',toString(number%7)) FROM numbers(350);\"\n database.run(fixture)\n before=database.run('SELECT partition,sum(secondary_indices_compressed_bytes) AS bytes FROM system.parts WHERE database=currentDatabase() AND table=\\'indexed\\' AND active GROUP BY partition ORDER BY partition;')\n assert len(before)==2 and before[0]['bytes']==0 and before[1]['bytes']>0,'fixture must show old part missing new index while new part has it'\n database.run(sql)\n after=database.run('SELECT partition,sum(secondary_indices_compressed_bytes) AS bytes FROM system.parts WHERE database=currentDatabase() AND table=\\'indexed\\' AND active GROUP BY partition ORDER BY partition;')\n assert len(after)==2 and all(row['bytes']>0 for row in after),'index definition or new-part coverage mistaken for historical materialization'\n assert database.run(\"SELECT batch,count() AS count,sum(id) AS id_sum FROM indexed GROUP BY batch ORDER BY batch;\")==[{'batch':1,'count':350,'id_sum':sum(range(350))},{'batch':2,'count':350,'id_sum':sum(range(350,700))}],'materialization lost or changed data'\n assert database.run(\"SELECT count() AS count FROM indexed WHERE category='cat3';\")==[{'count':100}]\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-clickhouse-099",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 3,
+    "topic": "写入与数据生命周期",
+    "title": "真实增量视图维度过期恢复：汇总稳定ID，查询时关联当前名称，历史及新事件不双计",
+    "answer": "```sql\nCREATE TABLE region_totals(region_id UInt32,total Int64) ENGINE=SummingMergeTree ORDER BY region_id;\nINSERT INTO region_totals SELECT region_id,sum(amount) AS total FROM facts GROUP BY region_id;\nCREATE MATERIALIZED VIEW totals_capture TO region_totals AS SELECT region_id,sum(amount) AS total FROM facts GROUP BY region_id;\nCREATE VIEW current_report AS SELECT r.name AS region,sum(t.total) AS total\nFROM region_totals AS t INNER ALL JOIN regions AS r ON t.region_id=r.region_id GROUP BY r.name;\n```\n\n原题知识说明：\n桌面推演，未在生产执行。核对视图触发源与插入块，维度变化不会自动重算已有汇总。按业务定义选择历史口径保留、读时关联或可验证重建；验收新旧事件及维度变更，避免无边界重复回填。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；ClickHouse官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n已有facts(id,region_id,amount)、regions(region_id,name)及错误stale_summary/stale_capture：写入facts时把维度name固化，改regions不会重算旧汇总。当前要求报表展示当前地区名称，写入已排空。task.sql一次性创建region_totals(region_id UInt32,total Int64) SummingMergeTree ORDER BY region_id，用全部facts按ID回填一次；创建totals_capture增量视图仅汇总region_id；创建普通VIEW current_report在读取时与regions关联并汇总为region/total。保留旧表及旧视图作为故障证据，不重复回填。平台随后再改地区名并写新事件，历史与新增金额都须按当前名称归属。不将写时视图声称为自动全量重算。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实固定ClickHouse Local 25.8.1.5101单机临时目录及小数据，不启动Keeper或分布式节点，不执行生产迁移。只在写入冻结的题定边界建立替代报表，不证明生产不停写回填、双写切换或任意更正事件。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/materialized-view/incremental-materialized-view"
+    ],
+    "incident_signature": "clickhouse:incremental-mv-dimension-stale",
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-099",
+      "original_title": "物化汇总中的地区名称未随维度表修改更新，增量视图在写入时JOIN维表，怎么办？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "CREATE TABLE region_totals(region_id UInt32,total Int64) ENGINE=SummingMergeTree ORDER BY region_id;\nINSERT INTO region_totals SELECT region_id,sum(amount) AS total FROM facts GROUP BY region_id;\nCREATE MATERIALIZED VIEW totals_capture TO region_totals AS SELECT region_id,sum(amount) AS total FROM facts GROUP BY region_id;\nCREATE VIEW current_report AS SELECT r.name AS region,sum(t.total) AS total\nFROM region_totals AS t INNER ALL JOIN regions AS r ON t.region_id=r.region_id GROUP BY r.name;\n"
+    },
+    "negative_files": {
+      "task.sql": "CREATE TABLE region_totals(region_id UInt32,total Int64) ENGINE=SummingMergeTree ORDER BY region_id;\nINSERT INTO region_totals SELECT region_id,sum(amount) AS total FROM facts GROUP BY region_id;\nCREATE MATERIALIZED VIEW totals_capture TO region_totals AS SELECT region_id,sum(amount) AS total FROM facts GROUP BY region_id;\nCREATE TABLE current_report ENGINE=MergeTree ORDER BY region AS SELECT r.name AS region,sum(t.total) AS total\nFROM region_totals AS t INNER ALL JOIN regions AS r ON t.region_id=r.region_id GROUP BY r.name;\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux及固定ClickHouse Local 25.8.1.5101，可只读挂载工具，无镜像构建",
+      "operation": "已有facts(id,region_id,amount)、regions(region_id,name)及错误stale_summary/stale_capture：写入facts时把维度name固化，改regions不会重算旧汇总。当前要求报表展示当前地区名称，写入已排空。task.sql一次性创建region_totals(region_id UInt32,total Int64) SummingMergeTree ORDER BY region_id，用全部facts按ID回填一次；创建totals_capture增量视图仅汇总region_id；创建普通VIEW current_report在读取时与regions关联并汇总为region/total。保留旧表及旧视图作为故障证据，不重复回填。平台随后再改地区名并写新事件，历史与新增金额都须按当前名称归属。不将写时视图声称为自动全量重算。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实固定ClickHouse Local 25.8.1.5101单机临时目录及小数据，不启动Keeper或分布式节点，不执行生产迁移。只在写入冻结的题定边界建立替代报表，不证明生产不停写回填、双写切换或任意更正事件。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 55,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n token=secrets.token_hex(5);old='old_'+token;new='new_'+token;latest='latest_'+token\n fixture=\"CREATE TABLE facts(id UInt32,region_id UInt32,amount Int64) ENGINE=MergeTree ORDER BY id; CREATE TABLE regions(region_id UInt32,name String) ENGINE=MergeTree ORDER BY region_id; CREATE TABLE stale_summary(region String,total Int64) ENGINE=SummingMergeTree ORDER BY region; CREATE MATERIALIZED VIEW stale_capture TO stale_summary AS SELECT r.name AS region,sum(f.amount) AS total FROM facts AS f INNER ALL JOIN regions AS r ON f.region_id=r.region_id GROUP BY r.name; INSERT INTO regions VALUES(1,'\"+old+\"'),(2,'west'); INSERT INTO facts VALUES(11,1,10),(12,2,20); ALTER TABLE regions UPDATE name='\"+new+\"' WHERE region_id=1 SETTINGS mutations_sync=1;\"\n assert database.run(fixture+'SELECT region,sum(total) AS total FROM stale_summary GROUP BY region ORDER BY region;')==[{'region':old,'total':10},{'region':'west','total':20}],'native insert-trigger view did not reproduce stale dimension label'\n database.run(sql)\n assert database.run('SELECT region,total FROM current_report ORDER BY region;')==[{'region':new,'total':10},{'region':'west','total':20}],'historical backfill missing or old dimension name persisted'\n changed=\"ALTER TABLE regions UPDATE name='\"+latest+\"' WHERE region_id=1 SETTINGS mutations_sync=1; INSERT INTO facts VALUES(13,1,7); SELECT region,total FROM current_report ORDER BY region;\"\n assert database.run(changed)==[{'region':latest,'total':17},{'region':'west','total':20}],'read-time label failed to follow dimension change or new facts were not incrementally aggregated'\n assert database.run('SELECT count() AS count,sum(amount) AS amount FROM facts;')==[{'count':3,'amount':37}]\n assert database.run('SELECT region,sum(total) AS total FROM stale_summary GROUP BY region ORDER BY region;')==[{'region':latest,'total':7},{'region':old,'total':10},{'region':'west','total':20}],'original stale report evidence modified'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-clickhouse-103",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 3,
+    "topic": "写入与数据生命周期",
+    "title": "真实TTL误删历史事件后从隔离备份恢复，按原入库时间保留而非重置时间",
+    "answer": "```sql\nCREATE TABLE recovered(event_id UInt32,event_time DateTime('UTC'),ingested_at DateTime('UTC'),payload String)\nENGINE=MergeTree ORDER BY event_id TTL ingested_at + INTERVAL 7 DAY;\nINSERT INTO recovered SELECT event_id,event_time,ingested_at,payload FROM recovery_backup;\n```\n\n原题知识说明：\n桌面推演，未在生产执行。暂停相关导入与清理决策，核对事件时间、入库时间和TTL表达式，确定误删边界。由备份恢复到隔离表并按正确保留字段重建；验收历史回填仍保留规定周期，已删数据不能靠改TTL自动回来。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；ClickHouse官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n已有broken表按event_time+7天TTL实际删除了历史回填，recovery_backup完整保留经批准三行素材。task.sql创建同列recovered(event_id UInt32,event_time DateTime('UTC'),ingested_at DateTime('UTC'),payload String)，MergeTree ORDER BY event_id，TTL只按原ingested_at+7天。从备份恢复原字段原字节，不能靠修改空broken的TTL声称数据已恢复，也不能把ingested_at重置now延长过期数据。平台实际OPTIMIZE落实TTL：旧事件但最近入库须保留，早已入库者须过期；备份保持完整。只操作题定隔离表。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实固定ClickHouse Local 25.8.1.5101单机临时目录及小数据，不启动Keeper或分布式节点，不执行生产迁移。真实单机TTL删除/隔离恢复；未验证生产备份链、全局停止清理、RPO/RTO或目标切流。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/guides/developer/ttl"
+    ],
+    "incident_signature": "clickhouse:ttl-wrong-time-column",
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-103",
+      "original_title": "历史导入当天大量数据被TTL清理，规则使用事件时间而需求按入库时间保留，如何恢复？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "CREATE TABLE recovered(event_id UInt32,event_time DateTime('UTC'),ingested_at DateTime('UTC'),payload String)\nENGINE=MergeTree ORDER BY event_id TTL ingested_at + INTERVAL 7 DAY;\nINSERT INTO recovered SELECT event_id,event_time,ingested_at,payload FROM recovery_backup;\n"
+    },
+    "negative_files": {
+      "task.sql": "CREATE TABLE recovered(event_id UInt32,event_time DateTime('UTC'),ingested_at DateTime('UTC'),payload String)\nENGINE=MergeTree ORDER BY event_id TTL event_time + INTERVAL 7 DAY;\nINSERT INTO recovered SELECT event_id,event_time,ingested_at,payload FROM recovery_backup;\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux及固定ClickHouse Local 25.8.1.5101，可只读挂载工具，无镜像构建",
+      "operation": "已有broken表按event_time+7天TTL实际删除了历史回填，recovery_backup完整保留经批准三行素材。task.sql创建同列recovered(event_id UInt32,event_time DateTime('UTC'),ingested_at DateTime('UTC'),payload String)，MergeTree ORDER BY event_id，TTL只按原ingested_at+7天。从备份恢复原字段原字节，不能靠修改空broken的TTL声称数据已恢复，也不能把ingested_at重置now延长过期数据。平台实际OPTIMIZE落实TTL：旧事件但最近入库须保留，早已入库者须过期；备份保持完整。只操作题定隔离表。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实固定ClickHouse Local 25.8.1.5101单机临时目录及小数据，不启动Keeper或分布式节点，不执行生产迁移。真实单机TTL删除/隔离恢复；未验证生产备份链、全局停止清理、RPO/RTO或目标切流。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 55,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n clock=database.run('SELECT toUnixTimestamp(now()) AS now;')[0]['now'];token=secrets.token_hex(5)\n values=\"(1,toDateTime(946684800,'UTC'),toDateTime(\"+str(clock-60)+\",'UTC'),'one_\"+token+\"'),(2,toDateTime(946684801,'UTC'),toDateTime(\"+str(clock-120)+\",'UTC'),'two_\"+token+\"'),(3,toDateTime(946684802,'UTC'),toDateTime(\"+str(clock-10*86400)+\",'UTC'),'expired_\"+token+\"')\"\n fixture=\"CREATE TABLE recovery_backup(event_id UInt32,event_time DateTime('UTC'),ingested_at DateTime('UTC'),payload String) ENGINE=MergeTree ORDER BY event_id; INSERT INTO recovery_backup VALUES \"+values+\"; CREATE TABLE broken AS recovery_backup ENGINE=MergeTree ORDER BY event_id TTL event_time + INTERVAL 7 DAY; INSERT INTO broken SELECT * FROM recovery_backup; OPTIMIZE TABLE broken FINAL; SELECT count() AS count FROM broken;\"\n assert database.run(fixture)==[{'count':0}],'fault must really delete historical event-time data via TTL'\n database.run(sql)\n actual=database.run('OPTIMIZE TABLE recovered FINAL; SELECT event_id,toUnixTimestamp(event_time) AS event_time,toUnixTimestamp(ingested_at) AS ingested_at,payload FROM recovered ORDER BY event_id;')\n assert actual==[{'event_id':1,'event_time':946684800,'ingested_at':clock-60,'payload':'one_'+token},{'event_id':2,'event_time':946684801,'ingested_at':clock-120,'payload':'two_'+token}],'correct retention should follow preserved ingestion timestamps, not old event time or reset-now timestamps'\n assert database.run('SELECT count() AS count FROM recovery_backup;')==[{'count':3}],'approved recovery source was modified'\n assert database.run('SELECT count() AS count FROM broken;')==[{'count':0}],'changing TTL was mistaken for restoring already deleted rows'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-clickhouse-107",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 3,
+    "topic": "备份与恢复",
+    "title": "原生Atomic数据库DETACH PERMANENTLY后跨进程重挂原表，保留UUID与真实数据",
+    "answer": "```sql\nATTACH TABLE recovery.history;\n```\n\n原题知识说明：\nDETACH通常卸载对象但保留相应数据以便重新挂接，DROP进入删除语义，具体回收与数据库引擎有关。核对对象状态及版本支持，验收重挂路径，不能以名称消失认定数据已擦除。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；对应产品官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n隔离recovery数据库明确为Atomic，recovery.history(id UInt32,payload String)原为MergeTree，平台已实际DETACH TABLE recovery.history PERMANENTLY；后续引擎进程目录中已无活动表，但元数据与数据仍在。task.sql重新ATTACH既有recovery.history，保持同一UUID和全部数据。不得DROP、CREATE空表、清理数据目录或直接编辑元数据文件。不把“名字暂时不可见”当作已擦除数据；本题不对Local默认DatabaseOverlay假设支持PERMANENTLY。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实固定ClickHouse Local 25.8.1.5101单机临时目录及小数据，不启动Keeper或分布式节点，不执行生产迁移。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/sql-reference/statements/detach",
+      "https://clickhouse.com/docs/sql-reference/statements/attach"
+    ],
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-107",
+      "original_title": "ClickHouse DETACH与DROP在恢复操作中为何需要明确区分？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "ATTACH TABLE recovery.history;\n"
+    },
+    "negative_files": {
+      "task.sql": "DROP TABLE IF EXISTS recovery.history; CREATE TABLE recovery.history(id UInt32,payload String) ENGINE=MergeTree ORDER BY id;\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux及固定ClickHouse Local 25.8.1.5101，可只读挂载工具，无镜像构建",
+      "operation": "隔离recovery数据库明确为Atomic，recovery.history(id UInt32,payload String)原为MergeTree，平台已实际DETACH TABLE recovery.history PERMANENTLY；后续引擎进程目录中已无活动表，但元数据与数据仍在。task.sql重新ATTACH既有recovery.history，保持同一UUID和全部数据。不得DROP、CREATE空表、清理数据目录或直接编辑元数据文件。不把“名字暂时不可见”当作已擦除数据；本题不对Local默认DatabaseOverlay假设支持PERMANENTLY。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实固定ClickHouse Local 25.8.1.5101单机临时目录及小数据，不启动Keeper或分布式节点，不执行生产迁移。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 55,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n token=secrets.token_hex(10)\n initial=\"CREATE DATABASE recovery ENGINE=Atomic; CREATE TABLE recovery.history(id UInt32,payload String) ENGINE=MergeTree ORDER BY id; INSERT INTO recovery.history VALUES(5,'\"+token+\"'),(8,'neighbor'); SELECT toString(uuid) AS uuid FROM system.tables WHERE database='recovery' AND name='history';\"\n identity=database.run(initial)[0]['uuid'];database.run('DETACH TABLE recovery.history PERMANENTLY;')\n assert database.run(\"SELECT count() AS count FROM system.tables WHERE database='recovery' AND name='history';\")==[{'count':0}],'table should remain detached across actual Local process restarts'\n database.run(sql)\n assert database.run(\"SELECT toString(uuid) AS uuid FROM system.tables WHERE database='recovery' AND name='history';\")==[{'uuid':identity}],'new empty table substituted for original detached object'\n assert database.run('SELECT id,payload FROM recovery.history ORDER BY id;')==[{'id':5,'payload':token},{'id':8,'payload':'neighbor'}],'detached data did not survive reattachment'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-clickhouse-106",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 2,
+    "topic": "表模型与数据类型",
+    "title": "真实Decimal256定精度除法：超大金额不转浮点、按分截断且零分母保持NULL",
+    "answer": "```sql\nSELECT id,toString(cost) AS unit_cost,toTypeName(cost) AS cost_type FROM\n(SELECT id,if(quantity=0,CAST(NULL AS Nullable(Decimal256(2))),divideDecimal(amount,toDecimal256(quantity,0),2)) AS cost FROM charges)\nORDER BY id SETTINGS short_circuit_function_evaluation='force_enable';\n```\n\n原题知识说明：\n结果精度和溢出行为受具体Decimal位宽、运算及设置影响，不能假定与任意精度数学相同。用最大值、舍入和除零样本核对，并让输出类型符合业务金额约束。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；对应产品官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\ntask.sql只读charges(id UInt32,amount Decimal256(2),quantity UInt32)。用divideDecimal及明确结果scale=2计算unit cost，向零截断到分；quantity=0结果NULL，不能编造分母1或零金额。使用if及明确强制短路评估，避免nullable参数底层零值仍进入除法。输出id、unit_cost（toString保真金额或NULL）、cost_type（toTypeName原数值类型），按id升序。数值类型必须Nullable(Decimal(76,2))，包括超大金额、正负1/6；不能转Float64、以显示位数代替真实Decimal精度或把整数除法当金额。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实固定ClickHouse Local 25.8.1.5101单机临时目录及小数据，不启动Keeper或分布式节点，不执行生产迁移。仅验证题定Decimal256除法及显式精度，不推广到所有Decimal位宽/运算的溢出保障。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/sql-reference/functions/arithmetic-functions#dividedecimal",
+      "https://clickhouse.com/docs/sql-reference/data-types/decimal"
+    ],
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-106",
+      "original_title": "ClickHouse Decimal除法和溢出检查为什么需要显式验证目标精度？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "SELECT id,toString(cost) AS unit_cost,toTypeName(cost) AS cost_type FROM\n(SELECT id,if(quantity=0,CAST(NULL AS Nullable(Decimal256(2))),divideDecimal(amount,toDecimal256(quantity,0),2)) AS cost FROM charges)\nORDER BY id SETTINGS short_circuit_function_evaluation='force_enable';\n"
+    },
+    "negative_files": {
+      "task.sql": "SELECT id,toString(cost) AS unit_cost,toTypeName(cost) AS cost_type FROM\n(SELECT id,if(quantity=0,CAST(NULL AS Nullable(Decimal256(2))),toFloat64(amount)/quantity) AS cost FROM charges)\nORDER BY id SETTINGS short_circuit_function_evaluation='force_enable';\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux及固定ClickHouse Local 25.8.1.5101，可只读挂载工具，无镜像构建",
+      "operation": "task.sql只读charges(id UInt32,amount Decimal256(2),quantity UInt32)。用divideDecimal及明确结果scale=2计算unit cost，向零截断到分；quantity=0结果NULL，不能编造分母1或零金额。使用if及明确强制短路评估，避免nullable参数底层零值仍进入除法。输出id、unit_cost（toString保真金额或NULL）、cost_type（toTypeName原数值类型），按id升序。数值类型必须Nullable(Decimal(76,2))，包括超大金额、正负1/6；不能转Float64、以显示位数代替真实Decimal精度或把整数除法当金额。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实固定ClickHouse Local 25.8.1.5101单机临时目录及小数据，不启动Keeper或分布式节点，不执行生产迁移。仅验证题定Decimal256除法及显式精度，不推广到所有Decimal位宽/运算的溢出保障。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 55,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n from decimal import Decimal,localcontext,ROUND_DOWN\n amounts=[('10000000000000000000000000000000000000000.01',3),('1.00',6),('-1.00',6),('9.99',0)]\n fixture='CREATE TABLE charges(id UInt32,amount Decimal256(2),quantity UInt32) ENGINE=Memory; INSERT INTO charges VALUES '+','.join('('+str(i)+\",'\"+amount+\"',\"+str(quantity)+')' for i,(amount,quantity) in enumerate(amounts,1))+';'\n actual=database.run(fixture+sql);assert len(actual)==4\n with localcontext() as context:\n  context.prec=100\n  for i,(row,(amount,quantity)) in enumerate(zip(actual,amounts),1):\n   expected=None if quantity==0 else format((Decimal(amount)/quantity).quantize(Decimal('.01'),rounding=ROUND_DOWN),'.2f')\n   assert row['id']==i and row['unit_cost']==expected,'Decimal256 cents lost via float conversion, rounding changed or zero divisor fabricated'\n   assert row['cost_type']=='Nullable(Decimal(76, 2))','output did not retain nullable Decimal256 scale 2'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

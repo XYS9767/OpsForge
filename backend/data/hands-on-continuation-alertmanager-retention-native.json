@@ -1,0 +1,80 @@
+[
+  {
+    "id": "curated-parallel-alertmanager-103",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 3,
+    "topic": "高可用协同与状态持久化",
+    "title": "真实通知留存短于repeat：保留旧记录到期边界，修正后新记录恢复原提醒周期",
+    "answer": "```python\ndef retention_seconds(repeat_seconds):\n    if type(repeat_seconds) is not int or not 1<=repeat_seconds<=15:raise ValueError('bounded positive repeat seconds')\n    return repeat_seconds*2\n```\n\n原题知识说明：\n通知历史过期使系统不再记得更早发送，repeat约束受保留窗口限制。按业务需要协调retention与repeat并评估存储，验证跨保留边界行为。不能仅再次把repeat调大。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "通知历史过期使系统不再记得更早发送，repeat约束受保留窗口限制。",
+      "按业务需要协调retention与repeat并评估存储，验证跨保留边界行为。",
+      "不能仅再次把repeat调大。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/#route",
+      "https://raw.githubusercontent.com/prometheus/alertmanager/v0.28.1/nflog/nflog.go"
+    ],
+    "incident_signature": "alertmanager-repeat-beyond-nflog-retention",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-103",
+      "original_title": "repeat_interval设一周，但data.retention只有五天，持续告警提前再次提醒。如何纠正？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现retention_seconds(repeat_seconds)：输入必须是非bool整数1..15，否则ValueError；返回非bool整数，至少2倍repeat且不超过30秒。返回值用于本题私有Alertmanager的--data.retention，不得改repeat_interval/receiver或关闭通知。平台把原周级场景缩为repeat5秒、retention2秒，真实nflog维护GC造成同指纹提前提醒；修正后用同storage/相同配置受控重启。旧记录的嵌入ExpiresAt不会被追溯延长，允许原到期点的一次过渡提醒；其后新记录应超过旧2秒留存仍不提前提醒，并按原5秒repeat实际通知。不能删状态掩盖问题、假设修改参数立即重写所有旧到期点、加随机标签产生新身份或承诺永久只发送一次。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Alertmanager0.28与私有receiver、连续API输入、真实通知日志GC/持久状态重启。只缩短retention/maintenance/repeat数值以有界验证，不改变系统时钟，不是模拟通知器或生产周级耐久测试。没有外部渠道/部署；有界repeat恢复不证明所有崩溃时序、磁盘损坏或消息严格一次。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def retention_seconds(repeat_seconds):\n    if type(repeat_seconds) is not int or not 1<=repeat_seconds<=15:raise ValueError('bounded positive repeat seconds')\n    return repeat_seconds*2\n"
+    },
+    "negative_files": {
+      "task.py": "def retention_seconds(repeat_seconds):\n    if type(repeat_seconds) is not int or not 1<=repeat_seconds<=15:raise ValueError('bounded positive repeat seconds')\n    return 2\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现retention_seconds(repeat_seconds)：输入必须是非bool整数1..15，否则ValueError；返回非bool整数，至少2倍repeat且不超过30秒。返回值用于本题私有Alertmanager的--data.retention，不得改repeat_interval/receiver或关闭通知。平台把原周级场景缩为repeat5秒、retention2秒，真实nflog维护GC造成同指纹提前提醒；修正后用同storage/相同配置受控重启。旧记录的嵌入ExpiresAt不会被追溯延长，允许原到期点的一次过渡提醒；其后新记录应超过旧2秒留存仍不提前提醒，并按原5秒repeat实际通知。不能删状态掩盖问题、假设修改参数立即重写所有旧到期点、加随机标签产生新身份或承诺永久只发送一次。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Alertmanager0.28与私有receiver、连续API输入、真实通知日志GC/持久状态重启。只缩短retention/maintenance/repeat数值以有界验证，不改变系统时钟，不是模拟通知器或生产周级耐久测试。没有外部渠道/部署；有界repeat恢复不证明所有崩溃时序、磁盘损坏或消息严格一次。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "alertmanager"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac",
+          "alertmanager:v0.28"
+        ]
+      },
+      "test_files": {
+        "checks/alertmanager_native.py": "\"\"\"Private Alertmanager0.28 HTTP/gossip peers on loopback; no external destinations.\"\"\"\nimport os,json,pathlib,shutil,subprocess,socket,tempfile,time,urllib.request,urllib.error,contextlib\nimport yaml\n\n\ndef free_port():\n    for _ in range(100):\n        with socket.socket() as tcp:\n            tcp.bind(('127.0.0.1',0));port=tcp.getsockname()[1]\n            try:\n                with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as udp:udp.bind(('127.0.0.1',port))\n                return port\n            except OSError:pass\n    raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private ports unavailable')\n\n\nclass Alertmanager:\n    def __init__(self,config=None,mesh=False,peers=(),advertise=None,cluster_options=()):\n        self.config=config or {'route':{'receiver':'sink','group_wait':'1h'},'receivers':[{'name':'sink'}]}\n        self.port=free_port();self.cluster_port=free_port() if mesh else None;self.peers=peers;self.advertise=advertise;self.cluster_options=tuple(cluster_options)\n        self.base='http://127.0.0.1:'+str(self.port);self.proc=None\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-am-');self.root=pathlib.Path(self.temp.name);self.log=(self.root/'server.log').open('wb')\n        try:\n            version=subprocess.check_output(['alertmanager','--version'],stderr=subprocess.STDOUT,text=True,timeout=3)\n            if '0.28.' not in version:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Alertmanager0.28 required')\n            path=self.root/'config.yaml';path.write_text(yaml.safe_dump(self.config,sort_keys=False),encoding='utf8')\n            args=['alertmanager','--config.file='+str(path),'--storage.path='+str(self.root/'state'),'--web.listen-address=127.0.0.1:'+str(self.port),'--log.level=error']\n            args+=['--cluster.listen-address=' if self.cluster_port is None else '--cluster.listen-address=127.0.0.1:'+str(self.cluster_port)]\n            if self.cluster_port is not None:\n                args+=['--cluster.advertise-address=127.0.0.1:'+str(self.advertise or self.cluster_port),'--cluster.settle-timeout=100ms']\n                args+=['--cluster.peer='+peer for peer in self.peers]\n                args+=list(self.cluster_options)\n            self.proc=subprocess.Popen(args,cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'64MiB'})\n            self.wait(lambda:self.request('/-/ready') is not None,'HTTP readiness')\n            print('NATIVE_ALERTMANAGER_READY:0.28',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,path,data=None,method=None):\n        request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data).encode(),headers={'Content-Type':'application/json'},method=method)\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        with opener.open(request,timeout=1) as response:\n            raw=response.read()\n            return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n    def wait(self,predicate,description,seconds=6):\n        deadline=time.monotonic()+seconds\n        while time.monotonic()<deadline:\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Alertmanager exited: '+(self.root/'server.log').read_text(errors='replace')[-2000:])\n            try:\n                value=predicate()\n                if value:return value\n            except (OSError,urllib.error.URLError):pass\n            time.sleep(.03)\n        raise AssertionError('native Alertmanager deadline: '+description)\n    def __exit__(self,*args):\n        if self.proc is not None:\n            if self.proc.poll() is None:self.proc.terminate()\n            try:self.proc.wait(timeout=3)\n            except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=2)\n        if getattr(self,'log',None):self.log.close()\n        self.temp.cleanup()\n\n\ndef members(document):\n    cluster=document['cluster'];names={cluster.get('name','')}\n    names.update(peer.get('name','') for peer in cluster.get('peers',[]));names.discard('');return names\n\n\n@contextlib.contextmanager\ndef pair():\n    with Alertmanager(mesh=True) as first,Alertmanager(mesh=True,peers=['127.0.0.1:'+str(first.cluster_port)]) as second:\n        first.wait(lambda:len(members(first.request('/api/v2/status')))>=2,'first gossip peer list')\n        second.wait(lambda:len(members(second.request('/api/v2/status')))>=2,'second gossip peer list')\n        print('NATIVE_ALERTMANAGER_GOSSIP_READY:2-members',flush=True);yield first,second\n",
+        "checks/retained_alertmanager.py": "\"\"\"Owned Alertmanager restart changes only retention, retaining private storage and notification policy.\"\"\"\nimport os,subprocess\nfrom alertmanager_native import Alertmanager\nclass RetainedAlertmanager(Alertmanager):\n def __init__(self,config,retention):super().__init__(config);self.retention=retention\n def __enter__(self):\n  super().__enter__()\n  try:self.restart(self.retention);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def restart(self,seconds):\n  if type(seconds) is not int or not 1<=seconds<=30:raise ValueError('bounded teaching retention')\n  if self.proc.poll() is None:self.proc.terminate();self.proc.wait(timeout=3)\n  args=['alertmanager','--config.file='+str(self.root/'config.yaml'),'--storage.path='+str(self.root/'state'),'--web.listen-address=127.0.0.1:'+str(self.port),'--cluster.listen-address=','--data.retention='+str(seconds)+'s','--data.maintenance-interval=100ms','--log.level=error']\n  self.proc=subprocess.Popen(args,cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'64MiB'})\n  self.wait(lambda:self.request('/-/ready') is not None,'retained storage restart');self.retention=seconds\n",
+        "checks/check.py": "import os,sys,pathlib,json,datetime,time,threading,http.server,hashlib,urllib.error\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom retained_alertmanager import RetainedAlertmanager\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nreceived=[];stop=threading.Event();producer_errors=[];producer=None\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_POST(self):\n  data=json.loads(self.rfile.read(int(self.headers['Content-Length'])));received.append((time.monotonic(),data));self.send_response(200);self.end_headers()\n def log_message(self,*args):pass\nreceiver=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=receiver.serve_forever,daemon=True);thread.start()\ntry:\n config={'route':{'receiver':'private','group_by':['alertname','cluster'],'group_wait':'100ms','group_interval':'200ms','repeat_interval':'5s'},'receivers':[{'name':'private','webhook_configs':[{'url':'http://127.0.0.1:'+str(receiver.server_port)+'/hook'}]}]}\n with RetainedAlertmanager(config,2) as am:\n  started=datetime.datetime.now(datetime.timezone.utc).isoformat();labels={'alertname':'RetentionIncident','cluster':'north','tenant':'tenant-a'};annotation={'summary':'same persistent incident'}\n  def produce():\n   while not stop.is_set():\n    payload=[{'labels':labels,'annotations':annotation,'startsAt':started,'endsAt':(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=30)).isoformat()}]\n    try:am.request('/api/v2/alerts',data=payload,method='POST')\n    except (OSError,urllib.error.URLError):pass # Only the explicitly controlled restart may interrupt ingress.\n    except Exception as error:producer_errors.append(type(error).__name__);return\n    stop.wait(.1)\n  producer=threading.Thread(target=produce,daemon=True);producer.start()\n  am.wait(lambda:len(received)>=2,'retention GC caused early repeat',6)\n  first,second=received[:2];delta=second[0]-first[0]\n  assert 1.7<=delta<4.5,'actual early reminder did not precede configured 5s repeat'\n  assert all(len(data['alerts'])==1 and data['alerts'][0]['labels']==labels for _,data in received),'identity or grouping changed during retention experiment'\n  before=len(received);last=received[-1][0];fingerprint=received[-1][1]['alerts'][0]['fingerprint'];protected=(am.root/'config.yaml').read_bytes();root=am.root\n  print('NATIVE_ALERTMANAGER_RETENTION2S_GC_REPEATS_SAME_FINGERPRINT_BEFORE_REPEAT5S',flush=True)\n  print('STUDENT_OPERATION_ENTERED:increase_retention_keep_repeat_policy_and_notification_log',flush=True)\n  try:seconds=task.retention_seconds(5)\n  except Exception as error:raise AssertionError('student retention budget failed') from error\n  assert type(seconds) is int and 1<=seconds<=30,'retention must fit the explicitly bounded teaching process'\n  am.restart(seconds);assert am.root==root and (am.root/'config.yaml').read_bytes()==protected,'storage path or repeat/receiver configuration changed'\n  # ExpiresAt is stored in each existing MeshEntry. Increasing retention does not\n  # retroactively extend an already persisted short-lived entry. Let that one\n  # transition expire naturally; only the next written entry uses the new budget.\n  am.wait(lambda:len(received)>before,'existing entry reaches its original embedded expiry',6)\n  transition=received[before];assert transition[1]['alerts'][0]['fingerprint']==fingerprint and 1.7<=transition[0]-last<4.5,'old embedded expiry was not retained through restart'\n  before=len(received);last=received[-1][0]\n  end=last+4.3\n  while time.monotonic()<end:\n   assert len(received)==before,'continued early notifications after retention repair'\n   assert am.proc.poll() is None and not producer_errors;time.sleep(.03)\n  am.wait(lambda:len(received)>before,'configured 5s repeat remains enabled',4)\n  reminder=received[before];assert reminder[0]-last>=4.8 and reminder[0]-last<6.5,'notification policy no longer follows configured repeat'\n  assert len(reminder[1]['alerts'])==1 and reminder[1]['alerts'][0]['fingerprint']==fingerprint and reminder[1]['alerts'][0]['annotations']==annotation\n  for repeat in (1,2,9,15):assert type(task.retention_seconds(repeat)) is int and 2*repeat<=task.retention_seconds(repeat)<=30\n  for invalid in (0,16,True,'5',1.5):\n   try:task.retention_seconds(invalid)\n   except ValueError:pass\n   else:raise AssertionError('invalid retention input accepted')\n  stop.set();producer.join(timeout=2);assert not producer.is_alive() and not producer_errors\n  print('NATIVE_OLD_EMBEDDED_EXPIRY_RETAINED_ONCE_THEN_NEW_RETENTION_KEEPS_REAL_5S_REPEAT',flush=True)\nfinally:\n stop.set()\n if producer:producer.join(timeout=2)\n receiver.shutdown();receiver.server_close();thread.join(timeout=2)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "alertmanager"
+    ]
+  }
+]

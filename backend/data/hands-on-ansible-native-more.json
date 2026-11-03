@@ -1,0 +1,586 @@
+[
+  {
+    "id": "curated-ansible-expansion-015",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "解析 register 的结构化结果并保存 JSON",
+    "level": 1,
+    "type": "code",
+    "title": "解析 register 的结构化结果并保存 JSON",
+    "body": "## 操作环境\nLinux 普通用户、ansible-core、Python3/PyYAML；localhost 本地连接、forks=1，所有写入限制在提供的临时 workspace 内。不得提权、SSH 或操作系统服务。\n\n## 操作任务\n执行给定只读 Python 探针，把 stdout 中的 JSON 对象保存为 probe.json；保留字符串空格与 count 数字类型。只读探针不能报告 changed，重复执行整份 playbook 应 changed=0。\n\n## 提交产物\nplaybook.yaml。已有辅助材料保持不变。\n\n## 验收方法\n提交后执行真实 ansible-playbook，检查正常、错误与边界输入下的文件、返回码和副作用。不是依靠匹配答案字符串评分；本题只验本地编排语义，不代表真实远程服务验收。",
+    "answer": "```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Read a structured local probe\n      ansible.builtin.command:\n        argv: ['{{ ansible_playbook_python }}', '-c', 'import json; print(json.dumps({\"status\":\"ready\", \"message\":\"two words\", \"count\":3}))']\n      register: probe\n      changed_when: false\n    - name: Persist the parsed response\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/probe.json'\n        content: '{{ probe.stdout | from_json | to_nice_json }}'\n        mode: '0600'\n```\n\nregister 是包含 rc/stdout/stderr 等字段的对象。from_json 解析 stdout，再序列化为 JSON，不能把整个探针响应当作业务数据。",
+    "rubric": [
+      "通常保存包含 changed、failed、rc、stdout 等适用字段的结构化对象，具体字段依模块/执行情况"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "yaml",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Read a structured local probe\n      ansible.builtin.command:\n        argv: ['{{ ansible_playbook_python }}', '-c', 'import json; print(json.dumps({\"status\":\"ready\", \"message\":\"two words\", \"count\":3}))']\n      register: probe\n      changed_when: false\n    - name: Persist the parsed response\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/probe.json'\n        content: '{{ probe | to_nice_json }}'\n        mode: '0600'\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Read a structured local probe\n      ansible.builtin.command:\n        argv: ['{{ ansible_playbook_python }}', '-c', 'import json; print(json.dumps({\"status\":\"ready\", \"message\":\"two words\", \"count\":3}))']\n      register: probe\n      changed_when: false\n    - name: Persist the parsed response\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/probe.json'\n        content: '{{ probe.stdout | from_json | to_nice_json }}'\n        mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Read a structured local probe\n      ansible.builtin.command:\n        argv: ['{{ ansible_playbook_python }}', '-c', 'import json; print(json.dumps({\"status\":\"ready\", \"message\":\"two words\", \"count\":3}))']\n      register: probe\n      changed_when: true\n    - name: Persist the parsed response\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/probe.json'\n        content: '{{ probe.stdout | from_json | to_nice_json }}'\n        mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "执行给定只读 Python 探针，把 stdout 中的 JSON 对象保存为 probe.json；保留字符串空格与 count 数字类型。只读探针不能报告 changed，重复执行整份 playbook 应 changed=0。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生 ansible-playbook 正常、错误、边界与副作用断言",
+      "failure_examples": [
+        "register 是包含 rc/stdout/stderr 等字段的对象。from_json 解析 stdout，再序列化为 JSON，不能把整个探针响应当作业务数据。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);run(root,{})\n    assert json.loads((root/'probe.json').read_text())=={'status':'ready','message':'two words','count':3}\n    unchanged(run(root,{}))\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-015",
+      "original_type": "interview",
+      "original_title": "register 保存的是标准输出字符串还是结构化结果？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-015"
+  },
+  {
+    "id": "curated-ansible-expansion-016",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "从循环 register 中提取失败探针清单",
+    "level": 1,
+    "type": "code",
+    "title": "从循环 register 中提取失败探针清单",
+    "body": "## 操作环境\nLinux 普通用户、ansible-core、Python3/PyYAML；localhost 本地连接、forks=1，所有写入限制在提供的临时 workspace 内。不得提权、SSH 或操作系统服务。\n\n## 操作任务\nprobes 含 name 与 rc，逐项运行本地退出码探针而不中断收集；failed.json 仅保存非零 rc 的原始名称，顺序不变。支持空清单、全成功与多个失败，重复执行不得假报 changed。\n\n## 提交产物\nplaybook.yaml。已有辅助材料保持不变。\n\n## 验收方法\n提交后执行真实 ansible-playbook，检查正常、错误与边界输入下的文件、返回码和副作用。不是依靠匹配答案字符串评分；本题只验本地编排语义，不代表真实远程服务验收。",
+    "answer": "```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Collect each probe without aborting the loop\n      ansible.builtin.command:\n        argv: ['{{ ansible_playbook_python }}', '-c', 'import sys;sys.exit(int(sys.argv[1]))', '{{ item.rc | string }}']\n      loop: '{{ probes }}'\n      register: probe_results\n      failed_when: false\n      changed_when: false\n    - name: Persist failed probe names\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/failed.json'\n        content: '{{ probe_results.results | rejectattr(\"rc\", \"equalto\", 0) | map(attribute=\"item.name\") | list | to_json }}'\n        mode: '0600'\n```\n\n循环 register 的逐项结果位于 results；每项的 item 保留输入对象，rc 才是执行退出码。",
+    "rubric": [
+      "通常通过 results 列表读取每次迭代对应的 item 和结果，不能直接假设顶层 stdout 是全部输出"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "yaml",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Collect each probe without aborting the loop\n      ansible.builtin.command:\n        argv: ['{{ ansible_playbook_python }}', '-c', 'import sys;sys.exit(int(sys.argv[1]))', '{{ item.rc | string }}']\n      loop: '{{ probes }}'\n      register: probe_results\n      failed_when: false\n      changed_when: false\n    - name: Persist failed probe names\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/failed.json'\n        content: '{{ probe_results.results | selectattr(\"rc\", \"equalto\", 0) | map(attribute=\"item.name\") | list | to_json }}'\n        mode: '0600'\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Collect each probe without aborting the loop\n      ansible.builtin.command:\n        argv: ['{{ ansible_playbook_python }}', '-c', 'import sys;sys.exit(int(sys.argv[1]))', '{{ item.rc | string }}']\n      loop: '{{ probes }}'\n      register: probe_results\n      failed_when: false\n      changed_when: false\n    - name: Persist failed probe names\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/failed.json'\n        content: '{{ probe_results.results | rejectattr(\"rc\", \"equalto\", 0) | map(attribute=\"item.name\") | list | to_json }}'\n        mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Collect each probe without aborting the loop\n      ansible.builtin.command:\n        argv: ['{{ ansible_playbook_python }}', '-c', 'import sys;sys.exit(int(sys.argv[1]))', '{{ item.rc | string }}']\n      loop: '{{ probes }}'\n      register: probe_results\n      failed_when: false\n      changed_when: false\n    - name: Persist failed probe names\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/failed.json'\n        content: '{{ probe_results.results | rejectattr(\"rc\", \"equalto\", 0) | map(attribute=\"item.rc\") | list | to_json }}'\n        mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "probes 含 name 与 rc，逐项运行本地退出码探针而不中断收集；failed.json 仅保存非零 rc 的原始名称，顺序不变。支持空清单、全成功与多个失败，重复执行不得假报 changed。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生 ansible-playbook 正常、错误、边界与副作用断言",
+      "failure_examples": [
+        "循环 register 的逐项结果位于 results；每项的 item 保留输入对象，rc 才是执行退出码。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp)\n    for entries in [[],[{'name':'healthy','rc':0}],[{'name':'a space','rc':2},{'name':'ok','rc':0},{'name':'b','rc':1}]]:\n        run(root,{'probes':entries})\n        assert json.loads((root/'failed.json').read_text())==[p['name'] for p in entries if p['rc']!=0]\n    unchanged(run(root,{'probes':entries}))\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-016",
+      "original_type": "interview",
+      "original_title": "循环任务 register 后如何逐项判断结果？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-016"
+  },
+  {
+    "id": "curated-ansible-expansion-033",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "区分未定义与空值的 default 行为",
+    "level": 2,
+    "type": "code",
+    "title": "区分未定义与空值的 default 行为",
+    "body": "## 操作环境\nLinux 普通用户、ansible-core、Python3/PyYAML；localhost 本地连接、forks=1，所有写入限制在提供的临时 workspace 内。不得提权、SSH 或操作系统服务。\n\n## 操作任务\n生成 effective.json 的 value：只有 candidate 未定义时用 fallback；显式空字符串、false、0、null 和空列表必须原样保留，不能变成默认值。\n\n## 提交产物\nplaybook.yaml。已有辅助材料保持不变。\n\n## 验收方法\n提交后执行真实 ansible-playbook，检查正常、错误与边界输入下的文件、返回码和副作用。不是依靠匹配答案字符串评分；本题只验本地编排语义，不代表真实远程服务验收。",
+    "answer": "```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Preserve explicitly supplied values\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/effective.json'\n        content: '{{ {\"value\": (candidate | default(\"fallback\"))} | to_json }}'\n        mode: '0600'\n```\n\ndefault 第二参数为 true 时会把各种假值也替换；配置语义要求仅未定义时回退，应保留默认的 false 行为。",
+    "rubric": [
+      "默认情况下主要针对未定义值，是否把空字符串/false 等也当缺省取决于参数"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "yaml",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Preserve explicitly supplied values\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/effective.json'\n        content: '{{ {\"value\": (candidate | default(\"fallback\", true))} | to_json }}'\n        mode: '0600'\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Preserve explicitly supplied values\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/effective.json'\n        content: '{{ {\"value\": (candidate | default(\"fallback\"))} | to_json }}'\n        mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Preserve explicitly supplied values\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/effective.json'\n        content: '{{ {\"value\": \"fallback\"} | to_json }}'\n        mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "生成 effective.json 的 value：只有 candidate 未定义时用 fallback；显式空字符串、false、0、null 和空列表必须原样保留，不能变成默认值。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生 ansible-playbook 正常、错误、边界与副作用断言",
+      "failure_examples": [
+        "default 第二参数为 true 时会把各种假值也替换；配置语义要求仅未定义时回退，应保留默认的 false 行为。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp)\n    for values,expected in [({},'fallback'),({'candidate':''},''),({'candidate':False},False),({'candidate':0},0),({'candidate':None},None),({'candidate':[]},[]),({'candidate':'ready'},'ready')]:\n        run(root,values);actual=json.loads((root/'effective.json').read_text())['value']\n        assert type(actual)==type(expected) and actual==expected,(actual,expected)\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-033",
+      "original_type": "interview",
+      "original_title": "default 过滤器如何处理未定义值与空值？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-033"
+  },
+  {
+    "id": "curated-ansible-expansion-034",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "将映射转换为稳定有序的键值清单",
+    "level": 2,
+    "type": "code",
+    "title": "将映射转换为稳定有序的键值清单",
+    "body": "## 操作环境\nLinux 普通用户、ansible-core、Python3/PyYAML；localhost 本地连接、forks=1，所有写入限制在提供的临时 workspace 内。不得提权、SSH 或操作系统服务。\n\n## 操作任务\n把 settings 映射转换为 rows.json 数组，每项保留 key/value，按 key 升序排列；数值、布尔、列表和字符串类型不可丢失，输入顺序变化不应触发写入。\n\n## 提交产物\nplaybook.yaml。已有辅助材料保持不变。\n\n## 验收方法\n提交后执行真实 ansible-playbook，检查正常、错误与边界输入下的文件、返回码和副作用。不是依靠匹配答案字符串评分；本题只验本地编排语义，不代表真实远程服务验收。",
+    "answer": "```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Persist deterministic key-value rows\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/rows.json'\n        content: '{{ settings | dict2items | sort(attribute=\"key\") | to_json }}'\n        mode: '0600'\n```\n\ndict2items 将映射转换为可排序列表；排序令输出稳定，to_json 保留值类型，不靠拼接字符串构造配置。",
+    "rubric": [
+      "可使用 dict2items 等受支持转换得到 key/value 项，再按需排序以保证结果稳定"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "yaml",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Persist deterministic key-value rows\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/rows.json'\n        content: '{{ settings | dict2items | to_json }}'\n        mode: '0600'\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Persist deterministic key-value rows\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/rows.json'\n        content: '{{ settings | dict2items | sort(attribute=\"key\") | to_json }}'\n        mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Persist deterministic key-value rows\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/rows.json'\n        content: '{{ settings | dict2items(key_name=\"name\", value_name=\"data\") | sort(attribute=\"key\") | to_json }}'\n        mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "把 settings 映射转换为 rows.json 数组，每项保留 key/value，按 key 升序排列；数值、布尔、列表和字符串类型不可丢失，输入顺序变化不应触发写入。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生 ansible-playbook 正常、错误、边界与副作用断言",
+      "failure_examples": [
+        "dict2items 将映射转换为可排序列表；排序令输出稳定，to_json 保留值类型，不靠拼接字符串构造配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);values={'z':['a',2],'a':False,'m':4,'b':'x y'}\n    run(root,{'settings':values})\n    assert json.loads((root/'rows.json').read_text())==[{'key':k,'value':values[k]} for k in sorted(values)]\n    unchanged(run(root,{'settings':dict(reversed(list(values.items())))}))\n    run(root,{'settings':{}});assert json.loads((root/'rows.json').read_text())==[]\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-034",
+      "original_type": "interview",
+      "original_title": "遍历映射时如何同时取得键和值？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-034"
+  },
+  {
+    "id": "curated-ansible-expansion-055",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "在写入之前阻止无效端口与生产环境参数",
+    "level": 2,
+    "type": "code",
+    "title": "在写入之前阻止无效端口与生产环境参数",
+    "body": "## 操作环境\nLinux 普通用户、ansible-core、Python3/PyYAML；localhost 本地连接、forks=1，所有写入限制在提供的临时 workspace 内。不得提权、SSH 或操作系统服务。\n\n## 操作任务\n输入 target_environment 与 service_port。service.json 仅允许 test/staging 环境和整数1024至65535端口。先验证所有参数；非法环境、字符串端口、越界端口必须失败并保留原文件字节。\n\n## 提交产物\nplaybook.yaml。已有辅助材料保持不变。\n\n## 验收方法\n提交后执行真实 ansible-playbook，检查正常、错误与边界输入下的文件、返回码和副作用。不是依靠匹配答案字符串评分；本题只验本地编排语义，不代表真实远程服务验收。",
+    "answer": "```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Validate all inputs before touching the target\n      ansible.builtin.assert:\n        that:\n          - service_port is integer\n          - service_port >= 1024 and service_port <= 65535\n          - target_environment in ['test', 'staging']\n    - name: Write approved configuration\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/service.json'\n        content: '{{ {\"port\": service_port, \"environment\": target_environment} | to_json }}'\n        mode: '0600'\n```\n\n输入断言位于写入之前。宽松 int 转换会掩盖参数类型错误，限制环境可防止参数组合误操作生产。",
+    "rubric": [
+      "当目标环境、版本、路径、容量或变量类型不符合前置条件时应明确失败，并给出非敏感原因"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "yaml",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Validate all inputs before touching the target\n      ansible.builtin.assert:\n        that:\n          - service_port is integer\n          - service_port >= 1 and service_port <= 65535\n          - target_environment in ['test', 'staging']\n    - name: Write approved configuration\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/service.json'\n        content: '{{ {\"port\": service_port, \"environment\": target_environment} | to_json }}'\n        mode: '0600'\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Validate all inputs before touching the target\n      ansible.builtin.assert:\n        that:\n          - service_port is integer\n          - service_port >= 1024 and service_port <= 65535\n          - target_environment in ['test', 'staging']\n    - name: Write approved configuration\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/service.json'\n        content: '{{ {\"port\": service_port, \"environment\": target_environment} | to_json }}'\n        mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Validate all inputs before touching the target\n      ansible.builtin.assert:\n        that:\n          - service_port is integer\n          - service_port >= 1024 and service_port <= 65535\n          - target_environment in ['test', 'staging', 'production']\n    - name: Write approved configuration\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/service.json'\n        content: '{{ {\"port\": service_port, \"environment\": target_environment} | to_json }}'\n        mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "输入 target_environment 与 service_port。service.json 仅允许 test/staging 环境和整数1024至65535端口。先验证所有参数；非法环境、字符串端口、越界端口必须失败并保留原文件字节。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生 ansible-playbook 正常、错误、边界与副作用断言",
+      "failure_examples": [
+        "输入断言位于写入之前。宽松 int 转换会掩盖参数类型错误，限制环境可防止参数组合误操作生产。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);target=root/'service.json'\n    for port in [1024,65535]:\n        run(root,{'service_port':port,'target_environment':'test'});assert json.loads(target.read_text())=={'port':port,'environment':'test'}\n    for values in [{'service_port':80,'target_environment':'test'},{'service_port':65536,'target_environment':'test'},{'service_port':'8080','target_environment':'test'},{'service_port':8080,'target_environment':'production'}]:\n        target.write_text('PRESERVE ORIGINAL\\n');run(root,values,expected=1);assert target.read_text()=='PRESERVE ORIGINAL\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-055",
+      "original_type": "interview",
+      "original_title": "何时应使用 assert/fail 在 play 开始前终止？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-055"
+  },
+  {
+    "id": "curated-ansible-expansion-029",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "验证 check mode 预览不落盘且实际执行可幂等",
+    "level": 1,
+    "type": "code",
+    "title": "验证 check mode 预览不落盘且实际执行可幂等",
+    "body": "## 操作环境\nLinux 普通用户、ansible-core、Python3/PyYAML；localhost 本地连接、forks=1，所有写入限制在提供的临时 workspace 内。不得提权、SSH 或操作系统服务。\n\n## 操作任务\nplanned.txt 通过 copy 写入 desired。--check 时应报告拟变更但不得修改已有文件或创建缺失文件；正式执行正确写入，第二次不变。禁止强制 check_mode:false。\n\n## 提交产物\nplaybook.yaml。已有辅助材料保持不变。\n\n## 验收方法\n提交后执行真实 ansible-playbook，检查正常、错误与边界输入下的文件、返回码和副作用。不是依靠匹配答案字符串评分；本题只验本地编排语义，不代表真实远程服务验收。",
+    "answer": "```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Declare a normal check-aware file change\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/planned.txt'\n        content: '{{ desired }}'\n        mode: '0600'\n```\n\n使用原生支持 check mode 的模块。预览与正式运行都要验证，不能把执行成功等同于未产生副作用。",
+    "rubric": [
+      "不能"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "yaml",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Declare a normal check-aware file change\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/planned.txt'\n        content: '{{ desired }}'\n        mode: '0600'\n      check_mode: false\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Declare a normal check-aware file change\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/planned.txt'\n        content: '{{ desired }}'\n        mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Declare a normal check-aware file change\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/planned.txt'\n        content: 'constant'\n        mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "planned.txt 通过 copy 写入 desired。--check 时应报告拟变更但不得修改已有文件或创建缺失文件；正式执行正确写入，第二次不变。禁止强制 check_mode:false。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生 ansible-playbook 正常、错误、边界与副作用断言",
+      "failure_examples": [
+        "使用原生支持 check mode 的模块。预览与正式运行都要验证，不能把执行成功等同于未产生副作用。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);target=root/'planned.txt'\n    run(root,{'desired':'new'},check=True);assert not target.exists()\n    target.write_text('old');run(root,{'desired':'new'},check=True);assert target.read_text()=='old'\n    run(root,{'desired':'new'});assert target.read_text()=='new';unchanged(run(root,{'desired':'new'}))\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-029",
+      "original_type": "interview",
+      "original_title": "--check 的通过结果能证明实际发布一定成功吗？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-029"
+  },
+  {
+    "id": "curated-ansible-expansion-027",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "阻止任务调试输出泄露演练凭据",
+    "level": 1,
+    "type": "code",
+    "title": "阻止任务调试输出泄露演练凭据",
+    "body": "## 操作环境\nLinux 普通用户、ansible-core、Python3/PyYAML；localhost 本地连接、forks=1，所有写入限制在提供的临时 workspace 内。不得提权、SSH 或操作系统服务。\n\n## 操作任务\n将固定演练字符串 training_secret 写入0600的 credential.txt，保留调试任务但遮蔽它的输出。标准输出及 Ansible 日志不能出现明文。只能保护本次任务日志，不声称秘密不会出现在目标文件。\n\n## 提交产物\nplaybook.yaml。已有辅助材料保持不变。\n\n## 验收方法\n提交后执行真实 ansible-playbook，检查正常、错误与边界输入下的文件、返回码和副作用。不是依靠匹配答案字符串评分；本题只验本地编排语义，不代表真实远程服务验收。",
+    "answer": "```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Install the exercise-only credential without logging it\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/credential.txt'\n        content: '{{ training_secret }}'\n        mode: '0600'\n      no_log: true\n      diff: false\n    - name: Exercise a secret-valued result\n      ansible.builtin.debug:\n        msg: '{{ training_secret }}'\n      no_log: true\n```\n\nno_log 要覆盖会输出秘密的每个任务；文件仍包含演练值，需使用最小权限，不能把日志遮蔽当作全面加密。",
+    "rubric": [
+      "不能"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "yaml",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Install the exercise-only credential without logging it\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/credential.txt'\n        content: '{{ training_secret }}'\n        mode: '0600'\n      no_log: false\n      diff: false\n    - name: Exercise a secret-valued result\n      ansible.builtin.debug:\n        msg: '{{ training_secret }}'\n      no_log: false\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Install the exercise-only credential without logging it\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/credential.txt'\n        content: '{{ training_secret }}'\n        mode: '0600'\n      no_log: true\n      diff: false\n    - name: Exercise a secret-valued result\n      ansible.builtin.debug:\n        msg: '{{ training_secret }}'\n      no_log: true\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Install the exercise-only credential without logging it\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/credential.txt'\n        content: '{{ training_secret }}'\n        mode: '0644'\n      no_log: true\n      diff: false\n    - name: Exercise a secret-valued result\n      ansible.builtin.debug:\n        msg: '{{ training_secret }}'\n      no_log: true\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "将固定演练字符串 training_secret 写入0600的 credential.txt，保留调试任务但遮蔽它的输出。标准输出及 Ansible 日志不能出现明文。只能保护本次任务日志，不声称秘密不会出现在目标文件。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生 ansible-playbook 正常、错误、边界与副作用断言",
+      "failure_examples": [
+        "no_log 要覆盖会输出秘密的每个任务；文件仍包含演练值，需使用最小权限，不能把日志遮蔽当作全面加密。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nimport stat\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp);secret='fixture-only-NOT-a-real-secret-4827'\n    output=run(root,{'training_secret':secret})\n    assert secret not in output and secret not in (root/'ansible.log').read_text()\n    target=root/'credential.txt';assert target.read_text()==secret and stat.S_IMODE(target.stat().st_mode)==0o600\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-027",
+      "original_type": "interview",
+      "original_title": "no_log 能否保证秘密永远不会出现在任何位置？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-027"
+  },
+  {
+    "id": "curated-ansible-expansion-052",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "为瞬时失败探针设置有界重试",
+    "level": 2,
+    "type": "code",
+    "title": "为瞬时失败探针设置有界重试",
+    "body": "## 操作环境\nLinux 普通用户、ansible-core、Python3/PyYAML；localhost 本地连接、forks=1，所有写入限制在提供的临时 workspace 内。不得提权、SSH 或操作系统服务。\n\n## 操作任务\n本地探针用 attempts 记录实际调用次数，在 ready_after 次调用后成功。允许最多3次实际执行；第1次和第3次成功均可继续写 ready，无限失败必须在3次后失败且不写 ready。不得关闭失败判断。\n\n## 提交产物\nplaybook.yaml。已有辅助材料保持不变。\n\n## 验收方法\n提交后执行真实 ansible-playbook，检查正常、错误与边界输入下的文件、返回码和副作用。不是依靠匹配答案字符串评分；本题只验本地编排语义，不代表真实远程服务验收。",
+    "answer": "```yaml\n- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Bound the transient probe to three attempts\n      ansible.builtin.command:\n        argv:\n          - '{{ ansible_playbook_python }}'\n          - '-c'\n          - 'import pathlib,sys;p=pathlib.Path(sys.argv[1]);n=int(p.read_text())+1 if p.exists() else 1;p.write_text(str(n));sys.exit(0 if n>=int(sys.argv[2]) else 1)'\n          - '{{ workspace }}/attempts'\n          - '{{ ready_after | string }}'\n      register: probe\n      until: probe.rc == 0\n      retries: 2\n      delay: 0\n      changed_when: false\n    - name: Record only successful readiness\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/ready'\n        content: ready\n        mode: '0600'\n```\n\n用 until 判断 rc，delay=0 只用于短演练；实际次数需要原生执行验证。成功才能进入后续任务，不用 ignore_errors 假装探针通过。",
+    "rubric": [
+      "使用能够代表目标就绪的明确条件，限定次数/时间间隔，保存最后错误与尝试信息"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_error_handling.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "yaml",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Bound the transient probe to three attempts\n      ansible.builtin.command:\n        argv:\n          - '{{ ansible_playbook_python }}'\n          - '-c'\n          - 'import pathlib,sys;p=pathlib.Path(sys.argv[1]);n=int(p.read_text())+1 if p.exists() else 1;p.write_text(str(n));sys.exit(0 if n>=int(sys.argv[2]) else 1)'\n          - '{{ workspace }}/attempts'\n          - '{{ ready_after | string }}'\n      register: probe\n      until: probe.rc == 0\n      retries: 0\n      delay: 0\n      changed_when: false\n    - name: Record only successful readiness\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/ready'\n        content: ready\n        mode: '0600'\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Bound the transient probe to three attempts\n      ansible.builtin.command:\n        argv:\n          - '{{ ansible_playbook_python }}'\n          - '-c'\n          - 'import pathlib,sys;p=pathlib.Path(sys.argv[1]);n=int(p.read_text())+1 if p.exists() else 1;p.write_text(str(n));sys.exit(0 if n>=int(sys.argv[2]) else 1)'\n          - '{{ workspace }}/attempts'\n          - '{{ ready_after | string }}'\n      register: probe\n      until: probe.rc == 0\n      retries: 2\n      delay: 0\n      changed_when: false\n    - name: Record only successful readiness\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/ready'\n        content: ready\n        mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Local isolated exercise\n  hosts: localhost\n  connection: local\n  gather_facts: false\n  tasks:\n    - name: Bound the transient probe to three attempts\n      ansible.builtin.command:\n        argv:\n          - '{{ ansible_playbook_python }}'\n          - '-c'\n          - 'import pathlib,sys;p=pathlib.Path(sys.argv[1]);n=int(p.read_text())+1 if p.exists() else 1;p.write_text(str(n));sys.exit(0 if n>=int(sys.argv[2]) else 1)'\n          - '{{ workspace }}/attempts'\n          - '{{ ready_after | string }}'\n      register: probe\n      until: true\n      retries: 2\n      delay: 0\n      changed_when: false\n    - name: Record only successful readiness\n      ansible.builtin.copy:\n        dest: '{{ workspace }}/ready'\n        content: ready\n        mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "本地探针用 attempts 记录实际调用次数，在 ready_after 次调用后成功。允许最多3次实际执行；第1次和第3次成功均可继续写 ready，无限失败必须在3次后失败且不写 ready。不得关闭失败判断。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "原生 ansible-playbook 正常、错误、边界与副作用断言",
+      "failure_examples": [
+        "用 until 判断 rc，delay=0 只用于短演练；实际次数需要原生执行验证。成功才能进入后续任务，不用 ignore_errors 假装探针通过。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,re,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nsource=Path('playbook.yaml').read_text()\ndoc=yaml.safe_load(source)\nassert isinstance(doc,list) and doc\nassert all(p.get('hosts')=='localhost' and p.get('connection','local')=='local' and not p.get('become',False) for p in doc)\ndef run(root,values,expected=0,check=False):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    (root/'input.json').write_text(json.dumps({'workspace':str(root),**values}))\n    (root/'playbook.yaml').write_text(source)\n    env={**os.environ,'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1','ANSIBLE_RETRY_FILES_ENABLED':'false',\n         'ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),\n         'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_LOG_PATH':str(root/'ansible.log'),\n         'ANSIBLE_INVENTORY_ENABLED':'host_list','ANSIBLE_HOST_KEY_CHECKING':'true'}\n    (root/'ansible.cfg').write_text('[defaults]\\nstdout_callback=default\\n')\n    command=['ansible-playbook','-i','localhost,','-c','local','-f','1','playbook.yaml','-e','@input.json',\n             '-e',json.dumps({'ansible_python_interpreter':sys.executable})]\n    if check:command.append('--check')\n    result=subprocess.run(command,cwd=root,env=env,capture_output=True,text=True,timeout=25)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'Unsafe or invalid input was accepted'\n    return result.stdout\ndef unchanged(output):\n    recap=output.rsplit('PLAY RECAP',1)[-1]\n    assert re.search(r'changed=0\\b',recap),recap\n\n\nfor threshold,expected in [(1,1),(3,3),(999,3)]:\n    with tempfile.TemporaryDirectory() as tmp:\n        root=Path(tmp);run(root,{'ready_after':threshold},expected=0 if threshold<=3 else 1)\n        assert int((root/'attempts').read_text())==expected\n        assert (root/'ready').exists()==(threshold<=3)\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-052",
+      "original_type": "interview",
+      "original_title": "until、retries 与 delay 应如何定义有界重试？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-052"
+  }
+]

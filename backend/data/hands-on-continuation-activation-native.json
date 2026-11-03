@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-advanced-process-011",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 5,
+    "topic": "服务托管与systemd",
+    "title": "真实socket activation升级：fd3与PID协议、接管失败保留旧服务及有限监听队列",
+    "answer": "```python\nimport os,subprocess,sys\ndef spawn_activated(listener,argv,environment):\n    fd=listener.fileno()\n    bootstrap=\"import os,sys;source=int(sys.argv[1]);os.dup2(source,3,inheritable=True);source!=3 and os.close(source);os.environ.pop('LISTEN_PIDFDID',None);os.environ.update(LISTEN_PID=str(os.getpid()),LISTEN_FDS='1',LISTEN_FDNAMES='http');os.execvpe(sys.argv[2],sys.argv[2:],os.environ)\"\n    return subprocess.Popen([sys.executable,'-c',bootstrap,str(fd),*argv],env=dict(environment),pass_fds=(fd,),close_fds=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\ndef stop(proc):\n    if proc.poll() is None:\n        proc.terminate()\n        try:proc.wait(timeout=3)\n        except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=2)\n    if proc.stdout:proc.stdout.close()\n    if proc.stderr:proc.stderr.close()\ndef upgrade(old,listener,argv,environment,verify):\n    fresh=None\n    try:\n        fresh=spawn_activated(listener,argv,environment)\n        if verify(fresh) is not True:raise ValueError('new service did not adopt the approved listening socket')\n    except BaseException:\n        if fresh is not None:stop(fresh)\n        raise\n    stop(old)\n    return fresh\n```\n\n原题知识说明：\n交付socket与service单元关系、监听fd协议及连接排空顺序。由socket单元持有入口，应用读取受支持的继承fd而不再次绑定同端口；明确新连接排队与已建立连接分别由谁负责。升级前验证开发制品支持该协议并保留旧版本。验收服务短暂停止时监听仍在、队列有界、新进程接管正确，同时检查旧连接处理结果。队列满仍可能拒绝请求，不能承诺无限无损。若接管失败，启动旧制品并保持同一socket入口；不可盲目重启socket单元，否则可能破坏正要保留的队列。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "给出题设要求的具体交付物与关键机制",
+      "用可观察结果验证约束和失败分支",
+      "明确停止条件及回退或恢复边界"
+    ],
+    "references": [
+      "https://www.freedesktop.org/software/systemd/man/latest/sd_listen_fds.html",
+      "https://www.freedesktop.org/software/systemd/man/latest/systemd.socket.html"
+    ],
+    "body": "## 操作任务\n实现spawn_activated(listener,argv,environment)返回Popen，和upgrade(old,listener,argv,environment,verify)返回验证通过的新Popen。listener为管理方一直持有的私有TCP监听socket；子进程exec服务前将其复制到fd3、只继承这个业务fd，将LISTEN_PID设为服务自身PID、LISTEN_FDS=1、LISTEN_FDNAMES=http，清除旧LISTEN_PIDFDID，保留其他环境且不修改父环境/传入字典。stdout/stderr为文本PIPE。upgrade先启动新制品并要求verify(fresh)严格True，之后才有限TERM/KILL回收旧服务并关闭PIPE；验证失败/异常只清理新制品、保持旧服务运行且传播异常。任何路径不得close/shutdown管理方listener，也不得重新bind端口。验收覆盖接管拒绝、正常升级、服务短暂停止时队列留存、backlog满后的有限拒绝与重新启动旧制品接收队列，核对socket inode始终相同；非监听的可继承fd不得泄露。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Linux exec/pass_fds/TCP内核监听队列与SIGTERM回收，管理方测试进程模拟Accept=no的持有职责；未启动实际systemd manager或部署.service/.socket单元，不验证任意生产长连接排空SLO，也不承诺队列满时无限无损。",
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-process-011",
+      "original_title": "为支持systemd socket activation的服务设计二进制升级交付，要求切换时不丢监听入口。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,subprocess,sys\ndef spawn_activated(listener,argv,environment):\n    fd=listener.fileno()\n    bootstrap=\"import os,sys;source=int(sys.argv[1]);os.dup2(source,3,inheritable=True);source!=3 and os.close(source);os.environ.pop('LISTEN_PIDFDID',None);os.environ.update(LISTEN_PID=str(os.getpid()),LISTEN_FDS='1',LISTEN_FDNAMES='http');os.execvpe(sys.argv[2],sys.argv[2:],os.environ)\"\n    return subprocess.Popen([sys.executable,'-c',bootstrap,str(fd),*argv],env=dict(environment),pass_fds=(fd,),close_fds=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\ndef stop(proc):\n    if proc.poll() is None:\n        proc.terminate()\n        try:proc.wait(timeout=3)\n        except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=2)\n    if proc.stdout:proc.stdout.close()\n    if proc.stderr:proc.stderr.close()\ndef upgrade(old,listener,argv,environment,verify):\n    fresh=None\n    try:\n        fresh=spawn_activated(listener,argv,environment)\n        if verify(fresh) is not True:raise ValueError('new service did not adopt the approved listening socket')\n    except BaseException:\n        if fresh is not None:stop(fresh)\n        raise\n    stop(old)\n    return fresh\n"
+    },
+    "negative_files": {
+      "task.py": "import os,subprocess,sys\ndef spawn_activated(listener,argv,environment):\n    fd=listener.fileno()\n    bootstrap=\"import os,sys;source=int(sys.argv[1]);os.dup2(source,3,inheritable=True);source!=3 and os.close(source);os.environ.pop('LISTEN_PIDFDID',None);os.environ.update(LISTEN_PID=str(os.getppid()),LISTEN_FDS='1',LISTEN_FDNAMES='http');os.execvpe(sys.argv[2],sys.argv[2:],os.environ)\"\n    return subprocess.Popen([sys.executable,'-c',bootstrap,str(fd),*argv],env=dict(environment),pass_fds=(fd,),close_fds=True,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\ndef stop(proc):\n    if proc.poll() is None:\n        proc.terminate()\n        try:proc.wait(timeout=3)\n        except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=2)\n    if proc.stdout:proc.stdout.close()\n    if proc.stderr:proc.stderr.close()\ndef upgrade(old,listener,argv,environment,verify):\n    fresh=None\n    try:\n        fresh=spawn_activated(listener,argv,environment)\n        if verify(fresh) is not True:raise ValueError('new service did not adopt the approved listening socket')\n    except BaseException:\n        if fresh is not None:stop(fresh)\n        raise\n    stop(old)\n    return fresh\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现spawn_activated(listener,argv,environment)返回Popen，和upgrade(old,listener,argv,environment,verify)返回验证通过的新Popen。listener为管理方一直持有的私有TCP监听socket；子进程exec服务前将其复制到fd3、只继承这个业务fd，将LISTEN_PID设为服务自身PID、LISTEN_FDS=1、LISTEN_FDNAMES=http，清除旧LISTEN_PIDFDID，保留其他环境且不修改父环境/传入字典。stdout/stderr为文本PIPE。upgrade先启动新制品并要求verify(fresh)严格True，之后才有限TERM/KILL回收旧服务并关闭PIPE；验证失败/异常只清理新制品、保持旧服务运行且传播异常。任何路径不得close/shutdown管理方listener，也不得重新bind端口。验收覆盖接管拒绝、正常升级、服务短暂停止时队列留存、backlog满后的有限拒绝与重新启动旧制品接收队列，核对socket inode始终相同；非监听的可继承fd不得泄露。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Linux exec/pass_fds/TCP内核监听队列与SIGTERM回收，管理方测试进程模拟Accept=no的持有职责；未启动实际systemd manager或部署.service/.socket单元，不验证任意生产长连接排空SLO，也不承诺队列满时无限无损。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/activation_worker.py": "import json,os,pathlib,select,signal,socket,sys\nassert os.environ.get('LISTEN_PID')==str(os.getpid()) and os.environ.get('LISTEN_FDS')=='1' and os.environ.get('LISTEN_FDNAMES')=='http','activation environment does not identify this service'\nlistener=socket.socket(fileno=3);assert listener.type==socket.SOCK_STREAM and listener.getsockopt(socket.SOL_SOCKET,socket.SO_ACCEPTCONN)==1\nassert not os.environ.get('LISTEN_PIDFDID'),'stale activation pidfd identity'\nstop=False\ndef finish(*args):\n global stop\n stop=True\nsignal.signal(signal.SIGTERM,finish)\nopen_paths=[]\nfor path in pathlib.Path('/proc/self/fd').iterdir():\n try:open_paths.append(os.readlink(path))\n except FileNotFoundError:pass\nprint(json.dumps({'version':sys.argv[1],'pid':os.getpid(),'inode':os.fstat(3).st_ino,'paths':open_paths,'marker':os.environ.get('ACTIVATION_MARKER')}),flush=True)\nwhile not stop:\n if not select.select([listener],[],[],.03)[0]:continue\n conn,_=listener.accept()\n with conn:\n  conn.settimeout(.2)\n  try:\n   raw=conn.recv(128)\n   if raw:conn.sendall((sys.argv[1]+':'+raw.decode()).encode())\n  except (TimeoutError,ConnectionResetError,BrokenPipeError):pass\nlistener.close()\n",
+        "checks/check.py": "import os,sys,pathlib,copy,json,select,socket,subprocess,tempfile,time\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as error:raise AssertionError('student activation operation failed') from error\ndef stop(proc):\n if proc is None:return\n if proc.poll() is None:proc.terminate()\n try:proc.wait(timeout=3)\n except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=2)\n for stream in (proc.stdout,proc.stderr):\n  if stream:stream.close()\ndef ready(proc,version,inode,forbidden):\n assert select.select([proc.stdout],[],[],2)[0],'activation readiness missing'\n line=proc.stdout.readline();assert line,'new process exited before readiness'\n message=json.loads(line);assert message['pid']==proc.pid and message['version']==version and message['inode']==inode\n assert forbidden not in message['paths'] and message['marker']=='original-marker','unrelated fd leaked or original environment narrowed'\n return True\nwith tempfile.TemporaryDirectory() as directory,socket.socket() as listener:\n listener.bind(('127.0.0.1',0));listener.listen(1);endpoint=listener.getsockname();inode=os.fstat(listener.fileno()).st_ino\n forbidden_file=pathlib.Path(directory)/'unrelated-private-fd';handle=forbidden_file.open('wb');os.set_inheritable(handle.fileno(),True)\n environment={**os.environ,'ACTIVATION_MARKER':'original-marker','LISTEN_PID':'invalid-parent-value','LISTEN_FDS':'9','LISTEN_FDNAMES':'stale','LISTEN_PIDFDID':'stale'};before=copy.deepcopy(environment);parent_before=dict(os.environ)\n worker=[sys.executable,'checks/activation_worker.py'];children=[];old=None;fresh=None;queued=[]\n def connect(value):\n  conn=socket.create_connection(endpoint,timeout=.4);conn.sendall(value.encode());return conn\n def exchange(value):\n  with connect(value) as conn:return conn.recv(128).decode()\n try:\n  # Trusted baseline runner uses the standard fd3 ABI, independently of student code.\n  fd=listener.fileno();boot=\"import os,sys;fd=int(sys.argv[1]);os.dup2(fd,3,inheritable=True);fd!=3 and os.close(fd);os.environ.pop('LISTEN_PIDFDID',None);os.environ.update(LISTEN_PID=str(os.getpid()),LISTEN_FDS='1',LISTEN_FDNAMES='http');os.execvpe(sys.argv[2],sys.argv[2:],os.environ)\"\n  old=subprocess.Popen([sys.executable,'-c',boot,str(fd),*worker,'v1'],pass_fds=(fd,),env=environment,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True);children.append(old)\n  assert ready(old,'v1',inode,str(forbidden_file));assert exchange('first')=='v1:first'\n  rejected=[]\n  def reject(proc):\n   rejected.append(proc);ready(proc,'bad-version',inode,str(forbidden_file));return False\n  print('STUDENT_OPERATION_ENTERED:upgrade',flush=True)\n  try:task.upgrade(old,listener,[*worker,'bad-version'],environment,reject)\n  except (ValueError,AssertionError):pass\n  else:raise AssertionError('unverified release replaced old process')\n  assert old.poll() is None and exchange('after-reject')=='v1:after-reject','failed upgrade destroyed original listener owner'\n  assert rejected and all(p.poll() is not None and p.stdout.closed and p.stderr.closed for p in rejected),'rejected child leaked'\n  fresh=student(task.upgrade,old,listener,[*worker,'v2'],environment,lambda p:ready(p,'v2',inode,str(forbidden_file)));children.append(fresh)\n  assert old.poll() is not None and old.stdout.closed and old.stderr.closed and exchange('upgraded')=='v2:upgraded'\n  assert os.fstat(listener.fileno()).st_ino==inode and listener.getsockname()==endpoint\n  stop(fresh);fresh=None\n  # No accepting service: the manager's original socket keeps a bounded kernel queue.\n  full=False\n  for index in range(8):\n   try:queued.append(connect('queued-'+str(index)))\n   except (TimeoutError,ConnectionRefusedError):full=True;break\n  assert queued and full,'bounded backlog did not become full; cannot claim infinite lossless queuing'\n  print('NATIVE_LISTENER_QUEUE_FULL_REPRODUCED',len(queued),flush=True)\n  fresh=student(task.spawn_activated,listener,[*worker,'v1'],environment);children.append(fresh);assert ready(fresh,'v1',inode,str(forbidden_file))\n  for index,conn in enumerate(queued):conn.settimeout(1);assert conn.recv(128).decode()=='v1:queued-'+str(index)\n  assert exchange('rollback')=='v1:rollback' and os.fstat(listener.fileno()).st_ino==inode\n  assert environment==before and dict(os.environ)==parent_before\n finally:\n  for conn in queued:conn.close()\n  for proc in children:stop(proc)\n  for proc in locals().get('rejected',[]):stop(proc)\n  if fresh is not None:stop(fresh)\n  handle.close()\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

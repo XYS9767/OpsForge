@@ -1,0 +1,805 @@
+[
+  {
+    "id": "curated-lab-redis-003",
+    "module": "redis",
+    "category": "Redis",
+    "topic": "大键数据处理",
+    "level": 3,
+    "type": "code",
+    "title": "离线编程实作：从 Redis SCAN 导出中生成无重复的大键清单",
+    "body": "## 操作任务\n实现 analyze(rows, threshold) 读取已授权导出的 SCAN 采样数据。SCAN 可返回重复键：同名键保留 observed_at 较新记录；同时间按输入后者覆盖。筛 bytes>=threshold、按大小降序再键名排序。缺失或负字节数报错，不能默默算为 0。\n\n## 产物\n- `analyze.py`：按任务要求完成，可在网页编辑后下载。\n\n## 验收方法\n1. 对 scan.json 和阈值 1000，输出 a=1200、b=1000，a 只能出现一次。\n2. 追加较旧的 a=9000，结果不变；追加同时间的新 a 值，按后者处理。\n3. 空输入输出空列表；负数/缺失 bytes/布尔 bytes 必须抛 ValueError。\n\n环境：网页编辑器；Python 3.11+，仅离线样本，不连接 Redis。本题待主审独立复核。\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅验Redis SCAN导出数据去重与排序，不连接Redis、不宣称大键已清理。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "scan.json": "[{\"key\": \"a\", \"bytes\": 500, \"observed_at\": 1}, {\"key\": \"b\", \"bytes\": 1000, \"observed_at\": 2}, {\"key\": \"a\", \"bytes\": 1200, \"observed_at\": 3}, {\"key\": \"c\", \"bytes\": 20, \"observed_at\": 1}]",
+      "analyze.py": "def analyze(rows, threshold):\n    raise NotImplementedError\n"
+    },
+    "answer": "### analyze.py\n```python\ndef analyze(rows, threshold):\n    if type(threshold) is not int or threshold < 0:\n        raise ValueError('invalid threshold')\n    latest = {}\n    for row in rows:\n        if not isinstance(row, dict) or not isinstance(row.get('key'), str):\n            raise ValueError('invalid key')\n        if type(row.get('bytes')) is not int or row['bytes'] < 0:\n            raise ValueError('invalid bytes')\n        if type(row.get('observed_at')) is not int:\n            raise ValueError('invalid observation time')\n        old = latest.get(row['key'])\n        if old is None or row['observed_at'] >= old['observed_at']:\n            latest[row['key']] = dict(row)\n    return sorted((x for x in latest.values() if x['bytes'] >= threshold), key=lambda x: (-x['bytes'], x['key']))\n```\n\nSCAN 不是一致性快照，本题做样本去重而非全量在线内存审计；观测时间不同时不能断言总内存精确。",
+    "solution_files": {
+      "analyze.py": "def analyze(rows, threshold):\n    if type(threshold) is not int or threshold < 0:\n        raise ValueError('invalid threshold')\n    latest = {}\n    for row in rows:\n        if not isinstance(row, dict) or not isinstance(row.get('key'), str):\n            raise ValueError('invalid key')\n        if type(row.get('bytes')) is not int or row['bytes'] < 0:\n            raise ValueError('invalid bytes')\n        if type(row.get('observed_at')) is not int:\n            raise ValueError('invalid observation time')\n        old = latest.get(row['key'])\n        if old is None or row['observed_at'] >= old['observed_at']:\n            latest[row['key']] = dict(row)\n    return sorted((x for x in latest.values() if x['bytes'] >= threshold), key=lambda x: (-x['bytes'], x['key']))\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "analyze.py"
+      ],
+      "verification": [
+        "对 scan.json 和阈值 1000，输出 a=1200、b=1000，a 只能出现一次。",
+        "追加较旧的 a=9000，结果不变；追加同时间的新 a 值，按后者处理。",
+        "空输入输出空列表；负数/缺失 bytes/布尔 bytes 必须抛 ValueError。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅验Redis SCAN导出数据去重与排序，不连接Redis、不宣称大键已清理"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'analyze.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nrows=fixture('scan.json');original=copy.deepcopy(rows)\nassert m.analyze(rows,1000)==[{'key':'a','bytes':1200,'observed_at':3},{'key':'b','bytes':1000,'observed_at':2}]\nassert rows==original\nassert m.analyze(rows+[{'key':'a','bytes':9000,'observed_at':0}],1000)==m.analyze(rows,1000)\nassert m.analyze(rows+[{'key':'a','bytes':5,'observed_at':3}],1000)==[{'key':'b','bytes':1000,'observed_at':2}]\nassert m.analyze([{'key':'z','bytes':9,'observed_at':1},{'key':'a','bytes':9,'observed_at':1}],0)[0]['key']=='a'\nassert m.analyze([],0)==[]\nfor bad in [-1,True,1.1,None]:reject(m.analyze,[],bad)\nfor bad in [-1,True,None]:reject(m.analyze,[{'key':'x','bytes':bad,'observed_at':1}],0)\nreject(m.analyze,[{'key':'x','observed_at':1}],0)\nreject(m.analyze,[{'key':'x','bytes':1,'observed_at':True}],0)\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "analyze.py": "def analyze(rows, threshold):\n return sorted([dict(x) for x in rows if x['bytes']>=threshold],key=lambda x:(-x['bytes'],x['key']))\n"
+    }
+  },
+  {
+    "id": "curated-lab-kafka-001",
+    "module": "kafka",
+    "category": "Kafka",
+    "topic": "消费位点与积压",
+    "level": 2,
+    "type": "code",
+    "title": "离线编程实作：计算消费组各分区 lag 并保留未知状态",
+    "body": "## 操作任务\n实现 report(rows)。每行 topic、partition、log_end、committed；committed=null 表示尚未提交，lag 输出 null 且状态 unknown；提交位点超过 log_end 则状态 invalid、lag=null，禁止输出负 lag 或将未知当零。\n\n## 产物\n- `lag.py`：按任务要求完成，可在网页编辑后下载。\n\n## 验收方法\n1. 样本分区 0/1/2 分别为 20/unknown/invalid；unknown、invalid 的 lag 必须为 null。\n2. 同 Topic/Partition 重复报错；不同 Topic 同分区合法。\n3. committed=log_end 得到 0；负位点和布尔位点拒绝。\n\n环境：网页编辑器；Python 3.11+；离线 Kafka 位点快照。本题待主审独立复核。\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅验Kafka位移快照报告，不向Broker提交或修改消费组。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "offsets.json": "[{\"topic\": \"orders\", \"partition\": 0, \"log_end\": 120, \"committed\": 100}, {\"topic\": \"orders\", \"partition\": 1, \"log_end\": 50, \"committed\": null}, {\"topic\": \"orders\", \"partition\": 2, \"log_end\": 20, \"committed\": 25}]",
+      "lag.py": "def report(rows):\n    raise NotImplementedError\n"
+    },
+    "answer": "### lag.py\n```python\ndef report(rows):\n    result=[]\n    seen=set()\n    for x in rows:\n        key=(x['topic'],x['partition'])\n        if key in seen: raise ValueError('duplicate partition')\n        seen.add(key)\n        end,cur=x['log_end'],x['committed']\n        if type(end) is not int or end<0 or (cur is not None and (type(cur) is not int or cur<0)):\n            raise ValueError('invalid offset')\n        state='unknown' if cur is None else ('invalid' if cur>end else 'ok')\n        result.append({'topic':key[0],'partition':key[1],'lag':end-cur if state=='ok' else None,'state':state})\n    return sorted(result,key=lambda x:(x['topic'],x['partition']))\n```\n\n位点样本可能跨时刻抓取，invalid 应提示重新采集，不自动修改消费组位点。",
+    "solution_files": {
+      "lag.py": "def report(rows):\n    result=[]\n    seen=set()\n    for x in rows:\n        key=(x['topic'],x['partition'])\n        if key in seen: raise ValueError('duplicate partition')\n        seen.add(key)\n        end,cur=x['log_end'],x['committed']\n        if type(end) is not int or end<0 or (cur is not None and (type(cur) is not int or cur<0)):\n            raise ValueError('invalid offset')\n        state='unknown' if cur is None else ('invalid' if cur>end else 'ok')\n        result.append({'topic':key[0],'partition':key[1],'lag':end-cur if state=='ok' else None,'state':state})\n    return sorted(result,key=lambda x:(x['topic'],x['partition']))\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "lag.py"
+      ],
+      "verification": [
+        "样本分区 0/1/2 分别为 20/unknown/invalid；unknown、invalid 的 lag 必须为 null。",
+        "同 Topic/Partition 重复报错；不同 Topic 同分区合法。",
+        "committed=log_end 得到 0；负位点和布尔位点拒绝。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅验Kafka位移快照报告，不向Broker提交或修改消费组"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'lag.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nrows=fixture('offsets.json');original=copy.deepcopy(rows)\nassert m.report(rows)==[{'topic':'orders','partition':0,'lag':20,'state':'ok'},{'topic':'orders','partition':1,'lag':None,'state':'unknown'},{'topic':'orders','partition':2,'lag':None,'state':'invalid'}]\nassert rows==original\nassert m.report([{'topic':'b','partition':0,'log_end':1,'committed':1},{'topic':'a','partition':0,'log_end':0,'committed':0}])==[{'topic':'a','partition':0,'lag':0,'state':'ok'},{'topic':'b','partition':0,'lag':0,'state':'ok'}]\nassert m.report([])==[]\nreject(m.report,[rows[0],rows[0]])\nfor field in ['log_end','committed']:\n for bad in [-1,True,1.2]:\n  x={'topic':'t','partition':0,'log_end':3,'committed':1};x[field]=bad;reject(m.report,[x])\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "lag.py": "def report(rows):\n return [{'topic':r['topic'],'partition':r['partition'],'lag':max(0,r['log_end']-(r['committed'] or 0)),'state':'ok'} for r in rows]\n"
+    }
+  },
+  {
+    "id": "curated-lab-kafka-003",
+    "module": "kafka",
+    "category": "Kafka",
+    "topic": "并发消费与位点安全",
+    "level": 4,
+    "type": "code",
+    "title": "离线编程实作：提交并发消费中连续完成的安全位点",
+    "body": "## 操作任务\n实现 next_commit(base, completed)：base 是第一条尚未确认处理的 offset；completed 为本轮已成功处理 offset 集合。返回从 base 开始连续完成区间之后的下一 offset。中间存在未完成消息时绝不能越过缺口。不得将最大 completed+1 直接提交。\n\n## 产物\n- `commit.py`：按任务要求完成，可在网页编辑后下载。\n\n## 验收方法\n1. base=10，完成 [10,12,13] 返回 11；补齐 11 后返回 14。\n2. 重复完成、空集合和小于 base 的历史消息不得推进错误位点。\n3. 模拟处理 10 成功、11 失败、12 成功，必须保留 11 可重试；此单元只验证提交计算，不声称 Broker 提交或事务已执行。\n\n环境：网页编辑器；Python 3.11+；确定性的并发完成事件样本。本题待主审独立复核。\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅验连续完成位点计算，不等同Kafka事务或Broker提交成功。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "events.json": "{\"base\": 10, \"completed\": [10, 12, 13], \"expected\": 11}",
+      "commit.py": "def next_commit(base, completed):\n    raise NotImplementedError\n"
+    },
+    "answer": "### commit.py\n```python\ndef next_commit(base, completed):\n    if type(base) is not int or base<0: raise ValueError('invalid base')\n    done=set()\n    for n in completed:\n        if type(n) is not int or n<0: raise ValueError('invalid offset')\n        done.add(n)\n    value=base\n    while value in done:\n        value+=1\n    return value\n```\n\nKafka 提交位点表示下次读取位置。分区状态需单独维护；分区撤销、处理副作用幂等和实际 commit API 属于集成验收。",
+    "solution_files": {
+      "commit.py": "def next_commit(base, completed):\n    if type(base) is not int or base<0: raise ValueError('invalid base')\n    done=set()\n    for n in completed:\n        if type(n) is not int or n<0: raise ValueError('invalid offset')\n        done.add(n)\n    value=base\n    while value in done:\n        value+=1\n    return value\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "commit.py"
+      ],
+      "verification": [
+        "base=10，完成 [10,12,13] 返回 11；补齐 11 后返回 14。",
+        "重复完成、空集合和小于 base 的历史消息不得推进错误位点。",
+        "模拟处理 10 成功、11 失败、12 成功，必须保留 11 可重试；此单元只验证提交计算，不声称 Broker 提交或事务已执行。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅验连续完成位点计算，不等同Kafka事务或Broker提交成功"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'commit.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nassert m.next_commit(10,[10,12,13])==11\nassert m.next_commit(10,[13,12,10,11])==14\nassert m.next_commit(10,[9,8,9])==10\nassert m.next_commit(10,[])==10\nassert m.next_commit(0,[0,0,1,1,3])==2\nassert m.next_commit(0,[])==0\nfor bad in [-1,True,None,1.2]:reject(m.next_commit,bad,[])\nfor bad in [-1,True,None,1.2]:reject(m.next_commit,0,[bad])\nfor base in range(5):\n for gap in range(base,base+5):\n  completed=[v for v in range(base,base+6) if v!=gap]\n  assert m.next_commit(base,completed)==gap\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "commit.py": "def next_commit(base, completed):\n return max([base-1]+list(completed))+1\n"
+    }
+  },
+  {
+    "id": "curated-lab-clickhouse-002",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "topic": "批量写入与 UTF-8",
+    "level": 3,
+    "type": "code",
+    "title": "离线编程实作：按行数和字节上限打包 JSONEachRow",
+    "body": "## 操作任务\n实现 batches(rows,max_rows,max_bytes)，返回 JSONEachRow 文本批次列表。每行紧凑 JSON 加一个换行，按 UTF-8 实际字节计数；单行超过上限时报错，不截断、不遗漏，空输入返回空列表。\n\n## 产物\n- `batch.py`：按任务要求完成，可在网页编辑后下载。\n\n## 验收方法\n1. 每批行数<=max_rows、UTF-8字节<=max_bytes；将所有批次逐行 JSON 解码后必须与原 rows 完全一致。\n2. max_rows=2、max_bytes=100 时 3 行形成 2 批；max_bytes=1 必须报错。\n3. 中文不能按字符数算字节；空输入、非法上限、NaN 输入验证失败路径。\n\n环境：网页编辑器；Python 3.11+；离线输入，不连接数据库。本题待主审独立复核。\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅验JSONEachRow请求载荷编码与批次边界，不连接ClickHouse、不验证入库性能。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "rows.json": "[{\"name\": \"甲\", \"n\": 1}, {\"name\": \"乙\", \"n\": 2}, {\"name\": \"C\", \"n\": 3}]",
+      "batch.py": "def batches(rows, max_rows, max_bytes):\n    raise NotImplementedError\n"
+    },
+    "answer": "### batch.py\n```python\nimport json\n\ndef batches(rows, max_rows, max_bytes):\n    if type(max_rows) is not int or type(max_bytes) is not int or min(max_rows,max_bytes)<1:\n        raise ValueError('invalid limits')\n    out=[]; current=[]; size=0\n    for row in rows:\n        line=json.dumps(row,ensure_ascii=False,separators=(',',':'),allow_nan=False)+'\\n'\n        length=len(line.encode('utf-8'))\n        if length>max_bytes: raise ValueError('single row too large')\n        if current and (len(current)>=max_rows or size+length>max_bytes):\n            out.append(''.join(current)); current=[]; size=0\n        current.append(line); size+=length\n    if current: out.append(''.join(current))\n    return out\n```\n\n打包只解决批次边界，不提供 ClickHouse 端去重保证。真实写入要另外处理连接故障与重试语义。",
+    "solution_files": {
+      "batch.py": "import json\n\ndef batches(rows, max_rows, max_bytes):\n    if type(max_rows) is not int or type(max_bytes) is not int or min(max_rows,max_bytes)<1:\n        raise ValueError('invalid limits')\n    out=[]; current=[]; size=0\n    for row in rows:\n        line=json.dumps(row,ensure_ascii=False,separators=(',',':'),allow_nan=False)+'\\n'\n        length=len(line.encode('utf-8'))\n        if length>max_bytes: raise ValueError('single row too large')\n        if current and (len(current)>=max_rows or size+length>max_bytes):\n            out.append(''.join(current)); current=[]; size=0\n        current.append(line); size+=length\n    if current: out.append(''.join(current))\n    return out\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "batch.py"
+      ],
+      "verification": [
+        "每批行数<=max_rows、UTF-8字节<=max_bytes；将所有批次逐行 JSON 解码后必须与原 rows 完全一致。",
+        "max_rows=2、max_bytes=100 时 3 行形成 2 批；max_bytes=1 必须报错。",
+        "中文不能按字符数算字节；空输入、非法上限、NaN 输入验证失败路径。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅验JSONEachRow请求载荷编码与批次边界，不连接ClickHouse、不验证入库性能"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'batch.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nrows=fixture('rows.json');original=copy.deepcopy(rows)\nparts=m.batches(rows,2,100)\nassert len(parts)==2\nassert [json.loads(line) for part in parts for line in part.splitlines()]==rows\nassert all(part.endswith('\\n') and len(part.splitlines())<=2 and len(part.encode('utf-8'))<=100 for part in parts)\nassert rows==original and m.batches([],2,100)==[]\nline=json.dumps({'x':'甲'},ensure_ascii=False,separators=(',',':'))+'\\n'\nsize=len(line.encode('utf-8'))\nassert m.batches([{'x':'甲'}],1,size)==[line]\nreject(m.batches,[{'x':'甲'}],1,size-1)\nfor limits in [(0,10),(1,0),(True,10),(1,True),(-1,10)]:reject(m.batches,[],*limits)\nreject(m.batches,[{'x':float('nan')}],1,100)\nreject(m.batches,[{'x':float('inf')}],1,100)\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "batch.py": "import json\ndef batches(rows,max_rows,max_bytes):\n return [json.dumps(row,ensure_ascii=False)+'\\n' for row in rows]\n"
+    }
+  },
+  {
+    "id": "curated-lab-tidb-003",
+    "module": "tidb",
+    "category": "TiDB",
+    "topic": "Region 热点与流量分布",
+    "level": 3,
+    "type": "code",
+    "title": "离线编程实作：区分 Region 写入热点与节点总量倾斜",
+    "body": "## 操作任务\n编写 summarize(rows)；每条记录含 region_id、leader_store_id、write_bytes。分别输出最热 Region、各 Leader Store 总写入和各自占比。不能用节点总量大直接认定某一个 Region 热。重复 Region 或负值拒绝。\n\n## 产物\n- `hotspot.py`：按任务要求完成，可在网页编辑后下载。\n\n## 验收方法\n1. 样本总量170，最热Region=1，占80/170；Store10=80、Store11=90。\n2. 空输入最热Region=null、占比=null；总量为0不能除零。\n3. 重复Region拒绝；最大节点Store11不是最热Region所在Store10，输出应体现差异。\n\n环境：网页编辑器；Python 3.11+；离线 PD 采样摘要，不修改真实 Region。本题待主审独立复核。\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅分析PD导出Region与Store快照，不调度或修复真实TiDB Region。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "regions.json": "[{\"region_id\": 1, \"leader_store_id\": 10, \"write_bytes\": 80}, {\"region_id\": 2, \"leader_store_id\": 11, \"write_bytes\": 30}, {\"region_id\": 3, \"leader_store_id\": 11, \"write_bytes\": 30}, {\"region_id\": 4, \"leader_store_id\": 11, \"write_bytes\": 30}]",
+      "hotspot.py": "def summarize(rows):\n    raise NotImplementedError\n"
+    },
+    "answer": "### hotspot.py\n```python\ndef summarize(rows):\n    stores={}; regions={}\n    for x in rows:\n        r,s,w=x['region_id'],x['leader_store_id'],x['write_bytes']\n        if type(r) is not int or type(s) is not int or type(w) is not int or w<0 or r in regions:\n            raise ValueError('invalid or duplicate region')\n        regions[r]=w; stores[s]=stores.get(s,0)+w\n    total=sum(regions.values())\n    hottest=min(regions,key=lambda r:(-regions[r],r)) if regions else None\n    return {'total_bytes':total,'hottest_region':hottest,\n            'region_fraction':regions[hottest]/total if total else None,\n            'stores':[{'id':s,'bytes':stores[s],'fraction':stores[s]/total if total else None} for s in sorted(stores)]}\n```\n\n采样窗口必须相同，字节数不能混用瞬时速率。该题验证数据处理能力，不证明热点已在集群消除。",
+    "solution_files": {
+      "hotspot.py": "def summarize(rows):\n    stores={}; regions={}\n    for x in rows:\n        r,s,w=x['region_id'],x['leader_store_id'],x['write_bytes']\n        if type(r) is not int or type(s) is not int or type(w) is not int or w<0 or r in regions:\n            raise ValueError('invalid or duplicate region')\n        regions[r]=w; stores[s]=stores.get(s,0)+w\n    total=sum(regions.values())\n    hottest=min(regions,key=lambda r:(-regions[r],r)) if regions else None\n    return {'total_bytes':total,'hottest_region':hottest,\n            'region_fraction':regions[hottest]/total if total else None,\n            'stores':[{'id':s,'bytes':stores[s],'fraction':stores[s]/total if total else None} for s in sorted(stores)]}\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "hotspot.py"
+      ],
+      "verification": [
+        "样本总量170，最热Region=1，占80/170；Store10=80、Store11=90。",
+        "空输入最热Region=null、占比=null；总量为0不能除零。",
+        "重复Region拒绝；最大节点Store11不是最热Region所在Store10，输出应体现差异。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅分析PD导出Region与Store快照，不调度或修复真实TiDB Region"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'hotspot.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nrows=fixture('regions.json');original=copy.deepcopy(rows);r=m.summarize(rows)\nassert r['total_bytes']==170 and r['hottest_region']==1 and math.isclose(r['region_fraction'],80/170)\nassert [x['id'] for x in r['stores']]==[10,11] and [x['bytes'] for x in r['stores']]==[80,90]\nassert math.isclose(r['stores'][1]['fraction'],90/170) and rows==original\nassert m.summarize([])=={'total_bytes':0,'hottest_region':None,'region_fraction':None,'stores':[]}\nr=m.summarize([{'region_id':2,'leader_store_id':1,'write_bytes':0},{'region_id':1,'leader_store_id':2,'write_bytes':0}])\nassert r['hottest_region']==1 and r['region_fraction'] is None and all(x['fraction'] is None for x in r['stores'])\nreject(m.summarize,[rows[0],rows[0]])\nfor field in ['region_id','leader_store_id','write_bytes']:\n x={'region_id':1,'leader_store_id':2,'write_bytes':1};x[field]=True;reject(m.summarize,[x])\nreject(m.summarize,[{'region_id':1,'leader_store_id':2,'write_bytes':-1}])\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "hotspot.py": "def summarize(rows):\n stores={}\n for r in rows:stores[r['leader_store_id']]=stores.get(r['leader_store_id'],0)+r['write_bytes']\n return {'total_bytes':sum(stores.values()),'hottest_region':max(stores,key=stores.get),'region_fraction':1,'stores':[]}\n"
+    }
+  },
+  {
+    "id": "curated-lab-ceph-001",
+    "module": "ceph",
+    "category": "Ceph",
+    "topic": "PG 状态数据分析",
+    "level": 3,
+    "type": "code",
+    "title": "离线编程实作：按 PG 状态组合识别不可用与降级",
+    "body": "## 操作任务\n解析 PG state，以 + 分割状态，不能把 active+undersized+degraded 当作 clean。输出总PG、clean数、含 degraded 数、含 inactive/peering/incomplete 数、其他状态 PG id；同 PG 重复拒绝。\n\n## 产物\n- `pg_report.py`：按任务要求完成，可在网页编辑后下载。\n\n## 验收方法\n1. 样本 total=4、clean=1、degraded=1、unavailable=1、other=[1.3]。\n2. active+degraded+incomplete 同时计入 degraded 与 unavailable；这些计数不是互斥分桶，不可简单相加当总数。\n3. 未知状态保留在 other，不能默认为健康；重复pgid必须拒绝。\n\n环境：网页编辑器；Python 3.11+；离线 Ceph PG 摘要 JSON。本题待主审独立复核。\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅依据约定PG状态词生成离线分类报告，不替代Ceph真实健康诊断或I/O恢复验收。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "pg.json": "[{\"pgid\": \"1.0\", \"state\": \"active+clean\"}, {\"pgid\": \"1.1\", \"state\": \"active+undersized+degraded\"}, {\"pgid\": \"1.2\", \"state\": \"peering\"}, {\"pgid\": \"1.3\", \"state\": \"active+recovering\"}]",
+      "pg_report.py": "def report(rows):\n    raise NotImplementedError\n"
+    },
+    "answer": "### pg_report.py\n```python\ndef report(rows):\n    result={'total':0,'clean':0,'degraded':0,'unavailable':0,'other':[]}; seen=set()\n    for x in rows:\n        pg=x['pgid']; state=x['state']\n        if pg in seen or not isinstance(state,str) or not state: raise ValueError('invalid PG')\n        seen.add(pg); flags=set(state.split('+')); result['total']+=1\n        if flags=={'active','clean'}: result['clean']+=1\n        if 'degraded' in flags: result['degraded']+=1\n        if flags & {'inactive','peering','incomplete'}: result['unavailable']+=1\n        if flags!={'active','clean'} and 'degraded' not in flags and not flags & {'inactive','peering','incomplete'}:\n            result['other'].append(pg)\n    result['other'].sort()\n    return result\n```\n\n这是明确限定的状态报告，不覆盖全部 Ceph 状态可用性语义；真实健康诊断仍需 health detail、PG stuck 时间及 I/O 验证。",
+    "solution_files": {
+      "pg_report.py": "def report(rows):\n    result={'total':0,'clean':0,'degraded':0,'unavailable':0,'other':[]}; seen=set()\n    for x in rows:\n        pg=x['pgid']; state=x['state']\n        if pg in seen or not isinstance(state,str) or not state: raise ValueError('invalid PG')\n        seen.add(pg); flags=set(state.split('+')); result['total']+=1\n        if flags=={'active','clean'}: result['clean']+=1\n        if 'degraded' in flags: result['degraded']+=1\n        if flags & {'inactive','peering','incomplete'}: result['unavailable']+=1\n        if flags!={'active','clean'} and 'degraded' not in flags and not flags & {'inactive','peering','incomplete'}:\n            result['other'].append(pg)\n    result['other'].sort()\n    return result\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "pg_report.py"
+      ],
+      "verification": [
+        "样本 total=4、clean=1、degraded=1、unavailable=1、other=[1.3]。",
+        "active+degraded+incomplete 同时计入 degraded 与 unavailable；这些计数不是互斥分桶，不可简单相加当总数。",
+        "未知状态保留在 other，不能默认为健康；重复pgid必须拒绝。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅依据约定PG状态词生成离线分类报告，不替代Ceph真实健康诊断或I/O恢复验收"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'pg_report.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nrows=fixture('pg.json');original=copy.deepcopy(rows)\nassert m.report(rows)=={'total':4,'clean':1,'degraded':1,'unavailable':1,'other':['1.3']}\nassert rows==original\nassert m.report([{'pgid':'2.0','state':'active+degraded+incomplete'}])=={'total':1,'clean':0,'degraded':1,'unavailable':1,'other':[]}\nassert m.report([{'pgid':'z','state':'unknown'},{'pgid':'a','state':'recovering'}])['other']==['a','z']\nassert m.report([])=={'total':0,'clean':0,'degraded':0,'unavailable':0,'other':[]}\nreject(m.report,[rows[0],rows[0]])\nfor state in ['',None,4]:reject(m.report,[{'pgid':'x','state':state}])\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "pg_report.py": "def report(rows):\n return {'total':len(rows),'clean':sum('active' in r['state'] for r in rows),'degraded':0,'unavailable':0,'other':[]}\n"
+    }
+  },
+  {
+    "id": "curated-lab-ceph-002",
+    "module": "ceph",
+    "category": "Ceph",
+    "topic": "CRUSH 故障域验证",
+    "level": 3,
+    "type": "code",
+    "title": "离线编程实作：检查副本放置是否跨主机故障域",
+    "body": "## 操作任务\n实现 validate(osd_hosts, placements, replicas)。检查每个对象副本数量、OSD 唯一性和主机唯一性；未知 OSD 必须拒绝。输出有违规的对象及原因。仅修改检查程序，不能修改样本绕过验收。\n\n## 产物\n- `placement.py`：按任务要求完成，可在网页编辑后下载。\n\n## 验收方法\n1. replicas=3时obj-a通过、obj-b含same_host、obj-c含replica_count。\n2. [0,0,2]必须同时发现duplicate_osd与same_host；未知OSD99必须拒绝而不是跳过。\n3. OSD所属主机改变后需重新评估；仅离线映射通过不能证明真实CRUSH规则故障后仍满足副本要求。\n\n环境：网页编辑器；Python 3.11+；离线 CRUSH 映射输出。本题待主审独立复核。\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅审计导出的OSD副本放置映射，不宣称真实CRUSH在节点故障后验证通过。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "osd-hosts.json": "{\"0\": \"host-a\", \"1\": \"host-a\", \"2\": \"host-b\", \"3\": \"host-c\"}",
+      "placements.json": "{\"obj-a\": [0, 2, 3], \"obj-b\": [0, 1, 2], \"obj-c\": [0, 2]}",
+      "placement.py": "def validate(osd_hosts, placements, replicas):\n    raise NotImplementedError\n"
+    },
+    "answer": "### placement.py\n```python\ndef validate(osd_hosts, placements, replicas):\n    if type(replicas) is not int or replicas<1: raise ValueError('invalid replicas')\n    failures={}\n    for name,osds in sorted(placements.items()):\n        reasons=[]\n        if len(osds)!=replicas: reasons.append('replica_count')\n        if len(set(osds))!=len(osds): reasons.append('duplicate_osd')\n        if any(str(o) not in osd_hosts for o in osds): raise ValueError('unknown OSD')\n        hosts=[osd_hosts[str(o)] for o in osds]\n        if len(set(hosts))!=len(hosts): reasons.append('same_host')\n        if reasons: failures[name]=reasons\n    return failures\n```\n\nOSD不同不代表主机故障域不同。实际规则验收需使用真实CRUSH map及不同故障状态运行crushtool；此题交付可重复运行的审计器。",
+    "solution_files": {
+      "placement.py": "def validate(osd_hosts, placements, replicas):\n    if type(replicas) is not int or replicas<1: raise ValueError('invalid replicas')\n    failures={}\n    for name,osds in sorted(placements.items()):\n        reasons=[]\n        if len(osds)!=replicas: reasons.append('replica_count')\n        if len(set(osds))!=len(osds): reasons.append('duplicate_osd')\n        if any(str(o) not in osd_hosts for o in osds): raise ValueError('unknown OSD')\n        hosts=[osd_hosts[str(o)] for o in osds]\n        if len(set(hosts))!=len(hosts): reasons.append('same_host')\n        if reasons: failures[name]=reasons\n    return failures\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "placement.py"
+      ],
+      "verification": [
+        "replicas=3时obj-a通过、obj-b含same_host、obj-c含replica_count。",
+        "[0,0,2]必须同时发现duplicate_osd与same_host；未知OSD99必须拒绝而不是跳过。",
+        "OSD所属主机改变后需重新评估；仅离线映射通过不能证明真实CRUSH规则故障后仍满足副本要求。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅审计导出的OSD副本放置映射，不宣称真实CRUSH在节点故障后验证通过"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'placement.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nhosts=fixture('osd-hosts.json');places=fixture('placements.json');original=copy.deepcopy(places)\nassert m.validate(hosts,places,3)=={'obj-b':['same_host'],'obj-c':['replica_count']}\nassert places==original\nassert m.validate(hosts,{'x':[0,0,2]},3)=={'x':['duplicate_osd','same_host']}\nassert m.validate(hosts,{},3)=={}\nreject(m.validate,hosts,{'x':[0,2,99]},3)\nfor bad in [0,-1,True,1.2]:reject(m.validate,hosts,{},bad)\nchanged=dict(hosts);changed['2']='host-a'\nassert m.validate(changed,{'a':[0,2,3]},3)=={'a':['same_host']}\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "placement.py": "def validate(osd_hosts,placements,replicas):\n return {name:['replica_count'] for name,osds in placements.items() if len(osds)!=replicas}\n"
+    }
+  },
+  {
+    "id": "curated-lab-ceph-003",
+    "module": "ceph",
+    "category": "Ceph",
+    "topic": "恢复容量与安全边界",
+    "level": 4,
+    "type": "code",
+    "title": "离线编程实作：按单 OSD 余量计算恢复写入准入",
+    "body": "## 操作任务\n实现 admit(osds,incoming,limit_ratio)，每个OSD容量/已用/拟恢复写入均为字节整数；逐OSD检查 projected_used/capacity 是否严格小于 limit_ratio。输出拒绝OSD及预计使用率；不能用集群平均掩盖单盘满。用 Decimal 字符串阈值避免浮点边界误差。\n\n## 产物\n- `admit.py`：按任务要求完成，可在网页编辑后下载。\n\n## 验收方法\n1. 阈值0.9时OSD0恰为0.9必须拒绝，OSD1为0.2通过。\n2. 集群平均0.55不能替代单盘检查；将OSD0 incoming改99后可通过。\n3. 未知OSD、负容量、已用超过容量、NaN阈值必须拒绝。\n\n环境：网页编辑器；Python 3.11+；离线容量与恢复分配样本。本题待主审独立复核。\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅验每OSD容量准入计算，不执行Ceph恢复写入或变更集群阈值。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "osds.json": "{\"0\": {\"capacity\": 1000, \"used\": 800}, \"1\": {\"capacity\": 1000, \"used\": 100}}",
+      "incoming.json": "{\"0\": 100, \"1\": 100}",
+      "admit.py": "def admit(osds, incoming, limit_ratio):\n    raise NotImplementedError\n"
+    },
+    "answer": "### admit.py\n```python\nfrom decimal import Decimal, InvalidOperation\n\ndef admit(osds, incoming, limit_ratio):\n    try: limit=Decimal(limit_ratio)\n    except (InvalidOperation,TypeError): raise ValueError('invalid limit')\n    if not limit.is_finite() or not 0<limit<1: raise ValueError('invalid limit')\n    if set(incoming)-set(osds): raise ValueError('unknown OSD')\n    out={}\n    for oid,x in osds.items():\n        cap,used,extra=x['capacity'],x['used'],incoming.get(oid,0)\n        if any(type(v) is not int for v in (cap,used,extra)) or cap<=0 or min(used,extra)<0 or used>cap:\n            raise ValueError('invalid capacity')\n        ratio=Decimal(used+extra)/Decimal(cap)\n        if ratio>=limit: out[oid]=str(ratio)\n    return out\n```\n\n该准入只是给定恢复分配的静态容量约束，不模拟CRUSH重排、复制开销或Ceph full/backfillfull动态控制；实际恢复仍需隔离集群验收。",
+    "solution_files": {
+      "admit.py": "from decimal import Decimal, InvalidOperation\n\ndef admit(osds, incoming, limit_ratio):\n    try: limit=Decimal(limit_ratio)\n    except (InvalidOperation,TypeError): raise ValueError('invalid limit')\n    if not limit.is_finite() or not 0<limit<1: raise ValueError('invalid limit')\n    if set(incoming)-set(osds): raise ValueError('unknown OSD')\n    out={}\n    for oid,x in osds.items():\n        cap,used,extra=x['capacity'],x['used'],incoming.get(oid,0)\n        if any(type(v) is not int for v in (cap,used,extra)) or cap<=0 or min(used,extra)<0 or used>cap:\n            raise ValueError('invalid capacity')\n        ratio=Decimal(used+extra)/Decimal(cap)\n        if ratio>=limit: out[oid]=str(ratio)\n    return out\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "admit.py"
+      ],
+      "verification": [
+        "阈值0.9时OSD0恰为0.9必须拒绝，OSD1为0.2通过。",
+        "集群平均0.55不能替代单盘检查；将OSD0 incoming改99后可通过。",
+        "未知OSD、负容量、已用超过容量、NaN阈值必须拒绝。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅验每OSD容量准入计算，不执行Ceph恢复写入或变更集群阈值"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'admit.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nosds=fixture('osds.json');incoming=fixture('incoming.json')\nassert m.admit(osds,incoming,'0.9')=={'0':'0.9'}\nassert m.admit(osds,{'0':99,'1':100},'0.9')=={}\nassert m.admit({}, {}, '0.9')=={}\nfor bad in ['NaN','Infinity','0','1','-0.1',None]:reject(m.admit,osds,incoming,bad)\nreject(m.admit,osds,{'99':1},'0.9')\nfor case in [{'capacity':0,'used':0},{'capacity':100,'used':101},{'capacity':100,'used':-1},{'capacity':True,'used':0}]:\n reject(m.admit,{'0':case},{},'0.9')\nreject(m.admit,osds,{'0':True},'0.9')\nreject(m.admit,osds,{'0':-1},'0.9')\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "admit.py": "def admit(osds,incoming,limit_ratio):\n total=sum(x['capacity'] for x in osds.values());used=sum(x['used'] for x in osds.values())+sum(incoming.values())\n return {} if used/total<float(limit_ratio) else {'cluster':'full'}\n"
+    }
+  },
+  {
+    "id": "curated-lab-elk-003",
+    "module": "elk",
+    "category": "ELK / EFK",
+    "topic": "日志去重与来源坐标",
+    "level": 3,
+    "type": "code",
+    "title": "离线编程实作：为日志重试生成稳定且不串租户的文档 ID",
+    "body": "## 操作任务\n实现 doc_id(event)。按 tenant、source、file_id、offset 生成SHA-256稳定ID；不能只按message去重，也不能仅使用offset。字段用紧凑JSON数组编码，避免拼接分隔符冲突。offset必须非负整数，拒绝空身份字段。\n\n## 产物\n- `id.py`：按任务要求完成，可在网页编辑后下载。\n\n## 验收方法\n1. 相同事件重试ID相同；三条样本ID两两不同。\n2. 同一内容在不同offset仍须不同；message变化不会改变同一来源坐标ID。\n3. 包含冒号/换行的字段不能产生拼接碰撞；缺字段、负offset、布尔offset必须拒绝。\n\n环境：网页编辑器；Python 3.11+；离线采集事件样本。本题待主审独立复核。\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅验稳定文档ID编码，不连接Elasticsearch、不声称索引写入幂等性已集成验证。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "events.json": "[{\"tenant\": \"a\", \"source\": \"node1\", \"file_id\": \"inode7:gen1\", \"offset\": 0, \"message\": \"hello\"}, {\"tenant\": \"b\", \"source\": \"node1\", \"file_id\": \"inode7:gen1\", \"offset\": 0, \"message\": \"hello\"}, {\"tenant\": \"a\", \"source\": \"node1\", \"file_id\": \"inode7:gen2\", \"offset\": 0, \"message\": \"hello\"}]",
+      "id.py": "def doc_id(event):\n    raise NotImplementedError\n"
+    },
+    "answer": "### id.py\n```python\nimport hashlib\nimport json\n\ndef doc_id(event):\n    names=['tenant','source','file_id']\n    if any(not isinstance(event.get(k),str) or not event[k] for k in names):\n        raise ValueError('missing identity')\n    offset=event.get('offset')\n    if type(offset) is not int or offset<0: raise ValueError('invalid offset')\n    raw=json.dumps([event[k] for k in names]+[offset],ensure_ascii=False,separators=(',',':'))\n    return hashlib.sha256(raw.encode('utf-8')).hexdigest()\n```\n\nfile_id必须包含轮转代际，不能只用可复用inode。稳定ID支持幂等覆盖，但必须与下游写入方式结合；本题不宣称端到端恰好一次。",
+    "solution_files": {
+      "id.py": "import hashlib\nimport json\n\ndef doc_id(event):\n    names=['tenant','source','file_id']\n    if any(not isinstance(event.get(k),str) or not event[k] for k in names):\n        raise ValueError('missing identity')\n    offset=event.get('offset')\n    if type(offset) is not int or offset<0: raise ValueError('invalid offset')\n    raw=json.dumps([event[k] for k in names]+[offset],ensure_ascii=False,separators=(',',':'))\n    return hashlib.sha256(raw.encode('utf-8')).hexdigest()\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "id.py"
+      ],
+      "verification": [
+        "相同事件重试ID相同；三条样本ID两两不同。",
+        "同一内容在不同offset仍须不同；message变化不会改变同一来源坐标ID。",
+        "包含冒号/换行的字段不能产生拼接碰撞；缺字段、负offset、布尔offset必须拒绝。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅验稳定文档ID编码，不连接Elasticsearch、不声称索引写入幂等性已集成验证"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'id.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nimport hashlib\nrows=fixture('events.json');ids=[m.doc_id(x) for x in rows];assert len(set(ids))==3\nassert m.doc_id(rows[0])==m.doc_id(dict(rows[0],message='changed'))\nassert m.doc_id(rows[0])!=m.doc_id(dict(rows[0],offset=1))\nexpected=hashlib.sha256(json.dumps(['a','node1','inode7:gen1',0],ensure_ascii=False,separators=(',',':')).encode()).hexdigest()\nassert ids[0]==expected\none={'tenant':'a:b','source':'c','file_id':'d','offset':0};two={'tenant':'a','source':'b:c','file_id':'d','offset':0}\nassert m.doc_id(one)!=m.doc_id(two)\nassert re.fullmatch('[0-9a-f]{64}',m.doc_id({'tenant':'租户','source':'n\\n1','file_id':'f','offset':0}))\nfor name in ['tenant','source','file_id']:\n bad=dict(rows[0]);bad.pop(name);reject(m.doc_id,bad)\n bad=dict(rows[0]);bad[name]='';reject(m.doc_id,bad)\nfor offset in [-1,True,None,1.2]:reject(m.doc_id,dict(rows[0],offset=offset))\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "id.py": "import hashlib\ndef doc_id(event):return hashlib.sha256(event['message'].encode()).hexdigest()\n"
+    }
+  },
+  {
+    "id": "curated-lab-loki-002",
+    "module": "loki",
+    "category": "Loki",
+    "topic": "标签基数与写入协议",
+    "level": 3,
+    "type": "code",
+    "title": "离线编程实作：将事件转换为 Loki push 的低基数流",
+    "body": "## 操作任务\n实现 build(events)，仅以namespace和app作为流标签；request_id保留在JSON日志中，不能形成标签。ts_ns必须为非负整数并以字符串写入values。每个流按时间排序，相同时间保持输入顺序；完整保留事件正文。\n\n## 产物\n- `push.py`：按任务要求完成，可在网页编辑后下载。\n\n## 验收方法\n1. 样本形成2条流；api values时间顺序为\"10\"、\"20\"，而非字符串字典序。\n2. 所有stream仅含namespace/app；request_id可从日志JSON恢复。\n3. 同时间事件不丢失，空输入streams=[]；负/浮点/布尔时间戳拒绝。\n\n环境：网页编辑器；Python 3.11+；仅离线载荷转换，不调用Loki。本题待主审独立复核。\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅验Loki push JSON载荷分组、时间排序与正文保留，不连接Loki或宣称写入/查询成功。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "events.json": "[{\"namespace\": \"shop\", \"app\": \"api\", \"ts_ns\": 20, \"request_id\": \"r2\", \"msg\": \"b\"}, {\"namespace\": \"shop\", \"app\": \"api\", \"ts_ns\": 10, \"request_id\": \"r1\", \"msg\": \"a\"}, {\"namespace\": \"shop\", \"app\": \"worker\", \"ts_ns\": 30, \"request_id\": \"r3\", \"msg\": \"c\"}]",
+      "push.py": "def build(events):\n    raise NotImplementedError\n"
+    },
+    "answer": "### push.py\n```python\nimport json\n\ndef build(events):\n    groups={}\n    for event in events:\n        for name in ('namespace','app'):\n            if not isinstance(event.get(name),str) or not event[name]: raise ValueError('missing label')\n        ts=event.get('ts_ns')\n        if type(ts) is not int or ts<0: raise ValueError('invalid timestamp')\n        key=(event['namespace'],event['app'])\n        groups.setdefault(key,[]).append((ts,json.dumps(event,ensure_ascii=False,separators=(',',':'),allow_nan=False)))\n    return {'streams':[{'stream':{'namespace':key[0],'app':key[1]},'values':[[str(t),line] for t,line in sorted(groups[key],key=lambda x:x[0])]} for key in sorted(groups)]}\n```\n\n这是push请求组装任务，不证明客户端已实现批次重试和服务器乱序窗口；真实提交需隔离Loki，禁止使用生产租户。",
+    "solution_files": {
+      "push.py": "import json\n\ndef build(events):\n    groups={}\n    for event in events:\n        for name in ('namespace','app'):\n            if not isinstance(event.get(name),str) or not event[name]: raise ValueError('missing label')\n        ts=event.get('ts_ns')\n        if type(ts) is not int or ts<0: raise ValueError('invalid timestamp')\n        key=(event['namespace'],event['app'])\n        groups.setdefault(key,[]).append((ts,json.dumps(event,ensure_ascii=False,separators=(',',':'),allow_nan=False)))\n    return {'streams':[{'stream':{'namespace':key[0],'app':key[1]},'values':[[str(t),line] for t,line in sorted(groups[key],key=lambda x:x[0])]} for key in sorted(groups)]}\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "push.py"
+      ],
+      "verification": [
+        "样本形成2条流；api values时间顺序为\"10\"、\"20\"，而非字符串字典序。",
+        "所有stream仅含namespace/app；request_id可从日志JSON恢复。",
+        "同时间事件不丢失，空输入streams=[]；负/浮点/布尔时间戳拒绝。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅验Loki push JSON载荷分组、时间排序与正文保留，不连接Loki或宣称写入/查询成功"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'push.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nrows=fixture('events.json');original=copy.deepcopy(rows);out=m.build(rows)\nassert len(out['streams'])==2\nassert [s['stream'] for s in out['streams']]==[{'namespace':'shop','app':'api'},{'namespace':'shop','app':'worker'}]\nassert [v[0] for v in out['streams'][0]['values']]==['10','20']\nassert [json.loads(v[1]) for s in out['streams'] for v in s['values']]==[rows[1],rows[0],rows[2]]\nassert rows==original and m.build([])=={'streams':[]}\nextra=[dict(rows[0],ts_ns=2,msg='first'),dict(rows[0],ts_ns=10,msg='later'),dict(rows[0],ts_ns=2,msg='second')]\nvalues=m.build(extra)['streams'][0]['values'];assert [v[0] for v in values]==['2','2','10']\nassert [json.loads(v[1])['msg'] for v in values]==['first','second','later']\nfor ts in [-1,True,1.1,None]:reject(m.build,[dict(rows[0],ts_ns=ts)])\nfor label in ['namespace','app']:reject(m.build,[dict(rows[0],**{label:''})])\nreject(m.build,[dict(rows[0],metric=float('nan'))])\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "push.py": "import json\ndef build(events):\n return {'streams':[{'stream':{'namespace':x['namespace'],'app':x['app'],'request_id':x['request_id']},'values':[[str(x['ts_ns']),json.dumps(x)]]} for x in events]}\n"
+    }
+  },
+  {
+    "id": "curated-lab-loki-003",
+    "module": "loki",
+    "category": "Loki",
+    "topic": "日志行大小与字符编码",
+    "level": 3,
+    "type": "code",
+    "title": "离线编程实作：为日志字节预算实现保留 UTF-8 边界的截断",
+    "body": "## 操作任务\n实现 truncate(text,budget)。输出UTF-8字节不超过budget；超限时追加ASCII标记...[truncated]，且不得截断多字节字符。预算不足以容纳标记时抛ValueError。未超限字符串原样返回，不修改原始日志文件。\n\n## 产物\n- `truncate.py`：按任务要求完成，可在网页编辑后下载。\n\n## 验收方法\n1. 样本输出UTF-8字节<=25、以...[truncated]结尾，不能含替换字符U+FFFD。\n2. 未超限ASCII和中文原样返回；budget正好等于原长度也原样返回。\n3. 含emoji和组合字符时不得产生非法UTF-8；该任务保证码点边界，不承诺保持完整字素簇。\n\n环境：网页编辑器；Python 3.11+；离线日志处理。本题待主审独立复核。\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅验UTF-8码点边界和字节预算，不宣称Loki服务端截断或完整字素簇保留。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "samples.json": "{\"text\": \"错误：订单超时，请重试\", \"budget\": 25}",
+      "truncate.py": "def truncate(text, budget):\n    raise NotImplementedError\n"
+    },
+    "answer": "### truncate.py\n```python\ndef truncate(text, budget):\n    marker='...[truncated]'\n    if not isinstance(text,str) or type(budget) is not int or budget<0:\n        raise ValueError('invalid input')\n    raw=text.encode('utf-8')\n    if len(raw)<=budget: return text\n    suffix=marker.encode('ascii')\n    if budget<len(suffix): raise ValueError('budget smaller than marker')\n    prefix=raw[:budget-len(suffix)].decode('utf-8',errors='ignore')\n    return prefix+marker\n```\n\n截断会丢信息，应在采集策略中明确并另存原始记录；此题只操作返回值。Loki实际行长限制及丢弃策略还需按部署版本验证。",
+    "solution_files": {
+      "truncate.py": "def truncate(text, budget):\n    marker='...[truncated]'\n    if not isinstance(text,str) or type(budget) is not int or budget<0:\n        raise ValueError('invalid input')\n    raw=text.encode('utf-8')\n    if len(raw)<=budget: return text\n    suffix=marker.encode('ascii')\n    if budget<len(suffix): raise ValueError('budget smaller than marker')\n    prefix=raw[:budget-len(suffix)].decode('utf-8',errors='ignore')\n    return prefix+marker\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "truncate.py"
+      ],
+      "verification": [
+        "样本输出UTF-8字节<=25、以...[truncated]结尾，不能含替换字符U+FFFD。",
+        "未超限ASCII和中文原样返回；budget正好等于原长度也原样返回。",
+        "含emoji和组合字符时不得产生非法UTF-8；该任务保证码点边界，不承诺保持完整字素簇。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅验UTF-8码点边界和字节预算，不宣称Loki服务端截断或完整字素簇保留"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'truncate.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nmarker='...[truncated]';sample=fixture('samples.json')\nvalue=m.truncate(sample['text'],sample['budget']);assert value.endswith(marker) and len(value.encode())<=25 and '\\ufffd' not in value\nfor text in ['', 'abc','甲','😀','e\\u0301']:\n size=len(text.encode());assert m.truncate(text,size)==text\n assert m.truncate(text,size+1)==text\nfor text in ['甲'*30,'😀'*30,'abc甲😀'*12]:\n for budget in range(len(marker),len(marker)+15):\n  value=m.truncate(text,budget);assert value.endswith(marker) and len(value.encode())<=budget\n  prefix=value[:-len(marker)];assert text.startswith(prefix) and '\\ufffd' not in value\nreject(m.truncate,'x'*50,len(marker)-1)\nfor budget in [-1,True,None,1.2]:reject(m.truncate,'x',budget)\nreject(m.truncate,None,20)\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "truncate.py": "def truncate(text,budget):\n return text if len(text)<=budget else text[:budget-len('...[truncated]')]+'...[truncated]'\n"
+    }
+  },
+  {
+    "id": "curated-lab-node_exporter-001",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "topic": "容量与 inode 指标",
+    "level": 2,
+    "type": "code",
+    "title": "离线编程实作：逐挂载点区分空间与 inode 耗尽",
+    "body": "## 操作任务\n忽略tmpfs/overlay和只读挂载；容量avail/size<0.1、inode files_free/files<0.05分别告警。0分母视为未知，禁止按主机总量掩盖单挂载点。\n\n## 产物\n- `space.py`：完成并提交此文件。\n\n## 验收方法\n1. 样本/触发capacity、/data触发inode、/tmp忽略。\n2. 恰好10%和5%不触发；0分母不除零。\n3. 负值或free超过总数拒绝，只读卷忽略。\n\n环境：平台Python 3.11+隔离工作区，离线指标样本\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅验node_exporter导出指标的逐挂载点分析，不宣称真实主机容量故障修复。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "mounts.json": "[{\"mount\": \"/\", \"fstype\": \"ext4\", \"readonly\": false, \"size\": 100, \"avail\": 8, \"files\": 1000, \"files_free\": 200}, {\"mount\": \"/data\", \"fstype\": \"xfs\", \"readonly\": false, \"size\": 100, \"avail\": 80, \"files\": 1000, \"files_free\": 10}, {\"mount\": \"/tmp\", \"fstype\": \"tmpfs\", \"readonly\": false, \"size\": 100, \"avail\": 1, \"files\": 0, \"files_free\": 0}]",
+      "space.py": "def alerts(rows):\n    raise NotImplementedError\n"
+    },
+    "answer": "### space.py\n```\ndef alerts(rows):\n    result={}\n    for r in rows:\n        vals=[r[k] for k in ('size','avail','files','files_free')]\n        if any(type(v) is not int or v<0 for v in vals): raise ValueError('invalid metric')\n        if r['avail']>r['size'] or r['files_free']>r['files']: raise ValueError('inconsistent metric')\n        if r['fstype'] in {'tmpfs','overlay'} or r['readonly']: continue\n        reasons=[]\n        if r['size'] and r['avail']*10<r['size']: reasons.append('capacity')\n        if r['files'] and r['files_free']*20<r['files']: reasons.append('inode')\n        if reasons: result[r['mount']]=reasons\n    return result\n```\n\navailable与free含义不同；本题只分析归一化样本，不改变主机挂载。",
+    "solution_files": {
+      "space.py": "def alerts(rows):\n    result={}\n    for r in rows:\n        vals=[r[k] for k in ('size','avail','files','files_free')]\n        if any(type(v) is not int or v<0 for v in vals): raise ValueError('invalid metric')\n        if r['avail']>r['size'] or r['files_free']>r['files']: raise ValueError('inconsistent metric')\n        if r['fstype'] in {'tmpfs','overlay'} or r['readonly']: continue\n        reasons=[]\n        if r['size'] and r['avail']*10<r['size']: reasons.append('capacity')\n        if r['files'] and r['files_free']*20<r['files']: reasons.append('inode')\n        if reasons: result[r['mount']]=reasons\n    return result\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "space.py"
+      ],
+      "verification": [
+        "样本/触发capacity、/data触发inode、/tmp忽略。",
+        "恰好10%和5%不触发；0分母不除零。",
+        "负值或free超过总数拒绝，只读卷忽略。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅验node_exporter导出指标的逐挂载点分析，不宣称真实主机容量故障修复"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'space.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nrows=fixture('mounts.json');assert m.alerts(rows)=={'/':['capacity'],'/data':['inode']}\nbase={'mount':'/x','fstype':'ext4','readonly':False,'size':100,'avail':10,'files':100,'files_free':5}\nassert m.alerts([base])=={}\nassert m.alerts([dict(base,avail=9,files_free=4)])=={'/x':['capacity','inode']}\nassert m.alerts([dict(base,size=0,avail=0,files=0,files_free=0)])=={}\nassert m.alerts([dict(base,avail=0,readonly=True),dict(base,avail=0,fstype='overlay')])=={}\nfor field in ['size','avail','files','files_free']:\n reject(m.alerts,[dict(base,**{field:-1})]);reject(m.alerts,[dict(base,**{field:True})])\nreject(m.alerts,[dict(base,avail=101)]);reject(m.alerts,[dict(base,files_free=101)])\nassert m.alerts([])=={}\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "space.py": "def alerts(rows):\n size=sum(x['size'] for x in rows);avail=sum(x['avail'] for x in rows)\n return {'host':['capacity']} if size and avail/size<0.1 else {}\n"
+    }
+  },
+  {
+    "id": "curated-lab-node_exporter-002",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "topic": "Textfile collector 原子写入",
+    "level": 4,
+    "type": "code",
+    "title": "离线编程实作：原子发布 textfile 指标避免半文件",
+    "body": "## 操作任务\n实现publish(directory,pending)，生成lab_queue_pending gauge；pending非负整数。同目录临时文件写入、flush/fsync后os.replace为queue.prom；失败清理临时文件，不能截断旧文件。\n\n## 产物\n- `publish.py`：完成并提交此文件。\n\n## 验收方法\n1. 临时目录执行publish(...,9)，完整三行指标且无遗留.tmp。\n2. 非法值或模拟replace失败时旧文件保持，临时文件删除。\n3. 本题验收到文件内容、原子替换与失败清理为止；node_exporter实际抓取不在离线合同中。\n\n环境：平台Python 3.11+隔离工作区，仅本题临时目录\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅验临时目录内的指标文件原子替换、fsync顺序和失败清理；真实node_exporter抓取与文件系统断电持久性不在本题验收范围。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "publish.py": "def publish(directory, pending):\n    raise NotImplementedError\n",
+      "queue.prom": "# HELP lab_queue_pending Pending jobs.\n# TYPE lab_queue_pending gauge\nlab_queue_pending 7\n"
+    },
+    "answer": "### publish.py\n```\nimport os\nimport tempfile\nfrom pathlib import Path\n\ndef publish(directory, pending):\n    if type(pending) is not int or pending<0: raise ValueError('invalid pending')\n    target=Path(directory)/'queue.prom'\n    text='# HELP lab_queue_pending Pending jobs.\\n# TYPE lab_queue_pending gauge\\nlab_queue_pending '+str(pending)+'\\n'\n    name=None\n    try:\n        with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',newline='\\n',dir=directory,prefix='.queue-',suffix='.tmp',delete=False) as stream:\n            name=stream.name\n            stream.write(text); stream.flush(); os.fsync(stream.fileno())\n        os.replace(name,target); name=None\n    finally:\n        if name is not None:\n            try: os.unlink(name)\n            except FileNotFoundError: pass\n```\n\n同目录原子替换。未fsync父目录，不承诺断电后目录项持久性。",
+    "solution_files": {
+      "publish.py": "import os\nimport tempfile\nfrom pathlib import Path\n\ndef publish(directory, pending):\n    if type(pending) is not int or pending<0: raise ValueError('invalid pending')\n    target=Path(directory)/'queue.prom'\n    text='# HELP lab_queue_pending Pending jobs.\\n# TYPE lab_queue_pending gauge\\nlab_queue_pending '+str(pending)+'\\n'\n    name=None\n    try:\n        with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',newline='\\n',dir=directory,prefix='.queue-',suffix='.tmp',delete=False) as stream:\n            name=stream.name\n            stream.write(text); stream.flush(); os.fsync(stream.fileno())\n        os.replace(name,target); name=None\n    finally:\n        if name is not None:\n            try: os.unlink(name)\n            except FileNotFoundError: pass\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "publish.py"
+      ],
+      "verification": [
+        "临时目录执行publish(...,9)，完整三行指标且无遗留.tmp。",
+        "非法值或模拟replace失败时旧文件保持，临时文件删除。",
+        "本题验收到文件内容、原子替换与失败清理为止；node_exporter实际抓取不在离线合同中。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅验临时目录内的指标文件原子替换、fsync顺序和失败清理；真实node_exporter抓取与文件系统断电持久性不在本题验收范围"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'publish.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nwith tempfile.TemporaryDirectory(prefix='publish-check-') as directory:\n target=pathlib.Path(directory)/'queue.prom';target.write_text('old\\n',encoding='utf-8')\n real_replace=m.os.replace;calls=[]\n def checked_replace(source,destination):\n  source=pathlib.Path(source);destination=pathlib.Path(destination)\n  assert source.parent==target.parent and source.suffix=='.tmp'\n  assert destination==target and target.read_text(encoding='utf-8')=='old\\n'\n  assert source.read_text(encoding='utf-8')=='# HELP lab_queue_pending Pending jobs.\\n# TYPE lab_queue_pending gauge\\nlab_queue_pending 9\\n'\n  calls.append('replace');return real_replace(source,destination)\n real_fsync=m.os.fsync\n def checked_fsync(fd):calls.append('fsync');return real_fsync(fd)\n with mock.patch.object(m.os,'replace',side_effect=checked_replace),mock.patch.object(m.os,'fsync',side_effect=checked_fsync):\n  m.publish(directory,9)\n assert calls==['fsync','replace']\n assert list(pathlib.Path(directory).iterdir())==[target]\n old=target.read_bytes()\n with mock.patch.object(m.os,'replace',side_effect=OSError('injected failure')):\n  try:m.publish(directory,10)\n  except OSError:pass\n  else:raise AssertionError('replace failure swallowed')\n assert target.read_bytes()==old and list(pathlib.Path(directory).iterdir())==[target]\n for bad in [-1,True,None,1.2]:reject(m.publish,directory,bad)\n assert target.read_bytes()==old\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "publish.py": "from pathlib import Path\ndef publish(directory,pending):\n Path(directory,'queue.prom').write_text(str(pending),encoding='utf-8')\n"
+    }
+  },
+  {
+    "id": "curated-lab-alertmanager-003",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "topic": "静默范围与时间",
+    "level": 3,
+    "type": "code",
+    "title": "离线编程实作：生成仅匹配维护主机的限时静默请求",
+    "body": "## 操作任务\n实现silence(hosts,start,end)。instance正则锚定且转义每个主机，去重排序；时间必须带时区且end>start。createdBy=opsforge-lab、comment=training maintenance，拒绝空主机列表。\n\n## 产物\n- `silence.py`：完成并提交此文件。\n\n## 验收方法\n1. 正则匹配a.b:9100与worker+1:9100，不匹配axb:9100、额外前后缀。\n2. 空列表、空名称、无时区或倒置时间拒绝；输出时间范围正确。\n3. 仅验证请求JSON及题目限定的转义匹配样例；不调用Alertmanager API，也不把Python正则结果当作RE2原生验收。\n\n环境：平台Python 3.11+隔离工作区；只生成JSON，不调用真实API\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅生成并检查Alertmanager静默请求JSON；不调用静默API，不宣称RE2原生执行或告警抑制已验证。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "input.json": "{\"hosts\": [\"a.b:9100\", \"worker+1:9100\"], \"start\": \"2026-01-01T00:00:00+00:00\", \"end\": \"2026-01-01T00:30:00+00:00\"}",
+      "silence.py": "def silence(hosts, start, end):\n    raise NotImplementedError\n"
+    },
+    "answer": "### silence.py\n```\nimport re\nfrom datetime import datetime\n\ndef silence(hosts, start, end):\n    if not isinstance(hosts,list) or not hosts or any(not isinstance(h,str) or not h for h in hosts):\n        raise ValueError('hosts required')\n    a,b=datetime.fromisoformat(start),datetime.fromisoformat(end)\n    if a.tzinfo is None or b.tzinfo is None or b<=a: raise ValueError('invalid time range')\n    pattern='^('+'|'.join(re.escape(h) for h in sorted(set(hosts)))+')$'\n    return {'matchers':[{'name':'instance','value':pattern,'isRegex':True,'isEqual':True}],\n            'startsAt':a.isoformat(),'endsAt':b.isoformat(),'createdBy':'opsforge-lab','comment':'training maintenance'}\n```\n\n参考只使用ASCII主机样本中Python/RE2共有的基本表达式结构。该代码只生成产物，没有网络副作用。",
+    "solution_files": {
+      "silence.py": "import re\nfrom datetime import datetime\n\ndef silence(hosts, start, end):\n    if not isinstance(hosts,list) or not hosts or any(not isinstance(h,str) or not h for h in hosts):\n        raise ValueError('hosts required')\n    a,b=datetime.fromisoformat(start),datetime.fromisoformat(end)\n    if a.tzinfo is None or b.tzinfo is None or b<=a: raise ValueError('invalid time range')\n    pattern='^('+'|'.join(re.escape(h) for h in sorted(set(hosts)))+')$'\n    return {'matchers':[{'name':'instance','value':pattern,'isRegex':True,'isEqual':True}],\n            'startsAt':a.isoformat(),'endsAt':b.isoformat(),'createdBy':'opsforge-lab','comment':'training maintenance'}\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "silence.py"
+      ],
+      "verification": [
+        "正则匹配a.b:9100与worker+1:9100，不匹配axb:9100、额外前后缀。",
+        "空列表、空名称、无时区或倒置时间拒绝；输出时间范围正确。",
+        "仅验证请求JSON及题目限定的转义匹配样例；不调用Alertmanager API，也不把Python正则结果当作RE2原生验收。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅生成并检查Alertmanager静默请求JSON；不调用静默API，不宣称RE2原生执行或告警抑制已验证"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'silence.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\ndata=fixture('input.json');out=m.silence(data['hosts'],data['start'],data['end'])\nassert out['createdBy']=='opsforge-lab' and out['comment']=='training maintenance'\nassert len(out['matchers'])==1 and out['matchers'][0]['name']=='instance' and out['matchers'][0]['isRegex'] is True and out['matchers'][0]['isEqual'] is True\npattern=out['matchers'][0]['value'];assert pattern.startswith('^(') and pattern.endswith(')$')\nfor name in data['hosts']:assert re.fullmatch(pattern,name)\nfor name in ['axb:9100','worker11:9100','xa.b:9100','a.b:9100x']:assert not re.fullmatch(pattern,name)\nassert m.silence(list(reversed(data['hosts']))+data['hosts'],data['start'],data['end'])==out\nfor hosts in [[],[''],['a',None],None]:reject(m.silence,hosts,data['start'],data['end'])\nreject(m.silence,['a'],'2026-01-01T00:00:00',data['end'])\nreject(m.silence,['a'],data['end'],data['start']);reject(m.silence,['a'],data['start'],data['start'])\nfrom datetime import datetime\nassert datetime.fromisoformat(out['endsAt'])>datetime.fromisoformat(out['startsAt'])\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "silence.py": "def silence(hosts,start,end):\n return {'matchers':[{'name':'instance','value':'|'.join(hosts),'isRegex':True,'isEqual':True}],'startsAt':start,'endsAt':end,'createdBy':'opsforge-lab','comment':'training maintenance'}\n"
+    }
+  },
+  {
+    "id": "curated-lab-grafana-003",
+    "module": "grafana",
+    "category": "Grafana",
+    "topic": "仪表盘引用审计",
+    "level": 3,
+    "type": "code",
+    "title": "离线编程实作：定位嵌套面板中悬空的数据源引用",
+    "body": "## 操作任务\n实现audit(dashboard,known_uids)，递归查datasource.uid，覆盖target与嵌套row。未知uid列missing，$开头变量列dynamic；忽略内置-- Mixed --、grafana、__expr__。只报告JSON路径，不修改文件。\n\n## 产物\n- `audit.py`：完成并提交此文件。\n\n## 验收方法\n1. missing仅old-loki，路径$.panels[0].targets[0].datasource.uid；dynamic仅${ds}。\n2. 嵌套row必须检查；lab-prom及内置源不报错。\n3. 变量不自动当作有效，也不替换；真实查询还需平台Grafana验证。\n\n环境：平台Python 3.11+隔离工作区；离线仪表盘导出文件\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅递归审计Grafana导出JSON的数据源引用，不连接Grafana、不冒充面板真实查询验收。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "dashboard.json": "{\"panels\": [{\"datasource\": {\"uid\": \"lab-prom\"}, \"targets\": [{\"datasource\": {\"uid\": \"old-loki\"}}]}, {\"panels\": [{\"datasource\": {\"uid\": \"${ds}\"}}]}]}",
+      "uids.json": "[\"lab-prom\", \"lab-loki\"]",
+      "audit.py": "def audit(dashboard, known_uids):\n    raise NotImplementedError\n"
+    },
+    "answer": "### audit.py\n```\ndef audit(dashboard, known_uids):\n    known=set(known_uids); out={'missing':[],'dynamic':[]}\n    def walk(value,path):\n        if isinstance(value,dict):\n            ds=value.get('datasource')\n            if isinstance(ds,dict) and isinstance(ds.get('uid'),str):\n                uid=ds['uid']; item={'path':path+'.datasource.uid','uid':uid}\n                if uid.startswith('$'): out['dynamic'].append(item)\n                elif uid not in known and uid not in {'-- Mixed --','grafana','__expr__'}: out['missing'].append(item)\n            for k,v in value.items(): walk(v,path+'.'+k)\n        elif isinstance(value,list):\n            for i,v in enumerate(value): walk(v,path+'['+str(i)+']')\n    walk(dashboard,'$')\n    return out\n```\n\n旧式字符串数据源引用不在本题合同中。路径用作人工定位，不作为可执行表达式。",
+    "solution_files": {
+      "audit.py": "def audit(dashboard, known_uids):\n    known=set(known_uids); out={'missing':[],'dynamic':[]}\n    def walk(value,path):\n        if isinstance(value,dict):\n            ds=value.get('datasource')\n            if isinstance(ds,dict) and isinstance(ds.get('uid'),str):\n                uid=ds['uid']; item={'path':path+'.datasource.uid','uid':uid}\n                if uid.startswith('$'): out['dynamic'].append(item)\n                elif uid not in known and uid not in {'-- Mixed --','grafana','__expr__'}: out['missing'].append(item)\n            for k,v in value.items(): walk(v,path+'.'+k)\n        elif isinstance(value,list):\n            for i,v in enumerate(value): walk(v,path+'['+str(i)+']')\n    walk(dashboard,'$')\n    return out\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "audit.py"
+      ],
+      "verification": [
+        "missing仅old-loki，路径$.panels[0].targets[0].datasource.uid；dynamic仅${ds}。",
+        "嵌套row必须检查；lab-prom及内置源不报错。",
+        "变量不自动当作有效，也不替换；真实查询还需平台Grafana验证。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅递归审计Grafana导出JSON的数据源引用，不连接Grafana、不冒充面板真实查询验收"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'audit.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\ndashboard=fixture('dashboard.json');original=copy.deepcopy(dashboard)\nassert m.audit(dashboard,fixture('uids.json'))=={'missing':[{'path':'$.panels[0].targets[0].datasource.uid','uid':'old-loki'}],'dynamic':[{'path':'$.panels[1].panels[0].datasource.uid','uid':'${ds}'}]}\nassert dashboard==original\ninternal={'panels':[{'datasource':{'uid':x}} for x in ['grafana','-- Mixed --','__expr__','known']]}\nassert m.audit(internal,['known'])=={'missing':[],'dynamic':[]}\nnested={'a':{'b':[{'targets':[{'datasource':{'uid':'missing'}}]}]}}\nassert m.audit(nested,[])['missing']==[{'path':'$.a.b[0].targets[0].datasource.uid','uid':'missing'}]\nassert m.audit({'datasource':{'uid':'$dynamic'}},[])['dynamic']==[{'path':'$.datasource.uid','uid':'$dynamic'}]\nassert m.audit({},[])=={'missing':[],'dynamic':[]}\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "audit.py": "def audit(dashboard,known_uids):\n out={'missing':[],'dynamic':[]}\n for i,panel in enumerate(dashboard.get('panels',[])):\n  uid=panel.get('datasource',{}).get('uid')\n  if uid and uid not in known_uids:out['missing'].append({'path':'$.panels['+str(i)+'].datasource.uid','uid':uid})\n return out\n"
+    }
+  },
+  {
+    "id": "curated-lab-zabbix-002",
+    "module": "zabbix",
+    "category": "Zabbix",
+    "topic": "低级发现与宏",
+    "level": 3,
+    "type": "code",
+    "title": "离线编程实作：为物理接口生成确定性的 LLD 宏数组",
+    "body": "## 操作任务\n实现discover(rows)，仅保留enabled=true且kind=physical；按name排序输出{#IFNAME}/{#IFINDEX}。重复name/index拒绝，过滤lo和veth以及禁用接口。\n\n## 产物\n- `discover.py`：完成并提交此文件。\n\n## 验收方法\n1. 样本仅eth0/index2、eth1/index3，顺序固定。\n2. 重复名称/索引、布尔index拒绝；空输入输出[]。\n3. 本题只验证生成的LLD宏数组；Zabbix服务端识别与prototype挂接属于未执行的独立集成验证。\n\n环境：平台Python 3.11+工作区；离线接口快照\n\n\n## 自动验收\n提交后由平台固定注入 checks/check.py；必须完整执行全部行为断言。参考答案、初始骨架与典型错误实现分别独立验证。\n\n## 能力边界\n仅验Zabbix LLD JSON宏数组生成，不宣称Zabbix原型挂接或监控项已创建。工作区由平台提供，学员无需另开Kubernetes。本题不访问业务服务，也不把离线程序测试描述为真实服务故障恢复。\n",
+    "files": {
+      "interfaces.json": "[{\"name\": \"eth1\", \"index\": 3, \"kind\": \"physical\", \"enabled\": true}, {\"name\": \"lo\", \"index\": 1, \"kind\": \"loopback\", \"enabled\": true}, {\"name\": \"veth0\", \"index\": 5, \"kind\": \"virtual\", \"enabled\": true}, {\"name\": \"eth0\", \"index\": 2, \"kind\": \"physical\", \"enabled\": true}, {\"name\": \"eth2\", \"index\": 4, \"kind\": \"physical\", \"enabled\": false}]",
+      "discover.py": "def discover(rows):\n    raise NotImplementedError\n"
+    },
+    "answer": "### discover.py\n```\ndef discover(rows):\n    names=set(); indexes=set(); out=[]\n    for r in rows:\n        name,index=r['name'],r['index']\n        if not isinstance(name,str) or not name or type(index) is not int or index<1 or type(r['enabled']) is not bool:\n            raise ValueError('invalid interface')\n        if name in names or index in indexes: raise ValueError('duplicate interface')\n        names.add(name); indexes.add(index)\n        if r['enabled'] and r['kind']=='physical':\n            out.append({'{#IFNAME}':name,'{#IFINDEX}':str(index)})\n    return sorted(out,key=lambda x:x['{#IFNAME}'])\n```\n\n输入physical是已标注字段，真实采集需另外定义判断标准。接口index可能重用，不能视为永久身份。",
+    "solution_files": {
+      "discover.py": "def discover(rows):\n    names=set(); indexes=set(); out=[]\n    for r in rows:\n        name,index=r['name'],r['index']\n        if not isinstance(name,str) or not name or type(index) is not int or index<1 or type(r['enabled']) is not bool:\n            raise ValueError('invalid interface')\n        if name in names or index in indexes: raise ValueError('duplicate interface')\n        names.add(name); indexes.add(index)\n        if r['enabled'] and r['kind']=='physical':\n            out.append({'{#IFNAME}':name,'{#IFINDEX}':str(index)})\n    return sorted(out,key=lambda x:x['{#IFNAME}'])\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台管理的Python 3.11+隔离工作区；标准库；仅本题样本和临时文件",
+      "deliverables": [
+        "discover.py"
+      ],
+      "verification": [
+        "样本仅eth0/index2、eth1/index3，顺序固定。",
+        "重复名称/索引、布尔index拒绝；空输入输出[]。",
+        "本题只验证生成的LLD宏数组；Zabbix服务端识别与prototype挂接属于未执行的独立集成验证。",
+        "运行平台注入的 checks/check.py，正常、边界、错误输入断言全部执行完成；只检查文件存在或语法不算通过。"
+      ],
+      "availability": "pending-independent-review",
+      "scope": "仅验Zabbix LLD JSON宏数组生成，不宣称Zabbix原型挂接或监控项已创建"
+    },
+    "review_status": "reviewed",
+    "review_note": "使用平台完成检测验收器独立执行参考、初始错误和反例，验证离线产物计算/配置语义；未连接原生中间件、云服务或集群，不代表线上故障恢复。",
+    "version": 1,
+    "has_answer": true,
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,re,tempfile,os,importlib.util\nfrom unittest import mock\nroot=pathlib.Path(__file__).resolve().parents[1]\nsys.path.insert(0,str(root))\nspec=importlib.util.spec_from_file_location('candidate',root/'discover.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\nrows=fixture('interfaces.json');original=copy.deepcopy(rows)\nassert m.discover(rows)==[{'{#IFNAME}':'eth0','{#IFINDEX}':'2'},{'{#IFNAME}':'eth1','{#IFINDEX}':'3'}]\nassert rows==original and m.discover([])==[]\nassert m.discover(list(reversed(rows)))==m.discover(rows)\nreject(m.discover,[rows[0],rows[0]]);reject(m.discover,[rows[0],dict(rows[0],name='other')])\nfor bad in [True,0,-1,None,1.1]:reject(m.discover,[dict(rows[0],index=bad)])\nfor bad in [1,'true',None]:reject(m.discover,[dict(rows[0],enabled=bad)])\nreject(m.discover,[dict(rows[0],name='')])\n\nprint('ALL_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "negative_files": {
+      "discover.py": "def discover(rows):\n return [{'{#IFNAME}':r['name'],'{#IFINDEX}':str(r['index'])} for r in rows if r['enabled']]\n"
+    }
+  }
+]

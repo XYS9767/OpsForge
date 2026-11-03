@@ -1,0 +1,82 @@
+[
+  {
+    "id": "curated-parallel-prometheus-055",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "TSDB存储与远端传输",
+    "title": "限制真实联邦导出范围并验证match参数的并集语义",
+    "answer": "```json\n{\n  \"match[]\": [\n    \"{__name__=~\\\"service:requests:rate5m|service:errors:rate5m\\\",env=\\\"prod\\\"}\",\n    \"{__name__=\\\"service:health\\\",env=\\\"stage\\\"}\"\n  ]\n}\n```\n将指标名和环境限制放在同一选择器内，再用第二个选择器显式添加stage健康集合。多个match[]不是连续过滤步骤而是结果并集。源端已有cluster标签保持原值；external_labels只补缺失标签。联邦从源端拉取被选中的当前序列，和remote_write的推送链路不同；目的端采集和honor_labels仍需另行验收。\n\n原题原理：federation由上层Prometheus抓取下层选定即时序列，常用于分层聚合；remote write从发送端推送样本到远端。两者的数据选择、延迟和历史覆盖不同，不能当作完全等价的复制协议。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "federation由上层Prometheus抓取下层选定即时序列，常用于分层聚合；remote write从发送端推送样本到远端。",
+      "两者的数据选择、延迟和历史覆盖不同，不能当作完全等价的复制协议。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/federation/",
+      "https://github.com/prometheus/prometheus/blob/v3.5.0/web/federate.go"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "json",
+    "files": {
+      "selectors.json": "{\n  \"match[]\": [\n    \"{env=\\\"prod\\\"}\"\n  ]\n}\n",
+      "source-rules.yaml": "groups:\n- name: fixed-federation-source\n  interval: 1s\n  rules:\n  - record: service:requests:rate5m\n    expr: vector(10)\n    labels:\n      env: prod\n      service: checkout\n      cluster: workload\n  - record: service:errors:rate5m\n    expr: vector(2)\n    labels:\n      env: prod\n      service: checkout\n  - record: service:requests:rate5m\n    expr: vector(999)\n    labels:\n      env: stage\n      service: checkout\n  - record: service:health\n    expr: vector(1)\n    labels:\n      env: stage\n      service: checkout\n  - record: service:health\n    expr: vector(999)\n    labels:\n      env: prod\n      service: checkout\n  - record: internal_secret_count\n    expr: vector(77)\n    labels:\n      env: prod\n      service: checkout\n"
+    },
+    "solution_files": {
+      "selectors.json": "{\n  \"match[]\": [\n    \"{__name__=~\\\"service:requests:rate5m|service:errors:rate5m\\\",env=\\\"prod\\\"}\",\n    \"{__name__=\\\"service:health\\\",env=\\\"stage\\\"}\"\n  ]\n}\n"
+    },
+    "negative_files": {
+      "selectors.json": "{\n  \"match[]\": [\n    \"{__name__=~\\\"service:requests:rate5m|service:errors:rate5m\\\"}\",\n    \"{env=\\\"prod\\\"}\",\n    \"{__name__=\\\"service:health\\\",env=\\\"stage\\\"}\"\n  ]\n}\n"
+    },
+    "body": "## 环境与初始材料\n平台在隔离工作区启动仅回环的Prometheus 3.5；source-rules.yaml持续产生六条固定测试序列，global.external_labels中cluster=source。HTTP /federate是实际原生端点，不是伪造响应。无需学员另开服务或Kubernetes。\n\n## 操作任务\n修复selectors.json的match[]列表。仅导出prod环境的service:requests:rate5m和service:errors:rate5m，以及stage环境的service:health。每个match[]内部条件为交集，多个match[]为并集，因此不能把“指标名”与“环境”拆成两个独立选择器。保留业务标签和值，不允许导出internal_secret_count、stage请求或prod健康序列。选择器必须是瞬时向量选择器，不能用rate/sum表达式冒充参数。\n\n## 产物\n提交selectors.json，唯一键match[]为1至4个选择器字符串。目标URL由平台固定为本机临时服务，不允许自定义外部地址。source-rules.yaml是可读的测试材料，不是学员提交的采集端修改。\n\n## 验收方法\n执行python3 checks/check.py，真实Prometheus生成六条序列后实际请求/federate。验收输出恰有3条：prod请求10（原始cluster=workload保留），prod错误2和stage健康1（缺失cluster由external_labels补source）；同时验证标签、值和新鲜时间戳；这些聚合记录原本无instance，Prometheus 3.5联邦导出会补instance空字符串，验收按真实协议保留它。典型拆分选择器错误会泄漏stage请求和内部指标，必须失败。此次仅验证源端导出选择，没有运行目的Prometheus、跨网传输或remote_write，不把源端成功当完整双端联邦上线。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-federate",
+      "deliverables": [
+        "selectors.json"
+      ],
+      "operation": "修复原生联邦导出的选择器集合",
+      "verification": "原生/federate端点真实标签/值/时间戳与精确范围验证",
+      "capability_gap": [
+        "不运行目的端，不验证跨网传输或remote_write。"
+      ],
+      "failure_examples": [
+        "拆分指标选择和环境选择会按并集泄漏数据"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "prometheus"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1m','external_labels':{'cluster':'source'}},'scrape_configs':[]}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: fixed-federation-source\\n  interval: 1s\\n  rules:\\n  - record: service:requests:rate5m\\n    expr: vector(10)\\n    labels:\\n      env: prod\\n      service: checkout\\n      cluster: workload\\n  - record: service:errors:rate5m\\n    expr: vector(2)\\n    labels:\\n      env: prod\\n      service: checkout\\n  - record: service:requests:rate5m\\n    expr: vector(999)\\n    labels:\\n      env: stage\\n      service: checkout\\n  - record: service:health\\n    expr: vector(1)\\n    labels:\\n      env: stage\\n      service: checkout\\n  - record: service:health\\n    expr: vector(999)\\n    labels:\\n      env: prod\\n      service: checkout\\n  - record: internal_secret_count\\n    expr: vector(77)\\n    labels:\\n      env: prod\\n      service: checkout\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\nimport re\ncandidate=yaml.load(pathlib.Path('selectors.json').read_text(encoding='utf-8'),Loader=Strict)\nassert set(candidate)=={'match[]'} and isinstance(candidate['match[]'],list) and 1<=len(candidate['match[]'])<=4\nassert all(isinstance(s,str) and 0<len(s)<=500 for s in candidate['match[]'])\nassert shutil.which('prometheus')\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-federation-') as d:\n root=pathlib.Path(d)\n try:\n  with server(root,'data',live=True) as (url,api):\n   end=time.monotonic()+5\n   while len(vector(api,'{__name__=~\"service:.*|internal_secret_count\"}'))<6:\n    assert time.monotonic()<end;time.sleep(.1)\n   query=urllib.parse.urlencode([('match[]',s) for s in candidate['match[]']])\n   req=urllib.request.Request(url+'/federate?'+query,headers={'Accept':'text/plain; version=0.0.4'})\n   with urllib.request.urlopen(req,timeout=2) as response:\n    assert response.status==200\n    text=response.read().decode('utf-8')\n   print('native federation response:',text)\n   actual=[]\n   for line in text.splitlines():\n    if not line or line.startswith('#'):continue\n    match=re.fullmatch(r'([A-Za-z_:][A-Za-z0-9_:]*)\\{([^}]*)\\}\\s+([^\\s]+)(?:\\s+([^\\s]+))?',line)\n    assert match,'unexpected fixture exposition syntax'\n    name,raw,value,timestamp=match.groups()\n    pairs=re.findall(r'([A-Za-z_][A-Za-z0-9_]*)=\"([^\"\\\\]*)\"',raw)\n    assert raw==','.join(k+'=\"'+v+'\"' for k,v in pairs) and len(dict(pairs))==len(pairs)\n    assert timestamp is not None and abs(float(timestamp)/1000-time.time())<10\n    actual.append((name,dict(pairs),float(value)))\n   expected=[('service:requests:rate5m',{'env':'prod','service':'checkout','cluster':'workload'},10.0),('service:errors:rate5m',{'env':'prod','service':'checkout','cluster':'source'},2.0),('service:health',{'env':'stage','service':'checkout','cluster':'source'},1.0)]\n   expected=[(n,{**ls,'instance':''},v) for n,ls,v in expected]\n   sort=lambda rows:sorted((n,tuple(sorted(ls.items())),v) for n,ls,v in rows)\n   assert sort(actual)==sort(expected),'union selectors leaked or omitted source series'\n finally:print('native lifecycle:',json.dumps(STATS))\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "federation_match_parameter_union_and_source_external_label_preservation",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-055",
+      "original_type": "interview",
+      "original_title": "federation与remote write在拉推模式和用途上如何区分？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

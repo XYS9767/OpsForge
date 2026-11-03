@@ -1,0 +1,71 @@
+[
+  {
+    "id": "curated-python-completion-051",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 4,
+    "topic": "并发与异步控制",
+    "title": "避免线程池工作线程递归等待池内子任务",
+    "answer": "```python\nfrom concurrent.futures import ThreadPoolExecutor\n\ndef execute_dag(nodes,max_workers,compute):\n    if not isinstance(nodes,dict) or any(not isinstance(name,str) or not name or not isinstance(deps,list) or len(set(deps))!=len(deps) for name,deps in nodes.items()):raise ValueError('invalid dependency graph')\n    if any(dep not in nodes for deps in nodes.values() for dep in deps):raise ValueError('unknown dependency')\n    if isinstance(max_workers,bool) or not isinstance(max_workers,int) or not 1<=max_workers<=64:raise ValueError('invalid worker count')\n    if not callable(compute):raise ValueError('compute callback required')\n    results={};pending=set(nodes)\n    with ThreadPoolExecutor(max_workers=max_workers) as pool:\n        while pending:\n            ready=sorted(name for name in pending if set(nodes[name])<=results.keys())\n            if not ready:raise ValueError('dependency cycle')\n            futures={name:pool.submit(compute,name,[results[dep] for dep in nodes[name]]) for name in ready}\n            for name in ready:results[name]=futures[name].result();pending.remove(name)\n    return results\n```\n\n原题知识说明：\n识别嵌套提交并同步等待形成的线程池饥饿死锁。取消或受控重启受影响批次后重构任务依赖，让协调层等待或使用独立受限执行资源；扩大线程数不能证明根因解决，验收在最小worker数下仍能完成。",
+    "type": "code",
+    "source": "OpsForge Python运维开发补充题",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "python-completion-20261021",
+    "body": "## 故障初始材料与公开复现\n现有 execute_dag 让池内 worker 再向同一池提交依赖并等待，单 worker 时真实饥饿死锁。\n在题目工作目录运行 `python3 reproduce.py`：故障初态退出 1；修复后退出 0。复现输出真实观察结果，未调用私有判分器。051 的死锁只发生在该脚本创建的独立子进程；超时后回收该直接子进程。\n\n## 操作任务\n实现execute_dag(nodes,max_workers,compute)，在协调线程按依赖拓扑提交ready节点，不让池内worker提交同一池的新任务后同步等待。必须在max_workers=1时也完成依赖图；严格遵守工作线程上限，拒绝未知依赖和循环，并传播任务异常。\n\n## 提交产物\ntask.py\n\n## 验收方法\n隔离Linux真实ThreadPoolExecutor在单/双worker下调度依赖DAG，测得并发峰值、循环拒绝；死锁反例由外层独立子进程限时回收。\n\n## 能力边界\n协调器仅为本地依赖图调度线程池工作；不支持任务内部再同步等待同一个池中的依赖任务，也不保证compute副作用回滚。测试把潜在死锁隔离到可杀的子进程。",
+    "rubric": [
+      "Python语义准确",
+      "资源与错误处理明确",
+      "验证覆盖边界"
+    ],
+    "hints": [],
+    "references": [],
+    "incident_signature": "python:executor-self-wait",
+    "related_modules": [
+      "python"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-python-completion-051",
+      "original_title": "线程池所有worker都在等待同一个池内新提交子任务的结果，队列有任务却没有空闲worker。如何恢复？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "\"\"\"Existing DAG scheduler: workers submit dependencies and wait in their own pool.\"\"\"\nfrom concurrent.futures import ThreadPoolExecutor\n\ndef execute_dag(nodes, max_workers, compute):\n    if not isinstance(nodes, dict) or any(dep not in nodes for deps in nodes.values() for dep in deps):\n        raise ValueError('invalid dependency graph')\n    if isinstance(max_workers, bool) or not isinstance(max_workers, int) or not 1 <= max_workers <= 64:\n        raise ValueError('invalid worker count')\n    if not callable(compute):\n        raise ValueError('compute callback required')\n    with ThreadPoolExecutor(max_workers=max_workers) as pool:\n        def resolve(name):\n            dependencies = [pool.submit(resolve, dep) for dep in nodes[name]]\n            return compute(name, [future.result() for future in dependencies])\n        futures = {name: pool.submit(resolve, name) for name in nodes}\n        return {name: future.result() for name, future in futures.items()}\n",
+      "reproduce.py": "\"\"\"Run: python3 reproduce.py. The owned child bounds the real thread deadlock.\"\"\"\nimport json\nimport subprocess\nimport sys\ncode = \"\"\"import json, task\nnodes = {'total': ['base'], 'base': []}\nresult = task.execute_dag(nodes, 1, lambda name, dependencies: 1+sum(dependencies))\nassert result == {'base': 1, 'total': 2}, result\nprint(json.dumps(result, sort_keys=True), flush=True)\n\"\"\"\ntry:\n    child = subprocess.run([sys.executable, '-B', '-c', code],\n                           capture_output=True, text=True, timeout=2)\nexcept subprocess.TimeoutExpired:\n    # subprocess.run kills and waits this direct child on timeout. The child\n    # creates only threads; it does not launch descendants or use other PIDs.\n    print(json.dumps({'completed': False, 'fault': 'worker waits for queued dependency',\n                      'owned_child_killed_and_waited': True}), flush=True)\n    raise SystemExit(1)\nprint(json.dumps({'completed': child.returncode == 0,\n                  'child_returncode': child.returncode, 'child_stdout': child.stdout,\n                  'child_stderr': child.stderr}), flush=True)\nraise SystemExit(0 if child.returncode == 0 else 1)\n"
+    },
+    "solution_files": {
+      "task.py": "from concurrent.futures import ThreadPoolExecutor\n\ndef execute_dag(nodes,max_workers,compute):\n    if not isinstance(nodes,dict) or any(not isinstance(name,str) or not name or not isinstance(deps,list) or len(set(deps))!=len(deps) for name,deps in nodes.items()):raise ValueError('invalid dependency graph')\n    if any(dep not in nodes for deps in nodes.values() for dep in deps):raise ValueError('unknown dependency')\n    if isinstance(max_workers,bool) or not isinstance(max_workers,int) or not 1<=max_workers<=64:raise ValueError('invalid worker count')\n    if not callable(compute):raise ValueError('compute callback required')\n    results={};pending=set(nodes)\n    with ThreadPoolExecutor(max_workers=max_workers) as pool:\n        while pending:\n            ready=sorted(name for name in pending if set(nodes[name])<=results.keys())\n            if not ready:raise ValueError('dependency cycle')\n            futures={name:pool.submit(compute,name,[results[dep] for dep in nodes[name]]) for name in ready}\n            for name in ready:results[name]=futures[name].result();pending.remove(name)\n    return results\n"
+    },
+    "negative_files": {
+      "task.py": "from concurrent.futures import ThreadPoolExecutor\ndef execute_dag(nodes,max_workers,compute):\n    with ThreadPoolExecutor(max_workers=max_workers) as pool:\n        def run(name):\n            children=[pool.submit(run,dep) for dep in nodes[name]]\n            return compute(name,[future.result() for future in children])\n        roots=[name for name in nodes if not any(name in deps for deps in nodes.values())]\n        return {name:pool.submit(run,name).result() for name in roots}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "现有 execute_dag 让池内 worker 再向同一池提交依赖并等待，单 worker 时真实饥饿死锁。先运行公开复现观察故障，再修复原有接口。实现execute_dag(nodes,max_workers,compute)，在协调线程按依赖拓扑提交ready节点，不让池内worker提交同一池的新任务后同步等待。必须在max_workers=1时也完成依赖图；严格遵守工作线程上限，拒绝未知依赖和循环，并传播任务异常。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "协调器仅为本地依赖图调度线程池工作；不支持任务内部再同步等待同一个池中的依赖任务，也不保证compute副作用回滚。测试把潜在死锁隔离到可杀的子进程。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,subprocess\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: bounded thread-pool DAG scheduler',flush=True)\ncode=r'''import sys,threading,time\nimport task\nlock=threading.Lock();active=peak=0\ndef compute(name,deps):\n global active,peak\n with lock:active+=1;peak=max(peak,active)\n time.sleep(.05)\n with lock:active-=1\n return len(name)+sum(deps)\nnodes={'a':[],'b':['a'],'c':['a'],'d':['b','c'],'e':[],'f':[],'g':[]}\nresult=task.execute_dag(nodes,2,compute)\nassert result=={'a':1,'b':2,'c':2,'d':5,'e':1,'f':1,'g':1},result\nassert 1<=peak<=2,peak\ntry:task.execute_dag({'x':['y'],'y':['x']},1,compute)\nexcept ValueError:pass\nelse:raise AssertionError('dependency cycle accepted')\nprint('CHILD_SEMANTIC_PASS',flush=True)\n'''\ntry:child=subprocess.run([sys.executable,'-c',code],capture_output=True,text=True,timeout=2)\nexcept subprocess.TimeoutExpired as exc:raise AssertionError('nested pool wait starved all workers') from exc\nassert child.returncode==0 and 'CHILD_SEMANTIC_PASS' in child.stdout,(child.returncode,child.stdout,child.stderr)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n\nimport task,threading,time\nfor cap in(1,3):\n lock=threading.Lock();active=peak=0;called=[]\n def compute(name,inputs):\n  global active,peak\n  with lock:active+=1;peak=max(peak,active);called.append(name)\n  try:time.sleep(.005);return len(name)+sum(inputs)\n  finally:\n   with lock:active-=1\n nodes={str(i):[]for i in range(8)};nodes['dependent']=['0','1']\n result=task.execute_dag(nodes,cap,compute)\n assert result=={**{str(i):1 for i in range(8)},'dependent':11}and 1<=peak<=cap and active==0 and sorted(called)==sorted(nodes)\n\nfor cap in(1,3):\n try:observed=subprocess.run([sys.executable,'-B',str(pathlib.Path('checks/worker_budget_child.py').resolve()),str(cap)],capture_output=True,text=True,timeout=5)\n except subprocess.TimeoutExpired as error:raise RuntimeError('native resource probe did not complete; no semantic rejection credit')from error\n assert observed.returncode==0,observed.stderr\n assert 'NATIVE_DAG_WORKER_LIFETIMES 'in observed.stdout\n print(observed.stdout.strip(),flush=True)\n",
+        "checks/worker_budget_child.py": "\"\"\"Actual standard-library worker lifetime, attributed by real compute calls.\"\"\"\nimport concurrent.futures.thread\nimport json\nimport multiprocessing.pool\nimport pathlib\nimport sys\nimport threading\nimport time\n\ncap=int(sys.argv[1]);guard=threading.Lock();events=[];threads={};business=set();callback_active=callback_peak=0;called=[]\nworker_codes={concurrent.futures.thread._worker.__code__:'executor',multiprocessing.pool.worker.__code__:'pool'}\nprevious_thread_profile=threading.getprofile()\ndef observe(frame,event,arg):\n kind=worker_codes.get(frame.f_code)\n if kind is None or event not in('call','return'):return\n identity=threading.get_ident()\n with guard:\n  if event=='call':\n   queue=frame.f_locals.get('work_queue',frame.f_locals.get('inqueue'))\n   key=(kind,id(queue));threads[identity]=key;events.append(('start',key,identity))\n  elif identity in threads:events.append(('end',threads.pop(identity),identity))\nthreading.setprofile(observe)\ntry:\n sys.path.insert(0,str(pathlib.Path.cwd()));import task\n def compute(name,inputs):\n  global callback_active,callback_peak\n  identity=threading.get_ident()\n  with guard:\n   if identity in threads:business.add(threads[identity])\n   callback_active+=1;callback_peak=max(callback_peak,callback_active);called.append(name)\n  try:time.sleep(.005);return len(name)+sum(inputs)\n  finally:\n   with guard:callback_active-=1\n nodes={str(index):[]for index in range(8)};nodes['dependent']=['0','1']\n actual=task.execute_dag(nodes,cap,compute)\n assert actual=={**{str(index):1 for index in range(8)},'dependent':11}\n assert sorted(called)==sorted(nodes)and callback_active==0 and 1<=callback_peak<=cap\n active=set();peak=0;all_active=set();all_peak=0\n for event,key,identity in events:\n  if event=='start':all_active.add(identity)\n  else:all_active.discard(identity)\n  all_peak=max(all_peak,len(all_active))\n  if key in business:\n   if event=='start':active.add(identity)\n   else:active.discard(identity)\n   peak=max(peak,len(active))\n assert peak<=cap,('actual node-worker allocation exceeded max_workers',peak,cap)\n print('NATIVE_DAG_WORKER_LIFETIMES '+json.dumps({'requested':cap,'business_worker_peak':peak,'callback_peak':callback_peak,'all_stdlib_worker_peak_including_coordinators':all_peak,'business_pool_count':len(business),'native_lifetime_events':len(events),'resource_counter_not_callback_semaphore':True}),flush=True)\nfinally:threading.setprofile(previous_thread_profile)\n"
+      }
+    },
+    "question_format": "case"
+  }
+]

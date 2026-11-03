@@ -1,0 +1,70 @@
+[
+  {
+    "id": "curated-python-completion-049",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 4,
+    "topic": "异常、测试与调试",
+    "title": "统一数据库过期时间与UTC服务时钟",
+    "answer": "```python\nfrom datetime import datetime,timezone,timedelta\n\ndef expired_ids(rows,now):\n    if not isinstance(now,datetime) or now.tzinfo is None or now.utcoffset() is None:raise ValueError('aware service time required')\n    cutoff=now.astimezone(timezone.utc);expired=[];seen=set()\n    for row in rows:\n        if not isinstance(row,dict) or not isinstance(row.get('id'),str) or not row['id'] or row['id'] in seen:raise ValueError('invalid or duplicate row id')\n        seen.add(row['id']);value=row.get('expires_at')\n        if isinstance(value,str):\n            try:value=datetime.fromisoformat(value)\n            except ValueError as exc:raise ValueError('invalid database timestamp') from exc\n        if not isinstance(value,datetime):raise ValueError('invalid database timestamp')\n        # This database contract stores timezone-naive values in UTC.\n        if value.tzinfo is None or value.utcoffset() is None:value=value.replace(tzinfo=timezone.utc)\n        if value.astimezone(timezone.utc)<=cutoff:expired.append(row['id'])\n    return expired\n```\n\n原题知识说明：\n先确认数据库时间原本代表哪个时区，再统一为正确aware时间进行比较，不能盲目replace UTC。检查历史数据和过期边界，用跨时区及临界时间验证；失败期间保留记录，避免误删未过期数据。",
+    "type": "code",
+    "source": "OpsForge Python运维开发补充题",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "python-completion-20261021",
+    "body": "## 故障初始材料与公开复现\n现有清理筛选函数直接比较数据库 UTC naive 时间与 aware 服务时钟，实际抛出 TypeError；本练习只筛选 ID，不执行删除。\n运行 `python3 reproduce.py`：错误初态退出 1 并展示真实异常/状态，修复后退出 0。全部数据库及日志为本次独立临时材料。\n\n## 操作任务\n实现expired_ids(rows,now)比较SQLite中按UTC保存的无时区时间戳与带时区服务时钟。先将双方规范化为UTC，边界expires_at<=now算过期；未知/错误时间和重复ID必须拒绝，且不得原地修改输入记录。\n\n## 提交产物\ntask.py\n\n## 验收方法\n在隔离Python进程中验证UTC naive、显式时区偏移、相等边界、未来时间与非法时钟输入。\n\n## 能力边界\n数据库合同明确所有naive时间均为UTC；如果真实数据库存的是本地墙上时间，本实现不适用，必须先声明并验证其时区/DST语义。只筛选ID，不执行删除。",
+    "rubric": [
+      "Python语义准确",
+      "资源与错误处理明确",
+      "验证覆盖边界"
+    ],
+    "hints": [],
+    "references": [],
+    "incident_signature": "python:naive-aware-expiry",
+    "related_modules": [
+      "python"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-python-completion-049",
+      "original_title": "令牌清理任务升级后持续TypeError，代码把无时区数据库时间与带UTC时区的当前时间比较。如何修复？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "from datetime import datetime,timezone,timedelta\n\ndef expired_ids(rows,now):\n    if not isinstance(now,datetime) or now.tzinfo is None or now.utcoffset() is None:raise ValueError('aware service time required')\n    cutoff=now.astimezone(timezone.utc);expired=[];seen=set()\n    for row in rows:\n        if not isinstance(row,dict) or not isinstance(row.get('id'),str) or not row['id'] or row['id'] in seen:raise ValueError('invalid or duplicate row id')\n        seen.add(row['id']);value=row.get('expires_at')\n        if isinstance(value,str):\n            try:value=datetime.fromisoformat(value)\n            except ValueError as exc:raise ValueError('invalid database timestamp') from exc\n        if not isinstance(value,datetime):raise ValueError('invalid database timestamp')\n        # This database contract stores timezone-naive values in UTC.\n        if value.tzinfo is None or value.utcoffset() is None:pass\n        if value<=cutoff:expired.append(row['id'])\n    return expired\n",
+      "reproduce.py": "\"\"\"Run python3 reproduce.py: original TypeError exits 1; repaired results exit 0.\"\"\"\nimport json, sqlite3\nfrom datetime import datetime, timezone\nimport task\nconnection=sqlite3.connect(':memory:')\ntry:\n    connection.execute('CREATE TABLE expiry(id TEXT PRIMARY KEY, expires_at TEXT)')\n    connection.executemany('INSERT INTO expiry VALUES(?,?)',[\n        ('naive-boundary','2026-03-28T12:00:00'),\n        ('offset-expired','2026-03-28T14:00:00+03:00'),\n        ('future','2026-03-28T12:00:01Z')])\n    rows=[{'id':key,'expires_at':expiry} for key,expiry in connection.execute('SELECT id,expires_at FROM expiry ORDER BY rowid')]\n    before=[dict(row) for row in rows]\n    try:\n        actual=task.expired_ids(rows,datetime(2026,3,28,12,tzinfo=timezone.utc))\n    except TypeError as error:\n        print(json.dumps({'fault':'naive-aware comparison','exception':type(error).__name__,\n                          'message':str(error),'input_unchanged':rows==before}),flush=True)\n        raise SystemExit(1)\n    expected=['naive-boundary','offset-expired']\n    ok=actual==expected and rows==before\n    print(json.dumps({'expired':actual,'expected':expected,'input_unchanged':rows==before,'correct':ok}),flush=True)\n    raise SystemExit(0 if ok else 1)\nfinally:connection.close()\n"
+    },
+    "solution_files": {
+      "task.py": "from datetime import datetime,timezone,timedelta\n\ndef expired_ids(rows,now):\n    if not isinstance(now,datetime) or now.tzinfo is None or now.utcoffset() is None:raise ValueError('aware service time required')\n    cutoff=now.astimezone(timezone.utc);expired=[];seen=set()\n    for row in rows:\n        if not isinstance(row,dict) or not isinstance(row.get('id'),str) or not row['id'] or row['id'] in seen:raise ValueError('invalid or duplicate row id')\n        seen.add(row['id']);value=row.get('expires_at')\n        if isinstance(value,str):\n            try:value=datetime.fromisoformat(value)\n            except ValueError as exc:raise ValueError('invalid database timestamp') from exc\n        if not isinstance(value,datetime):raise ValueError('invalid database timestamp')\n        # This database contract stores timezone-naive values in UTC.\n        if value.tzinfo is None or value.utcoffset() is None:value=value.replace(tzinfo=timezone.utc)\n        if value.astimezone(timezone.utc)<=cutoff:expired.append(row['id'])\n    return expired\n"
+    },
+    "negative_files": {
+      "task.py": "from datetime import datetime,timezone,timedelta\n\ndef expired_ids(rows,now):\n    if not isinstance(now,datetime) or now.tzinfo is None or now.utcoffset() is None:raise ValueError('aware service time required')\n    cutoff=now.astimezone(timezone.utc);expired=[];seen=set()\n    for row in rows:\n        if not isinstance(row,dict) or not isinstance(row.get('id'),str) or not row['id'] or row['id'] in seen:raise ValueError('invalid or duplicate row id')\n        seen.add(row['id']);value=row.get('expires_at')\n        if isinstance(value,str):\n            try:value=datetime.fromisoformat(value)\n            except ValueError as exc:raise ValueError('invalid database timestamp') from exc\n        if not isinstance(value,datetime):raise ValueError('invalid database timestamp')\n        # This database contract stores timezone-naive values in UTC.\n        if value.tzinfo is None or value.utcoffset() is None:value=value.replace(tzinfo=timezone.utc)\n        if value.replace(tzinfo=None)<=now.replace(tzinfo=None):expired.append(row['id'])\n    return expired\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "现有清理筛选函数直接比较数据库 UTC naive 时间与 aware 服务时钟，实际抛出 TypeError；本练习只筛选 ID，不执行删除。先运行公开复现观察故障，再修复原有接口。实现expired_ids(rows,now)比较SQLite中按UTC保存的无时区时间戳与带时区服务时钟。先将双方规范化为UTC，边界expires_at<=now算过期；未知/错误时间和重复ID必须拒绝，且不得原地修改输入记录。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "数据库合同明确所有naive时间均为UTC；如果真实数据库存的是本地墙上时间，本实现不适用，必须先声明并验证其时区/DST语义。只筛选ID，不执行删除。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: aware expiry comparison',flush=True)\nfrom datetime import datetime,timezone\nnow=datetime(2026,3,28,12,tzinfo=timezone.utc)\nrows=[{'id':'offset-expired','expires_at':'2026-03-28T14:00:00+03:00'},{'id':'utc-expired','expires_at':'2026-03-28T11:59:59'},{'id':'boundary','expires_at':'2026-03-28T12:00:00+00:00'},{'id':'future','expires_at':'2026-03-28T12:00:01Z'},{'id':'naive-future','expires_at':'2026-03-28T13:00:00'}]\ntry:observed=task.expired_ids(rows,now)\nexcept TypeError as error:raise AssertionError('valid UTC-naive database values must compare with aware service clock')from error\nassert observed==['offset-expired','utc-expired','boundary']\nfor bad_now in (datetime(2026,3,28,12),None):\n try:task.expired_ids(rows,bad_now)\n except ValueError:pass\n else:raise AssertionError('naive/missing service clock accepted')\nfor bad_rows in ([{'id':'x','expires_at':'not-a-time'}],[{'id':'x','expires_at':'2026-01-01T00:00:00Z'},{'id':'x','expires_at':'2026-01-02T00:00:00Z'}]):\n try:task.expired_ids(bad_rows,now)\n except ValueError:pass\n else:raise AssertionError('invalid expiration ledger accepted')\nassert rows[0]['expires_at']=='2026-03-28T14:00:00+03:00'\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "case"
+  }
+]

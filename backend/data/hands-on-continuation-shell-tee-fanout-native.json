@@ -1,0 +1,77 @@
+[
+  {
+    "id": "curated-advanced-shell-005",
+    "module": "shell",
+    "category": "Shell",
+    "level": 5,
+    "topic": "输入输出与管道",
+    "title": "tee多分支必需产物全部成功后才原子发布",
+    "body": "## 操作任务\n交付task.sh INPUT ARCHIVER SUMMARIZER OUTPUT，用GNU tee -p将输入同时送到两个必需消费者。分别等待tee、归档器、摘要器并核对归档字节与输入完全一致；仅所有分支成功且产物齐全时，才在输出目录同文件系统原子发布归档。失败保留旧正式结果及本批临时证据，禁止将tee单一退出状态当成全部消费者成功。\n\n## 提交产物\ntask.sh\n\n## 验收方法\n真实Linux FIFO/tee分流；验证归档失败、摘要器提前关闭、输入读取失败、空流和旧正式文件保留。\n\n## 能力边界\nLinux Bash/GNU coreutils；测试只用本地临时文件、FIFO与假消费者，不执行生产采集。摘要器退出状态和摘要文件存在仅代表其自身合同，实际摘要完整性仍由生产摘要器/业务校验提供。",
+    "answer": "```bash\n#!/usr/bin/env bash\nset -u\nif (( $# != 4 )); then printf 'usage: %s INPUT ARCHIVER SUMMARIZER OUTPUT\\n' \"$0\" >&2; exit 2; fi\ninput=$1; archiver=$2; summarizer=$3; output=$4\nif [[ ! -r \"$input\" || ! -f \"$archiver\" || ! -f \"$summarizer\" || -L \"$output\" ]]; then printf 'invalid input, worker, or output\\n' >&2; exit 2; fi\nparent=${output%/*}; [[ $parent == \"$output\" ]] && parent=.\nif [[ ! -d \"$parent\" ]]; then printf 'output directory missing\\n' >&2; exit 2; fi\nbatch=$(mktemp -d \"$parent/.fanout.XXXXXX\") || exit 2\narchive_fifo=$batch/archive.fifo; summary_fifo=$batch/summary.fifo\narchive_tmp=$batch/archive.bin; summary_tmp=$batch/summary.txt\nif ! mkfifo \"$archive_fifo\" \"$summary_fifo\"; then printf 'cannot create branch FIFOs\\n' >&2; exit 2; fi\n\"$BASH\" \"$archiver\" \"$archive_tmp\" <\"$archive_fifo\" & archive_pid=$!\n\"$BASH\" \"$summarizer\" \"$summary_tmp\" <\"$summary_fifo\" & summary_pid=$!\ntee -p \"$archive_fifo\" \"$summary_fifo\" <\"$input\" >/dev/null; tee_status=$?\nwait \"$archive_pid\"; archive_status=$?\nwait \"$summary_pid\"; summary_status=$?\nexpected_bytes=$(LC_ALL=C wc -c < \"$input\"); expected_bytes=${expected_bytes//[[:space:]]/}\nsummary_bytes=$(cat -- \"$summary_tmp\" 2>/dev/null || true)\nif [[ ! $expected_bytes =~ ^[0-9]+$ || ! $summary_bytes =~ ^[0-9]+$ ]] || (( expected_bytes != summary_bytes )); then summary_status=1; fi\nif (( tee_status != 0 || archive_status != 0 || summary_status != 0 )) || [[ ! -f \"$archive_tmp\" || ! -f \"$summary_tmp\" ]] || ! cmp -s -- \"$input\" \"$archive_tmp\"; then\n    printf 'FANOUT_FAILED tee=%s archive=%s summary=%s batch=%s\\n' \"$tee_status\" \"$archive_status\" \"$summary_status\" \"$batch\" >&2\n    exit 1\nfi\nif ! mv -f -- \"$archive_tmp\" \"$output\"; then printf 'PUBLISH_FAILED batch=%s\\n' \"$batch\" >&2; exit 1; fi\nrm -f -- \"$archive_fifo\" \"$summary_fifo\" \"$summary_tmp\"\nrmdir -- \"$batch\"\nprintf 'PUBLISHED\\n'; exit 0\n```\n\n原题知识说明：\n交付分支依赖清单，明确归档与摘要都是必需结果还是某支仅尽力而为；为每支保存PID、退出状态和字节或记录对账。单看tee退出码或最外层pipefail不足以覆盖进程替代中的所有消费者，必须独立等待并核验各分支，特别是消费者提前关管道和落盘失败。GNU tee的输出错误策略应按管道与普通文件分别确认，不把忽略破管道选项当通用容错。验收故意让摘要器提前退出、归档盘满、输入源读错以及空流，成功门禁要求输入完整且全部必需分支产物已验证。任何失败保留临时产物和分支状态，禁止移动到正式发布路径；重跑使用新批次并明确是否覆盖旧的完整结果，防止摘要正常掩盖归档丢失。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设特有机制及前提",
+      "给出可核验的证据、成功与失败判据",
+      "界定异常恢复与不可承诺的边界"
+    ],
+    "references": [
+      "https://www.gnu.org/software/coreutils/manual/html_node/tee-invocation.html"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "bash",
+    "conversion": {
+      "original_id": "curated-advanced-shell-005",
+      "original_title": "一个采集流同时送归档文件与实时摘要器，怎样验收tee分流使任一必需分支失败都阻止成功发布？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.sh": "echo NotImplementedError >&2; exit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "#!/usr/bin/env bash\nset -u\nif (( $# != 4 )); then printf 'usage: %s INPUT ARCHIVER SUMMARIZER OUTPUT\\n' \"$0\" >&2; exit 2; fi\ninput=$1; archiver=$2; summarizer=$3; output=$4\nif [[ ! -r \"$input\" || ! -f \"$archiver\" || ! -f \"$summarizer\" || -L \"$output\" ]]; then printf 'invalid input, worker, or output\\n' >&2; exit 2; fi\nparent=${output%/*}; [[ $parent == \"$output\" ]] && parent=.\nif [[ ! -d \"$parent\" ]]; then printf 'output directory missing\\n' >&2; exit 2; fi\nbatch=$(mktemp -d \"$parent/.fanout.XXXXXX\") || exit 2\narchive_fifo=$batch/archive.fifo; summary_fifo=$batch/summary.fifo\narchive_tmp=$batch/archive.bin; summary_tmp=$batch/summary.txt\nif ! mkfifo \"$archive_fifo\" \"$summary_fifo\"; then printf 'cannot create branch FIFOs\\n' >&2; exit 2; fi\n\"$BASH\" \"$archiver\" \"$archive_tmp\" <\"$archive_fifo\" & archive_pid=$!\n\"$BASH\" \"$summarizer\" \"$summary_tmp\" <\"$summary_fifo\" & summary_pid=$!\ntee -p \"$archive_fifo\" \"$summary_fifo\" <\"$input\" >/dev/null; tee_status=$?\nwait \"$archive_pid\"; archive_status=$?\nwait \"$summary_pid\"; summary_status=$?\nexpected_bytes=$(LC_ALL=C wc -c < \"$input\"); expected_bytes=${expected_bytes//[[:space:]]/}\nsummary_bytes=$(cat -- \"$summary_tmp\" 2>/dev/null || true)\nif [[ ! $expected_bytes =~ ^[0-9]+$ || ! $summary_bytes =~ ^[0-9]+$ ]] || (( expected_bytes != summary_bytes )); then summary_status=1; fi\nif (( tee_status != 0 || archive_status != 0 || summary_status != 0 )) || [[ ! -f \"$archive_tmp\" || ! -f \"$summary_tmp\" ]] || ! cmp -s -- \"$input\" \"$archive_tmp\"; then\n    printf 'FANOUT_FAILED tee=%s archive=%s summary=%s batch=%s\\n' \"$tee_status\" \"$archive_status\" \"$summary_status\" \"$batch\" >&2\n    exit 1\nfi\nif ! mv -f -- \"$archive_tmp\" \"$output\"; then printf 'PUBLISH_FAILED batch=%s\\n' \"$batch\" >&2; exit 1; fi\nrm -f -- \"$archive_fifo\" \"$summary_fifo\" \"$summary_tmp\"\nrmdir -- \"$batch\"\nprintf 'PUBLISHED\\n'; exit 0\n"
+    },
+    "negative_files": {
+      "task.sh": "#!/usr/bin/env bash\nset -u\nif (( $# != 4 )); then printf 'usage: %s INPUT ARCHIVER SUMMARIZER OUTPUT\\n' \"$0\" >&2; exit 2; fi\ninput=$1; archiver=$2; summarizer=$3; output=$4\nif [[ ! -r \"$input\" || ! -f \"$archiver\" || ! -f \"$summarizer\" || -L \"$output\" ]]; then printf 'invalid input, worker, or output\\n' >&2; exit 2; fi\nparent=${output%/*}; [[ $parent == \"$output\" ]] && parent=.\nif [[ ! -d \"$parent\" ]]; then printf 'output directory missing\\n' >&2; exit 2; fi\nbatch=$(mktemp -d \"$parent/.fanout.XXXXXX\") || exit 2\narchive_fifo=$batch/archive.fifo; summary_fifo=$batch/summary.fifo\narchive_tmp=$batch/archive.bin; summary_tmp=$batch/summary.txt\nif ! mkfifo \"$archive_fifo\" \"$summary_fifo\"; then printf 'cannot create branch FIFOs\\n' >&2; exit 2; fi\n\"$BASH\" \"$archiver\" \"$archive_tmp\" <\"$archive_fifo\" & archive_pid=$!\n\"$BASH\" \"$summarizer\" \"$summary_tmp\" <\"$summary_fifo\" & summary_pid=$!\ntee -p \"$archive_fifo\" \"$summary_fifo\" <\"$input\" >/dev/null; tee_status=$?\nwait \"$archive_pid\"; archive_status=$?\nwait \"$summary_pid\"; summary_status=$?\nif (( tee_status != 0 || archive_status != 0 || summary_status != 0 )) || [[ ! -f \"$archive_tmp\" || ! -f \"$summary_tmp\" ]] || ! cmp -s -- \"$input\" \"$archive_tmp\"; then\n    printf 'FANOUT_FAILED tee=%s archive=%s summary=%s batch=%s\\n' \"$tee_status\" \"$archive_status\" \"$summary_status\" \"$batch\" >&2\n    exit 1\nfi\nif ! mv -f -- \"$archive_tmp\" \"$output\"; then printf 'PUBLISH_FAILED batch=%s\\n' \"$batch\" >&2; exit 1; fi\nrm -f -- \"$archive_fifo\" \"$summary_fifo\" \"$summary_tmp\"\nrmdir -- \"$batch\"\nprintf 'PUBLISHED\\n'; exit 0\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "交付task.sh INPUT ARCHIVER SUMMARIZER OUTPUT，用GNU tee -p将输入同时送到两个必需消费者。分别等待tee、归档器、摘要器并核对归档字节与输入完全一致；仅所有分支成功且产物齐全时，才在输出目录同文件系统原子发布归档。失败保留旧正式结果及本批临时证据，禁止将tee单一退出状态当成全部消费者成功。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "Linux Bash/GNU coreutils；测试只用本地临时文件、FIFO与假消费者，不执行生产采集。摘要器退出状态和摘要文件存在仅代表其自身合同，实际摘要完整性仍由生产摘要器/业务校验提供。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 20,
+      "requires": {
+        "commands": [
+          "bash",
+          "cp",
+          "mktemp"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,tempfile,os,subprocess\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: tee required-branch publication gate',flush=True)\nif 'NotImplementedError' in pathlib.Path('task.sh').read_text(encoding='utf8'):raise NotImplementedError('implement task.sh')\nwith tempfile.TemporaryDirectory(prefix='tee-fanout-') as directory:\n root=pathlib.Path(directory);input_path=root/'capture.bin';archive=root/'archive.bin';script=root/'task.sh';archiver=root/'archive.sh';summarizer=root/'summary.sh'\n script.write_text(pathlib.Path('task.sh').read_text(encoding='utf8'));archiver.write_text(pathlib.Path('archiver.sh').read_text(encoding='utf8'));summarizer.write_text(pathlib.Path('summarizer.sh').read_text(encoding='utf8'))\n old=b'previous complete archive';archive.write_bytes(old);input_path.write_bytes((b'packet\\x00data\\n'*150000))\n env=os.environ.copy()\n def run(source=input_path,archive_mode='ok',summary_mode='ok'):\n  current=env.copy();current['ARCHIVE_MODE']=archive_mode;current['SUMMARY_MODE']=summary_mode\n  return subprocess.run(['/bin/bash',str(script),str(source),str(archiver),str(summarizer),str(archive)],env=current,capture_output=True,text=True,timeout=8)\n good=run();assert good.returncode==0 and 'PUBLISHED' in good.stdout and archive.read_bytes()==input_path.read_bytes()\n archive.write_bytes(old);failed=run(archive_mode='fail');assert failed.returncode==1 and 'FANOUT_FAILED' in failed.stderr and archive.read_bytes()==old\n archive.write_bytes(old);early=run(summary_mode='early');assert early.returncode==1 and 'FANOUT_FAILED' in early.stderr and archive.read_bytes()==old,(early.returncode,early.stdout,early.stderr,archive.read_bytes()[:80])\n archive.write_bytes(old);missing=run(root/'missing');assert missing.returncode==2 and archive.read_bytes()==old\n empty=root/'empty';empty.write_bytes(b'');empty_result=run(empty);assert empty_result.returncode==0 and archive.read_bytes()==b''\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n",
+        "archiver.sh": "#!/usr/bin/env bash\ncat > \"$1\"\nif [[ ${ARCHIVE_MODE:-ok} == fail ]]; then exit 7; fi\nexit 0\n",
+        "summarizer.sh": "#!/usr/bin/env bash\nif [[ ${SUMMARY_MODE:-ok} == early ]]; then head -c 1 | wc -c > \"$1\"; exit 0; fi\nwc -c > \"$1\"\n"
+      }
+    }
+  }
+]

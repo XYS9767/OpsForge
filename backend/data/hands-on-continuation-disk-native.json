@@ -1,0 +1,144 @@
+[
+  {
+    "id": "curated-advanced-disk-024",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "level": 5,
+    "topic": "备份迁移与存储恢复",
+    "title": "恢复离线稀疏raw文件：核对洞、尾部容量与已提交SQLite快照",
+    "answer": "```python\nimport os,errno,stat\ndef restore_sparse(source,target):\n    source_fd=os.open(source,os.O_RDONLY|os.O_NOFOLLOW)\n    target_fd=None;created=False\n    try:\n        info=os.fstat(source_fd)\n        if not stat.S_ISREG(info.st_mode):raise ValueError('regular source required')\n        target_fd=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600);created=True\n        offset=0\n        while offset<info.st_size:\n            try:data=os.lseek(source_fd,offset,os.SEEK_DATA)\n            except OSError as error:\n                if error.errno==errno.ENXIO:break\n                raise\n            end=min(os.lseek(source_fd,data,os.SEEK_HOLE),info.st_size)\n            if end<=data:raise OSError('invalid native extent')\n            position=data\n            while position<end:\n                block=os.pread(source_fd,min(65536,end-position),position)\n                if not block:raise OSError('source shortened during restore')\n                written=0\n                while written<len(block):\n                    count=os.pwrite(target_fd,block[written:],position+written)\n                    if count<=0:raise OSError('zero progress write')\n                    written+=count\n                position+=len(block)\n            offset=end\n        os.ftruncate(target_fd,info.st_size)\n        os.fchmod(target_fd,stat.S_IMODE(info.st_mode))\n        os.fsync(target_fd)\n        after=os.fstat(source_fd)\n        if (after.st_size,after.st_mtime_ns,after.st_ctime_ns)!=(info.st_size,info.st_mtime_ns,info.st_ctime_ns):raise OSError('source changed')\n    except BaseException:\n        if created:os.unlink(target)\n        raise\n    finally:\n        if target_fd is not None:os.close(target_fd)\n        os.close(source_fd)\n```\n\n原题说明：\n交付虚拟磁盘格式、稀疏区段、虚机停写或检查点协议与恢复步骤。文件逻辑大小可能远大于物理占用，备份工具需明确是否保留稀疏及增量分配语义；复制正在运行的磁盘还可能产生时间上不一致的数据，需使用虚拟化平台支持的备份能力。验收恢复文件摘要或格式校验、实际占用及来宾启动和业务检查，不能只比较文件长度。目标空间不足则中止并保留旧副本，禁止把半份恢复文件作为可启动卷。切回旧卷前处理新卷已产生的写入，避免默默丢弃恢复验证期间数据。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有题改编；原生验收范围及独立反例按精确源码指纹保留。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "给出题设要求的具体交付物与关键机制",
+      "用可观察结果验证约束和失败分支",
+      "明确停止条件及回退或恢复边界"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man2/lseek.2.html",
+      "https://docs.python.org/3/library/os.html"
+    ],
+    "body": "## 操作任务\n实现 restore_sparse(source,target)。source为已停写的自有普通文件，target必须不存在。用Linux SEEK_DATA/SEEK_HOLE复制数据区，处理短读/短写，保留完整逻辑长度（包括尾洞与全洞文件）、权限和内容，fsync后返回None。不得覆盖已有文件或跟随输入/输出符号链接；失败移除本次创建的部分目标，源文件不变。不支持extent查询时传播OSError，不能静默密集复制。源文件变化检测不等于并发快照。验收还从恢复文件读取已冻结SQLite应用快照并查询完整性及成对账目。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；仅操作自有临时文件，不挂载或修改宿主存储。\n\n## 能力边界\n真实磁盘文件系统的离线raw字节文件恢复与SQLite已提交快照检查；不处理QCOW2/VMDK格式、不挂载虚拟磁盘、不声称运行中虚拟机崩溃一致性或跨存储恢复已验证。",
+    "related_modules": [
+      "disk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-disk-024",
+      "original_title": "为稀疏虚拟磁盘文件制定备份验收，要求恢复后的容量、内容和应用一致性同时成立。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement the requested function\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,errno,stat\ndef restore_sparse(source,target):\n    source_fd=os.open(source,os.O_RDONLY|os.O_NOFOLLOW)\n    target_fd=None;created=False\n    try:\n        info=os.fstat(source_fd)\n        if not stat.S_ISREG(info.st_mode):raise ValueError('regular source required')\n        target_fd=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600);created=True\n        offset=0\n        while offset<info.st_size:\n            try:data=os.lseek(source_fd,offset,os.SEEK_DATA)\n            except OSError as error:\n                if error.errno==errno.ENXIO:break\n                raise\n            end=min(os.lseek(source_fd,data,os.SEEK_HOLE),info.st_size)\n            if end<=data:raise OSError('invalid native extent')\n            position=data\n            while position<end:\n                block=os.pread(source_fd,min(65536,end-position),position)\n                if not block:raise OSError('source shortened during restore')\n                written=0\n                while written<len(block):\n                    count=os.pwrite(target_fd,block[written:],position+written)\n                    if count<=0:raise OSError('zero progress write')\n                    written+=count\n                position+=len(block)\n            offset=end\n        os.ftruncate(target_fd,info.st_size)\n        os.fchmod(target_fd,stat.S_IMODE(info.st_mode))\n        os.fsync(target_fd)\n        after=os.fstat(source_fd)\n        if (after.st_size,after.st_mtime_ns,after.st_ctime_ns)!=(info.st_size,info.st_mtime_ns,info.st_ctime_ns):raise OSError('source changed')\n    except BaseException:\n        if created:os.unlink(target)\n        raise\n    finally:\n        if target_fd is not None:os.close(target_fd)\n        os.close(source_fd)\n"
+    },
+    "negative_files": {
+      "task.py": "import shutil\ndef restore_sparse(source,target):\n    with open(source,'rb') as incoming,open(target,'xb') as outgoing:\n        shutil.copyfileobj(incoming,outgoing)\n    shutil.copymode(source,target)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，可用SEEK_DATA/SEEK_HOLE的磁盘文件系统",
+      "operation": "实现 restore_sparse(source,target)。source为已停写的自有普通文件，target必须不存在。用Linux SEEK_DATA/SEEK_HOLE复制数据区，处理短读/短写，保留完整逻辑长度（包括尾洞与全洞文件）、权限和内容，fsync后返回None。不得覆盖已有文件或跟随输入/输出符号链接；失败移除本次创建的部分目标，源文件不变。不支持extent查询时传播OSError，不能静默密集复制。源文件变化检测不等于并发快照。验收还从恢复文件读取已冻结SQLite应用快照并查询完整性及成对账目。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实磁盘文件系统的离线raw字节文件恢复与SQLite已提交快照检查；不处理QCOW2/VMDK格式、不挂载虚拟磁盘、不声称运行中虚拟机崩溃一致性或跨存储恢复已验证。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,hashlib,json,copy,time,errno,sqlite3\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nfrom unittest.mock import patch\ndef digest(path):\n result=hashlib.sha256()\n with open(path,'rb') as stream:\n  for block in iter(lambda:stream.read(65536),b''):result.update(block)\n return result.hexdigest()\nwith tempfile.TemporaryDirectory() as directory:\n root=pathlib.Path(directory);source=root/'offline.raw';target=root/'restored.raw';database=root/'application.sqlite'\n token=secrets.token_hex(16)\n with sqlite3.connect(database) as db:\n  db.execute('create table ledger(id integer primary key,value integer,token text)')\n  db.executemany('insert into ledger values(?,?,?)',[(1,-317,token),(2,317,token)])\n database_bytes=database.read_bytes();size=32*1024*1024;offset=5*1024*1024+137\n with source.open('xb') as stream:\n  stream.truncate(size);stream.seek(0);stream.write(b'OPSFORGE-RAW-V1\\n'+len(database_bytes).to_bytes(8,'big'))\n  stream.seek(offset);stream.write(database_bytes);stream.seek(19*1024*1024+39);stream.write(secrets.token_bytes(3000))\n source.chmod(0o640);saved=(source.stat().st_ino,source.stat().st_mode,source.stat().st_mtime_ns,digest(source))\n assert source.stat().st_blocks*512<size//4,'native sparse fixture unavailable'\n try:\n  with source.open('rb') as stream:os.lseek(stream.fileno(),0,os.SEEK_DATA);os.lseek(stream.fileno(),0,os.SEEK_HOLE)\n except OSError as error:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: filesystem extent reporting unavailable') from error\n native_seek=os.lseek;seeks=[]\n def seek(fd,value,how):seeks.append(how);return native_seek(fd,value,how)\n print('STUDENT_OPERATION_ENTERED:restore_sparse',flush=True)\n with patch.object(os,'lseek',side_effect=seek):task.restore_sparse(source,target)\n assert target.stat().st_size==size,'trailing sparse region lost'\n assert digest(target)==saved[3],'restored full logical contents differ'\n assert target.stat().st_blocks*512<size//4,'restore allocated all holes'\n assert (target.stat().st_mode&0o777)==0o640,'file permissions not preserved'\n assert os.SEEK_DATA in seeks and os.SEEK_HOLE in seeks,'native extent query was bypassed'\n assert (source.stat().st_ino,source.stat().st_mode,source.stat().st_mtime_ns,digest(source))==saved,'source changed'\n with target.open('rb') as stream:stream.seek(offset);restored_database=stream.read(len(database_bytes))\n restored=root/'restored-application.sqlite';restored.write_bytes(restored_database)\n with sqlite3.connect('file:'+str(restored)+'?mode=ro',uri=True) as db:\n  assert db.execute('pragma integrity_check').fetchone()[0]=='ok'\n  assert db.execute('select sum(value),count(*),min(token),max(token) from ledger').fetchone()==(0,2,token,token),'offline committed application snapshot inconsistent'\n snapshot=target.read_bytes()\n try:task.restore_sparse(source,target)\n except FileExistsError:pass\n else:raise AssertionError('existing target was overwritten')\n assert target.read_bytes()==snapshot\n broken=root/'broken';broken.symlink_to('absent')\n try:task.restore_sparse(source,broken)\n except FileExistsError:pass\n else:raise AssertionError('dangling destination symlink was followed')\n assert broken.is_symlink() and not (root/'absent').exists()\n empty_source=root/'all-hole';empty_target=root/'all-hole-restored'\n with empty_source.open('xb') as stream:stream.truncate(size)\n task.restore_sparse(empty_source,empty_target)\n assert empty_target.stat().st_size==size and empty_target.stat().st_blocks*512<size//4\n # An unsupported extent API is explicit failure, never a silently dense fallback.\n failed=root/'must-clean-up'\n with patch.object(os,'lseek',side_effect=OSError(errno.EINVAL,'injected unsupported extent query')):\n  try:task.restore_sparse(source,failed)\n  except OSError:pass\n  else:raise AssertionError('unsupported extent reporting was silently ignored')\n assert not failed.exists(),'partial failed output was retained'\n print('NATIVE_SPARSE_AND_OFFLINE_SQLITE_RESTORE_VERIFIED',flush=True)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "src-a9dd3b3cf2d7fe8b",
+    "title": "实际文件写入吞吐采样：处理短写、包含fsync并区分MB与MiB",
+    "answer": "```python\nimport os,time\ndef write_throughput(path,chunks):\n    if not isinstance(chunks,list) or not chunks or any(type(x) is not bytes or not x for x in chunks):raise ValueError('nonempty bytes chunks required')\n    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)\n    try:\n        total=0;started=time.monotonic_ns()\n        for chunk in chunks:\n            offset=0\n            while offset<len(chunk):\n                count=os.write(fd,chunk[offset:])\n                if count<=0:raise OSError('zero-progress write')\n                offset+=count;total+=count\n        os.fsync(fd)\n        elapsed=time.monotonic_ns()-started\n        if elapsed<=0:raise RuntimeError('clock did not advance')\n        seconds=elapsed/1_000_000_000\n        return {'bytes':total,'seconds':seconds,'bytes_per_second':total/seconds,'MiB_per_second':total/seconds/(1024*1024)}\n    except BaseException:\n        os.unlink(path)\n        raise\n    finally:os.close(fd)\n```\n\n原题说明：\n吞吐量是单位时间传输的数据量，如 MiB/s，受 IOPS、块大小、并发、网络和设备限制。粗略关系是吞吐≈IOPS×每次 I/O 字节数，但实际混合负载和缓存会改变结果。GB 与 GiB 单位应保持一致。",
+    "category": "磁盘与文件系统",
+    "difficulty": "入门",
+    "section": "随机",
+    "type": "code",
+    "has_answer": true,
+    "source": "README.md",
+    "sources": [
+      "README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "现有题改编；原生验收范围及独立反例按精确源码指纹保留。",
+    "original_category": "存储",
+    "original_title": "解释存储吞吐量",
+    "module": "disk",
+    "topic": "I/O性能与数据持久性",
+    "level": 0,
+    "body": "## 操作任务\n实现 write_throughput(path,chunks)。chunks为非空list，每项必须为非空bytes，非法参数先ValueError。只创建不存在的自有文件，按实际os.write成功字节循环处理短写，结束调用一次fsync；用time.monotonic_ns测量写入和fsync区间。返回bytes、seconds、bytes_per_second、MiB_per_second（1024²字节）。零进展写抛OSError；失败删除本次创建的部分文件，不覆盖旧文件。不设置吞吐达标阈值，不向宿主块设备写入。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；仅操作自有临时文件，不挂载或修改宿主存储。\n\n## 能力边界\n真实自有普通文件的有限写入样本；fsync受实际文件系统语义约束，结果不是设备裸性能、断电持久性或生产SLO证明。短写和零进展通过明确标注的原生适配/故障注入验证。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "disk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "src-a9dd3b3cf2d7fe8b",
+      "original_title": "解释存储吞吐量",
+      "original_type": "source"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement the requested function\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,time\ndef write_throughput(path,chunks):\n    if not isinstance(chunks,list) or not chunks or any(type(x) is not bytes or not x for x in chunks):raise ValueError('nonempty bytes chunks required')\n    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)\n    try:\n        total=0;started=time.monotonic_ns()\n        for chunk in chunks:\n            offset=0\n            while offset<len(chunk):\n                count=os.write(fd,chunk[offset:])\n                if count<=0:raise OSError('zero-progress write')\n                offset+=count;total+=count\n        os.fsync(fd)\n        elapsed=time.monotonic_ns()-started\n        if elapsed<=0:raise RuntimeError('clock did not advance')\n        seconds=elapsed/1_000_000_000\n        return {'bytes':total,'seconds':seconds,'bytes_per_second':total/seconds,'MiB_per_second':total/seconds/(1024*1024)}\n    except BaseException:\n        os.unlink(path)\n        raise\n    finally:os.close(fd)\n"
+    },
+    "negative_files": {
+      "task.py": "import os,time\ndef write_throughput(path,chunks):\n    if not isinstance(chunks,list) or not chunks or any(type(x) is not bytes or not x for x in chunks):raise ValueError('nonempty bytes chunks required')\n    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)\n    try:\n        total=0;started=time.monotonic_ns()\n        for chunk in chunks:\n            offset=0\n            while offset<len(chunk):\n                count=os.write(fd,chunk[offset:])\n                if count<=0:raise OSError('zero-progress write')\n                offset+=count;total+=count\n        os.fsync(fd)\n        elapsed=time.monotonic_ns()-started\n        if elapsed<=0:raise RuntimeError('clock did not advance')\n        seconds=elapsed/1_000_000_000\n        return {'bytes':total,'seconds':seconds,'bytes_per_second':total/seconds,'MiB_per_second':total/seconds/1_000_000}\n    except BaseException:\n        os.unlink(path)\n        raise\n    finally:os.close(fd)\n"
+    },
+    "references": [
+      "https://man7.org/linux/man-pages/man2/lseek.2.html",
+      "https://docs.python.org/3/library/os.html"
+    ],
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，可用SEEK_DATA/SEEK_HOLE的磁盘文件系统",
+      "operation": "实现 write_throughput(path,chunks)。chunks为非空list，每项必须为非空bytes，非法参数先ValueError。只创建不存在的自有文件，按实际os.write成功字节循环处理短写，结束调用一次fsync；用time.monotonic_ns测量写入和fsync区间。返回bytes、seconds、bytes_per_second、MiB_per_second（1024²字节）。零进展写抛OSError；失败删除本次创建的部分文件，不覆盖旧文件。不设置吞吐达标阈值，不向宿主块设备写入。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实自有普通文件的有限写入样本；fsync受实际文件系统语义约束，结果不是设备裸性能、断电持久性或生产SLO证明。短写和零进展通过明确标注的原生适配/故障注入验证。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,hashlib,json,copy,time,errno,sqlite3\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nfrom unittest.mock import patch\nimport math\nwith tempfile.TemporaryDirectory() as directory:\n root=pathlib.Path(directory);path=root/'throughput.bin';chunks=[secrets.token_bytes(n) for n in [80000,27001,1,131072]]\n native_write=os.write;native_sync=os.fsync;events=[];counts=[]\n def write(fd,data):\n  count=native_write(fd,data[:4093]);events.append('write');counts.append(count);return count\n def sync(fd):events.append('fsync');return native_sync(fd)\n before=time.monotonic()\n print('STUDENT_OPERATION_ENTERED:write_throughput',flush=True)\n with patch.object(os,'write',side_effect=write),patch.object(os,'fsync',side_effect=sync):result=task.write_throughput(path,chunks)\n wall=time.monotonic()-before;expected=b''.join(chunks)\n assert path.read_bytes()==expected,'short native writes truncated payload'\n assert result['bytes']==len(expected)==sum(counts),'bytes counted from request rather than successful writes'\n assert events[-1]=='fsync' and events.count('fsync')==1,'measurement must include one final fsync'\n assert 0<result['seconds']<=wall and math.isfinite(result['bytes_per_second'])\n assert math.isclose(result['bytes_per_second']*result['seconds'],len(expected),rel_tol=1e-10)\n assert math.isclose(result['MiB_per_second']*1024*1024,result['bytes_per_second'],rel_tol=1e-10),'MiB is1024 squared, not decimal MB'\n saved=path.read_bytes()\n try:task.write_throughput(path,chunks)\n except FileExistsError:pass\n else:raise AssertionError('existing benchmark target overwritten')\n assert path.read_bytes()==saved\n for bad in [[],[b''],['text'],[bytearray(b'x')],None]:\n  invalid=root/('invalid-'+secrets.token_hex(3))\n  try:task.write_throughput(invalid,bad)\n  except ValueError:pass\n  else:raise AssertionError('invalid input accepted')\n  assert not invalid.exists(),'invalid request created an artifact'\n failed=root/'failed'\n with patch.object(os,'write',return_value=0):\n  try:task.write_throughput(failed,[b'abc'])\n  except OSError:pass\n  else:raise AssertionError('zero-progress write was accepted')\n assert not failed.exists(),'partial failed target not removed'\n print('NATIVE_BYTES_SHORT_WRITES_FSYNC_AND_UNITS_VERIFIED',flush=True)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

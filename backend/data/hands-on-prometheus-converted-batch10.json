@@ -1,0 +1,402 @@
+[
+  {
+    "id": "curated-parallel-prometheus-035",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "指标模型与监控架构",
+    "title": "用粗直方图桶给出SLO失败比例的可信上下界",
+    "answer": "```yaml\ngroups:\n- name: coarse-bucket-slo-bounds\n  interval: 1m\n  rules:\n  - record: slo:bad_fraction_lower\n    expr: ((sum by(service)(latency_bucket{le=\"+Inf\"}) - sum by(service)(latency_bucket{le=\"0.5\"}))\n      / sum by(service)(latency_bucket{le=\"+Inf\"})) and on(service) (sum by(service)(latency_bucket{le=\"+Inf\"})\n      > 0)\n  - record: slo:bad_fraction_upper\n    expr: ((sum by(service)(latency_bucket{le=\"+Inf\"}) - sum by(service)(latency_bucket{le=\"0.1\"}))\n      / sum by(service)(latency_bucket{le=\"+Inf\"})) and on(service) (sum by(service)(latency_bucket{le=\"+Inf\"})\n      > 0)\n  - record: slo:proven_good\n    expr: slo:bad_fraction_upper <= bool 0.05\n  - record: slo:proven_bad\n    expr: slo:bad_fraction_lower > bool 0.05\n```\n\n0.3位于0.1与0.5之间；缺少桶内分布就只能给上下界。good上界1%所以达标，bad下界30%所以失败，unknown为1%到30%无法确定。累计快照表达同一累计窗口的比例，不代表最近5分钟SLO。\n\n### 原题原理\n分位数需要在桶内插值，阈值附近缺少边界会增加误差。若SLO阈值正好有桶，可直接用阈值桶/总数计算合格比例。应按实际分布和业务阈值设计桶而非只增加任意桶数。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "产出实际PromQL可执行规则",
+      "保留规定标签和统计语义",
+      "窗口边界/未知值/原生样本类型通过真实工具验收"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/",
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: coarse-bucket-slo-bounds\n  interval: 1m\n  rules:\n  - record: slo:bad_fraction_lower\n    expr: ((sum by(service)(latency_bucket{le=\"+Inf\"}) - sum by(service)(latency_bucket{le=\"0.1\"}))\n      / sum by(service)(latency_bucket{le=\"+Inf\"})) and on(service) (sum by(service)(latency_bucket{le=\"+Inf\"})\n      > 0)\n  - record: slo:bad_fraction_upper\n    expr: ((sum by(service)(latency_bucket{le=\"+Inf\"}) - sum by(service)(latency_bucket{le=\"0.1\"}))\n      / sum by(service)(latency_bucket{le=\"+Inf\"})) and on(service) (sum by(service)(latency_bucket{le=\"+Inf\"})\n      > 0)\n  - record: slo:proven_good\n    expr: slo:bad_fraction_upper <= bool 0.05\n  - record: slo:proven_bad\n    expr: slo:bad_fraction_lower > bool 0.05\n",
+      "fixtures.yaml": "rule_files:\n- rules.yaml\nevaluation_interval: 1m\nfuzzy_compare: true\ntests:\n- interval: 1m\n  input_series:\n  - series: latency_bucket{le=\"0.1\",service=\"good\"}\n    values: 99+0x3\n  - series: latency_bucket{le=\"0.5\",service=\"good\"}\n    values: 100+0x3\n  - series: latency_bucket{le=\"+Inf\",service=\"good\"}\n    values: 100+0x3\n  - series: latency_bucket{le=\"0.1\",service=\"bad\"}\n    values: 60+0x3\n  - series: latency_bucket{le=\"0.5\",service=\"bad\"}\n    values: 70+0x3\n  - series: latency_bucket{le=\"+Inf\",service=\"bad\"}\n    values: 100+0x3\n  - series: latency_bucket{le=\"0.1\",service=\"unknown\"}\n    values: 70+0x3\n  - series: latency_bucket{le=\"0.5\",service=\"unknown\"}\n    values: 99+0x3\n  - series: latency_bucket{le=\"+Inf\",service=\"unknown\"}\n    values: 100+0x3\n  - series: latency_bucket{le=\"0.1\",service=\"empty\"}\n    values: 0+0x3\n  - series: latency_bucket{le=\"0.5\",service=\"empty\"}\n    values: 0+0x3\n  - series: latency_bucket{le=\"+Inf\",service=\"empty\"}\n    values: 0+0x3\n  promql_expr_test:\n  - expr: slo:bad_fraction_lower\n    eval_time: 2m\n    exp_samples:\n    - labels: slo:bad_fraction_lower{service=\"good\"}\n      value: 0\n    - labels: slo:bad_fraction_lower{service=\"bad\"}\n      value: 0.3\n    - labels: slo:bad_fraction_lower{service=\"unknown\"}\n      value: 0.01\n  - expr: slo:bad_fraction_upper\n    eval_time: 2m\n    exp_samples:\n    - labels: slo:bad_fraction_upper{service=\"good\"}\n      value: 0.01\n    - labels: slo:bad_fraction_upper{service=\"bad\"}\n      value: 0.4\n    - labels: slo:bad_fraction_upper{service=\"unknown\"}\n      value: 0.3\n  - expr: slo:proven_good\n    eval_time: 2m\n    exp_samples:\n    - labels: slo:proven_good{service=\"good\"}\n      value: 1\n    - labels: slo:proven_good{service=\"bad\"}\n      value: 0\n    - labels: slo:proven_good{service=\"unknown\"}\n      value: 0\n  - expr: slo:proven_bad\n    eval_time: 2m\n    exp_samples:\n    - labels: slo:proven_bad{service=\"good\"}\n      value: 0\n    - labels: slo:proven_bad{service=\"bad\"}\n      value: 1\n    - labels: slo:proven_bad{service=\"unknown\"}\n      value: 0\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: coarse-bucket-slo-bounds\n  interval: 1m\n  rules:\n  - record: slo:bad_fraction_lower\n    expr: ((sum by(service)(latency_bucket{le=\"+Inf\"}) - sum by(service)(latency_bucket{le=\"0.5\"}))\n      / sum by(service)(latency_bucket{le=\"+Inf\"})) and on(service) (sum by(service)(latency_bucket{le=\"+Inf\"})\n      > 0)\n  - record: slo:bad_fraction_upper\n    expr: ((sum by(service)(latency_bucket{le=\"+Inf\"}) - sum by(service)(latency_bucket{le=\"0.1\"}))\n      / sum by(service)(latency_bucket{le=\"+Inf\"})) and on(service) (sum by(service)(latency_bucket{le=\"+Inf\"})\n      > 0)\n  - record: slo:proven_good\n    expr: slo:bad_fraction_upper <= bool 0.05\n  - record: slo:proven_bad\n    expr: slo:bad_fraction_lower > bool 0.05\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: coarse-bucket-slo-bounds\n  interval: 1m\n  rules:\n  - record: slo:bad_fraction_lower\n    expr: ((sum by(service)(latency_bucket{le=\"+Inf\"}) - sum by(service)(latency_bucket{le=\"0.5\"}))\n      / sum by(service)(latency_bucket{le=\"+Inf\"})) and on(service) (sum by(service)(latency_bucket{le=\"+Inf\"})\n      > 0)\n  - record: slo:bad_fraction_upper\n    expr: ((sum by(service)(latency_bucket{le=\"+Inf\"}) - sum by(service)(latency_bucket{le=\"0.5\"}))\n      / sum by(service)(latency_bucket{le=\"+Inf\"})) and on(service) (sum by(service)(latency_bucket{le=\"+Inf\"})\n      > 0)\n  - record: slo:proven_good\n    expr: slo:bad_fraction_upper <= bool 0.05\n  - record: slo:proven_bad\n    expr: slo:bad_fraction_lower > bool 0.05\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供promtool 3.5和Python/PyYAML。编辑rules.yaml，fixtures.yaml提供固定Prometheus规则测试输入；无需学员自建Prometheus，也不连接生产。\n\n## 操作任务\nSLO要求请求耗时>0.3秒的比例不超过5%，但只有0.1/0.5/+Inf三个累计桶，没有0.3桶。对当前累计样本分别输出失败比例下界（>0.5）和上界（>0.1），以及proven_good/proven_bad的0/1证据。仅上界<=5%才可证明达标，仅下界>5%才可证明不达标；两者均0表示未知而非健康。empty无流量不输出。不能线性插值后声称知道精确0.3尾部比例。\n\n## 产物\n提交rules.yaml，保留题定记录规则和告警的名称、标签合同。\n\n## 验收方法\n执行python3 checks/check.py：官方promtool check rules检查规则，再由promtool test rules真实计算样本、告警pending/firing/恢复。可信fixtures由验收器独立加载，不接受删改测试来通过；允许等价PromQL表达式，不做公式字符串匹配。参考解、原配置、典型错误及重复键四路验证。\n\n## 原理复习\n经典histogram桶太粗会怎样影响SLO判定？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-promtool",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "SLO要求请求耗时>0.3秒的比例不超过5%，但只有0.1/0.5/+Inf三个累计桶，没有0.3桶。对当前累计样本分别输出失败比例下界（>0.5）和上界（>0.1），以及proven_good/proven_bad的0/1证据。仅上界<=5%才可证明达标，仅下界>5%才可证明不达标；两者均0表示未知而非健康。empty无流量不输出。不能线性插值后声称知道精确0.3尾部比例。",
+      "verification": "官方promtool真实离线执行PromQL与告警时间状态；带独立边界样本。",
+      "capability_gap": [
+        "不运行抓取、服务发现、Alertmanager通知，不将离线规则执行冒充线上链路通过。"
+      ],
+      "failure_examples": [
+        "negative_files对应题目中容易产生误报或错误数值的配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "promtool"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nEXPECTED={'groups': [{'name': 'coarse-bucket-slo-bounds', 'interval': '1m', 'rules': [{'record': 'slo:bad_fraction_lower', 'expr': '((sum by(service)(latency_bucket{le=\"+Inf\"}) - sum by(service)(latency_bucket{le=\"0.5\"})) / sum by(service)(latency_bucket{le=\"+Inf\"})) and on(service) (sum by(service)(latency_bucket{le=\"+Inf\"}) > 0)'}, {'record': 'slo:bad_fraction_upper', 'expr': '((sum by(service)(latency_bucket{le=\"+Inf\"}) - sum by(service)(latency_bucket{le=\"0.1\"})) / sum by(service)(latency_bucket{le=\"+Inf\"})) and on(service) (sum by(service)(latency_bucket{le=\"+Inf\"}) > 0)'}, {'record': 'slo:proven_good', 'expr': 'slo:bad_fraction_upper <= bool 0.05'}, {'record': 'slo:proven_bad', 'expr': 'slo:bad_fraction_lower > bool 0.05'}]}]}\nFIXTURE={'rule_files': ['rules.yaml'], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'latency_bucket{le=\"0.1\",service=\"good\"}', 'values': '99+0x3'}, {'series': 'latency_bucket{le=\"0.5\",service=\"good\"}', 'values': '100+0x3'}, {'series': 'latency_bucket{le=\"+Inf\",service=\"good\"}', 'values': '100+0x3'}, {'series': 'latency_bucket{le=\"0.1\",service=\"bad\"}', 'values': '60+0x3'}, {'series': 'latency_bucket{le=\"0.5\",service=\"bad\"}', 'values': '70+0x3'}, {'series': 'latency_bucket{le=\"+Inf\",service=\"bad\"}', 'values': '100+0x3'}, {'series': 'latency_bucket{le=\"0.1\",service=\"unknown\"}', 'values': '70+0x3'}, {'series': 'latency_bucket{le=\"0.5\",service=\"unknown\"}', 'values': '99+0x3'}, {'series': 'latency_bucket{le=\"+Inf\",service=\"unknown\"}', 'values': '100+0x3'}, {'series': 'latency_bucket{le=\"0.1\",service=\"empty\"}', 'values': '0+0x3'}, {'series': 'latency_bucket{le=\"0.5\",service=\"empty\"}', 'values': '0+0x3'}, {'series': 'latency_bucket{le=\"+Inf\",service=\"empty\"}', 'values': '0+0x3'}], 'promql_expr_test': [{'expr': 'slo:bad_fraction_lower', 'eval_time': '2m', 'exp_samples': [{'labels': 'slo:bad_fraction_lower{service=\"good\"}', 'value': 0}, {'labels': 'slo:bad_fraction_lower{service=\"bad\"}', 'value': 0.3}, {'labels': 'slo:bad_fraction_lower{service=\"unknown\"}', 'value': 0.01}]}, {'expr': 'slo:bad_fraction_upper', 'eval_time': '2m', 'exp_samples': [{'labels': 'slo:bad_fraction_upper{service=\"good\"}', 'value': 0.01}, {'labels': 'slo:bad_fraction_upper{service=\"bad\"}', 'value': 0.4}, {'labels': 'slo:bad_fraction_upper{service=\"unknown\"}', 'value': 0.3}]}, {'expr': 'slo:proven_good', 'eval_time': '2m', 'exp_samples': [{'labels': 'slo:proven_good{service=\"good\"}', 'value': 1}, {'labels': 'slo:proven_good{service=\"bad\"}', 'value': 0}, {'labels': 'slo:proven_good{service=\"unknown\"}', 'value': 0}]}, {'expr': 'slo:proven_bad', 'eval_time': '2m', 'exp_samples': [{'labels': 'slo:proven_bad{service=\"good\"}', 'value': 0}, {'labels': 'slo:proven_bad{service=\"bad\"}', 'value': 1}, {'labels': 'slo:proven_bad{service=\"unknown\"}', 'value': 0}]}]}]}\nr=load('rules.yaml')\nassert set(r)=={'groups'} and len(r['groups'])==1\ng=r['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']==EXPECTED['groups'][0]['name'] and g['interval']=='1m'\nassert len(g['rules'])==len(EXPECTED['groups'][0]['rules'])\nfor actual,expected in zip(g['rules'],EXPECTED['groups'][0]['rules']):\n assert set(actual)==set(expected)\n assert {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in expected.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\n\nassert shutil.which('promtool'),'platform must supply native promtool'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-rules-') as tmp:\n fixture=copy.deepcopy(FIXTURE);fixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\n path=pathlib.Path(tmp)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf-8')\n for args in [['promtool','check','rules','rules.yaml'],['promtool','test','rules',str(path)]]:\n  p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n  print(p.stdout);print(p.stderr);assert p.returncode==0,'native rule execution failed'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-035",
+      "original_type": "interview",
+      "original_title": "经典histogram桶太粗会怎样影响SLO判定？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-064",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 3,
+    "topic": "抓取配置与采集质量",
+    "title": "过滤仍在lookback窗口内但已经过期的业务样本",
+    "answer": "```yaml\ngroups:\n- name: freshness-gate\n  interval: 1m\n  rules:\n  - record: queue:fresh\n    expr: queue_depth and on(instance) (time() - timestamp(queue_depth) <= 60)\n```\n\n瞬时选择器可在lookback内使用旧样本，timestamp保留原采样时间；time()-timestamp给出年龄。严格小于会误删恰好60秒的合法边界；stale系列本身已不参与瞬时选择。\n\n### 原题原理\n即时查询有lookback与陈旧处理机制，具体表现受抓取失败、目标消失和时间戳设置影响。应同时看样本时间与up，不把图上最后一个值当当前观测。诊断使用明确评估时刻。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "产出实际PromQL可执行规则",
+      "保留规定标签和统计语义",
+      "窗口边界/未知值/原生样本类型通过真实工具验收"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/",
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: freshness-gate\n  interval: 1m\n  rules:\n  - record: queue:fresh\n    expr: queue_depth\n",
+      "fixtures.yaml": "rule_files:\n- rules.yaml\nevaluation_interval: 1m\nfuzzy_compare: true\ntests:\n- interval: 1m\n  input_series:\n  - series: queue_depth{instance=\"stopped\"}\n    values: 7 _ _ _ _ _ _\n  - series: queue_depth{instance=\"live\"}\n    values: 2+0x6\n  - series: queue_depth{instance=\"marked_stale\"}\n    values: 8 stale _ _ _ _ _\n  promql_expr_test:\n  - expr: queue:fresh\n    eval_time: 1m\n    exp_samples:\n    - labels: queue:fresh{instance=\"live\"}\n      value: 2\n    - labels: queue:fresh{instance=\"stopped\"}\n      value: 7\n  - expr: queue:fresh\n    eval_time: 2m\n    exp_samples:\n    - labels: queue:fresh{instance=\"live\"}\n      value: 2\n  - expr: queue:fresh\n    eval_time: 4m\n    exp_samples:\n    - labels: queue:fresh{instance=\"live\"}\n      value: 2\n  - expr: queue:fresh\n    eval_time: 6m\n    exp_samples:\n    - labels: queue:fresh{instance=\"live\"}\n      value: 2\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: freshness-gate\n  interval: 1m\n  rules:\n  - record: queue:fresh\n    expr: queue_depth and on(instance) (time() - timestamp(queue_depth) <= 60)\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: freshness-gate\n  interval: 1m\n  rules:\n  - record: queue:fresh\n    expr: queue_depth and on(instance) (time() - timestamp(queue_depth) < 60)\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供promtool 3.5和Python/PyYAML。编辑rules.yaml，fixtures.yaml提供固定Prometheus规则测试输入；无需学员自建Prometheus，也不连接生产。\n\n## 操作任务\nqueue:fresh只保留样本年龄<=60秒的queue_depth，并保留原值和instance。stopped只在0分钟采到7，1分钟边界仍可用、2/4分钟必须剔除，不能因为瞬时查询仍返回旧值就当作新采样。live持续采样保留；marked_stale第1分钟后立即不再输出。缺失不补成0，本题是新鲜度约束，不是证明抓取成功。\n\n## 产物\n提交rules.yaml，保留题定记录规则和告警的名称、标签合同。\n\n## 验收方法\n执行python3 checks/check.py：官方promtool check rules检查规则，再由promtool test rules真实计算样本、告警pending/firing/恢复。可信fixtures由验收器独立加载，不接受删改测试来通过；允许等价PromQL表达式，不做公式字符串匹配。参考解、原配置、典型错误及重复键四路验证。\n\n## 原理复习\n一次抓取超时后为什么有些查询仍可能短时显示旧值？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-promtool",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "queue:fresh只保留样本年龄<=60秒的queue_depth，并保留原值和instance。stopped只在0分钟采到7，1分钟边界仍可用、2/4分钟必须剔除，不能因为瞬时查询仍返回旧值就当作新采样。live持续采样保留；marked_stale第1分钟后立即不再输出。缺失不补成0，本题是新鲜度约束，不是证明抓取成功。",
+      "verification": "官方promtool真实离线执行PromQL与告警时间状态；带独立边界样本。",
+      "capability_gap": [
+        "不运行抓取、服务发现、Alertmanager通知，不将离线规则执行冒充线上链路通过。"
+      ],
+      "failure_examples": [
+        "negative_files对应题目中容易产生误报或错误数值的配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "promtool"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nEXPECTED={'groups': [{'name': 'freshness-gate', 'interval': '1m', 'rules': [{'record': 'queue:fresh', 'expr': 'queue_depth and on(instance) (time() - timestamp(queue_depth) <= 60)'}]}]}\nFIXTURE={'rule_files': ['rules.yaml'], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'queue_depth{instance=\"stopped\"}', 'values': '7 _ _ _ _ _ _'}, {'series': 'queue_depth{instance=\"live\"}', 'values': '2+0x6'}, {'series': 'queue_depth{instance=\"marked_stale\"}', 'values': '8 stale _ _ _ _ _'}], 'promql_expr_test': [{'expr': 'queue:fresh', 'eval_time': '1m', 'exp_samples': [{'labels': 'queue:fresh{instance=\"live\"}', 'value': 2}, {'labels': 'queue:fresh{instance=\"stopped\"}', 'value': 7}]}, {'expr': 'queue:fresh', 'eval_time': '2m', 'exp_samples': [{'labels': 'queue:fresh{instance=\"live\"}', 'value': 2}]}, {'expr': 'queue:fresh', 'eval_time': '4m', 'exp_samples': [{'labels': 'queue:fresh{instance=\"live\"}', 'value': 2}]}, {'expr': 'queue:fresh', 'eval_time': '6m', 'exp_samples': [{'labels': 'queue:fresh{instance=\"live\"}', 'value': 2}]}]}]}\nr=load('rules.yaml')\nassert set(r)=={'groups'} and len(r['groups'])==1\ng=r['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']==EXPECTED['groups'][0]['name'] and g['interval']=='1m'\nassert len(g['rules'])==len(EXPECTED['groups'][0]['rules'])\nfor actual,expected in zip(g['rules'],EXPECTED['groups'][0]['rules']):\n assert set(actual)==set(expected)\n assert {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in expected.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\n\nassert shutil.which('promtool'),'platform must supply native promtool'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-rules-') as tmp:\n fixture=copy.deepcopy(FIXTURE);fixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\n path=pathlib.Path(tmp)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf-8')\n for args in [['promtool','check','rules','rules.yaml'],['promtool','test','rules',str(path)]]:\n  p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n  print(p.stdout);print(p.stderr);assert p.returncode==0,'native rule execution failed'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-064",
+      "original_type": "interview",
+      "original_title": "一次抓取超时后为什么有些查询仍可能短时显示旧值？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-069",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 3,
+    "topic": "高可用容量与运行治理",
+    "title": "同时统计当前活跃身份和近期出现过的身份",
+    "answer": "```yaml\ngroups:\n- name: identity-churn-observation\n  interval: 1m\n  rules:\n  - record: workers:active\n    expr: count(worker_queue)\n  - record: workers:seen_5m\n    expr: count(count_over_time(worker_queue[5m]))\n```\n\n内层count_over_time保留每条历史系列并统计采样个数，外层count只数存在多少条系列。sum会混淆稳定系列的多次采样和多个不同身份。stale标记不算有效观测值，但此前窗口内样本仍可统计。\n\n### 原题原理\n短命标签组合不断创建和消失会消耗索引、WAL和Head资源，即使瞬时活跃数相近。检查创建/删除趋势及标签生命周期，避免请求ID或临时实例名无界变化。容量模型应包含新序列速率。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "产出实际PromQL可执行规则",
+      "保留规定标签和统计语义",
+      "窗口边界/未知值/原生样本类型通过真实工具验收"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/",
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: identity-churn-observation\n  interval: 1m\n  rules:\n  - record: workers:active\n    expr: count(worker_queue)\n  - record: workers:seen_5m\n    expr: count(worker_queue)\n",
+      "fixtures.yaml": "rule_files:\n- rules.yaml\nevaluation_interval: 1m\nfuzzy_compare: true\ntests:\n- interval: 1m\n  input_series:\n  - series: worker_queue{worker=\"a\"}\n    values: 1 stale _ _ _ _ _\n  - series: worker_queue{worker=\"b\"}\n    values: _ 1 stale _ _ _ _\n  - series: worker_queue{worker=\"c\"}\n    values: _ _ 1+0x4\n  promql_expr_test:\n  - expr: workers:active\n    eval_time: 2m\n    exp_samples:\n    - labels: workers:active{}\n      value: 1\n  - expr: workers:seen_5m\n    eval_time: 2m\n    exp_samples:\n    - labels: workers:seen_5m{}\n      value: 3\n  - expr: workers:active\n    eval_time: 6m\n    exp_samples:\n    - labels: workers:active{}\n      value: 1\n  - expr: workers:seen_5m\n    eval_time: 6m\n    exp_samples:\n    - labels: workers:seen_5m{}\n      value: 1\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: identity-churn-observation\n  interval: 1m\n  rules:\n  - record: workers:active\n    expr: count(worker_queue)\n  - record: workers:seen_5m\n    expr: count(count_over_time(worker_queue[5m]))\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: identity-churn-observation\n  interval: 1m\n  rules:\n  - record: workers:active\n    expr: count(worker_queue)\n  - record: workers:seen_5m\n    expr: sum(count_over_time(worker_queue[5m]))\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供promtool 3.5和Python/PyYAML。编辑rules.yaml，fixtures.yaml提供固定Prometheus规则测试输入；无需学员自建Prometheus，也不连接生产。\n\n## 操作任务\nworkers:active计算当前仍存在的worker_queue系列数；workers:seen_5m计算最近5分钟至少出现一次真实样本的不同标签系列数，不是样本条数。第2分钟只有c活跃但a/b/c均在窗口内，得到1与3；第6分钟窗口左开排除b的第1分钟样本，两者均1。这里报告身份周转迹象，不把差值当精确创建/删除速率或内存开销。\n\n## 产物\n提交rules.yaml，保留题定记录规则和告警的名称、标签合同。\n\n## 验收方法\n执行python3 checks/check.py：官方promtool check rules检查规则，再由promtool test rules真实计算样本、告警pending/firing/恢复。可信fixtures由验收器独立加载，不接受删改测试来通过；允许等价PromQL表达式，不做公式字符串匹配。参考解、原配置、典型错误及重复键四路验证。\n\n## 原理复习\n活跃序列数稳定为何仍需要关注序列churn？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-promtool",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "workers:active计算当前仍存在的worker_queue系列数；workers:seen_5m计算最近5分钟至少出现一次真实样本的不同标签系列数，不是样本条数。第2分钟只有c活跃但a/b/c均在窗口内，得到1与3；第6分钟窗口左开排除b的第1分钟样本，两者均1。这里报告身份周转迹象，不把差值当精确创建/删除速率或内存开销。",
+      "verification": "官方promtool真实离线执行PromQL与告警时间状态；带独立边界样本。",
+      "capability_gap": [
+        "不运行抓取、服务发现、Alertmanager通知，不将离线规则执行冒充线上链路通过。"
+      ],
+      "failure_examples": [
+        "negative_files对应题目中容易产生误报或错误数值的配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "promtool"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nEXPECTED={'groups': [{'name': 'identity-churn-observation', 'interval': '1m', 'rules': [{'record': 'workers:active', 'expr': 'count(worker_queue)'}, {'record': 'workers:seen_5m', 'expr': 'count(count_over_time(worker_queue[5m]))'}]}]}\nFIXTURE={'rule_files': ['rules.yaml'], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'worker_queue{worker=\"a\"}', 'values': '1 stale _ _ _ _ _'}, {'series': 'worker_queue{worker=\"b\"}', 'values': '_ 1 stale _ _ _ _'}, {'series': 'worker_queue{worker=\"c\"}', 'values': '_ _ 1+0x4'}], 'promql_expr_test': [{'expr': 'workers:active', 'eval_time': '2m', 'exp_samples': [{'labels': 'workers:active{}', 'value': 1}]}, {'expr': 'workers:seen_5m', 'eval_time': '2m', 'exp_samples': [{'labels': 'workers:seen_5m{}', 'value': 3}]}, {'expr': 'workers:active', 'eval_time': '6m', 'exp_samples': [{'labels': 'workers:active{}', 'value': 1}]}, {'expr': 'workers:seen_5m', 'eval_time': '6m', 'exp_samples': [{'labels': 'workers:seen_5m{}', 'value': 1}]}]}]}\nr=load('rules.yaml')\nassert set(r)=={'groups'} and len(r['groups'])==1\ng=r['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']==EXPECTED['groups'][0]['name'] and g['interval']=='1m'\nassert len(g['rules'])==len(EXPECTED['groups'][0]['rules'])\nfor actual,expected in zip(g['rules'],EXPECTED['groups'][0]['rules']):\n assert set(actual)==set(expected)\n assert {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in expected.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\n\nassert shutil.which('promtool'),'platform must supply native promtool'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-rules-') as tmp:\n fixture=copy.deepcopy(FIXTURE);fixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\n path=pathlib.Path(tmp)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf-8')\n for args in [['promtool','check','rules','rules.yaml'],['promtool','test','rules',str(path)]]:\n  p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n  print(p.stdout);print(p.stderr);assert p.returncode==0,'native rule execution failed'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-069",
+      "original_type": "interview",
+      "original_title": "活跃序列数稳定为何仍需要关注序列churn？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-036",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "指标模型与监控架构",
+    "title": "从真正的native histogram样本提取数量总和与均值",
+    "answer": "```yaml\ngroups:\n- name: native-histogram-fields\n  interval: 1m\n  rules:\n  - record: duration:observations\n    expr: histogram_count(request_duration_seconds)\n  - record: duration:sum_seconds\n    expr: histogram_sum(request_duration_seconds)\n  - record: duration:mean_seconds\n    expr: histogram_avg(request_duration_seconds) and (histogram_count(request_duration_seconds)\n      > 0)\n```\n\nnative histogram把桶、count、sum封装在单个样本中；使用histogram_count/sum/avg原生函数，不能沿用经典浮点系列后缀查找。可信fixture传入实际native histogram样本而不是Python伪造计数字段。\n\n### 原题原理\n原生histogram把分布作为样本类型，许多操作不再依赖le标签的独立桶序列。需核对采集、存储、remote write和查询版本支持，不能机械复用所有经典表达式或假定混合样本不会被忽略。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "产出实际PromQL可执行规则",
+      "保留规定标签和统计语义",
+      "窗口边界/未知值/原生样本类型通过真实工具验收"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/",
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: native-histogram-fields\n  interval: 1m\n  rules:\n  - record: duration:observations\n    expr: request_duration_seconds_count\n  - record: duration:sum_seconds\n    expr: request_duration_seconds_sum\n  - record: duration:mean_seconds\n    expr: request_duration_seconds_sum / request_duration_seconds_count\n",
+      "fixtures.yaml": "rule_files:\n- rules.yaml\nevaluation_interval: 1m\nfuzzy_compare: true\ntests:\n- interval: 1m\n  input_series:\n  - series: request_duration_seconds{instance=\"a\"}\n    values: '{{schema:0 sum:7 count:4 buckets:[1 3] offset:0}} {{schema:0 sum:7 count:4\n      buckets:[1 3] offset:0}} {{schema:0 sum:7 count:4 buckets:[1 3] offset:0}}'\n  - series: request_duration_seconds{instance=\"b\"}\n    values: '{{schema:0 sum:3 count:2 buckets:[1 1] offset:0}} {{schema:0 sum:3 count:2\n      buckets:[1 1] offset:0}} {{schema:0 sum:3 count:2 buckets:[1 1] offset:0}}'\n  - series: request_duration_seconds{instance=\"empty\"}\n    values: '{{schema:0 sum:0 count:0}} {{schema:0 sum:0 count:0}} {{schema:0 sum:0\n      count:0}}'\n  promql_expr_test:\n  - expr: duration:observations\n    eval_time: 2m\n    exp_samples:\n    - labels: duration:observations{instance=\"a\"}\n      value: 4\n    - labels: duration:observations{instance=\"b\"}\n      value: 2\n    - labels: duration:observations{instance=\"empty\"}\n      value: 0\n  - expr: duration:sum_seconds\n    eval_time: 2m\n    exp_samples:\n    - labels: duration:sum_seconds{instance=\"a\"}\n      value: 7\n    - labels: duration:sum_seconds{instance=\"b\"}\n      value: 3\n    - labels: duration:sum_seconds{instance=\"empty\"}\n      value: 0\n  - expr: duration:mean_seconds\n    eval_time: 2m\n    exp_samples:\n    - labels: duration:mean_seconds{instance=\"a\"}\n      value: 1.75\n    - labels: duration:mean_seconds{instance=\"b\"}\n      value: 1.5\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: native-histogram-fields\n  interval: 1m\n  rules:\n  - record: duration:observations\n    expr: histogram_count(request_duration_seconds)\n  - record: duration:sum_seconds\n    expr: histogram_sum(request_duration_seconds)\n  - record: duration:mean_seconds\n    expr: histogram_avg(request_duration_seconds) and (histogram_count(request_duration_seconds)\n      > 0)\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: native-histogram-fields\n  interval: 1m\n  rules:\n  - record: duration:observations\n    expr: histogram_count(request_duration_seconds)\n  - record: duration:sum_seconds\n    expr: histogram_sum(request_duration_seconds)\n  - record: duration:mean_seconds\n    expr: histogram_sum(request_duration_seconds)\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供promtool 3.5和Python/PyYAML。编辑rules.yaml，fixtures.yaml提供固定Prometheus规则测试输入；无需学员自建Prometheus，也不连接生产。\n\n## 操作任务\n材料中的request_duration_seconds本身是native histogram，不存在_count/_sum/_bucket浮点系列。交付三个记录：duration:observations为样本内count，duration:sum_seconds为sum，duration:mean_seconds为sum/count且count=0时不输出NaN。保留instance；a为4/7/1.75，b为2/3/1.5，empty保留0count和0sum但没有mean。这里提取累计快照统计，不把它称为rate。\n\n## 产物\n提交rules.yaml，保留题定记录规则和告警的名称、标签合同。\n\n## 验收方法\n执行python3 checks/check.py：官方promtool check rules检查规则，再由promtool test rules真实计算样本、告警pending/firing/恢复。可信fixtures由验收器独立加载，不接受删改测试来通过；允许等价PromQL表达式，不做公式字符串匹配。参考解、原配置、典型错误及重复键四路验证。\n\n## 原理复习\n原生histogram与经典_bucket序列的查询差异是什么？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-promtool",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "材料中的request_duration_seconds本身是native histogram，不存在_count/_sum/_bucket浮点系列。交付三个记录：duration:observations为样本内count，duration:sum_seconds为sum，duration:mean_seconds为sum/count且count=0时不输出NaN。保留instance；a为4/7/1.75，b为2/3/1.5，empty保留0count和0sum但没有mean。这里提取累计快照统计，不把它称为rate。",
+      "verification": "官方promtool真实离线执行PromQL与告警时间状态；带独立边界样本。",
+      "capability_gap": [
+        "不运行抓取、服务发现、Alertmanager通知，不将离线规则执行冒充线上链路通过。"
+      ],
+      "failure_examples": [
+        "negative_files对应题目中容易产生误报或错误数值的配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "promtool"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nEXPECTED={'groups': [{'name': 'native-histogram-fields', 'interval': '1m', 'rules': [{'record': 'duration:observations', 'expr': 'histogram_count(request_duration_seconds)'}, {'record': 'duration:sum_seconds', 'expr': 'histogram_sum(request_duration_seconds)'}, {'record': 'duration:mean_seconds', 'expr': 'histogram_avg(request_duration_seconds) and (histogram_count(request_duration_seconds) > 0)'}]}]}\nFIXTURE={'rule_files': ['rules.yaml'], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'request_duration_seconds{instance=\"a\"}', 'values': '{{schema:0 sum:7 count:4 buckets:[1 3] offset:0}} {{schema:0 sum:7 count:4 buckets:[1 3] offset:0}} {{schema:0 sum:7 count:4 buckets:[1 3] offset:0}}'}, {'series': 'request_duration_seconds{instance=\"b\"}', 'values': '{{schema:0 sum:3 count:2 buckets:[1 1] offset:0}} {{schema:0 sum:3 count:2 buckets:[1 1] offset:0}} {{schema:0 sum:3 count:2 buckets:[1 1] offset:0}}'}, {'series': 'request_duration_seconds{instance=\"empty\"}', 'values': '{{schema:0 sum:0 count:0}} {{schema:0 sum:0 count:0}} {{schema:0 sum:0 count:0}}'}], 'promql_expr_test': [{'expr': 'duration:observations', 'eval_time': '2m', 'exp_samples': [{'labels': 'duration:observations{instance=\"a\"}', 'value': 4}, {'labels': 'duration:observations{instance=\"b\"}', 'value': 2}, {'labels': 'duration:observations{instance=\"empty\"}', 'value': 0}]}, {'expr': 'duration:sum_seconds', 'eval_time': '2m', 'exp_samples': [{'labels': 'duration:sum_seconds{instance=\"a\"}', 'value': 7}, {'labels': 'duration:sum_seconds{instance=\"b\"}', 'value': 3}, {'labels': 'duration:sum_seconds{instance=\"empty\"}', 'value': 0}]}, {'expr': 'duration:mean_seconds', 'eval_time': '2m', 'exp_samples': [{'labels': 'duration:mean_seconds{instance=\"a\"}', 'value': 1.75}, {'labels': 'duration:mean_seconds{instance=\"b\"}', 'value': 1.5}]}]}]}\nr=load('rules.yaml')\nassert set(r)=={'groups'} and len(r['groups'])==1\ng=r['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']==EXPECTED['groups'][0]['name'] and g['interval']=='1m'\nassert len(g['rules'])==len(EXPECTED['groups'][0]['rules'])\nfor actual,expected in zip(g['rules'],EXPECTED['groups'][0]['rules']):\n assert set(actual)==set(expected)\n assert {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in expected.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\n\nassert shutil.which('promtool'),'platform must supply native promtool'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-rules-') as tmp:\n fixture=copy.deepcopy(FIXTURE);fixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\n path=pathlib.Path(tmp)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf-8')\n for args in [['promtool','check','rules','rules.yaml'],['promtool','test','rules',str(path)]]:\n  p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n  print(p.stdout);print(p.stderr);assert p.returncode==0,'native rule execution failed'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-036",
+      "original_type": "interview",
+      "original_title": "原生histogram与经典_bucket序列的查询差异是什么？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-032",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "指标模型与监控架构",
+    "title": "按服务合并经典直方图累计桶再计算分位数",
+    "answer": "```yaml\ngroups:\n- name: classic-histogram-service-aggregation\n  interval: 1m\n  rules:\n  - record: service:request_p50_seconds\n    expr: histogram_quantile(0.5, sum by(service,le)(rate(request_seconds_bucket[5m])))\n      and on(service)(sum by(service)(rate(request_seconds_bucket{le=\"+Inf\"}[5m]))\n      > 0)\n```\n\n经典累计桶按le保留边界，按service保留业务身份，先合并采样权重后再求分位数。shop总桶为9/100/100，p50估计约1.45055；逐实例分位数均值不会按实际流量重建总体分布。\n\n### 原题原理\nhistogram_quantile需要桶边界，通常先对各桶counter取rate，再按业务维度与le聚合。丢掉le会破坏分布结构。各实例桶布局需兼容，估计精度受桶边界影响。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "产出实际PromQL可执行规则",
+      "保留规定标签和统计语义",
+      "窗口边界/未知值/原生样本类型通过真实工具验收"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/",
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: classic-histogram-service-aggregation\n  interval: 1m\n  rules:\n  - record: service:request_p50_seconds\n    expr: histogram_quantile(0.5, sum by(service)(rate(request_seconds_bucket[5m])))\n",
+      "fixtures.yaml": "rule_files:\n- rules.yaml\nevaluation_interval: 1m\nfuzzy_compare: true\ntests:\n- interval: 1m\n  input_series:\n  - series: request_seconds_bucket{instance=\"a\",le=\"1\",service=\"shop\"}\n    values: 0+9x6\n  - series: request_seconds_bucket{instance=\"a\",le=\"2\",service=\"shop\"}\n    values: 0+10x6\n  - series: request_seconds_bucket{instance=\"a\",le=\"+Inf\",service=\"shop\"}\n    values: 0+10x6\n  - series: request_seconds_bucket{instance=\"b\",le=\"1\",service=\"shop\"}\n    values: 0+0x6\n  - series: request_seconds_bucket{instance=\"b\",le=\"2\",service=\"shop\"}\n    values: 0+90x6\n  - series: request_seconds_bucket{instance=\"b\",le=\"+Inf\",service=\"shop\"}\n    values: 0+90x6\n  - series: request_seconds_bucket{instance=\"c\",le=\"1\",service=\"other\"}\n    values: 0+100x6\n  - series: request_seconds_bucket{instance=\"c\",le=\"2\",service=\"other\"}\n    values: 0+100x6\n  - series: request_seconds_bucket{instance=\"c\",le=\"+Inf\",service=\"other\"}\n    values: 0+100x6\n  - series: request_seconds_bucket{instance=\"d\",le=\"1\",service=\"empty\"}\n    values: 0+0x6\n  - series: request_seconds_bucket{instance=\"d\",le=\"2\",service=\"empty\"}\n    values: 0+0x6\n  - series: request_seconds_bucket{instance=\"d\",le=\"+Inf\",service=\"empty\"}\n    values: 0+0x6\n  promql_expr_test:\n  - expr: service:request_p50_seconds\n    eval_time: 5m\n    exp_samples:\n    - labels: service:request_p50_seconds{service=\"shop\"}\n      value: 1.4505494505494505\n    - labels: service:request_p50_seconds{service=\"other\"}\n      value: 0.5\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: classic-histogram-service-aggregation\n  interval: 1m\n  rules:\n  - record: service:request_p50_seconds\n    expr: histogram_quantile(0.5, sum by(service,le)(rate(request_seconds_bucket[5m])))\n      and on(service)(sum by(service)(rate(request_seconds_bucket{le=\"+Inf\"}[5m]))\n      > 0)\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: classic-histogram-service-aggregation\n  interval: 1m\n  rules:\n  - record: service:request_p50_seconds\n    expr: avg by(service)(histogram_quantile(0.5,rate(request_seconds_bucket[5m])))\n      and on(service)(sum by(service)(rate(request_seconds_bucket{le=\"+Inf\"}[5m]))\n      > 0)\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供promtool 3.5和Python/PyYAML。编辑rules.yaml，fixtures.yaml提供固定Prometheus规则测试输入；无需学员自建Prometheus，也不连接生产。\n\n## 操作任务\n每个实例都是累计counter桶。用最近5分钟速率先按service/le合并，再计算每个服务p50，保留service、去掉instance和le。shop两个实例流量分别10和90/分钟，不能对实例p50做平均；other独立为0.5秒，empty无流量不输出NaN。结果是直方图插值估计，不冒充精确单请求排序。\n\n## 产物\n提交rules.yaml，保留题定记录规则和告警的名称、标签合同。\n\n## 验收方法\n执行python3 checks/check.py：官方promtool check rules检查规则，再由promtool test rules真实计算样本、告警pending/firing/恢复。可信fixtures由验收器独立加载，不接受删改测试来通过；允许等价PromQL表达式，不做公式字符串匹配。参考解、原配置、典型错误及重复键四路验证。\n\n## 原理复习\n跨实例计算经典histogram分位数时为何保留le？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-promtool",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "每个实例都是累计counter桶。用最近5分钟速率先按service/le合并，再计算每个服务p50，保留service、去掉instance和le。shop两个实例流量分别10和90/分钟，不能对实例p50做平均；other独立为0.5秒，empty无流量不输出NaN。结果是直方图插值估计，不冒充精确单请求排序。",
+      "verification": "官方promtool真实离线执行PromQL与告警时间状态；带独立边界样本。",
+      "capability_gap": [
+        "不运行抓取、服务发现、Alertmanager通知，不将离线规则执行冒充线上链路通过。"
+      ],
+      "failure_examples": [
+        "negative_files对应题目中容易产生误报或错误数值的配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "promtool"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nEXPECTED={'groups': [{'name': 'classic-histogram-service-aggregation', 'interval': '1m', 'rules': [{'record': 'service:request_p50_seconds', 'expr': 'histogram_quantile(0.5, sum by(service,le)(rate(request_seconds_bucket[5m]))) and on(service)(sum by(service)(rate(request_seconds_bucket{le=\"+Inf\"}[5m])) > 0)'}]}]}\nFIXTURE={'rule_files': ['rules.yaml'], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'request_seconds_bucket{instance=\"a\",le=\"1\",service=\"shop\"}', 'values': '0+9x6'}, {'series': 'request_seconds_bucket{instance=\"a\",le=\"2\",service=\"shop\"}', 'values': '0+10x6'}, {'series': 'request_seconds_bucket{instance=\"a\",le=\"+Inf\",service=\"shop\"}', 'values': '0+10x6'}, {'series': 'request_seconds_bucket{instance=\"b\",le=\"1\",service=\"shop\"}', 'values': '0+0x6'}, {'series': 'request_seconds_bucket{instance=\"b\",le=\"2\",service=\"shop\"}', 'values': '0+90x6'}, {'series': 'request_seconds_bucket{instance=\"b\",le=\"+Inf\",service=\"shop\"}', 'values': '0+90x6'}, {'series': 'request_seconds_bucket{instance=\"c\",le=\"1\",service=\"other\"}', 'values': '0+100x6'}, {'series': 'request_seconds_bucket{instance=\"c\",le=\"2\",service=\"other\"}', 'values': '0+100x6'}, {'series': 'request_seconds_bucket{instance=\"c\",le=\"+Inf\",service=\"other\"}', 'values': '0+100x6'}, {'series': 'request_seconds_bucket{instance=\"d\",le=\"1\",service=\"empty\"}', 'values': '0+0x6'}, {'series': 'request_seconds_bucket{instance=\"d\",le=\"2\",service=\"empty\"}', 'values': '0+0x6'}, {'series': 'request_seconds_bucket{instance=\"d\",le=\"+Inf\",service=\"empty\"}', 'values': '0+0x6'}], 'promql_expr_test': [{'expr': 'service:request_p50_seconds', 'eval_time': '5m', 'exp_samples': [{'labels': 'service:request_p50_seconds{service=\"shop\"}', 'value': 1.4505494505494505}, {'labels': 'service:request_p50_seconds{service=\"other\"}', 'value': 0.5}]}]}]}\nr=load('rules.yaml')\nassert set(r)=={'groups'} and len(r['groups'])==1\ng=r['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']==EXPECTED['groups'][0]['name'] and g['interval']=='1m'\nassert len(g['rules'])==len(EXPECTED['groups'][0]['rules'])\nfor actual,expected in zip(g['rules'],EXPECTED['groups'][0]['rules']):\n assert set(actual)==set(expected)\n assert {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in expected.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\n\nassert shutil.which('promtool'),'platform must supply native promtool'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-rules-') as tmp:\n fixture=copy.deepcopy(FIXTURE);fixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\n path=pathlib.Path(tmp)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf-8')\n for args in [['promtool','check','rules','rules.yaml'],['promtool','test','rules',str(path)]]:\n  p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n  print(p.stdout);print(p.stderr);assert p.returncode==0,'native rule execution failed'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-032",
+      "original_type": "interview",
+      "original_title": "跨实例计算经典histogram分位数时为何保留le？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

@@ -1,0 +1,1054 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opsforge
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opsforge-practice
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opsforge-backend
+  namespace: opsforge
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opsforge-learner
+  namespace: opsforge-practice
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opsforge-broker
+  namespace: opsforge-practice
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["get", "create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opsforge-broker
+  namespace: opsforge-practice
+subjects:
+  - kind: ServiceAccount
+    name: opsforge-backend
+    namespace: opsforge
+roleRef:
+  kind: Role
+  name: opsforge-broker
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opsforge-student
+  namespace: opsforge-practice
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "services", "configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log", "events", "endpoints"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/scale", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opsforge-student
+  namespace: opsforge-practice
+subjects:
+  - kind: ServiceAccount
+    name: opsforge-learner
+    namespace: opsforge-practice
+roleRef:
+  kind: Role
+  name: opsforge-student
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: practice-limits
+  namespace: opsforge-practice
+spec:
+  hard:
+    pods: "6"
+    requests.cpu: "1"
+    requests.memory: 1Gi
+    limits.cpu: "3"
+    limits.memory: 3Gi
+    requests.storage: "0"
+    requests.ephemeral-storage: 4Gi
+    limits.ephemeral-storage: 12Gi
+    persistentvolumeclaims: "0"
+    services.nodeports: "0"
+    services.loadbalancers: "0"
+---
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: defaults
+  namespace: opsforge-practice
+spec:
+  limits:
+    - type: Container
+      default: {cpu: "500m", memory: "256Mi", ephemeral-storage: "1Gi"}
+      defaultRequest: {cpu: "50m", memory: "64Mi", ephemeral-storage: "128Mi"}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: practice-boundary
+  namespace: opsforge-practice
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12, 192.168.0.0/16, 224.0.0.0/4, 240.0.0.0/4]
+      ports:
+        - {protocol: TCP, port: 443}
+    # API_SERVER_EGRESS
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsforge-gateway
+  namespace: opsforge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: opsforge-gateway
+  template:
+    metadata:
+      annotations:
+        opsforge/config-hash: CONFIG_FINGERPRINT
+      labels:
+        app: opsforge-gateway
+        opsforge-tier: backend
+        opsforge-data: 'no'
+    spec:
+      securityContext:
+        fsGroup: 10001
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: gateway
+        image: IMAGE_BACKEND
+        ports:
+        - containerPort: 8081
+        env:
+        - name: OPSFORGE_SERVICE
+          value: gateway
+        - name: SERVICE_SECRET
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: SERVICE_SECRET
+        - name: DATA_DIR
+          value: /data
+        resources:
+          requests:
+            cpu: 100m
+            memory: 192Mi
+          limits:
+            cpu: '1'
+            memory: 768Mi
+        securityContext:
+          runAsUser: 10001
+          runAsGroup: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: tmp
+          mountPath: /tmp
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8081
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /api/live
+            port: 8081
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+        livenessProbe:
+          httpGet:
+            path: /api/live
+            port: 8081
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsforge-gateway
+  namespace: opsforge
+spec:
+  selector:
+    app: opsforge-gateway
+  ports:
+  - port: 8081
+    targetPort: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opsforge-gateway-ingress
+  namespace: opsforge
+spec:
+  podSelector:
+    matchLabels:
+      app: opsforge-gateway
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: opsforge-frontend
+    ports:
+    - protocol: TCP
+      port: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsforge-auth
+  namespace: opsforge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: opsforge-auth
+  template:
+    metadata:
+      annotations:
+        opsforge/config-hash: CONFIG_FINGERPRINT
+      labels:
+        app: opsforge-auth
+        opsforge-tier: backend
+        opsforge-data: 'yes'
+    spec:
+      securityContext:
+        fsGroup: 10001
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: auth
+        image: IMAGE_BACKEND
+        ports:
+        - containerPort: 8081
+        env:
+        - name: OPSFORGE_SERVICE
+          value: auth
+        - name: SERVICE_SECRET
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: SERVICE_SECRET
+        - name: DATA_DIR
+          value: /data
+        - name: REQUIRE_POSTGRES
+          value: 'true'
+        - name: AUTH_DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: AUTH_DATABASE_URL
+        - name: OPSFORGE_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: OPSFORGE_PASSWORD
+        - name: COOKIE_SECURE
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: COOKIE_SECURE
+        - name: TRUSTED_PROXY_HOSTS
+          value: opsforge-proxy.opsforge.svc
+        resources:
+          requests:
+            cpu: 100m
+            memory: 192Mi
+          limits:
+            cpu: '1'
+            memory: 768Mi
+        securityContext:
+          runAsUser: 10001
+          runAsGroup: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: tmp
+          mountPath: /tmp
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8081
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /api/live
+            port: 8081
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+        livenessProbe:
+          httpGet:
+            path: /api/live
+            port: 8081
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsforge-auth
+  namespace: opsforge
+spec:
+  selector:
+    app: opsforge-auth
+  ports:
+  - port: 8081
+    targetPort: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opsforge-auth-ingress
+  namespace: opsforge
+spec:
+  podSelector:
+    matchLabels:
+      app: opsforge-auth
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          opsforge-tier: backend
+    ports:
+    - protocol: TCP
+      port: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsforge-bank
+  namespace: opsforge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: opsforge-bank
+  template:
+    metadata:
+      annotations:
+        opsforge/config-hash: CONFIG_FINGERPRINT
+      labels:
+        app: opsforge-bank
+        opsforge-tier: backend
+        opsforge-data: 'yes'
+    spec:
+      securityContext:
+        fsGroup: 10001
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: bank
+        image: IMAGE_BACKEND
+        ports:
+        - containerPort: 8081
+        env:
+        - name: OPSFORGE_SERVICE
+          value: bank
+        - name: SERVICE_SECRET
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: SERVICE_SECRET
+        - name: DATA_DIR
+          value: /data
+        - name: REQUIRE_POSTGRES
+          value: 'true'
+        - name: BANK_DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: BANK_DATABASE_URL
+        resources:
+          requests:
+            cpu: 100m
+            memory: 192Mi
+          limits:
+            cpu: '1'
+            memory: 768Mi
+        securityContext:
+          runAsUser: 10001
+          runAsGroup: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: tmp
+          mountPath: /tmp
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8081
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /api/live
+            port: 8081
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+        livenessProbe:
+          httpGet:
+            path: /api/live
+            port: 8081
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsforge-bank
+  namespace: opsforge
+spec:
+  selector:
+    app: opsforge-bank
+  ports:
+  - port: 8081
+    targetPort: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opsforge-bank-ingress
+  namespace: opsforge
+spec:
+  podSelector:
+    matchLabels:
+      app: opsforge-bank
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          opsforge-tier: backend
+    ports:
+    - protocol: TCP
+      port: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsforge-learning
+  namespace: opsforge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: opsforge-learning
+  template:
+    metadata:
+      annotations:
+        opsforge/config-hash: CONFIG_FINGERPRINT
+      labels:
+        app: opsforge-learning
+        opsforge-tier: backend
+        opsforge-data: 'yes'
+    spec:
+      securityContext:
+        fsGroup: 10001
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: learning
+        image: IMAGE_BACKEND
+        ports:
+        - containerPort: 8081
+        env:
+        - name: OPSFORGE_SERVICE
+          value: learning
+        - name: SERVICE_SECRET
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: SERVICE_SECRET
+        - name: DATA_DIR
+          value: /data
+        - name: REQUIRE_POSTGRES
+          value: 'true'
+        - name: LEARNING_DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: LEARNING_DATABASE_URL
+        resources:
+          requests:
+            cpu: 100m
+            memory: 192Mi
+          limits:
+            cpu: '1'
+            memory: 768Mi
+        securityContext:
+          runAsUser: 10001
+          runAsGroup: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: tmp
+          mountPath: /tmp
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8081
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /api/live
+            port: 8081
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+        livenessProbe:
+          httpGet:
+            path: /api/live
+            port: 8081
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsforge-learning
+  namespace: opsforge
+spec:
+  selector:
+    app: opsforge-learning
+  ports:
+  - port: 8081
+    targetPort: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opsforge-learning-ingress
+  namespace: opsforge
+spec:
+  podSelector:
+    matchLabels:
+      app: opsforge-learning
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          opsforge-tier: backend
+    ports:
+    - protocol: TCP
+      port: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsforge-exams
+  namespace: opsforge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: opsforge-exams
+  template:
+    metadata:
+      annotations:
+        opsforge/config-hash: CONFIG_FINGERPRINT
+      labels:
+        app: opsforge-exams
+        opsforge-tier: backend
+        opsforge-data: 'yes'
+    spec:
+      securityContext:
+        fsGroup: 10001
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: exams
+        image: IMAGE_BACKEND
+        ports:
+        - containerPort: 8081
+        env:
+        - name: OPSFORGE_SERVICE
+          value: exams
+        - name: SERVICE_SECRET
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: SERVICE_SECRET
+        - name: DATA_DIR
+          value: /data
+        - name: REQUIRE_POSTGRES
+          value: 'true'
+        - name: EXAMS_DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: EXAMS_DATABASE_URL
+        resources:
+          requests:
+            cpu: 100m
+            memory: 192Mi
+          limits:
+            cpu: '1'
+            memory: 768Mi
+        securityContext:
+          runAsUser: 10001
+          runAsGroup: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: tmp
+          mountPath: /tmp
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8081
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /api/live
+            port: 8081
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+        livenessProbe:
+          httpGet:
+            path: /api/live
+            port: 8081
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsforge-exams
+  namespace: opsforge
+spec:
+  selector:
+    app: opsforge-exams
+  ports:
+  - port: 8081
+    targetPort: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opsforge-exams-ingress
+  namespace: opsforge
+spec:
+  podSelector:
+    matchLabels:
+      app: opsforge-exams
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          opsforge-tier: backend
+    ports:
+    - protocol: TCP
+      port: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsforge-labs
+  namespace: opsforge
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: opsforge-labs
+  template:
+    metadata:
+      annotations:
+        opsforge/config-hash: CONFIG_FINGERPRINT
+      labels:
+        app: opsforge-labs
+        opsforge-tier: backend
+        opsforge-data: 'yes'
+    spec:
+      serviceAccountName: opsforge-backend
+      securityContext:
+        fsGroup: 10001
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: labs
+        image: IMAGE_BACKEND
+        ports:
+        - containerPort: 8081
+        env:
+        - name: OPSFORGE_SERVICE
+          value: labs
+        - name: SERVICE_SECRET
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: SERVICE_SECRET
+        - name: DATA_DIR
+          value: /data
+        - name: REQUIRE_POSTGRES
+          value: 'true'
+        - name: LABS_DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: LABS_DATABASE_URL
+        - name: LAB_BACKEND
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: LAB_BACKEND
+        - name: LAB_NAMESPACE
+          value: opsforge-practice
+        - name: LAB_NODE_SELECTOR
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: LAB_NODE_SELECTOR
+        - name: LAB_IMAGE
+          value: IMAGE_LAB
+        - name: ENABLE_DOCKER_LAB
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: ENABLE_DOCKER_LAB
+              optional: true
+        - name: ENABLE_CLUSTER_LAB
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: ENABLE_CLUSTER_LAB
+              optional: true
+        - name: K3S_IMAGE
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: K3S_IMAGE
+              optional: true
+        - name: K3S_PRELOAD_IMAGES
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: K3S_PRELOAD_IMAGES
+              optional: true
+        - name: NODE_LAB_IMAGE
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: NODE_LAB_IMAGE
+              optional: true
+        - name: DOCKER_NODE_SELECTOR
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: DOCKER_NODE_SELECTOR
+              optional: true
+        - name: ENABLE_DISTRIBUTED_LAB
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: ENABLE_DISTRIBUTED_LAB
+              optional: true
+        - name: DISTRIBUTED_NODE_SELECTOR
+          valueFrom:
+            configMapKeyRef:
+              name: opsforge-config
+              key: DISTRIBUTED_NODE_SELECTOR
+              optional: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 192Mi
+          limits:
+            cpu: '1'
+            memory: 768Mi
+        securityContext:
+          runAsUser: 10001
+          runAsGroup: 10001
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        - name: tmp
+          mountPath: /tmp
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 8081
+          initialDelaySeconds: 5
+          timeoutSeconds: 5
+        startupProbe:
+          httpGet:
+            path: /api/live
+            port: 8081
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 60
+        livenessProbe:
+          httpGet:
+            path: /api/live
+            port: 8081
+          initialDelaySeconds: 30
+          timeoutSeconds: 5
+      volumes:
+      - name: data
+        emptyDir: {}
+      - name: tmp
+        emptyDir: {}
+      automountServiceAccountToken: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsforge-labs
+  namespace: opsforge
+spec:
+  selector:
+    app: opsforge-labs
+  ports:
+  - port: 8081
+    targetPort: 8081
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opsforge-labs-ingress
+  namespace: opsforge
+spec:
+  podSelector:
+    matchLabels:
+      app: opsforge-labs
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          opsforge-tier: backend
+    ports:
+    - protocol: TCP
+      port: 8081
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opsforge-frontend
+  namespace: opsforge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: opsforge-frontend
+  template:
+    metadata:
+      annotations:
+        opsforge/config-hash: CONFIG_FINGERPRINT
+      labels:
+        app: opsforge-frontend
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: web
+        image: IMAGE_FRONTEND
+        ports:
+        - containerPort: 8080
+        resources:
+          requests:
+            cpu: 50m
+            memory: 32Mi
+          limits:
+            cpu: 300m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        volumeMounts:
+        - name: tmp
+          mountPath: /tmp
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+      volumes:
+      - name: tmp
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsforge-proxy
+  namespace: opsforge
+spec:
+  clusterIP: None
+  selector:
+    app: opsforge-frontend
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opsforge-web
+  namespace: opsforge
+spec:
+  type: NodePort
+  selector:
+    app: opsforge-frontend
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    nodePort: EXTERNAL_NODE_PORT

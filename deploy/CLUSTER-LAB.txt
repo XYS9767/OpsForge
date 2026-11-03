@@ -1,0 +1,24 @@
+独立 K3s 实验为可选特权侧车能力，默认关闭，外部部署仍须另外授权。
+
+deploy/config.json 新参数：
+- enable_cluster_lab：布尔值，默认 false。
+- k3s_image：固定 sha256 镜像引用；默认是官方 K3s 1.34.1 镜像。
+- k3s_preload_images：布尔值，默认 false；开启时须同时启用 cluster，并使用包含 opsforge-k3s-bootstrap 和镜像归档的自建不可变镜像。
+- node_lab_image：默认 busybox:1.36.1，或已审校的 busybox@sha256:73aaf090f3d85aa34ee199857f03fa3a95c8ede2ffd4cc2cdb5b94e566b11662；平台还检查实际内容摘要。
+
+真实实验必须 lab_backend=kubernetes、lab_node_selector 已配置。
+独立集群还要求 docker_node_selector 选择专用实验节点，即使 enable_docker_lab 保持 false。
+渲染器仅在 Docker 或 cluster 显式启用时追加 opsforge-docker 命名空间及其权限，不替换原 opsforge-practice 身份或 RBAC。
+共享实验命名空间有资源总限额；单个独立集群工作区需要约 3CPU/3Gi 的限制预算，并包含特权 K3s 容器，不能放在业务节点。
+
+渲染后的 opsforge-labs Deployment 显式接收 ENABLE_CLUSTER_LAB、K3S_IMAGE、K3S_PRELOAD_IMAGES、NODE_LAB_IMAGE。
+仅在 ConfigMap 中新增键而未进入 Deployment.env 不会开启功能。
+工作区自己的 OPSF_NODE_IMAGE 由后端从 NODE_LAB_IMAGE 传入，自己的 kubeconfig 由私有 K3s 生成。
+就绪检查实际等待私有 node/practice Ready，平台前置再次核对实际 Pod Ready 和随机日志；不读取用户宿主默认 kubeconfig。
+
+预缓存侧车开发构建上下文为 lab/：Dockerfile.k3s-node 使用固定官方基础摘要，COPY node-images/*.tar。
+opsforge-k3s-bootstrap 仅复制到该新侧车自己的 /var/lib/rancher/k3s/agent/images 后 exec 原 K3s server 参数。
+嵌套运行时还需要私有 cgroup/mount namespace：Dockerfile.k3s-node 用已提供工具镜像静态编译 opsforge-cgroup-namespace.c，bootstrap 在启动 K3s 前进入私有 cgroup v2 视图，避免内层 kubelet 看见并清理外层 Pod cgroup。
+该隔离只影响新侧车及其子进程，不调整宿主 cgroup、外层 kubelet 或用户默认身份；实际侧车仍受原 2Gi/2CPU 限制。环境须支持 cgroup v2 和所需特权能力，失败应视为环境不可用。
+新私有集群使用 Service CIDR 10.241.0.0/16、Pod CIDR 10.242.0.0/16，避免常见外层 K3s 的 10.43/10.42 网段与继承 DNS VIP 相撞；不会修改外层 DNS/Corefile/路由。启用前须确认这两个专用网段与实际环境不冲突。
+local-path helper 使用 rancher/mirrored-library-busybox:1.36.1 时，须在自有预缓存归档中保留对应精确引用及核验摘要；普通 busybox 标签不会自动替代该名称。

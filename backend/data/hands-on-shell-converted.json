@@ -1,0 +1,3153 @@
+[
+  {
+    "id": "src-df2e2db8973dcd65",
+    "title": "故障恢复：重定向绑定顺序使stderr漏出且丢失任务失败码",
+    "answer": "根因：重定向按从左到右复制描述符；先2>&1绑定的是旧stdout。先>run.log后2>&1，并在任何后续命令前保存worker状态再exit。\n修复参考：\n```bash\nworker=$1\n[[ \"$worker\" == /* ]] || worker=./$worker\ns=0\nbash -- \"$worker\" >run.log 2>&1 || s=$?\nexit \"$s\"\n```",
+    "category": "Shell",
+    "difficulty": "入门",
+    "section": "调试",
+    "type": "case",
+    "has_answer": true,
+    "source": "OpsForge Shell 原题实作转换",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "复用原ID补充真实故障初态、可核证根因及恢复；不计原214独立故障。",
+    "original_category": "Linux",
+    "original_title": "解释重定向",
+    "module": "shell",
+    "topic": "重定向顺序：合并日志后保留失败码",
+    "level": 0,
+    "body": "环境：非root Linux、Bash4.4+、C.UTF-8及/proc，全部操作限隔离题目目录；无远程服务或系统级修改。\n\n故障初态与复现：worker向stdout输出out、stderr输出err后退出7。初始task的2>&1 >run.log使err漏到终端，且随后exit0吞掉失败；期望终端无工作输出、run.log完整覆盖且脚本退出7。\n\n可核证根因：重定向按从左到右复制描述符；先2>&1绑定的是旧stdout。先>run.log后2>&1，并在任何后续命令前保存worker状态再exit。\n\n操作任务：修复task.sh并保留原行为边界：执行参数给定的 worker 文件，标准输出和标准错误都写入 run.log（覆盖旧内容），终端不得出现工作输出；最终原样返回 worker 退出码。日志不要求跨流顺序，仅完整包含两类输出。\n\n产物：修复后的task.sh；诊断文字可记录但不作为恢复通过证据。\n\n验收方法：可信驱动实际运行原故障脚本、同输入恢复及独立边界，检查进程stdout/stderr/退出码/文件状态。trace题原生观察真实PS4和FD生命周期，拒绝伪造日志。四路和独立突变；不代替PC完整验收。\n\n能力边界：本地教学故障；不计原214独立生产故障完成。输入名称按合同无冒号、NUL；JOB明确为非秘密。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh",
+        "block_ids": [
+          "ExHxdY7qgo1iDJxQmSEcwFqlnDb"
+        ]
+      }
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|重定向顺序：合并日志后保留失败码",
+    "files": {
+      "task.sh": "bash \"$1\" 2>&1 >run.log\nexit 0\n",
+      "worker.sh": "printf 'ok\\n';printf 'bad\\n' >&2;exit 7\n"
+    },
+    "solution_files": {
+      "task.sh": "worker=$1\n[[ \"$worker\" == /* ]] || worker=./$worker\ns=0\nbash -- \"$worker\" >run.log 2>&1 || s=$?\nexit \"$s\"\n"
+    },
+    "negative_files": {
+      "task.sh": "bash \"$1\" 2>&1 >run.log\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "执行参数给定的 worker 文件，标准输出和标准错误都写入 run.log（覆盖旧内容），终端不得出现工作输出；最终原样返回 worker 退出码。日志不要求跨流顺序，仅完整包含两类输出。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "实际Bash初态复现、修复恢复及日志/状态码/循环/traceFD/模式边界；非静态诊断验收。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ],
+      "pass_criteria": "故障原生复现；修复全部恢复与独立边界断言完成，平台completed/passed均true。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ],
+        "features": [
+          "locale:c_utf8"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef clean_env(extra=None):\n environment=dict(os.environ)\n for name in ['BASH_ENV','ENV','SHELLOPTS','BASHOPTS']:environment.pop(name,None)\n environment.update(extra or {})\n return environment\ndef run_script(script,args=(),stdin='',env=None):\n return subprocess.run([BASH,'--noprofile','--norc',script]+list(args),input=stdin,capture_output=True,text=True,encoding='utf-8',env=clean_env(env),timeout=6)\ndef call(args=(),stdin='',env=None):return run_script('task.sh',args,stdin,env)\n\ndef write(path,text):pathlib.Path(path).write_text(text,encoding='utf-8')\nworker=pathlib.Path('worker data.sh');write(worker,\"printf 'out\\\\n';printf 'err\\\\n' >&2;exit 7\\n\")\nprobe=run_script('incident/broken.sh',[str(worker)])\nassert probe.returncode==0 and probe.stdout=='err\\n' and probe.stderr=='' and pathlib.Path('run.log').read_text()=='out\\n',probe\nfor code in [0,7,23,125,255]:\n token='run-'+str(code);write(worker,\"printf '\"+token+\"-out\\\\n';printf '\"+token+\"-err\\\\n' >&2;exit \"+str(code)+\"\\n\")\n pathlib.Path('run.log').write_text('old content',encoding='utf-8')\n before=worker.read_bytes();result=call([str(worker)])\n assert (result.returncode,result.stdout,result.stderr)==(code,'',''),result\n assert sorted(pathlib.Path('run.log').read_text().splitlines())==[token+'-err',token+'-out']\n assert worker.read_bytes()==before\nwrite(worker,\"printf '\\\\000\\\\377A';printf 'B\\\\000' >&2;exit 11\\n\")\nresult=call([str(worker)]);assert (result.returncode,result.stdout,result.stderr)==(11,'','')\nraw=pathlib.Path('run.log').read_bytes();first=b'\\x00\\xffA';second=b'B\\x00';states={(0,0)}\nfor value in raw:\n next_states=set()\n for i,j in states:\n  if i<len(first) and first[i]==value:next_states.add((i+1,j))\n  if j<len(second) and second[j]==value:next_states.add((i,j+1))\n states=next_states\nassert (len(first),len(second)) in states and len(raw)==len(first)+len(second),raw\n\nfor name in ['--version','-','worker $ name;.sh']:\n worker=pathlib.Path(name);worker.write_text(\"printf 'special-out\\\\n';printf 'special-err\\\\n' >&2;exit 7\\n\",encoding='utf-8')\n result=call([name]);assert (result.returncode,result.stdout,result.stderr)==(7,'',''),(name,result)\n assert sorted(pathlib.Path('run.log').read_text().splitlines())==['special-err','special-out']\n",
+        "incident/broken.sh": "bash \"$1\" 2>&1 >run.log\nexit 0\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-df2e2db8973dcd65",
+      "original_title": "解释重定向",
+      "original_type": "source",
+      "original_version": 3,
+      "original_sha256": "da217d3549702aa887cffe84e2753451086196e803caae362b10e47a4b2a215c",
+      "theory_retained": true
+    },
+    "question_format": "case"
+  },
+  {
+    "id": "src-fefab13df2e2fea5",
+    "title": "故障恢复：字符类前缀匹配错误接受多字符任务分区",
+    "answer": "根因：case模式[XYZ]*不是“字符类重复次数”，其星号接受任意后缀。使用精确[XYZ]、[0-5]与?，并固定LC_ALL=C限定单字节ASCII；多字符和空串进入invalid。\n修复参考：\n```bash\nexport LC_ALL=C\nfor x in \"$@\";do\n case \"$x\" in [XYZ]) echo upper;; [0-5]) echo digit;; ?) echo other;; *) echo invalid;; esac\ndone\n```",
+    "category": "Shell",
+    "difficulty": "入门",
+    "section": "通配符和通配符",
+    "type": "case",
+    "has_answer": true,
+    "source": "OpsForge Shell 原题实作转换",
+    "sources": [
+      "topics/linux/README.md"
+    ],
+    "version": 7,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "复用原ID补充真实故障初态、可核证根因及恢复；不计原214独立故障。",
+    "original_category": "Linux",
+    "original_title": "解释`ls [XYZ]`将匹配什么",
+    "module": "shell",
+    "topic": "字符类路由：仅接受单字符任务分区",
+    "level": 1,
+    "body": "环境：非root Linux、Bash4.4+、C.UTF-8及/proc，全部操作限隔离题目目录；无远程服务或系统级修改。\n\n故障初态与复现：bash task.sh XY 05 X0：初始把前缀含XYZ或0..5的多字节分区当upper/digit，正确均为invalid。\n\n可核证根因：case模式[XYZ]*不是“字符类重复次数”，其星号接受任意后缀。使用精确[XYZ]、[0-5]与?，并固定LC_ALL=C限定单字节ASCII；多字符和空串进入invalid。\n\n操作任务：修复task.sh并保留原行为边界：逐个处理参数：仅单个字符 X/Y/Z 输出 upper，0..5 输出 digit，单个其他 ASCII 字符输出 other，多字符或空串输出 invalid；每个结果独占一行。限定 LC_ALL=C，不允许正则部分匹配。\n\n产物：修复后的task.sh；诊断文字可记录但不作为恢复通过证据。\n\n验收方法：可信驱动实际运行原故障脚本、同输入恢复及独立边界，检查进程stdout/stderr/退出码/文件状态。trace题原生观察真实PS4和FD生命周期，拒绝伪造日志。四路和独立突变；不代替PC完整验收。\n\n能力边界：本地教学故障；不计原214独立生产故障完成。输入名称按合同无冒号、NUL；JOB明确为非秘密。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-f10786ffa805fc7e",
+        "title": "解释`ls [^XYZ]`将匹配什么"
+      },
+      {
+        "id": "src-ae65912a87932374",
+        "title": "解释`ls [0-5]`将匹配什么"
+      }
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|字符类路由：仅接受单字符任务分区",
+    "files": {
+      "task.sh": "export LC_ALL=C\nfor x in \"$@\";do\n case \"$x\" in [XYZ]*) echo upper;; [0-5]*) echo digit;; ?) echo other;; *) echo invalid;; esac\ndone\n"
+    },
+    "solution_files": {
+      "task.sh": "export LC_ALL=C\nfor x in \"$@\";do\n case \"$x\" in [XYZ]) echo upper;; [0-5]) echo digit;; ?) echo other;; *) echo invalid;; esac\ndone\n"
+    },
+    "negative_files": {
+      "task.sh": "for x in \"$@\";do case \"$x\" in *[XYZ]*)echo upper;;*[0-5]*)echo digit;;*)echo other;;esac;done\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "逐个处理参数：仅单个字符 X/Y/Z 输出 upper，0..5 输出 digit，单个其他 ASCII 字符输出 other，多字符或空串输出 invalid；每个结果独占一行。限定 LC_ALL=C，不允许正则部分匹配。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "实际Bash初态复现、修复恢复及日志/状态码/循环/traceFD/模式边界；非静态诊断验收。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ],
+      "pass_criteria": "故障原生复现；修复全部恢复与独立边界断言完成，平台completed/passed均true。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ],
+        "features": [
+          "locale:c_utf8"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef clean_env(extra=None):\n environment=dict(os.environ)\n for name in ['BASH_ENV','ENV','SHELLOPTS','BASHOPTS']:environment.pop(name,None)\n environment.update(extra or {})\n return environment\ndef run_script(script,args=(),stdin='',env=None):\n return subprocess.run([BASH,'--noprofile','--norc',script]+list(args),input=stdin,capture_output=True,text=True,encoding='utf-8',env=clean_env(env),timeout=6)\ndef call(args=(),stdin='',env=None):return run_script('task.sh',args,stdin,env)\n\nprobe=run_script('incident/broken.sh',['XY','05','X0'])\nassert probe.returncode==0 and probe.stdout=='upper\\ndigit\\nupper\\n',probe\nfor values in [[],['X','5','6','x','XY','05','',' '],['é','中文','éX'],[chr(n)for n in range(1,128)]]:\n expected=''\n for value in values:\n  kind='upper'if value in ['X','Y','Z'] else 'digit'if value in ['0','1','2','3','4','5'] else 'other'if len(value.encode())==1 else 'invalid'\n  expected+=kind+'\\n'\n result=call(values,env={'LC_ALL':'C.UTF-8'})\n assert (result.returncode,result.stdout,result.stderr)==(0,expected,''),(values,result)\n",
+        "incident/broken.sh": "export LC_ALL=C\nfor x in \"$@\";do\n case \"$x\" in [XYZ]*) echo upper;; [0-5]*) echo digit;; ?) echo other;; *) echo invalid;; esac\ndone\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-fefab13df2e2fea5",
+      "original_title": "比较Shell glob中的[XYZ]、[0-5]与否定字符类，并说明单字符匹配和locale边界。",
+      "original_type": "source",
+      "original_version": 5,
+      "original_sha256": "a3a5160f54f38373c9b8616e9e4f7ae54d9b40ea24844fd74a2ae64db1fe35a8",
+      "theory_retained": true
+    },
+    "question_format": "case"
+  },
+  {
+    "id": "src-72fdd0fb36c61d4a",
+    "title": "故障恢复：UTF-8字符数被误当协议字节长度",
+    "answer": "根因：Bash长度展开受locale影响，UTF-8下按字符计数。应在长度求值前固定LC_ALL=C并保持\"$@\"及变量引用。\n修复参考：\n```bash\nexport LC_ALL=C\nfor x in \"$@\";do n=${#x};if ((n>=1&&n<=8));then printf 'OK:%s\\n' \"$n\";else printf 'BAD:%s\\n' \"$n\";fi;done\n```",
+    "category": "Shell",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "case",
+    "has_answer": true,
+    "source": "OpsForge Shell 原题实作转换",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "既有ID深化真实故障初态/根因/恢复，四路及独立突变后验收；不计原214故障。",
+    "original_category": "Shell",
+    "original_title": "你如何检查可变长度?",
+    "module": "shell",
+    "topic": "按字节长度校验协议字段",
+    "level": 0,
+    "body": "环境：非root Linux、Bash4.4+及C.UTF-8 locale，全部操作限隔离题目目录，无远程服务/系统级修改。\n\n故障初态与复现：LC_ALL=C.UTF-8 bash task.sh 中文中文：初始OK:4，但12字节字段应为BAD:12。\n\n可核证根因：Bash长度展开受locale影响，UTF-8下按字符计数。应在长度求值前固定LC_ALL=C并保持\"$@\"及变量引用。\n\n操作任务：修复task.sh，保留原行为合同：参数是待发送字段；LC_ALL=C 按 UTF-8 字节检查，长度 1..8 输出 OK:<字节数>，其他输出 BAD:<字节数>。空值、空格、中文不能经命令替换丢失或被拆词。逐参数输出，脚本退出0。\n\n产物：修复的task.sh；可记录诊断，但不以静态文字作为恢复证据。\n\n验收方法：可信驱动先实际复现保留故障脚本，再对修复运行同输入恢复和独立边界，核对stdout/stderr/退出码。alias题额外以Bash原生解析观察。四路与独立突变；不替代PC全链。\n\n能力边界：本地教学故障，不计原214独立生产故障；Shell输入不含NUL字节。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|按字节长度校验协议字段",
+    "files": {
+      "task.sh": "for x in \"$@\";do n=${#x};if ((n>=1&&n<=8));then printf 'OK:%s\\n' \"$n\";else printf 'BAD:%s\\n' \"$n\";fi;done\n"
+    },
+    "solution_files": {
+      "task.sh": "export LC_ALL=C\nfor x in \"$@\";do n=${#x};if ((n>=1&&n<=8));then printf 'OK:%s\\n' \"$n\";else printf 'BAD:%s\\n' \"$n\";fi;done\n"
+    },
+    "negative_files": {
+      "task.sh": "for x in $*;do printf 'OK:%s\\n' \"${#x}\";done\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "参数是待发送字段；LC_ALL=C 按 UTF-8 字节检查，长度 1..8 输出 OK:<字节数>，其他输出 BAD:<字节数>。空值、空格、中文不能经命令替换丢失或被拆词。逐参数输出，脚本退出0。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "真实Bash故障初态复现、同输入恢复及独立locale/EOF/解析/哨兵边界；不以静态报告判通过。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ],
+      "pass_criteria": "故障按预期复现，修复全部恢复/边界断言完成，平台completed/passed均true。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ],
+        "features": [
+          "locale:c_utf8"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef clean_env(extra=None):\n environment=dict(os.environ)\n for name in ['BASH_ENV','ENV','SHELLOPTS','BASHOPTS']:environment.pop(name,None)\n environment.update(extra or {})\n return environment\ndef run_script(script,args=(),stdin='',env=None):\n return subprocess.run([BASH,'--noprofile','--norc',script]+list(args),input=stdin,capture_output=True,text=True,encoding='utf-8',env=clean_env(env),timeout=6)\ndef call(args=(),stdin='',env=None):return run_script('task.sh',args,stdin,env)\n\nprobe=run_script('incident/broken.sh',['中文中文'],env={'LC_ALL':'C.UTF-8'});assert probe.returncode==0 and probe.stdout=='OK:4\\n',probe\nfor values in [[],[''],['中文中文'],['a b','\\t','\\n'],['1234567','12345678','123456789'],['*','$HOME',';echo bad'],['é'*4,'é'*5]]:\n result=call(values,env={'LC_ALL':'C.UTF-8'})\n expected=''.join(('OK' if 1<=len(v.encode())<=8 else 'BAD')+':'+str(len(v.encode()))+'\\n' for v in values)\n assert (result.returncode,result.stdout,result.stderr)==(0,expected,''),(values,result)\n",
+        "incident/broken.sh": "for x in \"$@\";do n=${#x};if ((n>=1&&n<=8));then printf 'OK:%s\\n' \"$n\";else printf 'BAD:%s\\n' \"$n\";fi;done\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-72fdd0fb36c61d4a",
+      "original_title": "你如何检查可变长度?",
+      "original_type": "source",
+      "original_version": 3,
+      "original_sha256": "56117b603121b301a1d7de1e283e406e127f73ea05d504f9cc2d2b2e21032aa2",
+      "theory_retained": true
+    },
+    "question_format": "case"
+  },
+  {
+    "id": "src-9a7211d37ecc2e2c",
+    "title": "故障恢复：终止哨兵使用continue后误导出后续记录",
+    "answer": "根因：continue仅跳过当前迭代，break才终止循环。精确匹配END，用IFS= read -r并处理未换行非空末行，保留空白/反斜杠。\n修复参考：\n```bash\nwhile IFS= read -r line || [[ -n \"$line\" ]];do\n [[ \"$line\" == END ]] && break\n [[ -z \"$line\" || \"$line\" == \\#* ]] && continue\n printf '%s\\n' \"$line\"\ndone\n```",
+    "category": "Shell",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "case",
+    "has_answer": true,
+    "source": "OpsForge Shell 原题实作转换",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "既有ID深化真实故障初态/根因/恢复，四路及独立突变后验收；不计原214故障。",
+    "original_category": "Shell",
+    "original_title": "解释 `continue` 和 `break`. 你什么时候使用它们?",
+    "module": "shell",
+    "topic": "有终止哨兵的记录筛选",
+    "level": 1,
+    "body": "环境：非root Linux、Bash4.4+及C.UTF-8 locale，全部操作限隔离题目目录，无远程服务/系统级修改。\n\n故障初态与复现：printf \"before\\nEND\\nafter\\n\" | bash task.sh：初始错误输出before和after，应只输出before。\n\n可核证根因：continue仅跳过当前迭代，break才终止循环。精确匹配END，用IFS= read -r并处理未换行非空末行，保留空白/反斜杠。\n\n操作任务：修复task.sh，保留原行为合同：逐行读取标准输入，保留反斜杠与空格。遇到整行 END 立即停止，空行及以 # 开头的行跳过，其他行原样输出。END 后的数据不可输出；没有末尾换行的有效末行也要处理。\n\n产物：修复的task.sh；可记录诊断，但不以静态文字作为恢复证据。\n\n验收方法：可信驱动先实际复现保留故障脚本，再对修复运行同输入恢复和独立边界，核对stdout/stderr/退出码。alias题额外以Bash原生解析观察。四路与独立突变；不替代PC全链。\n\n能力边界：本地教学故障，不计原214独立生产故障；Shell输入不含NUL字节。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|有终止哨兵的记录筛选",
+    "files": {
+      "task.sh": "while IFS= read -r line || [[ -n \"$line\" ]];do\n [[ \"$line\" == END ]] && continue\n [[ -z \"$line\" || \"$line\" == \\#* ]] && continue\n printf '%s\\n' \"$line\"\ndone\n"
+    },
+    "solution_files": {
+      "task.sh": "while IFS= read -r line || [[ -n \"$line\" ]];do\n [[ \"$line\" == END ]] && break\n [[ -z \"$line\" || \"$line\" == \\#* ]] && continue\n printf '%s\\n' \"$line\"\ndone\n"
+    },
+    "negative_files": {
+      "task.sh": "while read line;do [[ \"$line\" == END ]] && continue;printf '%s\\n' \"$line\";done\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "逐行读取标准输入，保留反斜杠与空格。遇到整行 END 立即停止，空行及以 # 开头的行跳过，其他行原样输出。END 后的数据不可输出；没有末尾换行的有效末行也要处理。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "真实Bash故障初态复现、同输入恢复及独立locale/EOF/解析/哨兵边界；不以静态报告判通过。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ],
+      "pass_criteria": "故障按预期复现，修复全部恢复/边界断言完成，平台completed/passed均true。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ],
+        "features": [
+          "locale:c_utf8"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef clean_env(extra=None):\n environment=dict(os.environ)\n for name in ['BASH_ENV','ENV','SHELLOPTS','BASHOPTS']:environment.pop(name,None)\n environment.update(extra or {})\n return environment\ndef run_script(script,args=(),stdin='',env=None):\n return subprocess.run([BASH,'--noprofile','--norc',script]+list(args),input=stdin,capture_output=True,text=True,encoding='utf-8',env=clean_env(env),timeout=6)\ndef call(args=(),stdin='',env=None):return run_script('task.sh',args,stdin,env)\n\nprobe=run_script('incident/broken.sh',stdin='before\\nEND\\nafter\\n');assert probe.returncode==0 and probe.stdout=='before\\nafter\\n',probe\nfor text,expected in [('', ''),('END',''),('END\\nhidden\\n',''),('first\\nEND\\nsecret\\n','first\\n'),('#skip\\n\\n a\\\\b \\nEND\\nlater\\n',' a\\\\b \\n'),('last','last\\n'),(' END \\n',' END \\n'),('  #not-comment\\nEND-suffix\\n#skip','  #not-comment\\nEND-suffix\\n'),('\\n#comment','')]:\n result=call(stdin=text);assert (result.returncode,result.stdout,result.stderr)==(0,expected,''),(text,result)\n",
+        "incident/broken.sh": "while IFS= read -r line || [[ -n \"$line\" ]];do\n [[ \"$line\" == END ]] && continue\n [[ -z \"$line\" || \"$line\" == \\#* ]] && continue\n printf '%s\\n' \"$line\"\ndone\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-9a7211d37ecc2e2c",
+      "original_title": "解释 `continue` 和 `break`. 你什么时候使用它们?",
+      "original_type": "source",
+      "original_version": 3,
+      "original_sha256": "9e2ca49b903eb69e2e5d219c45de2b7273513de6e8c91c9ccb818375c1faf338",
+      "theory_retained": true
+    },
+    "question_format": "case"
+  },
+  {
+    "id": "src-8b1fe28e7a1ba32d",
+    "title": "故障恢复：定义同行调用alias导致命令不存在",
+    "answer": "根因：alias读取/解析时展开，定义执行后才存在。非交互Bash启用expand_aliases，独立一行alias hello=声明，再在后续解析单元调用；保留参数边界，零参数不打印。此题须实际alias机制，不能函数/直接printf替代。\n修复参考：\n```bash\nshopt -s expand_aliases\nalias hello='builtin printf \"<%s>\\n\"'\nif (($#));then\n hello \"$@\"\nfi\n```",
+    "category": "Shell",
+    "difficulty": "入门",
+    "section": "系统调用",
+    "type": "case",
+    "has_answer": true,
+    "source": "OpsForge Shell 原题实作转换",
+    "sources": [
+      "topics/linux/README.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "既有ID深化真实故障初态/根因/恢复，四路及独立突变后验收；不计原214故障。",
+    "original_category": "Linux",
+    "original_title": "命令`alias x=y`到底做什么？",
+    "module": "shell",
+    "topic": "在非交互脚本中验证别名展开阶段",
+    "level": 0,
+    "body": "环境：非root Linux、Bash4.4+及C.UTF-8 locale，全部操作限隔离题目目录，无远程服务/系统级修改。\n\n故障初态与复现：bash task.sh \"a b\"：初始hello: command not found，退出127；alias定义与调用处于同一解析行。\n\n可核证根因：alias读取/解析时展开，定义执行后才存在。非交互Bash启用expand_aliases，独立一行alias hello=声明，再在后续解析单元调用；保留参数边界，零参数不打印。此题须实际alias机制，不能函数/直接printf替代。\n\n操作任务：修复task.sh，保留原行为合同：把给定参数原样传给别名 hello，别名展开为 builtin printf \"<%s>\\\\n\"。必须由非交互 Bash 的 alias 实现：先启用 expand_aliases，定义必须位于调用之前的独立解析行。不得调用外部同名 hello。无参数不输出。\n\n产物：修复的task.sh；可记录诊断，但不以静态文字作为恢复证据。\n\n验收方法：可信驱动先实际复现保留故障脚本，再对修复运行同输入恢复和独立边界，核对stdout/stderr/退出码。alias题额外以Bash原生解析观察。四路与独立突变；不替代PC全链。\n\n能力边界：本地教学故障，不计原214独立生产故障；Shell输入不含NUL字节。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|在非交互脚本中验证别名展开阶段",
+    "files": {
+      "task.sh": "shopt -s expand_aliases\nalias hello='builtin printf \"<%s>\\n\"'; hello \"$@\"\n"
+    },
+    "solution_files": {
+      "task.sh": "shopt -s expand_aliases\nalias hello='builtin printf \"<%s>\\n\"'\nif (($#));then\n hello \"$@\"\nfi\n"
+    },
+    "negative_files": {
+      "task.sh": "alias hello='printf \"<%s>\\n\"';hello \"$@\"\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "把给定参数原样传给别名 hello，别名展开为 builtin printf \"<%s>\\\\n\"。必须由非交互 Bash 的 alias 实现：先启用 expand_aliases，定义必须位于调用之前的独立解析行。不得调用外部同名 hello。无参数不输出。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "真实Bash故障初态复现、同输入恢复及独立locale/EOF/解析/哨兵边界；不以静态报告判通过。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ],
+      "pass_criteria": "故障按预期复现，修复全部恢复/边界断言完成，平台completed/passed均true。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ],
+        "features": [
+          "locale:c_utf8"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,json,secrets\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef clean_env(extra=None):\n environment=dict(os.environ)\n for name in ['BASH_ENV','ENV','SHELLOPTS','BASHOPTS']:environment.pop(name,None)\n environment.update(extra or {})\n return environment\ndef run_script(script,args=(),stdin='',env=None):\n return subprocess.run([BASH,'--noprofile','--norc',script]+list(args),input=stdin,capture_output=True,text=True,encoding='utf-8',env=clean_env(env),timeout=6)\ndef call(args=(),stdin='',env=None):return run_script('task.sh',args,stdin,env)\n\nprobe=run_script('incident/broken.sh',['a b']);assert probe.returncode==127 and probe.stdout=='' and 'hello' in probe.stderr,probe\nfor values in [[],['a b','%s',''],['*','$HOME',';echo x','line\\nnext','中文']]:\n result=call(values);assert (result.returncode,result.stdout,result.stderr)==(0,''.join('<'+v+'>\\n' for v in values),''),(values,result)\n\nnonce='alias-'+secrets.token_hex(12)\nobserver=r\"\"\"\n_alias_defined=0\n_alias_native_calls=0\n_alias_native_emit() {\n _alias_native_calls=$((_alias_native_calls+1))\n builtin printf 'PRIVATE_CHALLENGE:<%s>\\n' \"$@\"\n}\n_observe_alias() {\n if [[ $BASH_COMMAND == 'alias hello='* ]];then\n  _alias_defined=1\n  builtin alias 'hello=_alias_native_emit'\n  return 1\n fi\n return 0\n}\n_alias_verify() {\n saved_status=$?\n trap - DEBUG\n [[ $_alias_defined == 1 && $_alias_native_calls -gt 0 ]] || exit 74\n return \"$saved_status\"\n}\nshopt -s extdebug\ntrap _observe_alias DEBUG\ntrap _alias_verify EXIT\nsource ./task.sh \"$@\"\n\"\"\".replace('PRIVATE_CHALLENGE',nonce)\nresult=subprocess.run([BASH,'--noprofile','--norc','-c',observer,'observer','a b','%s',''],capture_output=True,text=True,env=clean_env(),timeout=6)\nassert (result.returncode,result.stdout,result.stderr)==(0,''.join(nonce+':<'+v+'>\\n' for v in ['a b','%s','']),''),result\n",
+        "incident/broken.sh": "shopt -s expand_aliases\nalias hello='builtin printf \"<%s>\\n\"'; hello \"$@\"\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-8b1fe28e7a1ba32d",
+      "original_title": "命令`alias x=y`到底做什么？",
+      "original_type": "source",
+      "original_version": 3,
+      "original_sha256": "9b83e7078a7dd525c0d7dc9604ec26d1eef255b75fe5493c7eb9b2343cfe87a9",
+      "theory_retained": true
+    },
+    "question_format": "case"
+  },
+  {
+    "id": "curated-parallel-shell-001",
+    "module": "shell",
+    "category": "Shell",
+    "level": 0,
+    "topic": "识别命令覆盖并调用真正的内建 printf",
+    "title": "识别命令覆盖并调用真正的内建 printf",
+    "answer": "```bash\nprintf(){ builtin printf 'shadow\\n'; }\ntype -t printf\nbuiltin printf '%s\\n' \"$1\"\nunset -f printf\ntype -t printf\n```\n\n命令名解析可能先命中函数；builtin 显式绕过同名函数。\n\n### 原题原理说明\n在Bash中用 type -a name 列出同名解析候选，command -V name 查看解析说明，type -P name 只查PATH中的程序。别名和函数可遮蔽外部命令，which通常不足以解释全部情况；记录实际解释器及PATH后再判断。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|识别命令覆盖并调用真正的内建 printf",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n定义 printf 函数作为遮蔽物（输出 shadow），输出 type -t printf 的结果，再通过 builtin printf 输出参数一原文及换行。随后 unset -f printf 并再次输出类型。依次应为 function、参数、builtin；不得使用 which 判断函数。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：如何确认一个命令名实际调用的是函数、内建命令还是外部程序？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "printf(){ builtin printf 'shadow\\n'; }\ntype -t printf\nbuiltin printf '%s\\n' \"$1\"\nunset -f printf\ntype -t printf\n"
+    },
+    "negative_files": {
+      "task.sh": "printf(){ echo shadow; };type -t printf;printf '%s\\n' \"$1\";unset -f printf;type -t printf\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "定义 printf 函数作为遮蔽物（输出 shadow），输出 type -t printf 的结果，再通过 builtin printf 输出参数一原文及换行。随后 unset -f printf 并再次输出类型。依次应为 function、参数、builtin；不得使用 which 判断函数。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nfor value in ['hello','%s * space']:\n r=call([value]);assert r.returncode==0 and r.stdout=='function\\n'+value+'\\nbuiltin\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-001",
+      "original_title": "如何确认一个命令名实际调用的是函数、内建命令还是外部程序？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "437a0d5c576fe35e832f6d9bb12d181d2ba0630b78693521a8d1c2b2852cf736",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-003",
+    "module": "shell",
+    "category": "Shell",
+    "level": 0,
+    "topic": "函数失败后继续输出调用者状态",
+    "title": "函数失败后继续输出调用者状态",
+    "answer": "```bash\ncheck(){ return \"$1\"; }\ns=0\ncheck \"$1\" || s=$?\nprintf 'check=%s\\nafter\\n' \"$s\"\n```\n\nreturn 结束函数，exit 结束当前 Shell；调用者负责聚合结果。\n\n### 原题原理说明\nreturn从函数或被source的文件返回状态；exit结束当前Shell进程。直接运行脚本时exit通常只结束脚本子进程，被source时却可能结束调用Shell。库文件应返回状态，由入口决定是否退出。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|函数失败后继续输出调用者状态",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n实现函数 check，参数是数字退出码 0..9，函数使用 return 返回；主流程调用 check 后保存状态并输出 check=<码> 和 after 两行，最终退出0。不能在函数中 exit 导致 after 丢失。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：return 与 exit 分别结束什么执行范围？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "check(){ return \"$1\"; }\ns=0\ncheck \"$1\" || s=$?\nprintf 'check=%s\\nafter\\n' \"$s\"\n"
+    },
+    "negative_files": {
+      "task.sh": "check(){ exit \"$1\"; };check \"$1\";echo after\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现函数 check，参数是数字退出码 0..9，函数使用 return 返回；主流程调用 check 后保存状态并输出 check=<码> 和 after 两行，最终退出0。不能在函数中 exit 导致 after 丢失。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nfor code in [0,3,9]:\n r=call([code]);assert r.returncode==0 and r.stdout==f'check={code}\\nafter\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-003",
+      "original_title": "return 与 exit 分别结束什么执行范围？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "4721d77556582779e6b922e76391f5a7a89a60a3589248d9f8224b2010d04026",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-004",
+    "module": "shell",
+    "category": "Shell",
+    "level": 0,
+    "topic": "生成带井号的配置值而不截断注释",
+    "title": "生成带井号的配置值而不截断注释",
+    "answer": "```bash\nprintf 'value=%s\\n' \"$1\" # explanatory comment\nprintf '%s\\n' 'abc#def'\nprintf '%s\\n' done\n```\n\n未被引用且处于新词开始的 # 才开始注释；数据应通过 printf 参数传入。\n\n### 原题原理说明\n#位于单词内部通常是普通字符，第一条输出abc#def；第二条中#开启注释，输出abc。引号内#也是数据。注释不是任意位置的字符串删除，排查配置生成应先确认Shell词法边界。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|生成带井号的配置值而不截断注释",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n参数1为值（可能含 #、空格、反斜杠），生成 value=<原值> 一行。然后输出字面文本 abc#def 和 done 各一行；脚本里的说明性 # 注释不得进入结果。所有输入都是数据。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：为何 echo abc#def 与 echo abc #def 输出不同？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "printf 'value=%s\\n' \"$1\" # explanatory comment\nprintf '%s\\n' 'abc#def'\nprintf '%s\\n' done\n"
+    },
+    "negative_files": {
+      "task.sh": "echo value=$1\necho abc #def\necho done\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "参数1为值（可能含 #、空格、反斜杠），生成 value=<原值> 一行。然后输出字面文本 abc#def 和 done 各一行；脚本里的说明性 # 注释不得进入结果。所有输入都是数据。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nfor value in ['a#b','x y','\\\\q # note','']:\n r=call([value]);assert r.returncode==0 and r.stdout=='value='+value+'\\nabc#def\\ndone\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-004",
+      "original_title": "为何 echo abc#def 与 echo abc #def 输出不同？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "d1c74747616e4fe2fa4ac4cff6b30fc954a037e8d586b0295769f264517f7c08",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-006",
+    "module": "shell",
+    "category": "Shell",
+    "level": 0,
+    "topic": "noclobber 下的安全占位文件创建",
+    "title": "noclobber 下的安全占位文件创建",
+    "answer": "```bash\nset -o noclobber\nif { : > \"$1\"; } 2>/dev/null;then echo created;else echo exists;exit 3;fi\n```\n\n冒号本身无需工作，但重定向仍会失败；noclobber 防止覆盖已有文件。\n\n### 原题原理说明\n:通常不执行操作且返回0，可配合参数展开做默认赋值，例如 : \"${MODE:=safe}\"。展开或重定向仍先发生，因此必填参数报错或输出文件打不开会使该语句失败。它不是跳过所有副作用的注释。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|noclobber 下的安全占位文件创建",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n参数为相对文件名。开启 noclobber，通过 : >文件 创建空占位；成功输出 created、退出0。文件已存在则内容必须保留，输出 exists、退出3，不把 Bash 重定向诊断泄漏到标准输出。禁止先删除或强制覆盖。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：冒号命令 : 有何用途，为什么它也可能失败？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "set -o noclobber\nif { : > \"$1\"; } 2>/dev/null;then echo created;else echo exists;exit 3;fi\n"
+    },
+    "negative_files": {
+      "task.sh": ": > \"$1\";echo created\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "参数为相对文件名。开启 noclobber，通过 : >文件 创建空占位；成功输出 created、退出0。文件已存在则内容必须保留，输出 exists、退出3，不把 Bash 重定向诊断泄漏到标准输出。禁止先删除或强制覆盖。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nwrite('kept','valuable\\n');r=call(['kept']);assert r.returncode==3 and r.stdout=='exists\\n' and read('kept')=='valuable\\n'\nr=call(['new file']);assert r.returncode==0 and r.stdout=='created\\n' and pathlib.Path('new file').read_bytes()==b''\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-006",
+      "original_title": "冒号命令 : 有何用途，为什么它也可能失败？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "037c8195a503135248ae72bbff08e52ede060d91bf03f7360997c6426c2f7869",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-009",
+    "module": "shell",
+    "category": "Shell",
+    "level": 1,
+    "topic": "函数内部重置位置参数不改变外层",
+    "title": "函数内部重置位置参数不改变外层",
+    "answer": "```bash\ninner(){\n set -- inner \"\"\n printf 'inner:%s:<%s>:<%s>\\n' \"$#\" \"$1\" \"$2\"\n}\ninner \"$@\"\nfor arg in \"$@\";do printf 'outer:<%s>\\n' \"$arg\";done\n```\n\n函数拥有自己的位置参数集；在函数内 set -- 不替换调用方参数。\n\n### 原题原理说明\n函数调用时有自己的位置参数集合，set --会修改函数内这组参数，函数返回后恢复调用者参数。函数中的普通变量默认仍共享作用域，应使用local管理局部状态；不要把这两种作用域混为一谈。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|函数内部重置位置参数不改变外层",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n保留调用参数；函数 inner 接收全部参数后 set -- inner \"\"，输出 inner:2:<inner>:<>。返回主流程按原顺序每参数输出 outer:<值>，不得丢空参数。无外层参数也要输出 inner 行。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：函数执行 set -- 后会改变调用者的位置参数吗？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "inner(){\n set -- inner \"\"\n printf 'inner:%s:<%s>:<%s>\\n' \"$#\" \"$1\" \"$2\"\n}\ninner \"$@\"\nfor arg in \"$@\";do printf 'outer:<%s>\\n' \"$arg\";done\n"
+    },
+    "negative_files": {
+      "task.sh": "set -- inner \"\";printf 'inner:2:<inner>:<>\\n';for arg in \"$@\";do printf 'outer:<%s>\\n' \"$arg\";done\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "保留调用参数；函数 inner 接收全部参数后 set -- inner \"\"，输出 inner:2:<inner>:<>。返回主流程按原顺序每参数输出 outer:<值>，不得丢空参数。无外层参数也要输出 inner 行。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nr=call(['one two','','three']);assert r.returncode==0 and r.stdout=='inner:2:<inner>:<>\\nouter:<one two>\\nouter:<>\\nouter:<three>\\n'\nassert call([]).stdout=='inner:2:<inner>:<>\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-009",
+      "original_title": "函数执行 set -- 后会改变调用者的位置参数吗？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "d9870f1fd1d6c34214c6eb9c857d93acf640d238b5c972ae022b16544f61bcbb",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-010",
+    "module": "shell",
+    "category": "Shell",
+    "level": 1,
+    "topic": "成对参数在执行 shift 前整体校验",
+    "title": "成对参数在执行 shift 前整体校验",
+    "answer": "```bash\n(($#%2==0))||exit 2\nargs=(\"$@\");declare -A seen=()\nwhile (($#));do\n [[ \"$1\" == a || \"$1\" == b ]]||exit 2\n [[ ! ${seen[$1]+x} ]]||exit 2\n seen[\"$1\"]=1\n shift 2\ndone\nset -- \"${args[@]}\"\nwhile (($#));do printf '%s=%s\\n' \"$1\" \"$2\";shift 2;done\n```\n\n先检查总量与键集合再 shift，避免半份机器可读输出。\n\n### 原题原理说明\n检查剩余参数数量至少满足本次消费数。shift 2需要至少两个位置参数；越界会返回非零且参数解析可能停滞。遇到带值选项要先校验值是否存在，对--停止选项解析，对未知选项明确报错。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|成对参数在执行 shift 前整体校验",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n参数为若干 KEY VALUE 对，KEY 只能是 a 或 b，不能重复，VALUE 可为空或带空格。先整体校验再输出原顺序 KEY=VALUE。奇数参数、未知键、重复键退出2且无输出；空清单合法。不得边输出边发现末尾参数错误。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：使用 shift 处理参数前应检查什么？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "(($#%2==0))||exit 2\nargs=(\"$@\");declare -A seen=()\nwhile (($#));do\n [[ \"$1\" == a || \"$1\" == b ]]||exit 2\n [[ ! ${seen[$1]+x} ]]||exit 2\n seen[\"$1\"]=1\n shift 2\ndone\nset -- \"${args[@]}\"\nwhile (($#));do printf '%s=%s\\n' \"$1\" \"$2\";shift 2;done\n"
+    },
+    "negative_files": {
+      "task.sh": "while (($#));do printf '%s=%s\\n' \"$1\" \"${2-}\";shift 2||break;done\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "参数为若干 KEY VALUE 对，KEY 只能是 a 或 b，不能重复，VALUE 可为空或带空格。先整体校验再输出原顺序 KEY=VALUE。奇数参数、未知键、重复键退出2且无输出；空清单合法。不得边输出边发现末尾参数错误。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nr=call(['a','x y','b','']);assert r.returncode==0 and r.stdout=='a=x y\\nb=\\n'\nfor args in [['a','ok','b'],['a','x','a','y'],['c','z']]:\n r=call(args);assert r.returncode==2 and r.stdout==''\nassert call([]).returncode==0\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-010",
+      "original_title": "使用 shift 处理参数前应检查什么？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "81436a260ad08b58314160d96cf8a38f39e177e332ad409c150601f8fa8e9eca",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-012",
+    "module": "shell",
+    "category": "Shell",
+    "level": 1,
+    "topic": "隔离目录探测与变量修改",
+    "title": "隔离目录探测与变量修改",
+    "answer": "```bash\ntoken=outer\n( cd probe || exit 4;token=inner;printf '%s:%s\\n' \"$token\" \"${PWD##*/}\" )||exit 4\nprintf '%s:%s\\n' \"$token\" \"${PWD##*/}\"\n```\n\n圆括号子进程继承变量和目录，但其中修改不会反向污染调用方。\n\n### 原题原理说明\n( commands )在子Shell环境运行，变量赋值和cd通常不影响父Shell；{ commands; }在当前Shell运行，会保留这些变化。花括号作为保留字需要适当空白和结束分隔符，重定向可作用于整个分组。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|隔离目录探测与变量修改",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n在当前工作目录的子目录 probe 中进行探测：初始变量 token=outer；进入圆括号子 Shell 后设置 inner、cd probe，输出 inner:probe。返回后输出 outer:<当前目录名>，当前目录必须未改变。probe 不存在时退出4且不得输出 outer 行。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：圆括号分组与花括号分组对变量和目录有什么影响？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "token=outer\n( cd probe || exit 4;token=inner;printf '%s:%s\\n' \"$token\" \"${PWD##*/}\" )||exit 4\nprintf '%s:%s\\n' \"$token\" \"${PWD##*/}\"\n"
+    },
+    "negative_files": {
+      "task.sh": "token=outer;cd probe||exit 4;token=inner;printf '%s:%s\\n' \"$token\" \"${PWD##*/}\";printf '%s:%s\\n' \"$token\" \"${PWD##*/}\"\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "在当前工作目录的子目录 probe 中进行探测：初始变量 token=outer；进入圆括号子 Shell 后设置 inner、cd probe，输出 inner:probe。返回后输出 outer:<当前目录名>，当前目录必须未改变。probe 不存在时退出4且不得输出 outer 行。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\npathlib.Path('probe').mkdir(); expected=subprocess.run([BASH,'-c','printf %s \"${PWD##*/}\"'],capture_output=True,timeout=8).stdout.decode();r=call();assert r.returncode==0 and r.stdout==f'inner:probe\\nouter:{expected}\\n'\npathlib.Path('probe').rmdir();assert call().returncode==4\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-012",
+      "original_title": "圆括号分组与花括号分组对变量和目录有什么影响？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "506fa3829cd3868cff14ab1c9a79c717ebc424b56d28ef6cccb5b1e820740bca",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-022",
+    "module": "shell",
+    "category": "Shell",
+    "level": 2,
+    "topic": "固定字节排序的制品名清单",
+    "title": "固定字节排序的制品名清单",
+    "answer": "```bash\nexport LC_ALL=C\nsort -u\n```\n\n字节排序固定可重现契约，不能偷偷忽略大小写。\n\n### 原题原理说明\n检查LC_ALL、LC_COLLATE及LANG。按机器稳定字节序排序可在该命令前设置LC_ALL=C；面向人类语言排序则保留选定locale并声明规则。不要把本地化排序结果当跨环境稳定的协议字段顺序。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|固定字节排序的制品名清单",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n从标准输入读 UTF-8 制品名，每行一项，输出 LC_ALL=C 的唯一排序结果；大小写有别，空行作为合法名称保留。只排序数据，不输出 locale 或诊断信息。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：脚本在不同机器上排序结果不同，应检查什么环境变量？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "export LC_ALL=C\nsort -u\n"
+    },
+    "negative_files": {
+      "task.sh": "sort -fu\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "从标准输入读 UTF-8 制品名，每行一项，输出 LC_ALL=C 的唯一排序结果；大小写有别，空行作为合法名称保留。只排序数据，不输出 locale 或诊断信息。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\ndata='z\\nA\\na\\nZ\\nA\\n\\né\\n'\nr=call(stdin=data,env={'LC_ALL':'C.UTF-8'});assert r.returncode==0 and r.stdout=='\\nA\\nZ\\na\\nz\\né\\n'\nassert call(stdin='').stdout==''\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-022",
+      "original_title": "脚本在不同机器上排序结果不同，应检查什么环境变量？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "9564bde2013ee4cab5f39721b50d0847f938f9e368188ca8818eff846df198f6",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-021",
+    "module": "shell",
+    "category": "Shell",
+    "level": 2,
+    "topic": "只枚举当前目录的隐藏普通文件",
+    "title": "只枚举当前目录的隐藏普通文件",
+    "answer": "```bash\nexport LC_ALL=C\nshopt -s dotglob nullglob\nfor p in payload/*;do [[ -f \"$p\" ]]&&printf '%s\\n' \"${p##*/}\";done | sort\n```\n\ndotglob 与 nullglob 处理隐藏文件及零匹配，-f 过滤目录。\n\n### 原题原理说明\n默认路径展开不匹配前导点，dotglob可改变该行为。应明确列出目标类型或在受控子Shell中启用dotglob，执行后检查匹配清单。不要临时用.*后直接执行破坏命令，因为特殊目录项和版本行为需要额外约束。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|只枚举当前目录的隐藏普通文件",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n列出目录 payload 下包含隐藏文件的普通文件 basename，按 C 排序。不得包含 .、.. 或子目录，也不得递归；空目录输出为空。文件名不含换行，但可含空格。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：为什么 Bash 的 * 一般不包含 .env，如何审慎处理隐藏文件？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "export LC_ALL=C\nshopt -s dotglob nullglob\nfor p in payload/*;do [[ -f \"$p\" ]]&&printf '%s\\n' \"${p##*/}\";done | sort\n"
+    },
+    "negative_files": {
+      "task.sh": "for p in payload/*;do printf '%s\\n' \"${p##*/}\";done\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "列出目录 payload 下包含隐藏文件的普通文件 basename，按 C 排序。不得包含 .、.. 或子目录，也不得递归；空目录输出为空。文件名不含换行，但可含空格。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\npathlib.Path('payload/sub').mkdir(parents=True);write('payload/.env','x');write('payload/a file','y');write('payload/sub/hidden','z')\nr=call();assert r.returncode==0 and r.stdout=='.env\\na file\\n'\npathlib.Path('payload/.env').unlink();pathlib.Path('payload/a file').unlink()\nassert call().stdout==''\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-021",
+      "original_title": "为什么 Bash 的 * 一般不包含 .env，如何审慎处理隐藏文件？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "719e2ec1c00eb097096e02b1066bad20eb36447715e55f3304a7ffa29d0eb538",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-031",
+    "module": "shell",
+    "category": "Shell",
+    "level": 2,
+    "topic": "同一进程重复解析 getopts",
+    "title": "同一进程重复解析 getopts",
+    "answer": "```bash\nparse(){\n local OPTIND=1 opt value=default\n while getopts ':n:' opt;do\n case \"$opt\" in n)value=$OPTARG;;*)return 2;;esac\n done\n shift \"$((OPTIND-1))\"\n (($#==0))||return 2\n printf 'n=%s\\n' \"$value\"\n}\nleft=();right=();sep=0\nfor arg in \"$@\";do if [[ \"$arg\" == --next && $sep == 0 ]];then sep=1;elif ((sep));then right+=(\"$arg\");else left+=(\"$arg\");fi;done\n((sep))||exit 2\na=$(parse \"${left[@]}\")||exit 2\nb=$(parse \"${right[@]}\")||exit 2\nprintf '%s\\n%s\\n' \"$a\" \"$b\"\n```\n\n局部 OPTIND=1 防止函数第二次从旧位置开始；先收集两段成功结果再输出。\n\n### 原题原理说明\ngetopts用OPTIND记录下次位置，重复解析新参数列表前通常要在函数中local OPTIND=1及本地OPTARG。解析完成后按OPTIND移除已消费参数。getopts主要处理短选项，长选项需另定解析接口。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|同一进程重复解析 getopts",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n写 parse 函数，两次分别解析固定分隔符 --next 前后的参数段。每段只允许 -n VALUE，缺省 n=default；每次输出 n=<值>，拒绝未知选项或缺失值退出2且整次不输出。允许 -n 的值为空。每次解析必须重置 OPTIND。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：同一Shell中多次调用getopts解析函数为什么要重置OPTIND？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "parse(){\n local OPTIND=1 opt value=default\n while getopts ':n:' opt;do\n case \"$opt\" in n)value=$OPTARG;;*)return 2;;esac\n done\n shift \"$((OPTIND-1))\"\n (($#==0))||return 2\n printf 'n=%s\\n' \"$value\"\n}\nleft=();right=();sep=0\nfor arg in \"$@\";do if [[ \"$arg\" == --next && $sep == 0 ]];then sep=1;elif ((sep));then right+=(\"$arg\");else left+=(\"$arg\");fi;done\n((sep))||exit 2\na=$(parse \"${left[@]}\")||exit 2\nb=$(parse \"${right[@]}\")||exit 2\nprintf '%s\\n%s\\n' \"$a\" \"$b\"\n"
+    },
+    "negative_files": {
+      "task.sh": "OPTIND=1\nparse(){ value=default;while getopts ':n:' opt;do value=$OPTARG;done;printf 'n=%s\\n' \"$value\"; }\nparse -n first\nparse -n second\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "写 parse 函数，两次分别解析固定分隔符 --next 前后的参数段。每段只允许 -n VALUE，缺省 n=default；每次输出 n=<值>，拒绝未知选项或缺失值退出2且整次不输出。允许 -n 的值为空。每次解析必须重置 OPTIND。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nr=call(['-n','first','--next','-n','second']);assert r.returncode==0 and r.stdout=='n=first\\nn=second\\n'\nr=call(['--next','-n','']);assert r.returncode==0 and r.stdout=='n=default\\nn=\\n'\nfor args in [['-n','x','--next','-q'],['--next','-n'],[]]:\n r=call(args);assert r.returncode==2 and r.stdout==''\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-031",
+      "original_title": "同一Shell中多次调用getopts解析函数为什么要重置OPTIND？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "1c38e6f1112d02eec39bdfebf556d650b0746221bc77ceb5128860318894b1fd",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-036",
+    "module": "shell",
+    "category": "Shell",
+    "level": 3,
+    "topic": "函数局部声明不掩盖采集失败",
+    "title": "函数局部声明不掩盖采集失败",
+    "answer": "```bash\ncollect(){\n local result\n result=$(bash \"$1\")||return $?\n printf 'value=%s\\n' \"$result\"\n}\ncollect \"$1\"\n```\n\nlocal 的成功不代表子命令成功；把声明与赋值拆开。\n\n### 原题原理说明\nlocal是一个内建命令，组合声明的退出状态可能来自local而不是替代命令。应先local result，再用if result=$(tool); then处理成功，否则保存并返回失败码。声明和执行分开也使日志能明确指出真正失败阶段。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|函数局部声明不掩盖采集失败",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh, worker.sh。\n\n## 操作任务\n定义 collect 函数，执行参数指定的 worker，成功时输出 value=<worker stdout 去除末尾换行>；失败时不得输出 value，整体原样返回其退出码。worker 是素材文件，stderr 可保留；不能让 local 声明覆盖命令替换的退出码。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：local result=$(tool) 为何可能隐藏tool失败？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n",
+      "worker.sh": "printf 'half\\n';exit 8\n"
+    },
+    "solution_files": {
+      "task.sh": "collect(){\n local result\n result=$(bash \"$1\")||return $?\n printf 'value=%s\\n' \"$result\"\n}\ncollect \"$1\"\n"
+    },
+    "negative_files": {
+      "task.sh": "collect(){ local result=$(bash \"$1\");printf 'value=%s\\n' \"$result\"; };collect \"$1\"\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "定义 collect 函数，执行参数指定的 worker，成功时输出 value=<worker stdout 去除末尾换行>；失败时不得输出 value，整体原样返回其退出码。worker 是素材文件，stderr 可保留；不能让 local 声明覆盖命令替换的退出码。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nwrite('worker.sh',\"printf 'half\\\\n';exit 8\\n\");r=call(['worker.sh']);assert r.returncode==8 and r.stdout==''\nwrite('worker.sh',\"printf 'a b\\\\n\\\\n'\\n\");r=call(['worker.sh']);assert r.returncode==0 and r.stdout=='value=a b\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-036",
+      "original_title": "local result=$(tool) 为何可能隐藏tool失败？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "d18d4a50a1d9717507c269368e1ba52cb73e78a181e087e7e9c31465015099c3",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-037",
+    "module": "shell",
+    "category": "Shell",
+    "level": 3,
+    "topic": "区分条件失败与成功分支自身失败",
+    "title": "区分条件失败与成功分支自身失败",
+    "answer": "```bash\nif bash probe.sh;then\n bash apply.sh\nelse\n bash fallback.sh\nfi\n```\n\n&&/|| 链依赖最近命令状态，apply 的失败会误触发 fallback；用 if 分支。\n\n### 原题原理说明\n不能。cmd1成功但cmd2失败时也会执行cmd3，因此并非只在cmd1失败时进入else。若cmd3表示回滚，可能被错误触发。应使用显式if cmd1; then cmd2; else cmd3; fi，并分别规定cmd2失败的处置。 分别看两个操作符，A && B只在A成功时执行B，A || B只在A失败时执行B；成功通常指退出码0。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c"
+    ],
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "HGMZdecE0oRQzgxsHkjcPltangb",
+        "question": "10、请描述指令行中&&和||分别的作用"
+      }
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "HGMZdecE0oRQzgxsHkjcPltangb"
+        ]
+      }
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|区分条件失败与成功分支自身失败",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh, probe.sh, apply.sh, fallback.sh。\n\n## 操作任务\n执行 probe.sh 判断条件。probe 成功才执行 apply.sh，返回 apply 的状态，禁止失败后再执行 fallback；probe 失败才执行 fallback.sh 并返回其状态。三个脚本由题目提供，调用顺序写在 events 文件。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：cmd1 && cmd2 || cmd3 能否始终等价于if-else？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n",
+      "probe.sh": "exit 0\n",
+      "apply.sh": "exit 6\n",
+      "fallback.sh": "exit 0\n"
+    },
+    "solution_files": {
+      "task.sh": "if bash probe.sh;then\n bash apply.sh\nelse\n bash fallback.sh\nfi\n"
+    },
+    "negative_files": {
+      "task.sh": "bash probe.sh && bash apply.sh || bash fallback.sh\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "执行 probe.sh 判断条件。probe 成功才执行 apply.sh，返回 apply 的状态，禁止失败后再执行 fallback；probe 失败才执行 fallback.sh 并返回其状态。三个脚本由题目提供，调用顺序写在 events 文件。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nwrite('probe.sh',\"echo probe >>events;exit 0\\n\");write('apply.sh',\"echo apply >>events;exit 6\\n\");write('fallback.sh',\"echo fallback >>events;exit 0\\n\")\nr=call();assert r.returncode==6 and read('events')=='probe\\napply\\n'\nwrite('events','');write('probe.sh',\"echo probe >>events;exit 4\\n\")\nassert call().returncode==0 and read('events')=='probe\\nfallback\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-037",
+      "original_title": "cmd1 && cmd2 || cmd3 能否始终等价于if-else？",
+      "original_type": "interview",
+      "original_version": 2,
+      "original_sha256": "a06a812c7fab83e1bb1e11db229c94d71d1ff59008c5b2e50ab144f24d1abfb8",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-042",
+    "module": "shell",
+    "category": "Shell",
+    "level": 3,
+    "topic": "消除函数动态作用域导致的跨层变量污染",
+    "title": "消除函数动态作用域导致的跨层变量污染",
+    "answer": "```bash\nresult=global\nhelper(){ local result=\"helper:$1\";printf '%s\\n' \"$result\"; }\nouter(){ local result=outer;helper \"$1\";printf '%s\\n' \"$result\"; }\nouter \"$1\"\nprintf '%s\\n' \"$result\"\n```\n\nBash local 使用动态作用域，下层函数未声明同名变量会修改上层局部值。\n\n### 原题原理说明\nBash局部变量具有动态作用域，被调用函数可看到调用链上同名local。若第二函数赋值而未声明自己的local，还可能改到调用者状态。函数接口应显式传参并局部声明内部变量，避免依赖碰巧可见的名字。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|消除函数动态作用域导致的跨层变量污染",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n实现 outer 和 helper。outer 有局部 result=outer，helper 按参数生成 result=helper:<参数> 并输出。调用 helper 后 outer 仍输出 outer，主流程全局 result=global 也必须保留并输出 global。helper 必须声明自己的局部 result。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：Bash函数的local变量为何可能被它调用的另一函数读到？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "result=global\nhelper(){ local result=\"helper:$1\";printf '%s\\n' \"$result\"; }\nouter(){ local result=outer;helper \"$1\";printf '%s\\n' \"$result\"; }\nouter \"$1\"\nprintf '%s\\n' \"$result\"\n"
+    },
+    "negative_files": {
+      "task.sh": "result=global\nhelper(){ result=\"helper:$1\";printf '%s\\n' \"$result\"; }\nouter(){ local result=outer;helper \"$1\";printf '%s\\n' \"$result\"; }\nouter \"$1\";printf '%s\\n' \"$result\"\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 outer 和 helper。outer 有局部 result=outer，helper 按参数生成 result=helper:<参数> 并输出。调用 helper 后 outer 仍输出 outer，主流程全局 result=global 也必须保留并输出 global。helper 必须声明自己的局部 result。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nfor value in ['x','a b']:\n r=call([value]);assert r.returncode==0 and r.stdout==f'helper:{value}\\nouter\\nglobal\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-042",
+      "original_title": "Bash函数的local变量为何可能被它调用的另一函数读到？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "2a345dd082809481cc3ebb7a99359598ea346377b493a4f71bf3474e7d6f46b4",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-032",
+    "module": "shell",
+    "category": "Shell",
+    "level": 2,
+    "topic": "受限间接引用读取指定变量",
+    "title": "受限间接引用读取指定变量",
+    "answer": "```bash\nBLUE='blue value';GREEN=''\ncase \"$1\" in BLUE|GREEN) name=$1;;*)exit 2;;esac\nprintf '%s=%s\\n' \"$name\" \"${!name}\"\n```\n\n先用固定集合授权名称，再进行 ! 间接展开；不是把数据交给解析器。\n\n### 原题原理说明\nBash的间接展开把name的值用作变量名再取值，不把结果当整段命令执行。仍应约束允许访问的变量名，避免读取敏感变量。能直接用关联数组表达键值映射时通常更清楚，也更容易界定输入范围。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|受限间接引用读取指定变量",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n脚本定义 BLUE=\"blue value\"、GREEN=\"\"。参数只允许 BLUE/GREEN；读取变量名字对应值并输出 NAME=<值>。其他名字（含表达式、空串、PATH）退出2，不输出且不得执行内容。使用间接展开而不是 eval。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：${!name} 与把变量内容交给eval有何不同？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "BLUE='blue value';GREEN=''\ncase \"$1\" in BLUE|GREEN) name=$1;;*)exit 2;;esac\nprintf '%s=%s\\n' \"$name\" \"${!name}\"\n"
+    },
+    "negative_files": {
+      "task.sh": "BLUE='blue value';GREEN=''\neval \"printf '%s\\n' \\\"\\$$1\\\"\"\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "脚本定义 BLUE=\"blue value\"、GREEN=\"\"。参数只允许 BLUE/GREEN；读取变量名字对应值并输出 NAME=<值>。其他名字（含表达式、空串、PATH）退出2，不输出且不得执行内容。使用间接展开而不是 eval。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nassert call(['BLUE']).stdout=='BLUE=blue value\\n'\nassert call(['GREEN']).stdout=='GREEN=\\n'\nfor value in ['PATH','','BLUE;touch owned','$(touch owned)']:\n r=call([value]);assert r.returncode==2 and r.stdout==''\nassert not pathlib.Path('owned').exists()\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-032",
+      "original_title": "${!name} 与把变量内容交给eval有何不同？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "010486d3af1e49fdbdb010905af3a80bc6c0d122349b7ba813fde309e5e807b1",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-033",
+    "module": "shell",
+    "category": "Shell",
+    "level": 2,
+    "topic": "一次性环境赋值与长期 export 的边界",
+    "title": "一次性环境赋值与长期 export 的边界",
+    "answer": "```bash\nexport FLAG=base\nFLAG=one bash child.sh\nbash child.sh\nexport FLAG=two\nbash child.sh\nprintf 'parent=%s\\n' \"$FLAG\"\n```\n\n前缀赋值只用于这次外部命令；export 修改当前 Shell 后续子进程继承的环境。\n\n### 原题原理说明\n前者一般只为该外部命令及其子进程设置环境；后者修改当前Shell并标记为后续子进程继承。Shell特殊内建存在细节差异，不能以临时赋值包装任意命令就认定父环境一定不变。子进程也无法直接改父环境。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "M0EUdg8zmoAf6YxR2secmwYPnJW",
+          "LOymd5uEcorZNYxEbmGcpi9InBe"
+        ]
+      }
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|一次性环境赋值与长期 export 的边界",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh, child.sh。\n\n## 操作任务\n设置并 export FLAG=base。先用 FLAG=one 启动 child.sh，再正常启动一次，然后 export FLAG=two 再启动一次，最后输出 parent=two。child 只输出收到的 FLAG，每次独占一行。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：VAR=value command 和 export VAR=value 的生命周期如何不同？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n",
+      "child.sh": "printf '%s\\n' \"$FLAG\"\n"
+    },
+    "solution_files": {
+      "task.sh": "export FLAG=base\nFLAG=one bash child.sh\nbash child.sh\nexport FLAG=two\nbash child.sh\nprintf 'parent=%s\\n' \"$FLAG\"\n"
+    },
+    "negative_files": {
+      "task.sh": "export FLAG=base\nexport FLAG=one;bash child.sh\nbash child.sh\nexport FLAG=two;bash child.sh\nprintf 'parent=%s\\n' \"$FLAG\"\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "设置并 export FLAG=base。先用 FLAG=one 启动 child.sh，再正常启动一次，然后 export FLAG=two 再启动一次，最后输出 parent=two。child 只输出收到的 FLAG，每次独占一行。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nwrite('child.sh',\"printf '%s\\\\n' \\\"$FLAG\\\"\\n\")\nr=call();assert r.returncode==0 and r.stdout=='one\\nbase\\ntwo\\nparent=two\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-033",
+      "original_title": "VAR=value command 和 export VAR=value 的生命周期如何不同？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "884b80fbd2ef179d218b294e050c2d1bd87efc03ae423b742e461f8a452bc8fd",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-069",
+    "module": "shell",
+    "category": "Shell",
+    "level": 3,
+    "topic": "默认值计算不得意外修改已有空变量",
+    "title": "默认值计算不得意外修改已有空变量",
+    "answer": "```bash\nvalue=$1\neffective=${value:-fallback}\nprintf 'effective=%s\\noriginal=%s\\n' \"$effective\" \"$value\"\n: \"${value:=saved}\"\nprintf 'saved=%s\\n' \"$value\"\n```\n\n:- 只产生值，:= 还会修改变量，避免把只读查询写成状态更新。\n\n### 原题原理说明\n:=在x未设置或为空时把默认值赋给x并返回，:-仅返回替代值不保存。默认赋值若发生在子Shell中也不会自动回到父环境。审查时要区分“展示默认值”和“改变状态”，避免日志格式化意外初始化变量。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "解释触发机制",
+      "说明正确处理边界"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|默认值计算不得意外修改已有空变量",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n参数1是变量原始值（允许空）。设置 value=$1，使用非赋值默认展开生成 effective（空时 fallback），输出 effective=<值> 与 original=<原值>。之后才使用赋值默认展开使 value 空时变为 saved，输出 saved=<最终值>。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：${x:=value} 为什么可能改变后续逻辑，而 ${x:-value} 不会？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "value=$1\neffective=${value:-fallback}\nprintf 'effective=%s\\noriginal=%s\\n' \"$effective\" \"$value\"\n: \"${value:=saved}\"\nprintf 'saved=%s\\n' \"$value\"\n"
+    },
+    "negative_files": {
+      "task.sh": "value=$1;effective=${value:=fallback};printf 'effective=%s\\noriginal=%s\\n' \"$effective\" \"$value\";: \"${value:=saved}\";printf 'saved=%s\\n' \"$value\"\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "参数1是变量原始值（允许空）。设置 value=$1，使用非赋值默认展开生成 effective（空时 fallback），输出 effective=<值> 与 original=<原值>。之后才使用赋值默认展开使 value 空时变为 saved，输出 saved=<最终值>。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nr=call(['']);assert r.returncode==0 and r.stdout=='effective=fallback\\noriginal=\\nsaved=saved\\n'\nr=call(['set']);assert r.returncode==0 and r.stdout=='effective=set\\noriginal=set\\nsaved=set\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-069",
+      "original_title": "${x:=value} 为什么可能改变后续逻辑，而 ${x:-value} 不会？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "13f410e25d1b8e4ccbfb5bdbff119e2e8bb55e6230fb3e9be4ae97a0646bde27",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-070",
+    "module": "shell",
+    "category": "Shell",
+    "level": 3,
+    "topic": "临时 glob 设置不泄漏到调用方",
+    "title": "临时 glob 设置不泄漏到调用方",
+    "answer": "```bash\ncase \"$1\" in on)shopt -s nullglob;;off)shopt -u nullglob;;*)exit 2;;esac\nbefore=$1\ncount(){ ( shopt -s nullglob;files=(empty/*.log);printf 'count=%s\\n' \"${#files[@]}\" ); }\ncount\nafter=off;shopt -q nullglob && after=on\nprintf 'before=%s\\nafter=%s\\n' \"$before\" \"$after\"\n```\n\n子 Shell 内选项修改不会污染调用方，无需假设调用方初始默认值。\n\n### 原题原理说明\n优先把需要特殊选项的操作包在子Shell中，离开时选项自动隔离；若必须当前Shell运行，应记录原状态并在所有退出路径恢复。不要假定函数返回会恢复shopt，它通常影响当前Shell环境。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "解释触发机制",
+      "说明正确处理边界"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|临时 glob 设置不泄漏到调用方",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n参数 on/off 指定调用者 nullglob 状态。函数 count 需要临时开 nullglob，对空目录 empty/*.log 计数并输出 count=0。返回后输出 before=<on/off>、after=<on/off>（count 行在前），两者必须一致。不可修改全局选项。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：如何避免临时修改shopt影响调用者后续命令？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "case \"$1\" in on)shopt -s nullglob;;off)shopt -u nullglob;;*)exit 2;;esac\nbefore=$1\ncount(){ ( shopt -s nullglob;files=(empty/*.log);printf 'count=%s\\n' \"${#files[@]}\" ); }\ncount\nafter=off;shopt -q nullglob && after=on\nprintf 'before=%s\\nafter=%s\\n' \"$before\" \"$after\"\n"
+    },
+    "negative_files": {
+      "task.sh": "shopt -u nullglob\ncount(){ shopt -s nullglob;files=(empty/*.log);printf 'count=%s\\n' \"${#files[@]}\"; }\ncount;echo before=off;echo after=on\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "参数 on/off 指定调用者 nullglob 状态。函数 count 需要临时开 nullglob，对空目录 empty/*.log 计数并输出 count=0。返回后输出 before=<on/off>、after=<on/off>（count 行在前），两者必须一致。不可修改全局选项。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\npathlib.Path('empty').mkdir()\nfor state in ['on','off']:\n r=call([state]);assert r.returncode==0 and r.stdout==f'count=0\\nbefore={state}\\nafter={state}\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-070",
+      "original_title": "如何避免临时修改shopt影响调用者后续命令？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "e357e040feb2d8ce30a77451a120c23ee3d1c12e2cabdea92f509cc0c3bada4e",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-066",
+    "module": "shell",
+    "category": "Shell",
+    "level": 2,
+    "topic": "二进制内容必须通过文件流传输",
+    "title": "二进制内容必须通过文件流传输",
+    "answer": "```bash\n[[ -f input.bin ]]||exit 4\ncat input.bin > output.bin || exit 5\nn=$(wc -c <output.bin)\nprintf 'bytes=%s\\n' \"$((n))\"\n```\n\nBash 变量不能保存 NUL；文件重定向避免命令替换删末尾换行。\n\n### 原题原理说明\n不能，Shell字符串无法包含NUL，命令替代可能丢弃它并提示警告。二进制数据应保留在文件或直接通过管道传递，摘要用安全文本编码表示。不能用字符串长度核对二进制完整性，需以字节数和校验和验证。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "解释触发机制",
+      "说明正确处理边界"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|二进制内容必须通过文件流传输",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh, input.bin。\n\n## 操作任务\n把 input.bin 字节无损复制为 output.bin（含 NUL、所有字节值和尾换行）；在标准输出报告 bytes=<wc -c 数字>。不得使用变量保存文件内容。输入缺失退出4且不创建输出。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：Bash变量能否无损保存包含NUL的二进制数据？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n",
+      "input.bin": "A\n\n"
+    },
+    "solution_files": {
+      "task.sh": "[[ -f input.bin ]]||exit 4\ncat input.bin > output.bin || exit 5\nn=$(wc -c <output.bin)\nprintf 'bytes=%s\\n' \"$((n))\"\n"
+    },
+    "negative_files": {
+      "task.sh": "data=$(cat input.bin);printf '%s' \"$data\" >output.bin;printf 'bytes=%s\\n' \"${#data}\"\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "把 input.bin 字节无损复制为 output.bin（含 NUL、所有字节值和尾换行）；在标准输出报告 bytes=<wc -c 数字>。不得使用变量保存文件内容。输入缺失退出4且不创建输出。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nfor data in [b'A\\0B\\n\\n',bytes(range(256)),b'']:\n pathlib.Path('input.bin').write_bytes(data);r=call();assert r.returncode==0 and pathlib.Path('output.bin').read_bytes()==data and r.stdout==f'bytes={len(data)}\\n'\npathlib.Path('input.bin').unlink();pathlib.Path('output.bin').unlink();assert call().returncode==4 and not pathlib.Path('output.bin').exists()\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-066",
+      "original_title": "Bash变量能否无损保存包含NUL的二进制数据？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "303924e3db2754c7678461f4b5fe490c66a54fb8f4c9a7610044733b7450fb49",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-067",
+    "module": "shell",
+    "category": "Shell",
+    "level": 2,
+    "topic": "按模式决定是否把 stderr 送入消费管道",
+    "title": "按模式决定是否把 stderr 送入消费管道",
+    "answer": "```bash\ncase \"$1\" in\nstdout) bash producer.sh | sed 's/^/data:/';;\nall) bash producer.sh |& sed 's/^/data:/';;\n*)exit 2;;\nesac\n```\n\n|& 将 stderr 合并到管道，而 | 默认只连接 stdout。\n\n### 原题原理说明\n|仅把前一命令stdout连接到下一个stdin；|&会把前一命令stderr也并入，等价的隐含重定向发生在显式重定向之后。混合后下游难以区分数据与错误，因此机器解析链路通常保留独立stderr。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "解释触发机制",
+      "说明正确处理边界"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|按模式决定是否把 stderr 送入消费管道",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh, producer.sh。\n\n## 操作任务\n参数 stdout/all；运行 producer.sh，经 sed 在每条进入管道的行前加 data:。stdout 模式只处理 stdout，stderr 原样留在终端；all 模式合并两流后均加前缀且 stderr 为空。非法模式退出2。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：Bash中的 |& 与仅使用 | 有何区别？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n",
+      "producer.sh": "printf 'out\\n';printf 'err\\n' >&2\n"
+    },
+    "solution_files": {
+      "task.sh": "case \"$1\" in\nstdout) bash producer.sh | sed 's/^/data:/';;\nall) bash producer.sh |& sed 's/^/data:/';;\n*)exit 2;;\nesac\n"
+    },
+    "negative_files": {
+      "task.sh": "bash producer.sh | sed 's/^/data:/'\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "参数 stdout/all；运行 producer.sh，经 sed 在每条进入管道的行前加 data:。stdout 模式只处理 stdout，stderr 原样留在终端；all 模式合并两流后均加前缀且 stderr 为空。非法模式退出2。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nwrite('producer.sh',\"printf 'out\\\\n';printf 'err\\\\n' >&2\\n\")\nr=call(['stdout']);assert r.returncode==0 and r.stdout=='data:out\\n' and r.stderr=='err\\n'\nr=call(['all']);assert r.returncode==0 and set(r.stdout.splitlines())=={'data:out','data:err'} and r.stderr==''\nassert call(['invalid']).returncode==2\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-067",
+      "original_title": "Bash中的 |& 与仅使用 | 有何区别？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "1156f1b7370081616f9fddf14fc269d42ecb2d55d9f66b3c1ede09c912500c44",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-020",
+    "module": "shell",
+    "category": "Shell",
+    "level": 2,
+    "topic": "无匹配 glob 时阻止调用后续发布动作",
+    "title": "无匹配 glob 时阻止调用后续发布动作",
+    "answer": "```bash\nif (shopt -s failglob;printf '%s\\n' artifacts/*.pkg) >manifest 2>/dev/null;then\n bash publish.sh\nelse\n exit 4\nfi\n```\n\nfailglob 属于展开失败，放在可检查状态的子 Shell 中阻断后续动作。\n\n### 原题原理说明\n默认通常保留字面模式*.csv；nullglob让未匹配模式消失；failglob把它变成展开错误并阻止该命令执行。批处理必须定义空集合行为，避免把*.csv作为真实文件名传入，也避免空参数意外触发工具默认操作。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|无匹配 glob 时阻止调用后续发布动作",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh, publish.sh。\n\n## 操作任务\n目录 artifacts 中必须至少有一个 *.pkg 文件。请先在独立子 Shell 使用 failglob 扩展并把匹配写入 manifest；无匹配退出4、不得调用 publish.sh。有匹配时再调用 publish.sh，manifest 每路径一行，文件名不含换行。禁止把字面 *.pkg 发布出去。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：Bash中 *.csv 未匹配文件时，nullglob与failglob有何差异？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n",
+      "publish.sh": "printf 'called\\n' >>events\n"
+    },
+    "solution_files": {
+      "task.sh": "if (shopt -s failglob;printf '%s\\n' artifacts/*.pkg) >manifest 2>/dev/null;then\n bash publish.sh\nelse\n exit 4\nfi\n"
+    },
+    "negative_files": {
+      "task.sh": "printf '%s\\n' artifacts/*.pkg >manifest;bash publish.sh\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "目录 artifacts 中必须至少有一个 *.pkg 文件。请先在独立子 Shell 使用 failglob 扩展并把匹配写入 manifest；无匹配退出4、不得调用 publish.sh。有匹配时再调用 publish.sh，manifest 每路径一行，文件名不含换行。禁止把字面 *.pkg 发布出去。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\npathlib.Path('artifacts').mkdir();write('publish.sh',\"printf 'called\\\\n' >>events\\n\")\nr=call();assert r.returncode==4 and not pathlib.Path('events').exists()\nwrite('artifacts/a.pkg','x');write('artifacts/b file.pkg','y');r=call();assert r.returncode==0\nassert set(read('manifest').splitlines())=={'artifacts/a.pkg','artifacts/b file.pkg'} and read('events')=='called\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-020",
+      "original_title": "Bash中 *.csv 未匹配文件时，nullglob与failglob有何差异？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "59d09e95f38136b3202c77361dbe7c00adba0c56cdbe4e18a8bae5d490b3e590",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "src-85f4dfa373bdec37",
+    "title": "故障恢复：确认输入在EOF时误报成功或漏掉末行",
+    "answer": "根因：未检查read失败且y*混淆确认。用IFS= read -r保留空白/反斜杠，失败但存在非空末行仍处理；精确yes/no各自退出，耗尽输入显式EOF。\n修复参考：\n```bash\nwhile IFS= read -r line || [[ -n \"$line\" ]];do\n case \"$line\" in yes)echo confirmed;exit 0;;no)echo cancelled;exit 3;;*)echo retry >&2;;esac\ndone\necho eof >&2;exit 4\n```",
+    "category": "Shell",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "case",
+    "has_answer": true,
+    "source": "OpsForge Shell 原题实作转换",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "既有ID深化真实故障初态/根因/恢复，四路及独立突变后验收；不计原214故障。",
+    "original_category": "Shell",
+    "original_title": "如何在Shell脚本中从用户获得输入?",
+    "module": "shell",
+    "topic": "读取确认输入并明确处理 EOF",
+    "level": 0,
+    "body": "环境：非root Linux、Bash4.4+及C.UTF-8 locale，全部操作限隔离题目目录，无远程服务/系统级修改。\n\n故障初态与复现：bash task.sh </dev/null：初始cancelled且退出0；未收到确认应stderr=eof且退出4。printf no | bash task.sh应cancelled且退出3。\n\n可核证根因：未检查read失败且y*混淆确认。用IFS= read -r保留空白/反斜杠，失败但存在非空末行仍处理；精确yes/no各自退出，耗尽输入显式EOF。\n\n操作任务：修复task.sh，保留原行为合同：从 stdin 逐行读取人工确认，只接受整行 yes 或 no。其他值输出 retry 到 stderr 后继续；yes 输出 confirmed 退出0，no 输出 cancelled 退出3，EOF 前没有有效确认则输出 eof 到 stderr 并退出4。每次保留空格、反斜杠，不把 y 或 YES 当 yes。\n\n产物：修复的task.sh；可记录诊断，但不以静态文字作为恢复证据。\n\n验收方法：可信驱动先实际复现保留故障脚本，再对修复运行同输入恢复和独立边界，核对stdout/stderr/退出码。alias题额外以Bash原生解析观察。四路与独立突变；不替代PC全链。\n\n能力边界：本地教学故障，不计原214独立生产故障；Shell输入不含NUL字节。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|读取确认输入并明确处理 EOF",
+    "files": {
+      "task.sh": "read line\nif [[ \"$line\" == y* ]];then echo confirmed;else echo cancelled;fi\n"
+    },
+    "solution_files": {
+      "task.sh": "while IFS= read -r line || [[ -n \"$line\" ]];do\n case \"$line\" in yes)echo confirmed;exit 0;;no)echo cancelled;exit 3;;*)echo retry >&2;;esac\ndone\necho eof >&2;exit 4\n"
+    },
+    "negative_files": {
+      "task.sh": "read line;[[ \"$line\" == y* ]]&&echo confirmed||echo cancelled\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "从 stdin 逐行读取人工确认，只接受整行 yes 或 no。其他值输出 retry 到 stderr 后继续；yes 输出 confirmed 退出0，no 输出 cancelled 退出3，EOF 前没有有效确认则输出 eof 到 stderr 并退出4。每次保留空格、反斜杠，不把 y 或 YES 当 yes。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "真实Bash故障初态复现、同输入恢复及独立locale/EOF/解析/哨兵边界；不以静态报告判通过。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ],
+      "pass_criteria": "故障按预期复现，修复全部恢复/边界断言完成，平台completed/passed均true。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ],
+        "features": [
+          "locale:c_utf8"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef clean_env(extra=None):\n environment=dict(os.environ)\n for name in ['BASH_ENV','ENV','SHELLOPTS','BASHOPTS']:environment.pop(name,None)\n environment.update(extra or {})\n return environment\ndef run_script(script,args=(),stdin='',env=None):\n return subprocess.run([BASH,'--noprofile','--norc',script]+list(args),input=stdin,capture_output=True,text=True,encoding='utf-8',env=clean_env(env),timeout=6)\ndef call(args=(),stdin='',env=None):return run_script('task.sh',args,stdin,env)\n\nprobe=run_script('incident/broken.sh');assert (probe.returncode,probe.stdout)==(0,'cancelled\\n'),probe\nfor text,code,out,err in [('',4,'','eof\\n'),('yes',0,'confirmed\\n',''),('no',3,'cancelled\\n',''),('y\\nYES\\n yes \\nyes\\n',0,'confirmed\\n','retry\\n'*3),('ye\\\\s\\nyes\\n',0,'confirmed\\n','retry\\n'),('\\n',4,'','retry\\neof\\n'),('no\\nyes\\n',3,'cancelled\\n',''),('yes\\nno\\n',0,'confirmed\\n',''),('partial',4,'','retry\\neof\\n')]:\n result=call(stdin=text);assert (result.returncode,result.stdout,result.stderr)==(code,out,err),(text,result)\n",
+        "incident/broken.sh": "read line\nif [[ \"$line\" == y* ]];then echo confirmed;else echo cancelled;fi\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-85f4dfa373bdec37",
+      "original_title": "如何在Shell脚本中从用户获得输入?",
+      "original_type": "source",
+      "original_version": 3,
+      "original_sha256": "e7e6c6accef91a8efd93fe0d010e7968a09ea05269f6b382a949d7c7d7652100",
+      "theory_retained": true
+    },
+    "question_format": "case"
+  },
+  {
+    "id": "src-698b42d1ef0900d6",
+    "title": "文件门禁按否定条件整体拒绝",
+    "answer": "```bash\nif [[ ! -f \"$1\" || ! -s \"$1\" ]];then echo blocked;exit 3;fi\necho ready\n```\n\n否定“普通且非空”是“非普通或为空”；边界用例验证德摩根关系。\n\n### 原题原理说明\n可用 if ! command; then ...; fi 按命令失败分支处理，或在 test/[[ ]] 中使用相应否定逻辑。注意在 ! 之后直接读取 $? 得到的可能是已取反状态，若要原退出码应在合适位置保存。字符串 'false' 不是自动布尔假。",
+    "category": "Shell",
+    "difficulty": "入门",
+    "section": "Shell 脚本 - 条件",
+    "type": "code",
+    "has_answer": true,
+    "source": "OpsForge Shell 原题实作转换",
+    "sources": [
+      "topics/shell/README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "Shell",
+    "original_title": "在shell脚本中，如何否定条件？",
+    "module": "shell",
+    "topic": "文件门禁按否定条件整体拒绝",
+    "level": 2,
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n输入路径只有同时满足普通文件且非空才输出 ready；不存在、空文件或目录统一输出 blocked 并退出3。不能用逻辑或错误地放行其中一项。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：在shell脚本中，如何否定条件？\n\n依据题目给出的前提作答，说明原理、适用条件及验证方法。参考答案为文本审校内容；涉及操作的示例仅用于获准的隔离环境，不代表已在生产执行。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|文件门禁按否定条件整体拒绝",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "if [[ ! -f \"$1\" || ! -s \"$1\" ]];then echo blocked;exit 3;fi\necho ready\n"
+    },
+    "negative_files": {
+      "task.sh": "if [[ ! -f \"$1\" && ! -s \"$1\" ]];then echo blocked;exit 3;fi;echo ready\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "输入路径只有同时满足普通文件且非空才输出 ready；不存在、空文件或目录统一输出 blocked 并退出3。不能用逻辑或错误地放行其中一项。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nwrite('full','x');write('empty','');pathlib.Path('dir').mkdir()\nr=call(['full']);assert r.returncode==0 and r.stdout=='ready\\n'\nfor p in ['empty','dir','missing']:\n r=call([p]);assert r.returncode==3 and r.stdout=='blocked\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-698b42d1ef0900d6",
+      "original_title": "在shell脚本中，如何否定条件？",
+      "original_type": "source",
+      "original_version": 3,
+      "original_sha256": "afd26262015af2e382700c01812fc442e4e0d680b4f009d7666786d4c498ea0f",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-advanced-shell-001",
+    "module": "shell",
+    "category": "Shell",
+    "level": 3,
+    "topic": "算术运算前拒绝表达式注入",
+    "title": "算术运算前拒绝表达式注入",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n参数是两个十进制整数文本，允许 0 或不带前导零的 1..9999，计算乘积并输出。负数、空串、表达式、数组下标、前导零和越界输入退出2且无输出；不能直接交给 Bash 算术。保证表达式中的 touch owned 不执行。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：把数字字符串放进Bash算术表达式，为什么仅加双引号仍不构成数据隔离？\n\n任务入口接收外部数字字符串，再放入Bash算术表达式；开发认为双引号与10#已足够安全。请分析继续解释、前导零和固定宽度溢出的边界，给出进入算术前的语法、长度与范围约束，以及不用恶意表达式执行的验证证据。",
+    "answer": "```bash\n(($#==2))||exit 2\nfor x in \"$@\";do [[ \"$x\" =~ ^(0|[1-9][0-9]{0,3})$ ]]||exit 2;done\nprintf '%s\\n' \"$(($1*$2))\"\n```\n\n算术上下文会再次解析表达式；严格验证字符集与长度才把输入限制为数字数据。\n\n### 原题原理说明\nBash算术上下文会把变量值按表达式继续解释，某些数组下标还涉及额外展开；双引号主要约束词分割，不能把任意文本变成安全整数。评审时先限定输入语法，例如只接受十进制数字并规定符号、长度和范围，再在可信表达式里使用校验结果。还要区分空值、前导零、溢出与除零：Bash采用固定宽度整数，并不替业务检查溢出，10#也不是任意字符串校验器。证据应包含解释器版本、进入算术前的拒绝记录和边界样例，避免为观察行为执行恶意表达式。若要求任意精度或财务舍入，应明确交给具备相应数值能力的实现，而非继续拼接Shell表达式。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设特有机制及前提",
+      "给出可核验的证据、成功与失败判据",
+      "界定异常恢复与不可承诺的边界"
+    ],
+    "references": [
+      "https://www.gnu.org/software/bash/manual/bash.html"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|算术运算前拒绝表达式注入",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "(($#==2))||exit 2\nfor x in \"$@\";do [[ \"$x\" =~ ^(0|[1-9][0-9]{0,3})$ ]]||exit 2;done\nprintf '%s\\n' \"$(($1*$2))\"\n"
+    },
+    "negative_files": {
+      "task.sh": "printf '%s\\n' \"$(($1*$2))\"\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "参数是两个十进制整数文本，允许 0 或不带前导零的 1..9999，计算乘积并输出。负数、空串、表达式、数组下标、前导零和越界输入退出2且无输出；不能直接交给 Bash 算术。保证表达式中的 touch owned 不执行。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nassert call(['9999','9999']).stdout=='99980001\\n'\nassert call(['0','8']).stdout=='0\\n'\nfor x in ['','01','-1','1+2','10000','a[$(touch owned)]']:\n r=call([x,'2']);assert r.returncode==2 and r.stdout==''\nassert not pathlib.Path('owned').exists()\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-advanced-shell-001",
+      "original_title": "把数字字符串放进Bash算术表达式，为什么仅加双引号仍不构成数据隔离？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "1fadb04b7aac8f16ee9ca792fc36582bf43cd554aaac3477a90e4e13098b73c9",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-advanced-shell-002",
+    "module": "shell",
+    "category": "Shell",
+    "level": 4,
+    "topic": "nameref 返回值避开内部变量同名遮蔽",
+    "title": "nameref 返回值避开内部变量同名遮蔽",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n实现 assign_result 函数：第一个参数只能 result 或 report，第二个参数为原值，借 nameref 写回调用者目标变量。初始化 result=oldR、report=oldP，调用后输出两行 result=... 和 report=...。目标未知退出2且无输出；内部局部变量必须采用不会与这两个合法名字冲突的命名。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：通用Bash函数用local -n修改调用者变量时，怎样推导同名遮蔽、自引用和unset的影响？\n\n通用函数用local -n修改调用者变量，调用者的局部变量可能与函数内部名称相同，函数还会执行unset。请推演嵌套调用、空名称和只读目标，区分解除引用与删除目标，并说明应采用何种命名与所有权合同。",
+    "answer": "```bash\nassign_result(){\n case \"$1\" in result|report);;*)return 2;;esac\n local -n _ops_dest=\"$1\"\n _ops_dest=$2\n}\nresult=oldR;report=oldP\nassign_result \"$1\" \"$2\"||exit 2\nprintf 'result=%s\\nreport=%s\\n' \"$result\" \"$report\"\n```\n\nnameref 的引用目标仍受动态作用域影响；限制目标集合并避免局部同名变量。\n\n### 原题原理说明\nnameref保存目标名称，读取或赋值会间接操作该目标；名称解析仍受Bash作用域影响，不是捕获调用时某个固定内存地址。若函数自己的局部名与传入目标重名，可能形成循环引用或命中错误层级；普通unset经引用删除目标与解除引用本身也必须区分。接口应限制允许的变量名，使用不与调用者约定冲突的内部名称，并明确支持标量还是数组、目标必须预存还是可创建。审校用嵌套调用、调用者同名局部变量、空名称、只读目标和重复调用推演结果，不能用eval绕过报错。跨版本部署先确认nameref能力；无法明确所有权时，改用返回值或标准输出数据接口，避免隐藏修改调用者状态。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设特有机制及前提",
+      "给出可核验的证据、成功与失败判据",
+      "界定异常恢复与不可承诺的边界"
+    ],
+    "references": [
+      "https://www.gnu.org/software/bash/manual/bash.html"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|nameref 返回值避开内部变量同名遮蔽",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "assign_result(){\n case \"$1\" in result|report);;*)return 2;;esac\n local -n _ops_dest=\"$1\"\n _ops_dest=$2\n}\nresult=oldR;report=oldP\nassign_result \"$1\" \"$2\"||exit 2\nprintf 'result=%s\\nreport=%s\\n' \"$result\" \"$report\"\n"
+    },
+    "negative_files": {
+      "task.sh": "assign_result(){ local result;local -n target=\"$1\";target=$2; }\nresult=oldR;report=oldP;assign_result \"$1\" \"$2\";printf 'result=%s\\nreport=%s\\n' \"$result\" \"$report\"\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 assign_result 函数：第一个参数只能 result 或 report，第二个参数为原值，借 nameref 写回调用者目标变量。初始化 result=oldR、report=oldP，调用后输出两行 result=... 和 report=...。目标未知退出2且无输出；内部局部变量必须采用不会与这两个合法名字冲突的命名。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nr=call(['result','new value']);assert r.returncode==0 and r.stdout=='result=new value\\nreport=oldP\\n'\nassert call(['report','']).stdout=='result=oldR\\nreport=\\n'\nassert call(['target','bad']).returncode==2\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-advanced-shell-002",
+      "original_title": "通用Bash函数用local -n修改调用者变量时，怎样推导同名遮蔽、自引用和unset的影响？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "9ba194925635120c026d0e4ac2db732c1220eeaf08d556faa4b9019f9ea58c79",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "src-e6ec668c4e4674ff",
+    "title": "故障恢复：xtrace污染stderr且追踪描述符未归还",
+    "answer": "根因：xtrace默认输出到stderr；用独立描述符并设置BASH_XTRACEFD。结束先set+x，再unset BASH_XTRACEFD关闭其持有FD。不能用手写静态trace代替实际执行追踪。\n修复参考：\n```bash\nexec 9>trace.log\nBASH_XTRACEFD=9\nPS4='TRACE: '\nset -x\nprintf 'job=%s\\n' \"$1\"\nset +x\nunset BASH_XTRACEFD\n```",
+    "category": "Shell",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "case",
+    "has_answer": true,
+    "source": "OpsForge Shell 原题实作转换",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "复用原ID补充真实故障初态、可核证根因及恢复；不计原214独立故障。",
+    "original_category": "Shell",
+    "original_title": "你如何调试Shell脚本?",
+    "module": "shell",
+    "topic": "将 xtrace 写到独立描述符而非业务输出",
+    "level": 2,
+    "body": "环境：非root Linux、Bash4.4+、C.UTF-8及/proc，全部操作限隔离题目目录；无远程服务或系统级修改。\n\n故障初态与复现：bash task.sh \"beta space\"：初始set -x把printf执行细节混入stderr，trace.log不存在。应仅stdout输出job=beta space，stderr为空，真实追踪单独写trace.log且完成后关闭trace/FD。\n\n可核证根因：xtrace默认输出到stderr；用独立描述符并设置BASH_XTRACEFD。结束先set+x，再unset BASH_XTRACEFD关闭其持有FD。不能用手写静态trace代替实际执行追踪。\n\n操作任务：修复task.sh并保留原行为边界：脚本读取参数作为 JOB（非秘密），启用 xtrace 记录一次 printf 操作，trace 写到 trace.log，stdout 仅 job=<JOB>，stderr 为空。使用独立 BASH_XTRACEFD；完成后关闭追踪及 FD。追踪中必须可找到实际 JOB，不能写伪造日志。\n\n产物：修复后的task.sh；诊断文字可记录但不作为恢复通过证据。\n\n验收方法：可信驱动实际运行原故障脚本、同输入恢复及独立边界，检查进程stdout/stderr/退出码/文件状态。trace题原生观察真实PS4和FD生命周期，拒绝伪造日志。四路和独立突变；不代替PC完整验收。\n\n能力边界：本地教学故障；不计原214独立生产故障完成。输入名称按合同无冒号、NUL；JOB明确为非秘密。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|将 xtrace 写到独立描述符而非业务输出",
+    "files": {
+      "task.sh": "set -x\nprintf 'job=%s\\n' \"$1\"\nset +x\n"
+    },
+    "solution_files": {
+      "task.sh": "exec 9>trace.log\nBASH_XTRACEFD=9\nPS4='TRACE: '\nset -x\nprintf 'job=%s\\n' \"$1\"\nset +x\nunset BASH_XTRACEFD\n"
+    },
+    "negative_files": {
+      "task.sh": "set -x;printf 'job=%s\\n' \"$1\";set +x\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "脚本读取参数作为 JOB（非秘密），启用 xtrace 记录一次 printf 操作，trace 写到 trace.log，stdout 仅 job=<JOB>，stderr 为空。使用独立 BASH_XTRACEFD；完成后关闭追踪及 FD。追踪中必须可找到实际 JOB，不能写伪造日志。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "实际Bash初态复现、修复恢复及日志/状态码/循环/traceFD/模式边界；非静态诊断验收。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ],
+      "pass_criteria": "故障原生复现；修复全部恢复与独立边界断言完成，平台completed/passed均true。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ],
+        "features": [
+          "locale:c_utf8"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,json,secrets\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef clean_env(extra=None):\n environment=dict(os.environ)\n for name in ['BASH_ENV','ENV','SHELLOPTS','BASHOPTS']:environment.pop(name,None)\n environment.update(extra or {})\n return environment\ndef run_script(script,args=(),stdin='',env=None):\n return subprocess.run([BASH,'--noprofile','--norc',script]+list(args),input=stdin,capture_output=True,text=True,encoding='utf-8',env=clean_env(env),timeout=6)\ndef call(args=(),stdin='',env=None):return run_script('task.sh',args,stdin,env)\n\npathlib.Path('trace.log').unlink(missing_ok=True)\nprobe=run_script('incident/broken.sh',['beta space'])\nassert probe.returncode==0 and probe.stdout=='job=beta space\\n' and 'printf' in probe.stderr and not pathlib.Path('trace.log').exists(),probe\nfor job in ['alpha','beta space','%s','中文','literal-$HOME']:\n pathlib.Path('trace.log').write_text('OLD',encoding='utf-8')\n result=call([job]);assert (result.returncode,result.stdout,result.stderr)==(0,'job='+job+'\\n',''),result\n trace=pathlib.Path('trace.log').read_text();assert 'TRACE:'in trace and 'printf'in trace and job in trace and 'OLD'not in trace\n\nnonce='native-trace-'+secrets.token_hex(12)+': '\nobserver=r\"\"\"\nlast_trace_fd=\ntrace_printf_seen=0\n_trace_observer() {\n if [[ -n DOLLAR{BASH_XTRACEFD-} ]];then last_trace_fd=$BASH_XTRACEFD;fi\n if [[ $- == *x* && ( $BASH_COMMAND == printf\\ * || $BASH_COMMAND == builtin\\ printf\\ * ) ]];then\n  trace_printf_seen=1\n  PS4='PRIVATE_TRACE_CHALLENGE'\n fi\n}\n_trace_exit() {\n saved_status=$?\n trap - DEBUG\n [[ $- != *x* ]] || exit 71\n [[ -z DOLLAR{BASH_XTRACEFD+x} ]] || exit 72\n [[ -n $last_trace_fd && ! -e /proc/$$/fd/$last_trace_fd ]] || exit 73\n [[ $trace_printf_seen == 1 ]] || exit 74\n printf observer-complete >&2\n return \"$saved_status\"\n}\nset -T\ntrap _trace_observer DEBUG\ntrap _trace_exit EXIT\n\"\"\".replace('DOLLAR','$').replace('PRIVATE_TRACE_CHALLENGE',nonce)\npathlib.Path('observer.bash').write_text(observer,encoding='utf-8')\nresult=run_script('task.sh',['native-job'],env={'BASH_ENV':str(pathlib.Path('observer.bash').resolve())})\nassert (result.returncode,result.stdout,result.stderr)==(0,'job=native-job\\n','observer-complete'),result\ntrace=pathlib.Path('trace.log').read_text();assert nonce in trace and 'printf' in trace and 'native-job'in trace\n",
+        "incident/broken.sh": "set -x\nprintf 'job=%s\\n' \"$1\"\nset +x\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-e6ec668c4e4674ff",
+      "original_title": "你如何调试Shell脚本?",
+      "original_type": "source",
+      "original_version": 3,
+      "original_sha256": "ffc1ec8421677a375844c6da02601df8c44080b813a4876c95a5af415b366357",
+      "theory_retained": true
+    },
+    "question_format": "case"
+  },
+  {
+    "id": "curated-advanced-shell-011",
+    "module": "shell",
+    "category": "Shell",
+    "level": 3,
+    "topic": "重复加载函数库不得重置调用者状态",
+    "title": "重复加载函数库不得重置调用者状态",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n交付 task.sh 作为可 source 的函数库。第一次加载设置 OPS_LIB_LOADED=1 并定义 ops_inc（将 OPS_COUNT 加1）；不得在加载时输出或修改 PWD、位置参数和 OPS_COUNT。重复 source 应直接返回成功，保留已有函数和状态。只接受 OPS_COUNT 为0..9999十进制，非法时 ops_inc 返回2而不改值。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：团队共享的Bash函数库可能被多次source，怎样验收加载动作无意外副作用且不污染调用方？\n\n多个Bash任务共享函数库，调用方已有trap、自定义IFS、选项和工作目录，同一库可能被重复source。请交付公开接口、变量命名、版本冲突和显式初始化合同。验收不同调用环境下连续加载两次，证明未启动业务动作、未改变调用方状态；冲突或副作用出现时停止采用该版本并恢复原调用环境。",
+    "answer": "```bash\n[[ ${OPS_LIB_LOADED-} == 1 ]] && return 0\nOPS_LIB_LOADED=1\nops_inc(){\n [[ ${OPS_COUNT-} =~ ^(0|[1-9][0-9]{0,3})$ ]]||return 2\n OPS_COUNT=$((OPS_COUNT+1))\n}\n```\n\n库加载守卫保证重复加载无副作用，函数拥有明确状态与输入合同。\n\n### 原题原理说明\n交付库的公开函数、变量命名约定、最低Bash版本和加载副作用清单。加载阶段原则上只定义接口，不启动任务、切目录、改trap、改变IFS或shell选项；必要初始化应是显式函数并有清晰重复调用合同。加载保护不能掩盖不同版本被混用，应检查库版本并对冲突报错；局部变量范围和返回值也要写入调用约定。验收在有已有trap、不同工作目录和自定义shell选项的调用者中连续加载两次，比较前后环境、目录、选项和函数集合，确认没有业务动作被提前执行。失败停止采用该库版本，回退到已审版本并恢复调用者原状态；不能用启动新shell悄悄改变所有函数的执行作用域来绕过问题。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设特有机制及前提",
+      "给出可核验的证据、成功与失败判据",
+      "界定异常恢复与不可承诺的边界"
+    ],
+    "references": [
+      "https://www.gnu.org/software/bash/manual/bash.html"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|重复加载函数库不得重置调用者状态",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "[[ ${OPS_LIB_LOADED-} == 1 ]] && return 0\nOPS_LIB_LOADED=1\nops_inc(){\n [[ ${OPS_COUNT-} =~ ^(0|[1-9][0-9]{0,3})$ ]]||return 2\n OPS_COUNT=$((OPS_COUNT+1))\n}\n"
+    },
+    "negative_files": {
+      "task.sh": "OPS_LIB_LOADED=1;OPS_COUNT=0\nops_inc(){ OPS_COUNT=$((OPS_COUNT+1)); }\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "交付 task.sh 作为可 source 的函数库。第一次加载设置 OPS_LIB_LOADED=1 并定义 ops_inc（将 OPS_COUNT 加1）；不得在加载时输出或修改 PWD、位置参数和 OPS_COUNT。重复 source 应直接返回成功，保留已有函数和状态。只接受 OPS_COUNT 为0..9999十进制，非法时 ops_inc 返回2而不改值。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\ndef harness(code):\n r=subprocess.run([BASH,'-c',code],capture_output=True,timeout=10);return r.returncode,r.stdout.decode(),r.stderr.decode()\ncode='set -- \"a b\" \"\"; OPS_COUNT=4; p=$PWD; source task.sh; ops_inc; source task.sh; ops_inc; [[ \"$PWD\" == \"$p\" && $# == 2 && \"$1\" == \"a b\" && -z \"$2\" ]] || exit 9; printf \"%s:%s\\\\n\" \"$OPS_LIB_LOADED\" \"$OPS_COUNT\"'\nassert harness(code)==(0,'1:6\\n','')\nassert harness('OPS_COUNT=bad;source task.sh;ops_inc;s=$?;printf \"%s:%s\\\\n\" \"$s\" \"$OPS_COUNT\"')==(0,'2:bad\\n','')\nassert harness('OPS_COUNT=4;source task.sh;ops_inc(){ OPS_COUNT=99; };source task.sh;ops_inc;printf \"%s\\\\n\" \"$OPS_COUNT\"')==(0,'99\\n','')\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-advanced-shell-011",
+      "original_title": "团队共享的Bash函数库可能被多次source，怎样验收加载动作无意外副作用且不污染调用方？",
+      "original_type": "practice",
+      "original_version": 1,
+      "original_sha256": "2097c77741c499acdb11e9f3ec81d512102694e9a3b156497fdedfa19f64e91b",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-advanced-shell-010",
+    "module": "shell",
+    "category": "Shell",
+    "level": 3,
+    "topic": "稀疏数组与关联结果完整对账",
+    "title": "稀疏数组与关联结果完整对账",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\nstdin 是 index<TAB>value，index 为0..9999规范十进制且唯一，value 无 TAB/换行但可为空。使用稀疏索引数组保留 index，按数值升序输出 index=value。非法或重复索引退出2且无输出。不能用数组元素个数当连续索引上界。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：Bash工具用稀疏数组保存任务号，用关联数组保存结果，怎样交付不依赖遍历顺序的对账规则？\n\n批处理工具用稀疏索引保存任务号、关联数组保存结果，任务可能删除、重复回报或返回空值，报告必须按批准清单输出。请交付键规范、有序ID清单和缺失／空值合同。验收非连续索引、空白键、重复及未知键，总量可闭合且顺序可解释；发现错配时不发布报告，并保留原始键值供重新对账。",
+    "answer": "```bash\ndeclare -a values=()\ndeclare -A seen=()\nwhile IFS= read -r row || [[ -n \"$row\" ]];do\n [[ \"$row\" == *$'\\t'* ]]||exit 2\n k=${row%%$'\\t'*};v=${row#*$'\\t'}\n [[ \"$k\" =~ ^(0|[1-9][0-9]{0,3})$ && \"$v\" != *$'\\t'* ]]||exit 2\n [[ ! ${seen[$k]+x} ]]||exit 2\n seen[\"$k\"]=1;values[k]=$v\ndone\nfor k in \"${!values[@]}\";do printf '%s=%s\\n' \"$k\" \"${values[k]}\";done\n```\n\n索引集合由 !array[@] 取得，存在性独立于空值；Bash 索引数组按数值索引遍历。\n\n### 原题原理说明\n交付任务键规范、缺失/空值语义和结果排序规则。稀疏索引数组的元素数量不等于最大索引加一，不能按0到长度减一推断完整任务集合；关联数组的遍历顺序也不能当批准清单顺序。应保存独立的有序任务ID清单，以该清单驱动输出，并对结果映射检查未知键、重复赋值、缺失键和显式空结果。验收包含删除中间元素、非连续索引、键含空白、同一任务重复回报及空清单，要求总数闭合且错误项可定位。若ID来自外部，只允许约定语法，避免把它直接当算术下标。失败不发布位置错配的结果表，保留原始键值记录并按清单重新生成报告；不得通过重新排序数组掩盖重复任务。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设特有机制及前提",
+      "给出可核验的证据、成功与失败判据",
+      "界定异常恢复与不可承诺的边界"
+    ],
+    "references": [
+      "https://www.gnu.org/software/bash/manual/bash.html"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|稀疏数组与关联结果完整对账",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "declare -a values=()\ndeclare -A seen=()\nwhile IFS= read -r row || [[ -n \"$row\" ]];do\n [[ \"$row\" == *$'\\t'* ]]||exit 2\n k=${row%%$'\\t'*};v=${row#*$'\\t'}\n [[ \"$k\" =~ ^(0|[1-9][0-9]{0,3})$ && \"$v\" != *$'\\t'* ]]||exit 2\n [[ ! ${seen[$k]+x} ]]||exit 2\n seen[\"$k\"]=1;values[k]=$v\ndone\nfor k in \"${!values[@]}\";do printf '%s=%s\\n' \"$k\" \"${values[k]}\";done\n"
+    },
+    "negative_files": {
+      "task.sh": "values=();while IFS=$'\\t' read -r k v;do values[k]=$v;done\nfor ((i=0;i<${#values[@]};i++));do printf '%s=%s\\n' \"$i\" \"${values[i]}\";done\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "stdin 是 index<TAB>value，index 为0..9999规范十进制且唯一，value 无 TAB/换行但可为空。使用稀疏索引数组保留 index，按数值升序输出 index=value。非法或重复索引退出2且无输出。不能用数组元素个数当连续索引上界。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nr=call(stdin='10\\tlast\\n0\\tfirst\\n4\\t\\n');assert r.returncode==0 and r.stdout=='0=first\\n4=\\n10=last\\n'\nfor text in ['2\\tx\\n2\\ty\\n','01\\tx\\n','-1\\tx\\n','2\\tx\\ty\\n']:\n r=call(stdin=text);assert r.returncode==2 and r.stdout==''\nassert call(stdin='').stdout==''\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-advanced-shell-010",
+      "original_title": "Bash工具用稀疏数组保存任务号，用关联数组保存结果，怎样交付不依赖遍历顺序的对账规则？",
+      "original_type": "practice",
+      "original_version": 1,
+      "original_sha256": "207fda0ffacf4bcb9b3be8d86b05e1a403a7db6748dde502a52adb8640d5c483",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-advanced-shell-006",
+    "module": "shell",
+    "category": "Shell",
+    "level": 4,
+    "topic": "动态文件描述符的所有权与释放验收",
+    "title": "动态文件描述符的所有权与释放验收",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n参数是若干普通文件。每个文件用 exec {fd}<file 打开，读取第一行（空文件视为空字符串），关闭该 FD 后验证不能再次从该号码读取；输出 basename=<首行>。每个 FD 都必须关闭，不能靠进程结束释放。缺失文件退出4。文件名不含换行。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：长期Bash包装器循环打开文件描述符并调用外部程序，应交付怎样的描述符所有权与泄漏验收？\n\n长期Bash包装器循环打开通道并启动外部程序，成功路径稳定，但解析失败或取消后描述符数量增长。请交付创建、继承及关闭责任台账。验收多轮成功和异常后描述符回到基线，子程序仅获得所需通道；覆盖子进程残留写端导致EOF不来的情况。泄漏时停止新任务并保留映射，不能靠提高ulimit通过。",
+    "answer": "```bash\nfor p in \"$@\";do\n [[ -f \"$p\" ]]||exit 4\n exec {fd}<\"$p\"||exit 4\n line=''\n IFS= read -r line <&\"$fd\" || :\n exec {fd}<&-\n if : <&\"$fd\";then exit 9;fi\n printf '%s=%s\\n' \"${p##*/}\" \"$line\"\ndone\n```\n\n资源释放须在持有者仍存活时检查；仅观察子进程退出无法证明无泄漏。\n\n### 原题原理说明\n交付描述符台账，逐项写明创建者、读写用途、传给哪些子进程、正常及异常关闭点；检查exec动态分配描述符后的所有分支，而不只检查文件对象是否已删除。不需要继承的通道在启动子程序前关闭，不能假定所有Shell打开的描述符默认不会继承。用受控样本运行多轮成功、打开失败、解析失败和取消，观测进程描述符数量回到稳定基线，并检查子程序看到的描述符集合。另加入父进程结束而子进程仍持有写端的场景，验证读端能按协议结束。验收不以抬高ulimit作为通过条件。发现增长时暂停新任务、让在途任务收尾并保存描述符映射，回退到已验证包装器版本；被继承的敏感通道应单独失效处理。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设特有机制及前提",
+      "给出可核验的证据、成功与失败判据",
+      "界定异常恢复与不可承诺的边界"
+    ],
+    "references": [
+      "https://www.gnu.org/software/bash/manual/bash.html"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|动态文件描述符的所有权与释放验收",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "for p in \"$@\";do\n [[ -f \"$p\" ]]||exit 4\n exec {fd}<\"$p\"||exit 4\n line=''\n IFS= read -r line <&\"$fd\" || :\n exec {fd}<&-\n if : <&\"$fd\";then exit 9;fi\n printf '%s=%s\\n' \"${p##*/}\" \"$line\"\ndone\n"
+    },
+    "negative_files": {
+      "task.sh": "for p in \"$@\";do exec {fd}<\"$p\";IFS= read -r line <&\"$fd\";printf '%s=%s\\n' \"${p##*/}\" \"$line\";done\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "参数是若干普通文件。每个文件用 exec {fd}<file 打开，读取第一行（空文件视为空字符串），关闭该 FD 后验证不能再次从该号码读取；输出 basename=<首行>。每个 FD 都必须关闭，不能靠进程结束释放。缺失文件退出4。文件名不含换行。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nwrite('one','first\\nsecond\\n');write('two','');r=call(['one','two']);assert r.returncode==0 and r.stdout=='one=first\\ntwo=\\n'\ncode='set -- one;source task.sh; : <&\"$fd\" && exit 9;exit 0'\nr=subprocess.run([BASH,'-c',code],capture_output=True,timeout=8);assert r.returncode==0\nassert call(['missing']).returncode==4\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-advanced-shell-006",
+      "original_title": "长期Bash包装器循环打开文件描述符并调用外部程序，应交付怎样的描述符所有权与泄漏验收？",
+      "original_type": "practice",
+      "original_version": 1,
+      "original_sha256": "09c43df32f9defe3fde29e28c82f3ad5cdcf66adcaca3b41ad2d8d0bb35efc1b",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-advanced-shell-008",
+    "module": "shell",
+    "category": "Shell",
+    "level": 3,
+    "topic": "刷新 Shell 命令缓存后采用新优先路径",
+    "title": "刷新 Shell 命令缓存后采用新优先路径",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh, second/tool。\n\n## 操作任务\n在同一 Bash 中将前缀 PATH 设置为 first:second（绝对当前目录），首次调用 tool。此时 first 不含 tool，second/tool 输出 old 并创建 first/tool（输出 new）；第二次调用前必须使缓存失效，最终 stdout 为 old/new 两行。不能重启 Shell 或改写初始 tool；这是受控测试文件，不修改系统 PATH 配置。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：维护Shell持续运行数日，底层工具原子替换后如何证明后续调用确实使用批准的可执行文件？\n\n长驻Bash任务入口运行数日，期间工具通过版本目录和链接切换发布，PATH中还可能出现同名程序。请交付函数、别名、命令哈希及文件摘要的解析证据表。验收链接切换、旧目录残留和文件不可执行，区分已运行旧进程与后续调用；无法确认批准制品时拒绝新任务，恢复旧入口并保留两版证据。",
+    "answer": "```bash\nPATH=\"$PWD/first:$PWD/second:$PATH\";export PATH\ntool\nhash -r\ntool\n```\n\nPATH 中新出现的优先命令可能被旧 hash 缓存绕过；hash -r 清除解析缓存。\n\n### 原题原理说明\n交付命令解析路径清单，记录PATH、函数、别名、Bash命令哈希以及工具文件的版本证据；固定路径仍要考虑该路径指向内容可变化，不能把命令名字等同批准制品。发布时先安装到版本目录，再按受控入口切换，长驻包装器按约定重新确认解析结果，必要时清除命令路径缓存。验收在PATH前面出现同名工具、旧目录保留、链接切换和工具不可执行等条件下，检查实际执行对象与批准摘要一致，解析失败时拒绝继续。已有运行进程不会因文件路径切换自动升级，应分别统计旧新进程。失败恢复原入口并隔离新版本，保留两版解析证据；不能删除仍被使用的版本目录来强迫升级。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设特有机制及前提",
+      "给出可核验的证据、成功与失败判据",
+      "界定异常恢复与不可承诺的边界"
+    ],
+    "references": [
+      "https://www.gnu.org/software/bash/manual/bash.html"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|刷新 Shell 命令缓存后采用新优先路径",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n",
+      "second/tool": "#!/usr/bin/env bash\nprintf 'old\\n'\nprintf '#!/usr/bin/env bash\\nprintf \"new\\\\n\"\\n' >first/tool\nchmod +x first/tool\n"
+    },
+    "solution_files": {
+      "task.sh": "PATH=\"$PWD/first:$PWD/second:$PATH\";export PATH\ntool\nhash -r\ntool\n"
+    },
+    "negative_files": {
+      "task.sh": "PATH=\"$PWD/first:$PWD/second:$PATH\";export PATH;tool;tool\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "在同一 Bash 中将前缀 PATH 设置为 first:second（绝对当前目录），首次调用 tool。此时 first 不含 tool，second/tool 输出 old 并创建 first/tool（输出 new）；第二次调用前必须使缓存失效，最终 stdout 为 old/new 两行。不能重启 Shell 或改写初始 tool；这是受控测试文件，不修改系统 PATH 配置。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\npathlib.Path('first').mkdir();pathlib.Path('second').mkdir(exist_ok=True)\nwrite('second/tool',\"\"\"#!/usr/bin/env bash\nprintf 'old\\\\n'\nprintf '#!/usr/bin/env bash\\\\nprintf \"new\\\\\\\\n\"\\\\n' >first/tool\nchmod +x first/tool\n\"\"\")\npathlib.Path('second/tool').chmod(0o755)\nr=call();assert r.returncode==0 and r.stdout=='old\\nnew\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-advanced-shell-008",
+      "original_title": "维护Shell持续运行数日，底层工具原子替换后如何证明后续调用确实使用批准的可执行文件？",
+      "original_type": "practice",
+      "original_version": 1,
+      "original_sha256": "ded3479b452caa88d76b5955ce53bb34b627192174028e4ed3e8b058bd641ee5",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-advanced-shell-003",
+    "module": "shell",
+    "category": "Shell",
+    "level": 5,
+    "topic": "用 coproc 顺序关联行协议请求与响应",
+    "title": "用 coproc 顺序关联行协议请求与响应",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh, worker.sh。\n\n## 操作任务\nworker.sh 是常驻逐行协议服务，收到 id:value 后返回 id:VALUE（value 只含英文字母或空格，id 是1起连续数）。task.sh 对每个参数通过同一个 coproc 发送请求并立即读取响应，验证响应 id 后只输出 VALUE；全部完成关闭写端、关闭读端并 wait。错误 id 或 worker 提前 EOF 返回5。不能为每项重新启动 worker。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：交付一个通过Bash coproc驱动长驻转换器的接口，怎样避免双方互等并证明结果属于正确请求？\n\nBash包装器通过coproc反复调用长驻转换器，请求总量可能超过管道容量，转换器也会持续输出诊断。请交付请求关联ID、响应结束规则、读写状态图和取消流程。验收提前退出、短响应、重复响应与无响应，证明无双向互等，所有已发送请求均能归入成功或未决清单；失败保留输入，不盲目重发。",
+    "answer": "```bash\ncoproc OPS_WORKER { bash worker.sh; }\npid=$OPS_WORKER_PID\nexec {rx}<&\"${OPS_WORKER[0]}\"\nexec {tx}>&\"${OPS_WORKER[1]}\"\ni=0;bad=0\nfor value in \"$@\";do\n ((i+=1))\n printf '%s:%s\\n' \"$i\" \"$value\" >&\"$tx\"||{ bad=5;break; }\n IFS= read -r response <&\"$rx\"||{ bad=5;break; }\n [[ \"$response\" == \"$i:\"* ]]||{ bad=5;break; }\n printf '%s\\n' \"${response#*:}\"\ndone\nexec {tx}>&-\nexec {OPS_WORKER[1]}>&-\nexec {rx}<&-\nwait \"$pid\"||bad=5\nexit \"$bad\"\n```\n\n请求序号验证结果归属，关闭所有写端后 worker 才能看见 EOF；本题非并发RPC。\n\n### 原题原理说明\n交付请求/响应协议表、连接状态图和错误注入验收记录。每条请求带递增关联ID与长度界限，响应必须携带同一ID；明确单请求串行还是允许乱序，不能只依赖输出行位置。父进程持续消费响应，避免先写满全部输入再读取造成双向管道堵塞；转换器明确刷新缓冲，退出时关闭写端并处理EOF。记录coprocess PID和已取得的描述符，终止后读取最终退出状态，短响应、重复响应和无响应分别失败。验收覆盖大于管道容量的数据、转换器提前退出、stderr持续输出和用户取消，所有已发送请求最终落入成功或未决清单。失败只停用该转换会话并保留原输入，禁止把可能已处理的请求无标识重发；由开发实现协议适配后再上线。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设特有机制及前提",
+      "给出可核验的证据、成功与失败判据",
+      "界定异常恢复与不可承诺的边界"
+    ],
+    "references": [
+      "https://www.gnu.org/software/bash/manual/bash.html"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|用 coproc 顺序关联行协议请求与响应",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n",
+      "worker.sh": "echo start >>starts\nwhile IFS=: read -r id value;do printf '%s:%s\\n' \"$id\" \"${value^^}\";done\n"
+    },
+    "solution_files": {
+      "task.sh": "coproc OPS_WORKER { bash worker.sh; }\npid=$OPS_WORKER_PID\nexec {rx}<&\"${OPS_WORKER[0]}\"\nexec {tx}>&\"${OPS_WORKER[1]}\"\ni=0;bad=0\nfor value in \"$@\";do\n ((i+=1))\n printf '%s:%s\\n' \"$i\" \"$value\" >&\"$tx\"||{ bad=5;break; }\n IFS= read -r response <&\"$rx\"||{ bad=5;break; }\n [[ \"$response\" == \"$i:\"* ]]||{ bad=5;break; }\n printf '%s\\n' \"${response#*:}\"\ndone\nexec {tx}>&-\nexec {OPS_WORKER[1]}>&-\nexec {rx}<&-\nwait \"$pid\"||bad=5\nexit \"$bad\"\n"
+    },
+    "negative_files": {
+      "task.sh": "for value in \"$@\";do printf '1:%s\\n' \"$value\" | bash worker.sh | cut -d: -f2-;done\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "worker.sh 是常驻逐行协议服务，收到 id:value 后返回 id:VALUE（value 只含英文字母或空格，id 是1起连续数）。task.sh 对每个参数通过同一个 coproc 发送请求并立即读取响应，验证响应 id 后只输出 VALUE；全部完成关闭写端、关闭读端并 wait。错误 id 或 worker 提前 EOF 返回5。不能为每项重新启动 worker。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nwrite('worker.sh',\"echo start >>starts\\nwhile IFS=: read -r id value;do printf '%s:%s\\\\n' \\\"$id\\\" \\\"${value^^}\\\";done\\n\")\nr=call(['alpha','two words']);assert r.returncode==0 and r.stdout=='ALPHA\\nTWO WORDS\\n' and read('starts')=='start\\n'\nwrite('worker.sh',\"IFS=: read -r id value;printf 'wrong:VALUE\\\\n';exit 0\\n\")\nassert call(['x']).returncode==5\nwrite('worker.sh','exit 0\\n');assert call(['one']).returncode==5\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-advanced-shell-003",
+      "original_title": "交付一个通过Bash coproc驱动长驻转换器的接口，怎样避免双方互等并证明结果属于正确请求？",
+      "original_type": "practice",
+      "original_version": 1,
+      "original_sha256": "e1709f86506d18471f7a9641ea28716860d13da14d06f056f648d09f255be1ca",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-064",
+    "module": "shell",
+    "category": "Shell",
+    "level": 3,
+    "topic": "在 Bash 与 POSIX 模式下保持一致的退出码聚合",
+    "title": "在 Bash 与 POSIX 模式下保持一致的退出码聚合",
+    "answer": "```bash\nindex=0\nbad=0\nfor file do\n status=0\n bash \"$file\" || status=$?\n printf '%s:%s\\n' \"$index\" \"$status\"\n [ \"$status\" -eq 0 ] || bad=1\n index=$((index+1))\ndone\n[ \"$bad\" -eq 0 ] || exit 9\nexit 0\n```\n\n不能把多个版本的 bash 运行等同验证全部 POSIX 实现；只给出本题实际覆盖边界。\n\n### 原题原理说明\n先明确只支持的解释器和最低版本；POSIX承诺应排除数组、[[ ]]、进程替代等扩展。把词法、空值、空匹配、错误路径和信号退出作为兼容样例，用目标解释器分别验证；静态检查只能辅助。若依赖Bash就明确shebang及部署依赖，不静默回退到sh。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|在 Bash 与 POSIX 模式下保持一致的退出码聚合",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh, a.sh, b.sh, c.sh。\n\n## 操作任务\n用 POSIX Shell 语法实现脚本：依次执行所有参数指定的 worker，按输入序号输出 index:status，全部运行完有任一失败退出9，否则0。禁止数组、[[、(( 语法；需在普通 Bash 与 bash --posix 下给出相同结果。兼容承诺限定这两种模式，不宣称验证所有 sh 实现。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：设计评审：如何验证Shell工具在Bash与POSIX sh之间的兼容承诺？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n",
+      "a.sh": "exit 0\n",
+      "b.sh": "exit 3\n",
+      "c.sh": "exit 0\n"
+    },
+    "solution_files": {
+      "task.sh": "index=0\nbad=0\nfor file do\n status=0\n bash \"$file\" || status=$?\n printf '%s:%s\\n' \"$index\" \"$status\"\n [ \"$status\" -eq 0 ] || bad=1\n index=$((index+1))\ndone\n[ \"$bad\" -eq 0 ] || exit 9\nexit 0\n"
+    },
+    "negative_files": {
+      "task.sh": "for file do bash \"$file\";done;exit 0\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "用 POSIX Shell 语法实现脚本：依次执行所有参数指定的 worker，按输入序号输出 index:status，全部运行完有任一失败退出9，否则0。禁止数组、[[、(( 语法；需在普通 Bash 与 bash --posix 下给出相同结果。兼容承诺限定这两种模式，不宣称验证所有 sh 实现。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nwrite('a.sh','exit 0\\n');write('b.sh','exit 3\\n');write('c.sh','exit 0\\n')\nfor mode in ['', '--posix ']:\n r=subprocess.run([BASH,'-c','exec bash '+mode+'task.sh a.sh b.sh c.sh'],capture_output=True,timeout=8)\n assert r.returncode==9 and r.stdout==b'0:0\\n1:3\\n2:0\\n'\ns=read('task.sh');assert '[[' not in s and '((' not in s.replace('$((','')\nassert call([]).returncode==0\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-064",
+      "original_title": "设计评审：如何验证Shell工具在Bash与POSIX sh之间的兼容承诺？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "41f3e0bfe012eeb884f09ed2113335d697ff2bb22cf631a4ee6246d43f57ff3c",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-073",
+    "module": "shell",
+    "category": "Shell",
+    "level": 4,
+    "topic": "条件上下文中的 set -e 不得绕过显式门禁",
+    "title": "条件上下文中的 set -e 不得绕过显式门禁",
+    "answer": "```bash\nset -e\ndeploy(){\n bash prepare.sh||return $?\n bash activate.sh||return $?\n}\nif deploy;then echo success;else echo failed;exit 6;fi\n```\n\nif 调用上下文会影响 errexit 语义；关键阶段必须显式检查状态。\n\n### 原题原理说明\n保留函数定义、调用上下文与逐阶段状态，确认失败不是被远端包装吞掉。Bash对条件上下文中的函数调用可忽略errexit，函数内失败后仍继续；set -e不是事务保护。立即暂停后续发布并核对哪些目标已激活，由开发为每个关键命令显式检查并返回错误，外层再决定下一步。验收把首步和中间步分别故障注入，要求激活绝不触发且退出码保持失败；仅增加set -e不能作为修复证据。",
+    "type": "code",
+    "incident_signature": "shell:errexit-ignored-function-conditional",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "用现场证据证明对应Shell机制",
+      "区分止损与开发修复",
+      "给出成功与失败边界的验收"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|条件上下文中的 set -e 不得绕过显式门禁",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh, prepare.sh, activate.sh。\n\n## 操作任务\n定义 deploy 函数，依次执行 prepare.sh 和 activate.sh。prepare 失败须显式停止函数，绝不能激活。主流程必须在 if deploy 条件中调用，成功输出 success、退出0；失败输出 failed、退出6。素材脚本把调用顺序写 events，禁止修改素材。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：发布函数启用了set -e，但放到if deploy后，内部false之后仍执行了激活动作。如何桌面排查？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n",
+      "prepare.sh": "exit 7\n",
+      "activate.sh": "exit 0\n"
+    },
+    "solution_files": {
+      "task.sh": "set -e\ndeploy(){\n bash prepare.sh||return $?\n bash activate.sh||return $?\n}\nif deploy;then echo success;else echo failed;exit 6;fi\n"
+    },
+    "negative_files": {
+      "task.sh": "set -e\ndeploy(){ bash prepare.sh;bash activate.sh; }\nif deploy;then echo success;else echo failed;exit 6;fi\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "定义 deploy 函数，依次执行 prepare.sh 和 activate.sh。prepare 失败须显式停止函数，绝不能激活。主流程必须在 if deploy 条件中调用，成功输出 success、退出0；失败输出 failed、退出6。素材脚本把调用顺序写 events，禁止修改素材。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nwrite('prepare.sh',\"echo prepare >>events;exit 7\\n\");write('activate.sh',\"echo activate >>events;exit 0\\n\")\nr=call();assert r.returncode==6 and r.stdout=='failed\\n' and read('events')=='prepare\\n'\nwrite('events','');write('prepare.sh',\"echo prepare >>events;exit 0\\n\")\nr=call();assert r.returncode==0 and r.stdout=='success\\n' and read('events')=='prepare\\nactivate\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-073",
+      "original_title": "发布函数启用了set -e，但放到if deploy后，内部false之后仍执行了激活动作。如何桌面排查？",
+      "original_type": "case",
+      "original_version": 1,
+      "original_sha256": "ebc15a4cfc05103936ecd02a24d70d2c295251221cb28a2d62e2b7eb364b972d",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-055",
+    "module": "shell",
+    "category": "Shell",
+    "level": 3,
+    "topic": "CLI 双输出模式保持稳定协议",
+    "title": "CLI 双输出模式保持稳定协议",
+    "answer": "```bash\nmode=$1;shift\n[[ \"$mode\" == human || \"$mode\" == tsv ]]||exit 2\nfor name in \"$@\";do [[ \"$name\" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]]||exit 2;done\n[[ \"$mode\" == tsv ]]&&printf 'format\\t1\\n'\nfor name in \"$@\";do\n if [[ \"$mode\" == human ]];then printf '服务 %s: 待检查\\n' \"$name\";else printf '%s\\tpending\\n' \"$name\";fi\ndone\nexit 0\n```\n\n机器协议有显式版本和严格字段边界；新增人类提示不能混入 tsv 输出。\n\n### 原题原理说明\n保留稳定机器输出模式及版本标记，人类提示只送stderr；新增字段尽量可忽略，删除或改类型需要升级版本。退出码、空集合和部分失败也是接口，必须纳入兼容测试；不能只保证命令行参数名字没变。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明本题机制及约束",
+      "给出答案列出的边界或验收依据"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|CLI 双输出模式保持稳定协议",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh。\n\n## 操作任务\n参数 human/tsv 后跟若干服务名，服务名只允许 [A-Za-z][A-Za-z0-9_-]*；先整体校验。human 输出“服务 <name>: 待检查”；tsv 输出版本头 format<TAB>1 然后 name<TAB>pending。错误模式或非法名字退出2且无任何输出；human 空清单不输出，tsv 空清单仍输出版本头。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：Shell工具对人类与自动化调用同时服务时怎样演进接口？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "mode=$1;shift\n[[ \"$mode\" == human || \"$mode\" == tsv ]]||exit 2\nfor name in \"$@\";do [[ \"$name\" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]]||exit 2;done\n[[ \"$mode\" == tsv ]]&&printf 'format\\t1\\n'\nfor name in \"$@\";do\n if [[ \"$mode\" == human ]];then printf '服务 %s: 待检查\\n' \"$name\";else printf '%s\\tpending\\n' \"$name\";fi\ndone\nexit 0\n"
+    },
+    "negative_files": {
+      "task.sh": "shift;for name in \"$@\";do printf '服务 %s: 待检查\\n' \"$name\";done\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "参数 human/tsv 后跟若干服务名，服务名只允许 [A-Za-z][A-Za-z0-9_-]*；先整体校验。human 输出“服务 <name>: 待检查”；tsv 输出版本头 format<TAB>1 然后 name<TAB>pending。错误模式或非法名字退出2且无任何输出；human 空清单不输出，tsv 空清单仍输出版本头。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nassert call(['human','web','db_2']).stdout=='服务 web: 待检查\\n服务 db_2: 待检查\\n'\nassert call(['tsv','web']).stdout=='format\\t1\\nweb\\tpending\\n'\nassert call(['tsv']).stdout=='format\\t1\\n'\nfor args in [['json','x'],['tsv','good','bad name'],['human','']]:\n r=call(args);assert r.returncode==2 and r.stdout==''\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-055",
+      "original_title": "Shell工具对人类与自动化调用同时服务时怎样演进接口？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "8c305324743343a489dff4ba60979495f3404395636ccd6d2fa93b62371fdd8f",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-shell-072",
+    "module": "shell",
+    "category": "Shell",
+    "level": 3,
+    "topic": "固定参数预算分批调用处理器",
+    "title": "固定参数预算分批调用处理器",
+    "answer": "```bash\nbatch=()\nflush(){ bash worker.sh \"${batch[@]}\"; }\nfor item in \"$@\";do\n batch+=(\"$item\")\n if ((\"${#batch[@]}\"==3));then flush||exit $?;batch=();fi\ndone\nif ((\"${#batch[@]}\"));then flush||exit $?;fi\nexit 0\n```\n\n按参数数量显式分批；这不是 ARG_MAX 字节预算的完整通用实现，本题限定每批3项。\n\n### 原题原理说明\n操作系统限制argv与环境总大小，过量会触发Argument list too long。应使用工具支持的stdin清单接口，或find -exec ... +、xargs -0进行安全分批；每批单独收集退出状态，最终对账，不能把第一批成功当全量成功。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "解释触发机制",
+      "说明正确处理边界"
+    ],
+    "references": [],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|固定参数预算分批调用处理器",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh, worker.sh。\n\n## 操作任务\n输入参数是任意文件名（不含 NUL），按原顺序最多3项为一批调用 worker.sh，每批只调用一次；空清单不调用。worker 记录参数个数及用 NUL 分隔的参数到 calls.bin。任一批失败立即退出该退出码且不执行后续批。不能拆词或把全部参数一次传入。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：为什么把百万路径展开到单次命令参数会失败，怎样安排批次？\n\n",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n",
+      "worker.sh": "printf '%s\\0' \"$#\" \"$@\" >>calls.bin\n"
+    },
+    "solution_files": {
+      "task.sh": "batch=()\nflush(){ bash worker.sh \"${batch[@]}\"; }\nfor item in \"$@\";do\n batch+=(\"$item\")\n if ((\"${#batch[@]}\"==3));then flush||exit $?;batch=();fi\ndone\nif ((\"${#batch[@]}\"));then flush||exit $?;fi\nexit 0\n"
+    },
+    "negative_files": {
+      "task.sh": "bash worker.sh \"$@\"\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "输入参数是任意文件名（不含 NUL），按原顺序最多3项为一批调用 worker.sh，每批只调用一次；空清单不调用。worker 记录参数个数及用 NUL 分隔的参数到 calls.bin。任一批失败立即退出该退出码且不执行后续批。不能拆词或把全部参数一次传入。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nwrite('worker.sh',\"printf '%s\\\\0' \\\"$#\\\" \\\"$@\\\" >>calls.bin\\n[[ \\\"$1\\\" != fail ]]||exit 7\\n\")\nargs=['a b','','c','d','e','f','g']\nr=call(args);assert r.returncode==0\nassert pathlib.Path('calls.bin').read_bytes()==b'3\\0a b\\0\\0c\\0' + b'3\\0d\\0e\\0f\\0' + b'1\\0g\\0'\npathlib.Path('calls.bin').unlink();assert call([]).returncode==0 and not pathlib.Path('calls.bin').exists()\nr=call(['fail','a','b','never']);assert r.returncode==7 and b'never' not in pathlib.Path('calls.bin').read_bytes()\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-shell-072",
+      "original_title": "为什么把百万路径展开到单次命令参数会失败，怎样安排批次？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "c5297167f6748b8b568a438a247ddcfa3274222f82163d810eb24ae937fa9ae2",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-feishu-60-009",
+    "module": "shell",
+    "category": "Shell",
+    "level": 2,
+    "topic": "启动文件链的受控选择与显式加载",
+    "title": "启动文件链的受控选择与显式加载",
+    "answer": "```bash\nchosen=''\ncase \"$1\" in\nlogin) for f in .bash_profile .bash_login .profile;do if [[ -f \"sandbox-home/$f\" ]];then chosen=$f;break;fi;done;;\ninteractive) [[ -f sandbox-home/.bashrc ]]&&chosen=.bashrc;;\n*)exit 2;;\nesac\nif [[ -z \"$chosen\" ]];then echo selected=none;exit 0;fi\nTOKEN=''\nsource \"sandbox-home/$chosen\"\nprintf 'selected=%s\\ntoken=%s\\n' \"$chosen\" \"$TOKEN\"\n```\n\n在隔离目录复现明确的优先级选择；实际 Bash 还受启动选项影响，本题不改用户配置。\n\n### 原题原理说明\n登录Bash先读/etc/profile，再按顺序寻找用户登录文件（常为.bash_profile）；交互非登录Bash通常读.bashrc，登录文件可显式source它。登录Shell退出可读.bash_logout。非交互Shell有另一路径如BASH_ENV，不能说每次启动Bash都会读.bashrc；发行版配置需现场核对。",
+    "type": "code",
+    "source": "OpsForge Shell 原题实作转换",
+    "source_block_id": "Ykjxd6bnRotNkUxouYIcp5X0nYY",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "feishu-60-reviewed",
+    "body": "## 环境与初始材料\n平台隔离 Bash 4.4+、GNU 常用工具；全部文件位于题目临时目录，无服务器、无系统级操作。初始素材：task.sh, sandbox-home/.bash_profile, sandbox-home/.profile, sandbox-home/.bashrc。\n\n## 操作任务\n使用 sandbox-home 下的模拟启动文件，不读取真实 HOME。参数 login/interactive：login 按 .bash_profile、.bash_login、.profile 优先级仅 source 首个存在普通文件；interactive 只 source .bashrc。若找不到文件输出 selected=none；否则输出 selected=<basename> 和素材设置的 TOKEN。素材仅赋值，不能更改它们。不是启动真实登录 Shell，只实现可测试的选择器。\n\n## 产物\n提交完整 task.sh；初始素材不可作为答案硬编码，验收会更换参数和内容。\n\n## 验收方法\n运行 python3 checks/check.py。独立驱动实际执行 Bash，检查标准输出、错误输出、退出码及文件状态；正常、边界、错误用例均须满足合同。以下正文定义所有预期值。当前仅本地 Git Bash 验证，不声称服务或网页集成已通过。\n\n## 原理复习\n原问题：Bash的.bash_profile、.bashrc和.bash_logout分别在什么条件下读取？\n\n说明原理、适用条件及可验证结果；不用个人经历作答。",
+    "rubric": [
+      "登录Bash先读/etc/profile，再按顺序寻找用户登录文件（常为.bash_profile）；交互非登录Bash通常读.bashrc，登录文件可显式source它",
+      "登录Shell退出可读.bash_logout",
+      "非交互Shell有另一路径如BASH_ENV，不能说每次启动Bash都会读.bashrc；发行版配置需现场核对"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c"
+    ],
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "Ykjxd6bnRotNkUxouYIcp5X0nYY",
+        "question": "9、请描述宿主目录中\".bashrc\"、\".bash_logout\"、\".bash_profile\"的作用"
+      }
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "Ykjxd6bnRotNkUxouYIcp5X0nYY"
+        ]
+      }
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|启动文件链的受控选择与显式加载",
+    "files": {
+      "task.sh": "#!/usr/bin/env bash\n# TODO: complete the task\nexit 1\n",
+      "sandbox-home/.bash_profile": "TOKEN=profile\n",
+      "sandbox-home/.profile": "TOKEN=fallback\n",
+      "sandbox-home/.bashrc": "TOKEN=rc\n"
+    },
+    "solution_files": {
+      "task.sh": "chosen=''\ncase \"$1\" in\nlogin) for f in .bash_profile .bash_login .profile;do if [[ -f \"sandbox-home/$f\" ]];then chosen=$f;break;fi;done;;\ninteractive) [[ -f sandbox-home/.bashrc ]]&&chosen=.bashrc;;\n*)exit 2;;\nesac\nif [[ -z \"$chosen\" ]];then echo selected=none;exit 0;fi\nTOKEN=''\nsource \"sandbox-home/$chosen\"\nprintf 'selected=%s\\ntoken=%s\\n' \"$chosen\" \"$TOKEN\"\n"
+    },
+    "negative_files": {
+      "task.sh": "TOKEN=''\nfor f in sandbox-home/.*;do [[ -f \"$f\" ]]&&source \"$f\";done\nprintf 'token=%s\\n' \"$TOKEN\"\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "使用 sandbox-home 下的模拟启动文件，不读取真实 HOME。参数 login/interactive：login 按 .bash_profile、.bash_login、.profile 优先级仅 source 首个存在普通文件；interactive 只 source .bashrc。若找不到文件输出 selected=none；否则输出 selected=<basename> 和素材设置的 TOKEN。素材仅赋值，不能更改它们。不是启动真实登录 Shell，只实现可测试的选择器。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "Python 驱动真实 Bash 行为验收；答案通过，骨架及典型错误均失败。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,shlex,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef call(args=(),stdin='',env=None):\n r=subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join([str(x) for x in args])],input=stdin.encode(),capture_output=True,timeout=12,env=dict(os.environ,**(env or {})))\n r.stdout=r.stdout.decode('utf-8');r.stderr=r.stderr.decode('utf-8');return r\ndef write(p,s):\n p=pathlib.Path(p);p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes(s.encode())\ndef read(p):return pathlib.Path(p).read_text(encoding='utf-8')\nwrite('sandbox-home/.bash_profile','TOKEN=profile\\n');write('sandbox-home/.profile','TOKEN=fallback\\n');write('sandbox-home/.bashrc','TOKEN=rc\\n')\nassert call(['login']).stdout=='selected=.bash_profile\\ntoken=profile\\n'\nassert call(['interactive']).stdout=='selected=.bashrc\\ntoken=rc\\n'\npathlib.Path('sandbox-home/.bash_profile').unlink();assert call(['login']).stdout=='selected=.profile\\ntoken=fallback\\n'\npathlib.Path('sandbox-home/.profile').unlink();assert call(['login']).stdout=='selected=none\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-feishu-60-009",
+      "original_title": "Bash的.bash_profile、.bashrc和.bash_logout分别在什么条件下读取？",
+      "original_type": "interview",
+      "original_version": 1,
+      "original_sha256": "15ec8620d4b15d175987e3ad48354c6384d8c5bfaa51f82d5e934cb86a9d29d4",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "src-e388c334baa86bae",
+    "title": "故障恢复：禁用组合continue2误跳过区域剩余巡检",
+    "answer": "根因：两重循环中continue2跳到外层下一轮，禁用的只是一个region:service组合，应只continue当前服务。读取必须保留空格/反斜杠和未换行末行，按区域优先的原输入顺序遍历。\n修复参考：\n```bash\ndeclare -A disabled=()\nwhile IFS= read -r line || [[ -n \"$line\" ]];do [[ -n \"$line\" ]]&&disabled[\"$line\"]=1;done <disabled.txt\nwhile IFS= read -r region || [[ -n \"$region\" ]];do\n [[ -n \"$region\" ]]||continue\n while IFS= read -r service || [[ -n \"$service\" ]];do\n  [[ -n \"$service\" ]]||continue\n  key=\"$region:$service\"\n  [[ ${disabled[$key]+x} ]]&&continue\n  printf '%s\\n' \"$key\"\n done <services.txt\ndone <regions.txt\n```",
+    "category": "Shell",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "case",
+    "has_answer": true,
+    "source": "OpsForge Shell 原题实作转换",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "复用原ID补充真实故障初态、可核证根因及恢复；不计原214独立故障。",
+    "original_category": "Shell",
+    "original_title": "什么是循环? 你熟悉哪些类型的循环?",
+    "module": "shell",
+    "topic": "二维巡检计划生成并跳过禁用组合",
+    "level": 2,
+    "body": "环境：非root Linux、Bash4.4+、C.UTF-8及/proc，全部操作限隔离题目目录；无远程服务或系统级修改。\n\n故障初态与复现：regions为east/west，services为api/db，禁用east:api。初始continue 2使east:db也消失；应该只去掉east:api并保留其余三个组合。\n\n可核证根因：两重循环中continue2跳到外层下一轮，禁用的只是一个region:service组合，应只continue当前服务。读取必须保留空格/反斜杠和未换行末行，按区域优先的原输入顺序遍历。\n\n操作任务：修复task.sh并保留原行为边界：regions.txt 与 services.txt 分别每行一个非空名称（不含冒号），生成 region:service 笛卡尔积，region 优先保持原文件顺序。disabled.txt 含禁止的完整组合，跳过它们，不得跳过同名的其他组合；忽略输入空行，名称可有空格。所有文件为空则输出空。\n\n产物：修复后的task.sh；诊断文字可记录但不作为恢复通过证据。\n\n验收方法：可信驱动实际运行原故障脚本、同输入恢复及独立边界，检查进程stdout/stderr/退出码/文件状态。trace题原生观察真实PS4和FD生命周期，拒绝伪造日志。四路和独立突变；不代替PC完整验收。\n\n能力边界：本地教学故障；不计原214独立生产故障完成。输入名称按合同无冒号、NUL；JOB明确为非秘密。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-69ec0736d5e61f5d",
+        "title": "什么是循环？您熟悉哪些类型的循环？",
+        "category": "Shell",
+        "source": "topics/shell/README.md",
+        "sources": [
+          "topics/shell/README.md"
+        ]
+      }
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "R3ptdo4Z5ogdoGxm5EGcAZ3pnNc",
+          "Idcld2PfUoHkc6xNwdocOMF4nDb",
+          "VQTTdgOhJoVJvBxKLLMceatGnwd",
+          "Ne4QdMTWwoHm79xYGtUcr5CMnYd"
+        ]
+      }
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "shell",
+    "case_signature": "shell-converted|二维巡检计划生成并跳过禁用组合",
+    "files": {
+      "task.sh": "declare -A disabled=()\nwhile IFS= read -r line || [[ -n \"$line\" ]];do [[ -n \"$line\" ]]&&disabled[\"$line\"]=1;done <disabled.txt\nwhile IFS= read -r region || [[ -n \"$region\" ]];do\n [[ -n \"$region\" ]]||continue\n while IFS= read -r service || [[ -n \"$service\" ]];do\n  [[ -n \"$service\" ]]||continue\n  key=\"$region:$service\"\n  [[ ${disabled[$key]+x} ]]&&continue 2\n  printf '%s\\n' \"$key\"\n done <services.txt\ndone <regions.txt\n",
+      "regions.txt": "east coast\nwest\n",
+      "services.txt": "api\ndb\n",
+      "disabled.txt": "east coast:db\n"
+    },
+    "solution_files": {
+      "task.sh": "declare -A disabled=()\nwhile IFS= read -r line || [[ -n \"$line\" ]];do [[ -n \"$line\" ]]&&disabled[\"$line\"]=1;done <disabled.txt\nwhile IFS= read -r region || [[ -n \"$region\" ]];do\n [[ -n \"$region\" ]]||continue\n while IFS= read -r service || [[ -n \"$service\" ]];do\n  [[ -n \"$service\" ]]||continue\n  key=\"$region:$service\"\n  [[ ${disabled[$key]+x} ]]&&continue\n  printf '%s\\n' \"$key\"\n done <services.txt\ndone <regions.txt\n"
+    },
+    "negative_files": {
+      "task.sh": "for region in $(cat regions.txt);do for service in $(cat services.txt);do echo \"$region:$service\";done;done\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "regions.txt 与 services.txt 分别每行一个非空名称（不含冒号），生成 region:service 笛卡尔积，region 优先保持原文件顺序。disabled.txt 含禁止的完整组合，跳过它们，不得跳过同名的其他组合；忽略输入空行，名称可有空格。所有文件为空则输出空。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "实际Bash初态复现、修复恢复及日志/状态码/循环/traceFD/模式边界；非静态诊断验收。",
+      "failure_examples": [
+        "negative_files 中实现违反至少一个明确合同，必须拒绝。"
+      ],
+      "pass_criteria": "故障原生复现；修复全部恢复与独立边界断言完成，平台completed/passed均true。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "bash"
+        ],
+        "features": [
+          "locale:c_utf8"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,json\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef clean_env(extra=None):\n environment=dict(os.environ)\n for name in ['BASH_ENV','ENV','SHELLOPTS','BASHOPTS']:environment.pop(name,None)\n environment.update(extra or {})\n return environment\ndef run_script(script,args=(),stdin='',env=None):\n return subprocess.run([BASH,'--noprofile','--norc',script]+list(args),input=stdin,capture_output=True,text=True,encoding='utf-8',env=clean_env(env),timeout=6)\ndef call(args=(),stdin='',env=None):return run_script('task.sh',args,stdin,env)\n\ndef write_inputs(regions,services,disabled):\n values={'regions.txt':regions,'services.txt':services,'disabled.txt':disabled}\n for name,text in values.items():pathlib.Path(name).write_text(text,encoding='utf-8')\n return {name:pathlib.Path(name).read_bytes()for name in values}\nwrite_inputs('east\\nwest\\n','api\\ndb\\n','east:api\\n')\nprobe=run_script('incident/broken.sh');assert probe.returncode==0 and probe.stdout=='west:api\\nwest:db\\n',probe\nfor regions,services,disabled in [\n ('east\\nwest\\n','api\\ndb\\n','east:api\\n'),\n ('east coast\\nwest','api\\n\\ndb','east coast:db\\nwest:api\\n'),\n (' r\\\\one \\n\\nlast',' s\\\\one \\nlast-service',' r\\\\one :last-service'),\n ('a\\nb','x\\ny','a:x\\na:y\\nb:x\\nb:y'),('','x\\n',''),('a\\n','',''),('a\\na\\n','x\\n','')]:\n before=write_inputs(regions,services,disabled)\n expected=''.join(r+':'+s+'\\n'for r in regions.splitlines()if r for s in services.splitlines()if s and r+':'+s not in set(disabled.splitlines()))\n result=call();assert (result.returncode,result.stdout,result.stderr)==(0,expected,''),(regions,services,disabled,result)\n assert {name:pathlib.Path(name).read_bytes()for name in before}==before\n",
+        "incident/broken.sh": "declare -A disabled=()\nwhile IFS= read -r line || [[ -n \"$line\" ]];do [[ -n \"$line\" ]]&&disabled[\"$line\"]=1;done <disabled.txt\nwhile IFS= read -r region || [[ -n \"$region\" ]];do\n [[ -n \"$region\" ]]||continue\n while IFS= read -r service || [[ -n \"$service\" ]];do\n  [[ -n \"$service\" ]]||continue\n  key=\"$region:$service\"\n  [[ ${disabled[$key]+x} ]]&&continue 2\n  printf '%s\\n' \"$key\"\n done <services.txt\ndone <regions.txt\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-e388c334baa86bae",
+      "original_title": "什么是循环? 你熟悉哪些类型的循环?",
+      "original_type": "source",
+      "original_version": 3,
+      "original_sha256": "b644894c953e7faa40d255a43f974010695dc6ef74b4463f67d662716f6d3b8d",
+      "theory_retained": true
+    },
+    "question_format": "case"
+  }
+]

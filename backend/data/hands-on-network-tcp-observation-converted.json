@@ -1,0 +1,142 @@
+[
+  {
+    "id": "curated-network-completion-013",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 3,
+    "topic": "读取真实协商MSS并与接口MTU分别交付",
+    "title": "读取真实协商MSS并与接口MTU分别交付",
+    "answer": "```python\nimport socket,subprocess,json\ndef execute(connection,interface):\n    if connection.family!=socket.AF_INET:raise ValueError('IPv4 TCP only')\n    connection.getpeername()\n    if not isinstance(interface,str) or not interface or '\\x00' in interface:raise ValueError('invalid interface')\n    result=subprocess.run(['ip','-j','link','show','dev',interface],capture_output=True,text=True,check=True,timeout=2)\n    rows=json.loads(result.stdout)\n    if len(rows)!=1:raise ValueError('interface ambiguity')\n    mtu=int(rows[0]['mtu']);mss=connection.getsockopt(socket.IPPROTO_TCP,socket.TCP_MAXSEG)\n    return {'interface':interface,'mtu_bytes':mtu,'negotiated_mss_bytes':mss,'ipv4_tcp_base_header_bound':mtu-40,'within_base_bound':0<mss<=mtu-40}\n```\n\n原理补充：\nMTU 限制链路上承载的网络层包大小，TCP MSS 描述单段 TCP 数据上限，还需扣除 IP/TCP 头并考虑封装和选项。隧道可能降低有效载荷空间。应测端到端路径和协商结果，不能因网卡 MTU=1500 就让应用每段发送1500字节 TCP 数据。",
+    "type": "code",
+    "source": "OpsForge 原创网络专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\n非root隔离Linux、Python3和iproute2。验收仅创建本题回环TCP套接字并读取本进程连接与lo接口信息，不配置网络、不访问外网、不需要NET_ADMIN。\n\n## 操作任务\n实现execute(connection,interface)，只接受已连接IPv4 TCP套接字。调用ip -j link show dev读取指定接口MTU，用getsockopt(TCP_MAXSEG)读取该连接协商MSS，返回interface、mtu_bytes、negotiated_mss_bytes、ipv4_tcp_base_header_bound=MTU-40、within_base_bound布尔值。MTU-40只是无选项IPv4/TCP基础头的上界，不是强制实际MSS；不得把MTU当MSS或写死1460。未连接socket须抛OSError，接口不存在须抛异常。验收默认连接及建连前限制MSS1200的连接，读取不得修改连接设置或损坏后续传输。\n\n## 提交产物\ntask.py，函数读取真实已连接套接字和内核信息，返回约定的结构化观测；不能硬编码常见MTU/窗口数字。\n\n## 验收方法\npython3 checks/check.py建立真实连接、调用内核工具交叉比对，分别覆盖正常、指定较小MSS或单位转换、未连接套接字等边界。全部断言通过退出0，缺少工具显示能力待验。仅证明本机回环内核行为，不据此推断公网PMTU、丢包或吞吐。\n\n失败示例：把MTU减40直接当协商MSS，会忽略TCP选项和对端/本端协商限制。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "def execute(*args):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,subprocess,json\ndef execute(connection,interface):\n    if connection.family!=socket.AF_INET:raise ValueError('IPv4 TCP only')\n    connection.getpeername()\n    if not isinstance(interface,str) or not interface or '\\x00' in interface:raise ValueError('invalid interface')\n    result=subprocess.run(['ip','-j','link','show','dev',interface],capture_output=True,text=True,check=True,timeout=2)\n    rows=json.loads(result.stdout)\n    if len(rows)!=1:raise ValueError('interface ambiguity')\n    mtu=int(rows[0]['mtu']);mss=connection.getsockopt(socket.IPPROTO_TCP,socket.TCP_MAXSEG)\n    return {'interface':interface,'mtu_bytes':mtu,'negotiated_mss_bytes':mss,'ipv4_tcp_base_header_bound':mtu-40,'within_base_bound':0<mss<=mtu-40}\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,subprocess,json\ndef execute(connection,interface):\n    if connection.family!=socket.AF_INET:raise ValueError('IPv4 TCP only')\n    connection.getpeername()\n    if not isinstance(interface,str) or not interface or '\\x00' in interface:raise ValueError('invalid interface')\n    result=subprocess.run(['ip','-j','link','show','dev',interface],capture_output=True,text=True,check=True,timeout=2)\n    rows=json.loads(result.stdout)\n    if len(rows)!=1:raise ValueError('interface ambiguity')\n    mtu=int(rows[0]['mtu']);mss=mtu-40\n    return {'interface':interface,'mtu_bytes':mtu,'negotiated_mss_bytes':mss,'ipv4_tcp_base_header_bound':mtu-40,'within_base_bound':0<mss<=mtu-40}\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(connection,interface)，只接受已连接IPv4 TCP套接字。调用ip -j link show dev读取指定接口MTU，用getsockopt(TCP_MAXSEG)读取该连接协商MSS，返回interface、mtu_bytes、negotiated_mss_bytes、ipv4_tcp_base_header_bound=MTU-40、within_base_bound布尔值。MTU-40只是无选项IPv4/TCP基础头的上界，不是强制实际MSS；不得把MTU当MSS或写死1460。未连接socket须抛OSError，接口不存在须抛异常。验收默认连接及建连前限制MSS1200的连接，读取不得修改连接设置或损坏后续传输。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实回环TCP连接与Linux只读内核观测交叉验证",
+      "failure_examples": [
+        "把MTU减40直接当协商MSS，会忽略TCP选项和对端/本端协商限制。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,socket,subprocess,json\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nmtu=json.loads(subprocess.run(['ip','-j','link','show','dev','lo'],capture_output=True,text=True,check=True,timeout=2).stdout)[0]['mtu']\nobserved=[]\nfor limit in [None,1200]:\n    with socket.socket() as listener,socket.socket() as client:\n        listener.bind(('127.0.0.1',0));listener.listen()\n        if limit:client.setsockopt(socket.IPPROTO_TCP,socket.TCP_MAXSEG,limit)\n        client.settimeout(2);client.connect(listener.getsockname());peer,_=listener.accept()\n        with peer:\n            before=client.getsockopt(socket.IPPROTO_TCP,socket.TCP_MAXSEG)\n            result=task.execute(client,'lo')\n            assert result=={'interface':'lo','mtu_bytes':mtu,'negotiated_mss_bytes':before,'ipv4_tcp_base_header_bound':mtu-40,'within_base_bound':0<before<=mtu-40}\n            assert client.getsockopt(socket.IPPROTO_TCP,socket.TCP_MAXSEG)==before\n            observed.append(before)\n            client.sendall(b'payload');assert peer.recv(7)==b'payload'\n            try:task.execute(client,'no_such_iface_xyz')\n            except (ValueError,subprocess.CalledProcessError):pass\n            else:raise AssertionError('unknown interface accepted')\nassert observed[1]<=1200 and observed[0]>observed[1]\nwith socket.socket() as client:\n    try:task.execute(client,'lo')\n    except OSError:pass\n    else:raise AssertionError('unconnected socket treated as negotiated MSS')\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "ip"
+        ]
+      }
+    },
+    "case_signature": "network-kernel-observation|curated-network-completion-013|读取真实协商MSS并与接口MTU分别交付",
+    "conversion": {
+      "original_id": "curated-network-completion-013",
+      "original_title": "MSS 与 MTU 有何联系，为什么不能固定写成同一个数字？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-network-completion-011",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 3,
+    "topic": "区分拥塞窗口与对端接收窗口的真实内核遥测",
+    "title": "区分拥塞窗口与对端接收窗口的真实内核遥测",
+    "answer": "```python\nimport socket,subprocess,re\ndef execute(connection):\n    if connection.family!=socket.AF_INET:raise ValueError('IPv4 TCP only')\n    local=connection.getsockname();peer=connection.getpeername()\n    output=subprocess.run(['ss','-H','-t','-i','-n','-O'],capture_output=True,text=True,check=True,timeout=2).stdout\n    rows=[]\n    for line in output.splitlines():\n        fields=line.split()\n        if len(fields)>=5 and fields[3]==local[0]+':'+str(local[1]) and fields[4]==peer[0]+':'+str(peer[1]):rows.append(line)\n    if len(rows)!=1:raise ValueError('exact connection not found')\n    def field(key):\n        match=re.search(r'(?:^|\\s)'+key+r':(\\d+)(?:\\s|$)',rows[0])\n        if not match:raise ValueError('kernel did not expose '+key)\n        return int(match.group(1))\n    mss=field('mss');cwnd=field('cwnd');window=field('snd_wnd')\n    return {'mss_bytes':mss,'cwnd_segments':cwnd,'cwnd_bytes':mss*cwnd,'peer_advertised_window_bytes':window,'window_bound_bytes':min(mss*cwnd,window)}\n```\n\n原理补充：\n接收窗口表示对端可接纳的数据量，拥塞窗口由发送端根据网络反馈控制在途数据。可发送量受到二者及实际实现共同限制。零窗口常需检查接收端消费速度；网络拥塞则还要看丢包、RTT 和拥塞控制，不能把两个窗口混为一谈。",
+    "type": "code",
+    "source": "OpsForge 原创网络专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\n非root隔离Linux、Python3和iproute2。验收仅创建本题回环TCP套接字并读取本进程连接与lo接口信息，不配置网络、不访问外网、不需要NET_ADMIN。\n\n## 操作任务\n实现execute(connection)：从ss -H -t -i -n -O精确匹配该IPv4 TCP连接的本地及对端地址端口，读取mss、cwnd、snd_wnd。输出mss_bytes、cwnd_segments、cwnd_bytes=mss*cwnd、peer_advertised_window_bytes=snd_wnd、window_bound_bytes=min(cwnd_bytes,snd_wnd)。cwnd是段数，snd_wnd已是字节；不要把rcv_space误称为对端通告窗口，也不要以cwnd与snd_wnd直接比较。缺字段/非唯一匹配抛ValueError；未连接socket抛OSError。此处上界只是两个窗口给出的理论限制，还未扣除在途字节，不等于可立即发送量或实测吞吐。\n\n## 提交产物\ntask.py，函数读取真实已连接套接字和内核信息，返回约定的结构化观测；不能硬编码常见MTU/窗口数字。\n\n## 验收方法\npython3 checks/check.py建立真实连接、调用内核工具交叉比对，分别覆盖正常、指定较小MSS或单位转换、未连接套接字等边界。全部断言通过退出0，缺少工具显示能力待验。仅证明本机回环内核行为，不据此推断公网PMTU、丢包或吞吐。\n\n失败示例：直接min(cwnd,snd_wnd)混合段数和字节，会把可用窗口上界缩错几个数量级。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "def execute(*args):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,subprocess,re\ndef execute(connection):\n    if connection.family!=socket.AF_INET:raise ValueError('IPv4 TCP only')\n    local=connection.getsockname();peer=connection.getpeername()\n    output=subprocess.run(['ss','-H','-t','-i','-n','-O'],capture_output=True,text=True,check=True,timeout=2).stdout\n    rows=[]\n    for line in output.splitlines():\n        fields=line.split()\n        if len(fields)>=5 and fields[3]==local[0]+':'+str(local[1]) and fields[4]==peer[0]+':'+str(peer[1]):rows.append(line)\n    if len(rows)!=1:raise ValueError('exact connection not found')\n    def field(key):\n        match=re.search(r'(?:^|\\s)'+key+r':(\\d+)(?:\\s|$)',rows[0])\n        if not match:raise ValueError('kernel did not expose '+key)\n        return int(match.group(1))\n    mss=field('mss');cwnd=field('cwnd');window=field('snd_wnd')\n    return {'mss_bytes':mss,'cwnd_segments':cwnd,'cwnd_bytes':mss*cwnd,'peer_advertised_window_bytes':window,'window_bound_bytes':min(mss*cwnd,window)}\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,subprocess,re\ndef execute(connection):\n    if connection.family!=socket.AF_INET:raise ValueError('IPv4 TCP only')\n    local=connection.getsockname();peer=connection.getpeername()\n    output=subprocess.run(['ss','-H','-t','-i','-n','-O'],capture_output=True,text=True,check=True,timeout=2).stdout\n    rows=[]\n    for line in output.splitlines():\n        fields=line.split()\n        if len(fields)>=5 and fields[3]==local[0]+':'+str(local[1]) and fields[4]==peer[0]+':'+str(peer[1]):rows.append(line)\n    if len(rows)!=1:raise ValueError('exact connection not found')\n    def field(key):\n        match=re.search(r'(?:^|\\s)'+key+r':(\\d+)(?:\\s|$)',rows[0])\n        if not match:raise ValueError('kernel did not expose '+key)\n        return int(match.group(1))\n    mss=field('mss');cwnd=field('cwnd');window=field('snd_wnd')\n    return {'mss_bytes':mss,'cwnd_segments':cwnd,'cwnd_bytes':mss*cwnd,'peer_advertised_window_bytes':window,'window_bound_bytes':min(cwnd,window)}\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(connection)：从ss -H -t -i -n -O精确匹配该IPv4 TCP连接的本地及对端地址端口，读取mss、cwnd、snd_wnd。输出mss_bytes、cwnd_segments、cwnd_bytes=mss*cwnd、peer_advertised_window_bytes=snd_wnd、window_bound_bytes=min(cwnd_bytes,snd_wnd)。cwnd是段数，snd_wnd已是字节；不要把rcv_space误称为对端通告窗口，也不要以cwnd与snd_wnd直接比较。缺字段/非唯一匹配抛ValueError；未连接socket抛OSError。此处上界只是两个窗口给出的理论限制，还未扣除在途字节，不等于可立即发送量或实测吞吐。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实回环TCP连接与Linux只读内核观测交叉验证",
+      "failure_examples": [
+        "直接min(cwnd,snd_wnd)混合段数和字节，会把可用窗口上界缩错几个数量级。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,socket,subprocess,re\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nfor cap in [None,1200]:\n    with socket.socket() as listener,socket.socket() as client:\n        listener.bind(('127.0.0.1',0));listener.listen()\n        if cap:client.setsockopt(socket.IPPROTO_TCP,socket.TCP_MAXSEG,cap)\n        client.settimeout(2);client.connect(listener.getsockname());peer,_=listener.accept()\n        with peer:\n            result=task.execute(client)\n            text=subprocess.run(['ss','-H','-t','-i','-n','-O'],capture_output=True,text=True,check=True,timeout=2).stdout\n            endpoint=lambda pair:pair[0]+':'+str(pair[1])\n            row=next(line for line in text.splitlines() if line.split()[3:5]==[endpoint(client.getsockname()),endpoint(client.getpeername())])\n            fields={key:int(re.search(r'(?:^|\\s)'+key+r':(\\d+)(?:\\s|$)',row).group(1)) for key in ['mss','cwnd','snd_wnd']}\n            assert result=={'mss_bytes':fields['mss'],'cwnd_segments':fields['cwnd'],'cwnd_bytes':fields['mss']*fields['cwnd'],'peer_advertised_window_bytes':fields['snd_wnd'],'window_bound_bytes':min(fields['mss']*fields['cwnd'],fields['snd_wnd'])}\n            assert result['mss_bytes']>0 and result['cwnd_segments']>0\nwith socket.socket() as client:\n    try:task.execute(client)\n    except OSError:pass\n    else:raise AssertionError('unconnected socket accepted')\n\n# Injected telemetry failure coverage supplements, not replaces, real ss checks.\nimport types\nclass Descriptor:\n    family=socket.AF_INET\n    def getsockname(self):return ('127.0.0.1',32001)\n    def getpeername(self):return ('127.0.0.1',32002)\nbase='ESTAB 0 0 127.0.0.1:32001 127.0.0.1:32002 mss:1000 cwnd:10 snd_wnd:4096'\noriginal=task.subprocess\ntry:\n    for text in ['',base.replace(' snd_wnd:4096',''),base+'\\n'+base]:\n        task.subprocess=types.SimpleNamespace(run=lambda *a,**kw:types.SimpleNamespace(stdout=text))\n        try:task.execute(Descriptor())\n        except ValueError:pass\n        else:raise AssertionError('missing/duplicate telemetry accepted')\nfinally:task.subprocess=original\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "ss"
+        ]
+      }
+    },
+    "case_signature": "network-kernel-observation|curated-network-completion-011|区分拥塞窗口与对端接收窗口的真实内核遥测",
+    "conversion": {
+      "original_id": "curated-network-completion-011",
+      "original_title": "TCP 接收窗口与拥塞窗口分别限制什么？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-parallel-clickhouse-057",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 2,
+    "topic": "写入与数据生命周期",
+    "title": "原生CSV输入初始化：提前配置分隔符、引号及NULL标记，保留换行和真实零",
+    "answer": "```python\ndef csv_options():\n    return {'format_csv_delimiter':';','format_csv_allow_double_quotes':True,'format_csv_null_representation':chr(92)+'N'}\n```\n\n原题知识说明：\n显式选择匹配格式及设置，先用包含逗号、引号、换行和空值的样本校验。统计解析失败和实际行数，不能以总字节成功上传认定数据语义正确。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；ClickHouse官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现csv_options()返回恰三项dict：format_csv_delimiter=\";\"、format_csv_allow_double_quotes=True（bool）、format_csv_null_representation=单个反斜线加N。平台将其作为ClickHouse Local命令行参数，在创建标准输入CSV表之前应用。原生读取source(id UInt32,label String,n Nullable(Int32))，无表头：引号内分号、嵌入换行、成对转义双引号和UTF8保持原文；n字段0与反斜线N的NULL保持区分。不能按物理行切开CSV、补NULL为0或静默跳坏行。查询级SETTINGS在本初始化顺序中太晚，不用它冒充提前配置。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实ClickHouse Local25.8.1.5101及私有输入，不连接Server。仅将软件支持的三个CSV命令行参数提前提供，不改全局配置/真实默认身份；有界四行包含嵌入换行。未验证任意CSV方言或任意坏数据的容错导入，不构建镜像。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/interfaces/formats/CSV"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-057",
+      "original_title": "CSV导入怎样处理引号、分隔符和Nullable字段？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def csv_options():\n    return {'format_csv_delimiter':';','format_csv_allow_double_quotes':True,'format_csv_null_representation':chr(92)+'N'}\n"
+    },
+    "negative_files": {
+      "task.py": "def csv_options():\n    return {'format_csv_delimiter':',','format_csv_allow_double_quotes':True,'format_csv_null_representation':chr(92)+'N'}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现csv_options()返回恰三项dict：format_csv_delimiter=\";\"、format_csv_allow_double_quotes=True（bool）、format_csv_null_representation=单个反斜线加N。平台将其作为ClickHouse Local命令行参数，在创建标准输入CSV表之前应用。原生读取source(id UInt32,label String,n Nullable(Int32))，无表头：引号内分号、嵌入换行、成对转义双引号和UTF8保持原文；n字段0与反斜线N的NULL保持区分。不能按物理行切开CSV、补NULL为0或静默跳坏行。查询级SETTINGS在本初始化顺序中太晚，不用它冒充提前配置。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实ClickHouse Local25.8.1.5101及私有输入，不连接Server。仅将软件支持的三个CSV命令行参数提前提供，不改全局配置/真实默认身份；有界四行包含嵌入换行。未验证任意CSV方言或任意坏数据的容错导入，不构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_csv.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow',extra_flags=()):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  args+=list(extra_flags)\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import sys,os,pathlib,csv,io,secrets,json\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nfrom ch_csv import Local\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED:csv_options_before_native_input_table_creation',flush=True)\noptions=task.csv_options()\nassert isinstance(options,dict) and set(options)=={'format_csv_delimiter','format_csv_allow_double_quotes','format_csv_null_representation'}\nassert isinstance(options['format_csv_delimiter'],str) and len(options['format_csv_delimiter'])==1 and type(options['format_csv_allow_double_quotes']) is bool\nassert isinstance(options['format_csv_null_representation'],str)\nflags=['--format_csv_delimiter='+options['format_csv_delimiter'],'--format_csv_allow_double_quotes='+str(int(options['format_csv_allow_double_quotes'])),'--format_csv_null_representation='+options['format_csv_null_representation']]\nsuffix=secrets.token_hex(4);values=[(1,'semi;'+suffix,0),(2,'quoted \"text\" '+suffix,None),(3,'line1\\nline2',-7),(4,'中文🙂'+suffix,42)]\nbuffer=io.StringIO(newline='');writer=csv.writer(buffer,delimiter=';',lineterminator='\\n')\nfor identity,label,number in values:writer.writerow([identity,label,chr(92)+'N' if number is None else number])\nbefore=buffer.getvalue()\nwith Local() as database:\n result=database.run('SELECT id,label,n FROM source ORDER BY id',data=before,structure='id UInt32,label String,n Nullable(Int32)',input_format='CSV',extra_flags=flags)\n assert result==[dict(id=i,label=label,n=number) for i,label,number in values],result\nassert buffer.getvalue()==before\nprint('NATIVE_CLICKHOUSE_CSV_CLI_CUSTOM_DELIMITER_MULTILINE_QUOTES_NULL_MARKER_AND_REAL_ZERO',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "clickhouse"
+    ]
+  }
+]

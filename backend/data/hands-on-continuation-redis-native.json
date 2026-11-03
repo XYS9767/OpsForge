@@ -1,0 +1,358 @@
+[
+  {
+    "id": "curated-parallel-redis-029",
+    "module": "redis",
+    "category": "Redis",
+    "level": 1,
+    "topic": "性能与访问治理",
+    "title": "真实AUTH成功后分别验证命令权限与键模式拒绝",
+    "answer": "```python\ndef probe_readonly(command,allowed,forbidden):\n    value=command('GET',allowed)\n    def denied(*parts):\n        try:command(*parts)\n        except Exception as error:\n            if str(error).startswith('NOPERM'):return True\n            raise\n        return False\n    return {'value':value,'write_denied':denied('SET',allowed,'probe'),\n            'other_key_denied':denied('GET',forbidden)}\n```\n\n原题说明：\n不意味着。ACL可以分别限制命令、键模式和频道；认证识别身份，授权决定操作。使用目标用户测试代表命令与越界键，检查ACL日志，不用管理员连接替代验证。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；Redis7.2非root私有Unix socket环境运行证据与独立反例单独保存。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 probe_readonly(command,allowed,forbidden)。回调已绑定一个真实AUTH成功的只读用户。实际GET允许键取得value，尝试SET允许键的值probe、GET其他命名空间键，分别返回write_denied/other_key_denied。只把Redis错误文本以NOPERM开头视为拒绝；连接失败等其他异常原样传播，不能以认证成功推断权限。不得修改ACL或允许/邻居键。返回三个字段value/write_denied/other_key_denied。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py，启动私有Redis7.2真实进程；不连接外部服务。\n\n## 能力边界\n私有Redis7.2上真实认证与ACL拒绝；传输错误另用显式故障注入。不变更宿主账号或任何现有外部Redis身份。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/commands/auth/",
+      "https://redis.io/docs/latest/management/security/acl/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-029",
+      "original_title": "Redis AUTH成功是否意味着允许执行所有命令和访问所有键？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement the requested function\")\n"
+    },
+    "solution_files": {
+      "task.py": "def probe_readonly(command,allowed,forbidden):\n    value=command('GET',allowed)\n    def denied(*parts):\n        try:command(*parts)\n        except Exception as error:\n            if str(error).startswith('NOPERM'):return True\n            raise\n        return False\n    return {'value':value,'write_denied':denied('SET',allowed,'probe'),\n            'other_key_denied':denied('GET',forbidden)}\n"
+    },
+    "negative_files": {
+      "task.py": "def probe_readonly(command,allowed,forbidden):\n    return {'value':command('GET',allowed),'write_denied':False,'other_key_denied':False}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有Redis7.2可执行文件，私有Unix socket和自有目录",
+      "operation": "实现 probe_readonly(command,allowed,forbidden)。回调已绑定一个真实AUTH成功的只读用户。实际GET允许键取得value，尝试SET允许键的值probe、GET其他命名空间键，分别返回write_denied/other_key_denied。只把Redis错误文本以NOPERM开头视为拒绝；连接失败等其他异常原样传播，不能以认证成功推断权限。不得修改ACL或允许/邻居键。返回三个字段value/write_denied/other_key_denied。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "私有Redis7.2上真实认证与ACL拒绝；传输错误另用显式故障注入。不变更宿主账号或任何现有外部Redis身份。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import sys,os,pathlib,secrets,hashlib,json,copy\nsys.path.insert(0,str(pathlib.Path.cwd()))\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token,acl_profile\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith NativeRedis() as server:\n admin=server.command;prefix=token('tenant')+':';allowed=prefix+'value';forbidden=token('neighbor')+':value'\n user=token('opsforge_acl');password=token('password');value=token('payload');other=token('preserve')\n admin('SET',allowed,value);admin('SET',forbidden,other)\n admin('ACL','SETUSER',user,'reset','on','>'+password,'~'+prefix+'*','-@all','+get')\n profile=acl_profile(admin,user);client=server.client(user,password);calls=[]\n try:\n  def command(*args):calls.append(args);return client.command(*args)\n  result=student(task.probe_readonly,command,allowed,forbidden)\n  assert result=={'value':value,'write_denied':True,'other_key_denied':True},'AUTH success is not unrestricted command/key authorization'\n  assert ('SET',allowed,'probe') in calls and ('GET',forbidden) in calls,'must perform actual denied operations'\n  assert admin('GET',allowed)==value and admin('GET',forbidden)==other and acl_profile(admin,user)==profile\n  def transport_fault(*args):\n   if args[0]=='SET':raise ConnectionError('explicit transport fault injection')\n   return client.command(*args)\n  try:task.probe_readonly(transport_fault,allowed,forbidden)\n  except ConnectionError:pass\n  else:raise AssertionError('transport failure mislabeled as an ACL denial')\n finally:client.close()\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-redis-059",
+    "module": "redis",
+    "category": "Redis",
+    "level": 2,
+    "topic": "性能与访问治理",
+    "title": "实际重启Redis验证CONFIG SET与CONFIG REWRITE的持久化差别",
+    "answer": "```python\ndef persist_timeout(command,seconds):\n    if type(seconds) is not int or not 0<=seconds<=300:raise ValueError('bounded integer timeout')\n    command('CONFIG','SET','timeout',seconds)\n    command('CONFIG','REWRITE')\n    return int(command('CONFIG','GET','timeout')[1])\n```\n\n原题说明：\n运行时变更与持久配置是两层状态，是否持久取决于配置管理和支持的重写机制。核对实际配置来源、受管文件和启动参数，在隔离重启验收；不能仅凭CONFIG GET宣称永久生效。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；Redis7.2非root私有Unix socket环境运行证据与独立反例单独保存。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 persist_timeout(command,seconds)，seconds为0..300的整数且拒绝bool。只修改本实验私有Redis的timeout设置，调用CONFIG REWRITE持久化后返回实际整型值。必须在进程重启后保持，不得顺带修改hz等无关配置，已保存的键保持。无效参数先ValueError且不能写配置。无需启动/停止服务，验收器负责实际重启。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py，启动私有Redis7.2真实进程；不连接外部服务。\n\n## 能力边界\n只在自有目录内的独立Redis进程验证配置文件重写及重启加载；不是部署变更，也不证明任意配置或ACL配置文件自动持久化。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/commands/config-rewrite/",
+      "https://redis.io/docs/latest/operate/oss_and_stack/management/config/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-059",
+      "original_title": "CONFIG SET生效后如何判断重启是否仍保持配置？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement the requested function\")\n"
+    },
+    "solution_files": {
+      "task.py": "def persist_timeout(command,seconds):\n    if type(seconds) is not int or not 0<=seconds<=300:raise ValueError('bounded integer timeout')\n    command('CONFIG','SET','timeout',seconds)\n    command('CONFIG','REWRITE')\n    return int(command('CONFIG','GET','timeout')[1])\n"
+    },
+    "negative_files": {
+      "task.py": "def persist_timeout(command,seconds):\n    if type(seconds) is not int or not 0<=seconds<=300:raise ValueError('bounded integer timeout')\n    command('CONFIG','SET','timeout',seconds)\n    return int(command('CONFIG','GET','timeout')[1])\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有Redis7.2可执行文件，私有Unix socket和自有目录",
+      "operation": "实现 persist_timeout(command,seconds)，seconds为0..300的整数且拒绝bool。只修改本实验私有Redis的timeout设置，调用CONFIG REWRITE持久化后返回实际整型值。必须在进程重启后保持，不得顺带修改hz等无关配置，已保存的键保持。无效参数先ValueError且不能写配置。无需启动/停止服务，验收器负责实际重启。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "只在自有目录内的独立Redis进程验证配置文件重写及重启加载；不是部署变更，也不证明任意配置或ACL配置文件自动持久化。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import sys,os,pathlib,secrets,hashlib,json,copy\nsys.path.insert(0,str(pathlib.Path.cwd()))\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token,acl_profile\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith NativeRedis() as server:\n command=server.command;preserve=token('persisted');payload=token('data')\n command('SET',preserve,payload);command('SAVE');before_hz=command('CONFIG','GET','hz')[1]\n assert command('CONFIG','GET','timeout')[1]=='0'\n assert student(task.persist_timeout,command,33)==33\n assert command('CONFIG','GET','timeout')[1]=='33' and command('CONFIG','GET','hz')[1]==before_hz,'unrelated settings changed'\n server.stop();server.start();command=server.command\n assert command('CONFIG','GET','timeout')[1]=='33','CONFIG SET alone was lost on actual process restart'\n assert command('CONFIG','GET','hz')[1]==before_hz and command('GET',preserve)==payload\n before=server.config.read_bytes()\n for bad in [True,-1,301,'33']:\n  try:task.persist_timeout(command,bad)\n  except ValueError:pass\n  else:raise AssertionError('invalid timeout accepted')\n assert server.config.read_bytes()==before,'invalid request changed persisted configuration'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-redis-070",
+    "module": "redis",
+    "category": "Redis",
+    "level": 3,
+    "topic": "性能与访问治理",
+    "title": "真实ACL密码分阶段轮换：验证新连接后撤旧，保留备用密码与权限",
+    "answer": "```python\nimport hashlib,re\ndef rotate_password(command,user,old_password,new_password,probe):\n    if not isinstance(user,str) or not re.fullmatch(r'opsforge_[a-z0-9_]+',user):raise ValueError('exercise user required')\n    if not isinstance(new_password,str) or len(new_password)<16 or new_password==old_password:raise ValueError('distinct new password')\n    raw=command('ACL','GETUSER',user)\n    if raw is None:raise ValueError('existing exercise user required')\n    profile=dict(zip(raw[::2],raw[1::2]));passwords=profile['passwords']\n    if hashlib.sha256(old_password.encode()).hexdigest() not in passwords:raise ValueError('old credential not active')\n    if hashlib.sha256(new_password.encode()).hexdigest() in passwords:raise ValueError('new credential already active')\n    command('ACL','SETUSER',user,'>'+new_password)\n    try:\n        if probe(new_password) is not True:raise RuntimeError('new connection probe failed')\n    except BaseException:\n        command('ACL','SETUSER',user,'<'+new_password)\n        raise\n    command('ACL','SETUSER',user,'<'+old_password)\n    return True\n```\n\n原题说明：\n在支持的ACL模型中设置新旧凭据并存窗口，更新客户端并验证新建连接使用新凭据，最后撤旧。记录连接池重连路径与未迁移消费者，旧连接行为按版本和客户端实际验证。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；Redis7.2非root私有Unix socket环境运行证据与独立反例单独保存。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 rotate_password(command,user,old_password,new_password,probe)。仅操作opsforge_开头的现有实验用户；新密码至少16字符、不同于旧密码且尚未激活，旧密码必须在当前ACL密码哈希集合中。先新增新密码，调用probe(new_password)验证真实新连接，返回严格True后才移除指定旧密码。probe失败/异常时只撤回本次新增密码并传播异常，保留旧密码、其他备用密码、命令/键/通道权限。不得reset/resetpass或删除用户；已认证连接应继续可用。成功返回True。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py，启动私有Redis7.2真实进程；不连接外部服务。\n\n## 能力边界\n私有Redis7.2的单用户密码与连接生命周期；不读取真实口令，不切换默认身份，不宣称生产连接池已全部完成滚动更新。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/commands/acl-setuser/",
+      "https://redis.io/docs/latest/management/security/acl/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-070",
+      "original_title": "Redis ACL密码轮换如何避免连接池同时失效？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement the requested function\")\n"
+    },
+    "solution_files": {
+      "task.py": "import hashlib,re\ndef rotate_password(command,user,old_password,new_password,probe):\n    if not isinstance(user,str) or not re.fullmatch(r'opsforge_[a-z0-9_]+',user):raise ValueError('exercise user required')\n    if not isinstance(new_password,str) or len(new_password)<16 or new_password==old_password:raise ValueError('distinct new password')\n    raw=command('ACL','GETUSER',user)\n    if raw is None:raise ValueError('existing exercise user required')\n    profile=dict(zip(raw[::2],raw[1::2]));passwords=profile['passwords']\n    if hashlib.sha256(old_password.encode()).hexdigest() not in passwords:raise ValueError('old credential not active')\n    if hashlib.sha256(new_password.encode()).hexdigest() in passwords:raise ValueError('new credential already active')\n    command('ACL','SETUSER',user,'>'+new_password)\n    try:\n        if probe(new_password) is not True:raise RuntimeError('new connection probe failed')\n    except BaseException:\n        command('ACL','SETUSER',user,'<'+new_password)\n        raise\n    command('ACL','SETUSER',user,'<'+old_password)\n    return True\n"
+    },
+    "negative_files": {
+      "task.py": "import hashlib,re\ndef rotate_password(command,user,old_password,new_password,probe):\n    if not isinstance(user,str) or not re.fullmatch(r'opsforge_[a-z0-9_]+',user):raise ValueError('exercise user required')\n    if not isinstance(new_password,str) or len(new_password)<16 or new_password==old_password:raise ValueError('distinct new password')\n    raw=command('ACL','GETUSER',user)\n    if raw is None:raise ValueError('existing exercise user required')\n    profile=dict(zip(raw[::2],raw[1::2]));passwords=profile['passwords']\n    if hashlib.sha256(old_password.encode()).hexdigest() not in passwords:raise ValueError('old credential not active')\n    if hashlib.sha256(new_password.encode()).hexdigest() in passwords:raise ValueError('new credential already active')\n    command('ACL','SETUSER',user,'resetpass','>'+new_password)\n    try:\n        if probe(new_password) is not True:raise RuntimeError('new connection probe failed')\n    except BaseException:\n        command('ACL','SETUSER',user,'<'+new_password)\n        raise\n    command('ACL','SETUSER',user,'<'+old_password)\n    return True\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有Redis7.2可执行文件，私有Unix socket和自有目录",
+      "operation": "实现 rotate_password(command,user,old_password,new_password,probe)。仅操作opsforge_开头的现有实验用户；新密码至少16字符、不同于旧密码且尚未激活，旧密码必须在当前ACL密码哈希集合中。先新增新密码，调用probe(new_password)验证真实新连接，返回严格True后才移除指定旧密码。probe失败/异常时只撤回本次新增密码并传播异常，保留旧密码、其他备用密码、命令/键/通道权限。不得reset/resetpass或删除用户；已认证连接应继续可用。成功返回True。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "私有Redis7.2的单用户密码与连接生命周期；不读取真实口令，不切换默认身份，不宣称生产连接池已全部完成滚动更新。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import sys,os,pathlib,secrets,hashlib,json,copy\nsys.path.insert(0,str(pathlib.Path.cwd()))\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token,acl_profile\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith NativeRedis() as server:\n admin=server.command\n def setup():\n  user=token('opsforge_rotate');old=token('old_password');new=token('new_password');spare=token('spare_password');key=token('scope')+':x';value=token('stable')\n  admin('SET',key,value);admin('ACL','SETUSER',user,'reset','on','>'+old,'>'+spare,'~'+key,'-@all','+get')\n  return user,old,new,spare,key,value\n def read_with(user,password,key):\n  client=server.client(user,password)\n  try:return client.command('GET',key)\n  finally:client.close()\n user,old,new,spare,key,value=setup();profile=acl_profile(admin,user);existing=server.client(user,old);probes=[]\n def probe(password):\n  probes.append(password)\n  assert read_with(user,old,key)==value and read_with(user,spare,key)==value,'old/spare credentials removed before new connection verification'\n  return read_with(user,password,key)==value\n try:\n  assert student(task.rotate_password,admin,user,old,new,probe) is True and probes==[new]\n  assert existing.command('GET',key)==value,'existing authenticated connection was invalidated'\n  assert read_with(user,new,key)==value and read_with(user,spare,key)==value\n  try:server.client(user,old)\n  except RedisError as error:assert str(error).startswith('WRONGPASS')\n  else:raise AssertionError('retired password still authenticates fresh connections')\n  after=acl_profile(admin,user)\n  assert {k:v for k,v in after.items() if k!='passwords'}=={k:v for k,v in profile.items() if k!='passwords'},'command/key/channel permissions changed during password rotation'\n finally:existing.close()\n user,old,new,spare,key,value=setup();before=acl_profile(admin,user)\n try:task.rotate_password(admin,user,old,new,lambda password:False)\n except RuntimeError:pass\n else:raise AssertionError('failed probe accepted')\n assert acl_profile(admin,user)==before and read_with(user,old,key)==value and read_with(user,spare,key)==value,'failed rotation did not preserve preexisting credentials and permissions'\n try:server.client(user,new)\n except RedisError:pass\n else:raise AssertionError('unverified new credential retained')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-redis-076",
+    "module": "redis",
+    "category": "Redis",
+    "level": 3,
+    "topic": "事务脚本与协调",
+    "title": "部署真实Redis Function并验证SCRIPT FLUSH与RDB重启后的生命周期",
+    "answer": "```python\nimport re\ndef deploy_function(command,library,name):\n    if any(not isinstance(value,str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,47}',value) for value in [library,name]):raise ValueError('literal library/function names required')\n    if command('FUNCTION','LIST','LIBRARYNAME',library):raise ValueError('existing library is protected')\n    code=\"#!lua name=\"+library+\"\\nredis.register_function('\"+name+\"', function(keys,args) return redis.call('INCRBY',keys[1],args[1]) end)\\n\"\n    return command('FUNCTION','LOAD',code)\n```\n\n原题说明：\n函数库是可管理、持久化和复制的服务器端程序资产，脚本缓存不应当作可靠持久部署。按版本确认支持与备份包含范围，验收重启和切换后可调用；程序逻辑需由开发维护。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；Redis7.2非root私有Unix socket环境运行证据与独立反例单独保存。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 deploy_function(command,library,name)，名称为字母/下划线开头、其后字母数字下划线且总长1..48。拒绝已有同名库，使用FUNCTION LOAD部署Lua库，注册指定函数：给定一个KEYS键与一个ARGV整数增量，返回真实INCRBY结果。不得用临时SCRIPT LOAD代替，不得FUNCTION FLUSH或覆盖邻居库。返回库名。验收器真实执行FCALL、SCRIPT FLUSH、SAVE及进程重启，再验证函数、数据与邻居库。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py，启动私有Redis7.2真实进程；不连接外部服务。\n\n## 能力边界\n私有Redis7.2单实例的Function、脚本缓存与RDB生命周期；不构建镜像、不验证Cluster全节点部署、复制故障接管或跨版本兼容。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/develop/programmability/functions-intro/",
+      "https://redis.io/docs/latest/commands/function-load/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-076",
+      "original_title": "Redis Function与临时脚本缓存的部署生命周期有何不同？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement the requested function\")\n"
+    },
+    "solution_files": {
+      "task.py": "import re\ndef deploy_function(command,library,name):\n    if any(not isinstance(value,str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,47}',value) for value in [library,name]):raise ValueError('literal library/function names required')\n    if command('FUNCTION','LIST','LIBRARYNAME',library):raise ValueError('existing library is protected')\n    code=\"#!lua name=\"+library+\"\\nredis.register_function('\"+name+\"', function(keys,args) return redis.call('INCRBY',keys[1],args[1]) end)\\n\"\n    return command('FUNCTION','LOAD',code)\n"
+    },
+    "negative_files": {
+      "task.py": "import re\ndef deploy_function(command,library,name):\n    if any(not isinstance(value,str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,47}',value) for value in [library,name]):raise ValueError('literal library/function names required')\n    if command('FUNCTION','LIST','LIBRARYNAME',library):raise ValueError('existing library is protected')\n    code=\"#!lua name=\"+library+\"\\nredis.register_function('\"+name+\"', function(keys,args) return redis.call('INCRBY',keys[1],args[1]) end)\\n\"\n    return command('SCRIPT','LOAD',code)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有Redis7.2可执行文件，私有Unix socket和自有目录",
+      "operation": "实现 deploy_function(command,library,name)，名称为字母/下划线开头、其后字母数字下划线且总长1..48。拒绝已有同名库，使用FUNCTION LOAD部署Lua库，注册指定函数：给定一个KEYS键与一个ARGV整数增量，返回真实INCRBY结果。不得用临时SCRIPT LOAD代替，不得FUNCTION FLUSH或覆盖邻居库。返回库名。验收器真实执行FCALL、SCRIPT FLUSH、SAVE及进程重启，再验证函数、数据与邻居库。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "私有Redis7.2单实例的Function、脚本缓存与RDB生命周期；不构建镜像、不验证Cluster全节点部署、复制故障接管或跨版本兼容。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import sys,os,pathlib,secrets,hashlib,json,copy\nsys.path.insert(0,str(pathlib.Path.cwd()))\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token,acl_profile\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith NativeRedis() as server:\n command=server.command;neighbor=token('neighbor_library');other_function=token('neighbor_function');library=token('opsforge_library');name=token('opsforge_function');key=token('counter')\n command('FUNCTION','LOAD',\"#!lua name=\"+neighbor+\"\\nredis.register_function('\"+other_function+\"',function(keys,args)return 777 end)\")\n sha=command('SCRIPT','LOAD','return 17')\n assert command('EVALSHA',sha,0)==17\n assert student(task.deploy_function,command,library,name)==library\n assert command('FUNCTION','LIST','LIBRARYNAME',neighbor),'neighbor library was destroyed'\n assert command('FCALL',other_function,0)==777\n assert command('FCALL',name,1,key,3)==3 and command('FCALL',name,1,key,4)==7\n command('SCRIPT','FLUSH')\n assert command('SCRIPT','EXISTS',sha)==[0] and command('FCALL',name,1,key,2)==9,'Functions must survive script-cache flush'\n command('SAVE');server.stop();server.start();command=server.command\n assert command('FCALL',name,1,key,1)==10 and command('FCALL',other_function,0)==777,'Function library or dataset did not survive actual RDB restart'\n before=command('FUNCTION','LIST')\n try:task.deploy_function(command,library,token('different'))\n except ValueError:pass\n else:raise AssertionError('existing library overwritten')\n for bad in ['bad name',\"x'bad\",'x'*49]:\n  try:task.deploy_function(command,bad,name)\n  except ValueError:pass\n  else:raise AssertionError('unsafe source name accepted')\n assert command('FUNCTION','LIST')==before\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-redis-100",
+    "module": "redis",
+    "category": "Redis",
+    "level": 4,
+    "topic": "缓存与过期策略",
+    "title": "真实重连复现客户端缓存失效丢失，并恢复新连接的TRACKING通知",
+    "answer": "```python\ndef restore_tracking(command,redirect_id):\n    if type(redirect_id) is not int or redirect_id<=0:raise ValueError('positive client ID required')\n    return command('CLIENT','TRACKING','ON','REDIRECT',redirect_id)\n```\n\n原题说明：\n桌面推演，未在生产执行。比较直连GET与本地命中，检查tracking状态、失效消息通道和重连初始化，确认失效订阅未恢复。先旁路或清空本地缓存，由开发修复重连流程；验收断连、重连及更新后失效时限。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；Redis7.2非root私有Unix socket环境运行证据与独立反例单独保存。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 restore_tracking(command,redirect_id)。command绑定已重连的新Redis连接；redirect_id是已订阅__redis__:invalidate的独立接收连接ID，必须为正整数且拒绝bool。对新连接重新启用CLIENT TRACKING ON REDIRECT并返回真实OK。必须既收到其他连接写入的失效通知，也收到本连接写入的通知，不启用NOLOOP，不使用PING或旧连接状态代替。验收先复现旧连接有效、断开后新连接无通知，再运行修复并读取真实RESP2失效消息。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py，启动私有Redis7.2真实进程；不连接外部服务。\n\n## 能力边界\n真实Redis7.2连接级TRACKING与RESP2重定向失效通知；只验证本地有限序列，不宣称某个生产驱动、本地缓存线程或断网期间事件可重放。",
+    "hints": [],
+    "rubric": [
+      "识别题设具体根因并提供对应证据",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/commands/client-tracking/",
+      "https://redis.io/docs/latest/develop/clients/client-side-caching/"
+    ],
+    "incident_signature": "redis:client-tracking-invalidation-disabled",
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-100",
+      "original_title": "启用客户端本地缓存后更新长期不可见，重连路径没有恢复CLIENT TRACKING，应怎么办？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement the requested function\")\n"
+    },
+    "solution_files": {
+      "task.py": "def restore_tracking(command,redirect_id):\n    if type(redirect_id) is not int or redirect_id<=0:raise ValueError('positive client ID required')\n    return command('CLIENT','TRACKING','ON','REDIRECT',redirect_id)\n"
+    },
+    "negative_files": {
+      "task.py": "def restore_tracking(command,redirect_id):\n    command('PING')\n    return 'OK'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有Redis7.2可执行文件，私有Unix socket和自有目录",
+      "operation": "实现 restore_tracking(command,redirect_id)。command绑定已重连的新Redis连接；redirect_id是已订阅__redis__:invalidate的独立接收连接ID，必须为正整数且拒绝bool。对新连接重新启用CLIENT TRACKING ON REDIRECT并返回真实OK。必须既收到其他连接写入的失效通知，也收到本连接写入的通知，不启用NOLOOP，不使用PING或旧连接状态代替。验收先复现旧连接有效、断开后新连接无通知，再运行修复并读取真实RESP2失效消息。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Redis7.2连接级TRACKING与RESP2重定向失效通知；只验证本地有限序列，不宣称某个生产驱动、本地缓存线程或断网期间事件可重放。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import sys,os,pathlib,secrets,hashlib,json,copy\nsys.path.insert(0,str(pathlib.Path.cwd()))\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token,acl_profile\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nimport select\nwith NativeRedis() as server:\n admin=server.command;key=token('tracked');admin('SET',key,'v1')\n receiver=server.client();old=server.client();replacement=None\n try:\n  redirect_id=receiver.command('CLIENT','ID');receiver.command('SUBSCRIBE','__redis__:invalidate')\n  def invalidation():\n   assert select.select([receiver.socket],[],[],2)[0],'actual invalidation notification did not arrive'\n   message=receiver.read()\n   assert message==['message','__redis__:invalidate',[key]],'unexpected native invalidation payload'\n  old.command('CLIENT','TRACKING','ON','REDIRECT',redirect_id);assert old.command('GET',key)=='v1'\n  admin('SET',key,'v2');invalidation();old.close()\n  replacement=server.client();assert replacement.command('GET',key)=='v2'\n  info=acl_profile if False else replacement.command('CLIENT','TRACKINGINFO')\n  info=dict(zip(info[::2],info[1::2]));assert 'off' in info['flags'],'fresh connection unexpectedly retained old tracking state'\n  admin('SET',key,'v3')\n  assert not select.select([receiver.socket],[],[],.1)[0],'fault fixture unexpectedly emitted invalidation with tracking disabled'\n  assert student(task.restore_tracking,replacement.command,redirect_id)=='OK'\n  info=replacement.command('CLIENT','TRACKINGINFO');info=dict(zip(info[::2],info[1::2]))\n  assert 'on' in info['flags'] and info['redirect']==redirect_id,'tracking was not restored on the actual replacement connection'\n  assert replacement.command('GET',key)=='v3'\n  admin('SET',key,'v4');invalidation()\n  assert replacement.command('GET',key)=='v4'\n  replacement.command('SET',key,'v5');invalidation()\n  assert admin('GET',key)=='v5','tracking repair modified unrelated value semantics'\n  for bad in [True,0,-1,'1']:\n   try:task.restore_tracking(replacement.command,bad)\n   except ValueError:pass\n   else:raise AssertionError('invalid redirect identity accepted')\n finally:\n  old.close();receiver.close()\n  if replacement is not None:replacement.close()\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

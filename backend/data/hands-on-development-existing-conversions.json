@@ -1,0 +1,1050 @@
+[
+  {
+    "id": "curated-parallel-go-109",
+    "module": "go",
+    "category": "Go 运维开发",
+    "level": 4,
+    "topic": "文件数据与时间",
+    "title": "故障恢复：真实Go缓冲导出丢尾、Flush失败与关闭双错保留",
+    "answer": "```go\npackage practice\nimport(\"bufio\";\"errors\";\"io\")\nfunc Export(dst io.WriteCloser, records []string)(err error){\n    defer func(){err=errors.Join(err,dst.Close())}()\n    writer:=bufio.NewWriterSize(dst,4096)\n    for _,record:=range records{\n        if _,err=writer.WriteString(record+\"\\n\");err!=nil{return err}\n    }\n    return writer.Flush()\n}\n```\n\n底层 Close 不会替外层 bufio.Writer 刷新。先检查写入和 Flush，再关闭目标；命名返回值配合 errors.Join 保留两类错误。实际磁盘文件与注入式 Writer 分别验证字节落入文件和失败传播。没有 fsync 或原子重命名，因此不能据此承诺断电持久性或旧产物保护。\n\n修复缓冲导出丢尾故障，保留Export(dst io.WriteCloser, records []string) error原接口。每个Go字符串按原字节写入并追加一个LF；空记录也写LF，nil/空切片不写正文。成功返回前完整Flush，并且正常/写入失败/Flush失败/Close失败均恰好Close一次。写入/Flush错误与Close错误并存时errors.Is必须均能找到原错误；短写必须失败。dst保证非nil合法对象，允许等价缓冲策略，不改变API所有权。\n真实CLI为cmd/exporter/main.go：go run ./cmd/exporter --input records.json --output report.bin。--input/--output均必填，不接收额外位置参数。输入为常规文件，最多1MiB UTF-8 JSON字符串数组；null/[]都表示0记录，按encoding/json标准解码。输入文件和对象不得修改。输出允许覆盖旧常规文件；仅额外允许显式/dev/full作为原生失败夹具。输入校验完成后才打开输出，同一路径、硬链接或符号链接指向同一输入文件必须拒绝，不能截断输入证据。\n成功stdout恰为一个JSON对象：status=\"complete\"、records为输入记录数、bytes为UTF-8解码后逐记录追加LF的总字节数、sha256为这些导出字节的SHA256。可信验收会重读真实文件，不能以自报摘要代替落盘字节。输入/导出失败退出2、stdout为空、stderr说明；不能吞掉Export错误仍报成功。完成导出后若状态输出通道失败，目标已写成，非零退出并说明export completed，不声称回滚。\n本API和CLI不提供fsync、原子替换、旧产物保护或写入失败回滚；运行前先冻结发布，失败目标可能为空或部分写入，禁止将其作为完整产物发布。非法输入/同输入输出须在打开目标前拒绝，只有这类预检失败才保证已有目标不变。\n真实/dev/full验证的是缓冲Flush遇ENOSPC。Close错误、双错、短写及晚到部分写错误使用明确的io.WriteCloser接口替身，只证明API传播与关闭责任，不冒充真实文件系统Close故障。所有进程只用既有Go标准库与隔离临时文件，无网络、镜像构建或默认身份变更。",
+    "type": "case",
+    "incident_signature": "go:bufio-writer-not-flushed",
+    "source": "独立编审：Go特有数据与并发故障",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "复用原ID深化为真实故障恢复场景；原生Go编译/文件导出与/dev/full，接口Close双错明确单列；原214增量0。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "用类型/栈/字节证据证明根因",
+      "正确交接开发修复与运维止损",
+      "列出本故障的正常和边界验收"
+    ],
+    "references": [
+      "https://pkg.go.dev/bufio#Writer.Flush",
+      "https://pkg.go.dev/os#File.Close",
+      "https://pkg.go.dev/errors#Join",
+      "https://pkg.go.dev/encoding/json#Unmarshal"
+    ],
+    "related_modules": [
+      "go"
+    ],
+    "language": "go",
+    "run": "go run ./cmd/exporter --input records.json --output report.bin",
+    "body": "## 环境与初始材料\n普通非root Linux、既有Go1.23+与/dev/full。提供保留原故障的task.go、可运行CLI、records.json。所有临时Go缓存仅位于本题隔离工作目录，验证设置GOTOOLCHAIN=local、GOPROXY=off，不下载工具或依赖。\n\n## 故障初态与复现\n运行go run ./cmd/exporter --input records.json --output report.bin。初始Export创建4096字节bufio.Writer，只Close底层文件却从未Flush，也忽略WriteString错误：小报告真实为0字节，大报告真实仅保留已写出的前缀，尾部仍在用户态缓冲。初始程序可能返回成功；检查真实文件字节才发现损坏。可信incident目录保留相同旧函数和完整CLI，实际编译并复现两种丢失，不用空骨架充当故障。\n\n## 可核证根因与止损\n底层File.Close不会替外层bufio.Writer刷新。先冻结产物发布、记录预期与实际字节/摘要；修复后验证小于、等于、大于4096及多缓冲报告。按写入/Flush再Close的顺序处理，合并独立错误，不能只defer Flush并丢弃返回值。\n\n## 操作任务\n修复缓冲导出丢尾故障，保留Export(dst io.WriteCloser, records []string) error原接口。每个Go字符串按原字节写入并追加一个LF；空记录也写LF，nil/空切片不写正文。成功返回前完整Flush，并且正常/写入失败/Flush失败/Close失败均恰好Close一次。写入/Flush错误与Close错误并存时errors.Is必须均能找到原错误；短写必须失败。dst保证非nil合法对象，允许等价缓冲策略，不改变API所有权。\n真实CLI为cmd/exporter/main.go：go run ./cmd/exporter --input records.json --output report.bin。--input/--output均必填，不接收额外位置参数。输入为常规文件，最多1MiB UTF-8 JSON字符串数组；null/[]都表示0记录，按encoding/json标准解码。输入文件和对象不得修改。输出允许覆盖旧常规文件；仅额外允许显式/dev/full作为原生失败夹具。输入校验完成后才打开输出，同一路径、硬链接或符号链接指向同一输入文件必须拒绝，不能截断输入证据。\n成功stdout恰为一个JSON对象：status=\"complete\"、records为输入记录数、bytes为UTF-8解码后逐记录追加LF的总字节数、sha256为这些导出字节的SHA256。可信验收会重读真实文件，不能以自报摘要代替落盘字节。输入/导出失败退出2、stdout为空、stderr说明；不能吞掉Export错误仍报成功。完成导出后若状态输出通道失败，目标已写成，非零退出并说明export completed，不声称回滚。\n本API和CLI不提供fsync、原子替换、旧产物保护或写入失败回滚；运行前先冻结发布，失败目标可能为空或部分写入，禁止将其作为完整产物发布。非法输入/同输入输出须在打开目标前拒绝，只有这类预检失败才保证已有目标不变。\n真实/dev/full验证的是缓冲Flush遇ENOSPC。Close错误、双错、短写及晚到部分写错误使用明确的io.WriteCloser接口替身，只证明API传播与关闭责任，不冒充真实文件系统Close故障。所有进程只用既有Go标准库与隔离临时文件，无网络、镜像构建或默认身份变更。\n\n## 产物\ntask.go、cmd/exporter/main.go；保留go.mod的practice模块。提供records.json用于直接终端复现。故障定位文字可记录，但不作为恢复通过证据。\n\n## 验收方法\n运行python3 checks/check.py。可信驱动实际Go编译原故障及修复CLI，复现小报告0字节/大报告丢尾；保留全部原Go API测试，再验证真实/dev/full、任意Go字符串字节、CLI Unicode/NUL/换行/4096边界、多缓冲、实际文件摘要、错误码、输入/别名保留。原参考/初态/典型错误/提前退出四路及独立错误变体共同验收。\n\n## 能力边界\n本地可复现的教学故障场景，不增加原214项独立生产故障计数。接口注入Close失败不代表真实磁盘Close故障；没有云端、生产部署、PC全链或断电持久性证明。\n",
+    "files": {
+      "go.mod": "module practice\n\ngo 1.23\n",
+      "task.go": "package practice\nimport(\"bufio\";\"io\")\nfunc Export(dst io.WriteCloser, records []string)error{\n    writer:=bufio.NewWriterSize(dst,4096)\n    for _,record:=range records{writer.WriteString(record+\"\\n\")}\n    return dst.Close()\n}\n",
+      "cmd/exporter/main.go": "package main\n\nimport (\n    \"bytes\"\n    \"crypto/sha256\"\n    \"encoding/hex\"\n    \"encoding/json\"\n    \"errors\"\n    \"flag\"\n    \"fmt\"\n    \"io\"\n    \"os\"\n    \"unicode/utf8\"\n\n    \"practice\"\n)\n\nfunc run(args []string) error {\n    flags := flag.NewFlagSet(\"exporter\", flag.ContinueOnError)\n    flags.SetOutput(io.Discard)\n    input := flags.String(\"input\", \"\", \"JSON records file\")\n    output := flags.String(\"output\", \"\", \"export destination\")\n    if err := flags.Parse(args); err != nil { return err }\n    if *input == \"\" || *output == \"\" || flags.NArg() != 0 {\n        return errors.New(\"--input and --output are required; no positional arguments\")\n    }\n    inputInfo, err := os.Stat(*input)\n    if err != nil { return fmt.Errorf(\"input: %w\", err) }\n    if !inputInfo.Mode().IsRegular() { return errors.New(\"input must be a regular file\") }\n    raw, err := os.ReadFile(*input)\n    if err != nil { return fmt.Errorf(\"input: %w\", err) }\n    if len(raw) > 1048576 || !utf8.Valid(raw) { return errors.New(\"input must be UTF-8 JSON, at most 1 MiB\") }\n    var records []string\n    if err = json.Unmarshal(raw, &records); err != nil { return fmt.Errorf(\"records JSON: %w\", err) }\n    outputInfo, statErr := os.Stat(*output)\n    if statErr == nil {\n        if os.SameFile(inputInfo, outputInfo) { return errors.New(\"input and output must be different files\") }\n        if !outputInfo.Mode().IsRegular() && *output != \"/dev/full\" {\n            return errors.New(\"output must be a regular file, or the explicit /dev/full fixture\")\n        }\n    } else if !os.IsNotExist(statErr) { return fmt.Errorf(\"output: %w\", statErr) }\n    destination, err := os.Create(*output)\n    if err != nil { return fmt.Errorf(\"create output: %w\", err) }\n    if err = practice.Export(destination, records); err != nil { return fmt.Errorf(\"export incomplete: %w\", err) }\n    var wanted bytes.Buffer\n    for _, record := range records { wanted.WriteString(record); wanted.WriteByte('\\n') }\n    digest := sha256.Sum256(wanted.Bytes())\n    report := struct {\n        Status string `json:\"status\"`\n        Records int `json:\"records\"`\n        Bytes int `json:\"bytes\"`\n        SHA256 string `json:\"sha256\"`\n    }{\"complete\", len(records), wanted.Len(), hex.EncodeToString(digest[:])}\n    if err = json.NewEncoder(os.Stdout).Encode(report); err != nil {\n        return fmt.Errorf(\"export completed; status output failed: %w\", err)\n    }\n    return nil\n}\n\nfunc main() {\n    if err := run(os.Args[1:]); err != nil {\n        fmt.Fprintln(os.Stderr, err)\n        os.Exit(2)\n    }\n}\n",
+      "records.json": "[\"small report\", \"tail\"]\n"
+    },
+    "solution_files": {
+      "task.go": "package practice\nimport(\"bufio\";\"errors\";\"io\")\nfunc Export(dst io.WriteCloser, records []string)(err error){\n    defer func(){err=errors.Join(err,dst.Close())}()\n    writer:=bufio.NewWriterSize(dst,4096)\n    for _,record:=range records{\n        if _,err=writer.WriteString(record+\"\\n\");err!=nil{return err}\n    }\n    return writer.Flush()\n}\n",
+      "cmd/exporter/main.go": "package main\n\nimport (\n    \"bytes\"\n    \"crypto/sha256\"\n    \"encoding/hex\"\n    \"encoding/json\"\n    \"errors\"\n    \"flag\"\n    \"fmt\"\n    \"io\"\n    \"os\"\n    \"unicode/utf8\"\n\n    \"practice\"\n)\n\nfunc run(args []string) error {\n    flags := flag.NewFlagSet(\"exporter\", flag.ContinueOnError)\n    flags.SetOutput(io.Discard)\n    input := flags.String(\"input\", \"\", \"JSON records file\")\n    output := flags.String(\"output\", \"\", \"export destination\")\n    if err := flags.Parse(args); err != nil { return err }\n    if *input == \"\" || *output == \"\" || flags.NArg() != 0 {\n        return errors.New(\"--input and --output are required; no positional arguments\")\n    }\n    inputInfo, err := os.Stat(*input)\n    if err != nil { return fmt.Errorf(\"input: %w\", err) }\n    if !inputInfo.Mode().IsRegular() { return errors.New(\"input must be a regular file\") }\n    raw, err := os.ReadFile(*input)\n    if err != nil { return fmt.Errorf(\"input: %w\", err) }\n    if len(raw) > 1048576 || !utf8.Valid(raw) { return errors.New(\"input must be UTF-8 JSON, at most 1 MiB\") }\n    var records []string\n    if err = json.Unmarshal(raw, &records); err != nil { return fmt.Errorf(\"records JSON: %w\", err) }\n    outputInfo, statErr := os.Stat(*output)\n    if statErr == nil {\n        if os.SameFile(inputInfo, outputInfo) { return errors.New(\"input and output must be different files\") }\n        if !outputInfo.Mode().IsRegular() && *output != \"/dev/full\" {\n            return errors.New(\"output must be a regular file, or the explicit /dev/full fixture\")\n        }\n    } else if !os.IsNotExist(statErr) { return fmt.Errorf(\"output: %w\", statErr) }\n    destination, err := os.Create(*output)\n    if err != nil { return fmt.Errorf(\"create output: %w\", err) }\n    if err = practice.Export(destination, records); err != nil { return fmt.Errorf(\"export incomplete: %w\", err) }\n    var wanted bytes.Buffer\n    for _, record := range records { wanted.WriteString(record); wanted.WriteByte('\\n') }\n    digest := sha256.Sum256(wanted.Bytes())\n    report := struct {\n        Status string `json:\"status\"`\n        Records int `json:\"records\"`\n        Bytes int `json:\"bytes\"`\n        SHA256 string `json:\"sha256\"`\n    }{\"complete\", len(records), wanted.Len(), hex.EncodeToString(digest[:])}\n    if err = json.NewEncoder(os.Stdout).Encode(report); err != nil {\n        return fmt.Errorf(\"export completed; status output failed: %w\", err)\n    }\n    return nil\n}\n\nfunc main() {\n    if err := run(os.Args[1:]); err != nil {\n        fmt.Fprintln(os.Stderr, err)\n        os.Exit(2)\n    }\n}\n"
+    },
+    "negative_files": {
+      "task.go": "package practice\nimport(\"bufio\";\"io\")\nfunc Export(dst io.WriteCloser, records []string)error{\n    writer:=bufio.NewWriterSize(dst,4096)\n    for _,record:=range records{writer.WriteString(record+\"\\n\")}\n    writer.Flush()\n    return dst.Close()\n}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "dedicated nonroot Linux; existing Go1.23+ standard library; /dev/full",
+      "operation": "修复缓冲导出丢尾故障，保留Export(dst io.WriteCloser, records []string) error原接口。每个Go字符串按原字节写入并追加一个LF；空记录也写LF，nil/空切片不写正文。成功返回前完整Flush，并且正常/写入失败/Flush失败/Close失败均恰好Close一次。写入/Flush错误与Close错误并存时errors.Is必须均能找到原错误；短写必须失败。dst保证非nil合法对象，允许等价缓冲策略，不改变API所有权。\n真实CLI为cmd/exporter/main.go：go run ./cmd/exporter --input records.json --output report.bin。--input/--output均必填，不接收额外位置参数。输入为常规文件，最多1MiB UTF-8 JSON字符串数组；null/[]都表示0记录，按encoding/json标准解码。输入文件和对象不得修改。输出允许覆盖旧常规文件；仅额外允许显式/dev/full作为原生失败夹具。输入校验完成后才打开输出，同一路径、硬链接或符号链接指向同一输入文件必须拒绝，不能截断输入证据。\n成功stdout恰为一个JSON对象：status=\"complete\"、records为输入记录数、bytes为UTF-8解码后逐记录追加LF的总字节数、sha256为这些导出字节的SHA256。可信验收会重读真实文件，不能以自报摘要代替落盘字节。输入/导出失败退出2、stdout为空、stderr说明；不能吞掉Export错误仍报成功。完成导出后若状态输出通道失败，目标已写成，非零退出并说明export completed，不声称回滚。\n本API和CLI不提供fsync、原子替换、旧产物保护或写入失败回滚；运行前先冻结发布，失败目标可能为空或部分写入，禁止将其作为完整产物发布。非法输入/同输入输出须在打开目标前拒绝，只有这类预检失败才保证已有目标不变。\n真实/dev/full验证的是缓冲Flush遇ENOSPC。Close错误、双错、短写及晚到部分写错误使用明确的io.WriteCloser接口替身，只证明API传播与关闭责任，不冒充真实文件系统Close故障。所有进程只用既有Go标准库与隔离临时文件，无网络、镜像构建或默认身份变更。",
+      "deliverables": [
+        "task.go",
+        "cmd/exporter/main.go"
+      ],
+      "verification": "python3 checks/check.py: real compiler, filesystem and native ENOSPC; old API plus explicit interface-only double errors",
+      "scope": "local buffered export incident, not production or original-214 evidence"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "go"
+        ]
+      },
+      "test_files": {
+        "contract_test.go": "package practice\nimport(\"bytes\";\"errors\";\"io\";\"os\";\"path/filepath\";\"strings\";\"testing\")\ntype sink struct{buffer bytes.Buffer; closed bool; closes,writes,failAfter int; writeErr,closeErr error; short,partial bool; wroteAfterClose bool}\nfunc(s *sink)Write(p []byte)(int,error){\n    if s.closed{s.wroteAfterClose=true;return 0,errors.New(\"write after close\")}\n    s.writes++\n    if s.writeErr!=nil&&(s.failAfter==0||s.buffer.Len()+len(p)>s.failAfter){\n        if s.partial{n:=s.failAfter-s.buffer.Len();if n<0{n=0};s.buffer.Write(p[:n]);return n,s.writeErr}\n        return 0,s.writeErr\n    }\n    if s.short{return len(p)/2,nil}\n    return s.buffer.Write(p)\n}\nfunc(s *sink)Close()error{s.closed=true;s.closes++;return s.closeErr}\nfunc TestExportExactBytes(t *testing.T){\n    for _,records:=range [][]string{nil,{\"\"},{\"甲\",\"🙂\",\"tail\"},{strings.Repeat(\"x\",4095)},{strings.Repeat(\"y\",4096)},{strings.Repeat(\"z\",12289),\"tail\"},{\"a\\nb\",\"line\\r\",\"nul\\x00\"}}{\n        want:=\"\";for _,v:=range records{want+=v+\"\\n\"}\n        s:=&sink{};if err:=Export(s,records);err!=nil{t.Fatal(err)}\n        if s.buffer.String()!=want||s.closes!=1||s.wroteAfterClose{t.Fatalf(\"bytes or lifecycle: want %d got %d closes %d\",len(want),s.buffer.Len(),s.closes)}\n        // A real file confirms the bytes exist after the function returns.\n        path:=filepath.Join(t.TempDir(),\"报告.txt\");f,err:=os.Create(path);if err!=nil{t.Fatal(err)}\n        if err=Export(f,records);err!=nil{t.Fatal(err)}\n        got,err:=os.ReadFile(path);if err!=nil||string(got)!=want{t.Fatal(\"on-disk data differs\",err)}\n        if _,err=f.Write([]byte(\"must be closed\"));err==nil{f.Close();t.Fatal(\"file ownership was not released\")}\n    }\n}\nfunc TestExportErrorsRemainDiscoverable(t *testing.T){\n    writeFailure:=errors.New(\"injected write\");closeFailure:=errors.New(\"injected close\")\n    for _,n:=range []int{1,4095,4096,9000}{\n        for _,failClose:=range []bool{false,true}{\n            s:=&sink{writeErr:writeFailure};if failClose{s.closeErr=closeFailure}\n            err:=Export(s,[]string{strings.Repeat(\"a\",n),\"never complete\"})\n            if !errors.Is(err,writeFailure)||errors.Is(err,closeFailure)!=failClose||s.closes!=1||s.wroteAfterClose{t.Fatal(\"lost failure or wrong cleanup\",n,err,s.closes)}\n        }\n    }\n    s:=&sink{closeErr:closeFailure};err:=Export(s,[]string{\"ok\"})\n    if !errors.Is(err,closeFailure)||s.buffer.String()!=\"ok\\n\"||s.closes!=1{t.Fatal(\"close failure hidden\",err)}\n    for _,records:=range [][]string{nil,{\"payload\"}}{\n        s:=&sink{short:true,closeErr:closeFailure};err:=Export(s,records)\n        if !errors.Is(err,closeFailure)||s.closes!=1{t.Fatal(\"close not retained\")}\n        if len(records)>0&&!errors.Is(err,io.ErrShortWrite){t.Fatal(\"short write accepted\",err)}\n    }\n    // A writer can accept earlier blocks, then return n>0 and an error.\n    // Use a byte budget, not a call count: legal buffer sizes may coalesce writes.\n    for _,partial:=range []bool{false,true}{\n        s:=&sink{writeErr:writeFailure,closeErr:closeFailure,failAfter:5501,partial:partial}\n        err:=Export(s,[]string{strings.Repeat(\"first\",1100),strings.Repeat(\"second\",1000),\"tail\"})\n        if !errors.Is(err,writeFailure)||!errors.Is(err,closeFailure)||s.closes!=1||s.wroteAfterClose{t.Fatal(\"later write failure was lost\",err,s.writes,s.closes)}\n    }\n}\n",
+        "native_export_test.go": "package practice\n\nimport (\n    \"bytes\"\n    \"errors\"\n    \"os\"\n    \"path/filepath\"\n    \"syscall\"\n    \"testing\"\n)\n\nfunc TestNativeFullFailsDuringActualFlushAndStillCloses(t *testing.T) {\n    target, err := os.OpenFile(\"/dev/full\", os.O_WRONLY, 0)\n    if err != nil { t.Fatal(\"dedicated Linux /dev/full fixture unavailable\", err) }\n    // This payload fits entirely inside the specified 4096-byte buffer, so the\n    // real ENOSPC arises when flushing, not by simulating a filesystem failure.\n    err = Export(target, []string{\"fits in the buffer\"})\n    if !errors.Is(err, syscall.ENOSPC) { t.Fatal(\"native flush ENOSPC was not retained\", err) }\n    if _, err = target.Write([]byte(\"closed?\")); !errors.Is(err, os.ErrClosed) {\n        target.Close()\n        t.Fatal(\"native failed destination was not closed\", err)\n    }\n}\n\nfunc TestGoStringBytesRemainOpaqueAtFunctionBoundary(t *testing.T) {\n    records := []string{string([]byte{0, 255, 13}), \"tail\"}\n    want := []byte{0, 255, 13, '\\n', 't', 'a', 'i', 'l', '\\n'}\n    path := filepath.Join(t.TempDir(), \"opaque export.bin\")\n    target, err := os.Create(path)\n    if err != nil { t.Fatal(err) }\n    if err = Export(target, records); err != nil { t.Fatal(err) }\n    actual, err := os.ReadFile(path)\n    if err != nil || !bytes.Equal(actual, want) { t.Fatal(\"function normalized Go string bytes\", err, actual) }\n}\n",
+        "checks/check.py": "import hashlib\nimport json\nimport os\nfrom pathlib import Path\nimport re\nimport subprocess\nimport sys\nimport tempfile\n\nassert sys.platform == 'linux' and os.geteuid() != 0, 'dedicated nonroot Linux required'\nROOT = Path.cwd()\nprint('NATIVE_LINUX_READY', flush=True)\n\n\ndef digest(raw):\n    return hashlib.sha256(raw).hexdigest()\n\n\ndef build(command, cwd, env):\n    result = subprocess.run(command, cwd=cwd, env=env, capture_output=True, timeout=70)\n    if result.returncode:\n        raise RuntimeError('Go compiler/tool failure: ' + result.stdout.decode(errors='replace')[-1500:] + result.stderr.decode(errors='replace')[-1500:])\n    return result\n\n\nwith tempfile.TemporaryDirectory(prefix='.go-export-validation-', dir=ROOT) as work:\n    work = Path(work)\n    env = dict(os.environ, GOCACHE=str(work/'cache'), GOMODCACHE=str(work/'modules'), GOPATH=str(work/'gopath'),\n               GOENV='off', GOWORK='off', GOTOOLCHAIN='local', GOPROXY='off', GOSUMDB='off')\n    env.pop('GOFLAGS', None)\n    broken = work/'broken-exporter'\n    build(['go', 'build', '-o', str(broken), './cmd/exporter'], ROOT/'incident', env)\n    print('STUDENT_OPERATION_ENTERED:actual_go_export_incident', flush=True)\n    incident_input = work/'incident records.json'\n    incident_target = work/'incident output.bin'\n    for records in [['small', 'tail'], ['first-'*800, 'second-'*800, 'tail']]:\n        incident_input.write_text(json.dumps(records), encoding='utf8')\n        result = subprocess.run([str(broken), '--input', str(incident_input), '--output', str(incident_target)],\n                                capture_output=True, timeout=5, env=env)\n        assert result.returncode == 0 and not result.stderr, result\n        expected = ''.join(record+'\\n' for record in records).encode('utf8')\n        actual = incident_target.read_bytes()\n        if len(expected) < 4096:\n            assert actual == b'' and expected, 'the initial fault did not really lose the small report'\n        else:\n            assert 0 < len(actual) < len(expected) and expected.startswith(actual), 'the initial fault did not really lose its buffered tail'\n    # Keep every original functional API assertion, including independent\n    # interface-injected close/partial-write/short-write failures.\n    required_tests = set()\n    for name in ('contract_test.go', 'native_export_test.go'):\n        names = re.findall(r'^func\\s+(Test[A-Za-z0-9_]+)\\s*\\(\\s*\\w+\\s+\\*testing\\.T\\s*\\)',\n                           (ROOT/name).read_text(encoding='utf8'), re.M)\n        if not names or required_tests.intersection(names):\n            raise RuntimeError('trusted Go test inventory is missing or ambiguous')\n        required_tests.update(names)\n    result = subprocess.run(['go', 'test', '-json', '-count=1', '-timeout=20s', './...'], cwd=ROOT,\n                            env=env, capture_output=True, timeout=75)\n    output = (result.stdout + result.stderr).decode('utf8', errors='replace')\n    try:\n        events = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n    except (ValueError, UnicodeError) as error:\n        raise RuntimeError('Go tool produced invalid JSON events: ' + output[-3000:]) from error\n    if not all(isinstance(event, dict) for event in events):\n        raise RuntimeError('Go tool produced non-object test events')\n    if result.returncode:\n        if any(event.get('Action') == 'fail' and event.get('Test') for event in events):\n            raise AssertionError('Go API/native boundary assertions failed: ' + output[-6000:])\n        raise RuntimeError('Go compilation/environment failed: ' + output[-3000:])\n    # Only top-level go test -json run/pass events prove execution. JSON printed\n    # by a TestMain is wrapped in an Action:output record and cannot satisfy this.\n    running = set()\n    passed = set()\n    for event in events:\n        if event.get('Package') != 'practice' or event.get('Test') not in required_tests:\n            continue\n        name = event['Test']\n        if event.get('Action') == 'run':\n            running.add(name)\n        elif event.get('Action') == 'pass' and name in running:\n            passed.add(name)\n    if passed != required_tests:\n        raise AssertionError('trusted Go tests did not complete: ' + ', '.join(sorted(required_tests-passed)))\n    print('GO_TRUSTED_TESTS_COMPLETED:' + ','.join(sorted(passed)), flush=True)\n    executable = work/'exporter'\n    build(['go', 'build', '-o', str(executable), './cmd/exporter'], ROOT, env)\n\n    def cli(raw, target, *, good=True):\n        path = work/'records input.json'\n        path.write_bytes(raw)\n        before = path.read_bytes()\n        result = subprocess.run([str(executable), '--input', str(path), '--output', str(target)],\n                                capture_output=True, env=env, timeout=5)\n        assert path.read_bytes() == before, 'CLI changed input records'\n        if good:\n            assert result.returncode == 0 and not result.stderr, result\n            return json.loads(result.stdout)\n        assert result.returncode == 2 and not result.stdout and result.stderr, result\n        return result\n\n    target = work/'report with spaces.bin'\n    cases = [None, [], [''], ['alpha', '中文', '🙂', 'tail'], ['x'*4095], ['x'*4096],\n             ['x'*4097], ['prefix-'*1500, 'tail'], ['embedded\\nnewline', 'carriage\\r', 'NUL\\x00', '', 'suffix']]\n    for records in cases:\n        raw = json.dumps(records, ensure_ascii=False).encode('utf8')\n        target.write_bytes(b'old export must be truncated')\n        report = cli(raw, target)\n        expected = ''.join(record+'\\n' for record in (records or [])).encode('utf8')\n        assert target.read_bytes() == expected, 'CLI did not restore the actual exported bytes'\n        assert report == {'status': 'complete', 'records': len(records or []), 'bytes': len(expected), 'sha256': digest(expected)}\n    full = cli(b'[\"small buffered payload\"]', '/dev/full', good=False)\n    assert b'export incomplete' in full.stderr and b'no space left' in full.stderr.lower(), full.stderr\n    for raw in [b'{\"not\":\"an array\"}', b'[1]', b'[\"valid\",false]', b'[', b'[] []', b'[\"\\xff\"]', b' '*1048577]:\n        target.write_bytes(b'previous output')\n        cli(raw, target, good=False)\n        assert target.read_bytes() == b'previous output', 'bad input opened/truncated an output before validation'\n    source = work/'same file.json'\n    source.write_bytes(b'[\"preserve input\"]')\n    for destination in [source, work/'same hardlink.json', work/'same symlink.json']:\n        if destination != source:\n            if 'hardlink' in destination.name:os.link(source, destination)\n            else:destination.symlink_to(source.name)\n        before = source.read_bytes()\n        result = subprocess.run([str(executable), '--input', str(source), '--output', str(destination)],\n                                env=env, capture_output=True, timeout=5)\n        assert result.returncode == 2 and not result.stdout and result.stderr and source.read_bytes() == before, 'same input/output destroyed evidence'\n    for arguments in [[], ['--input', str(source)], ['--input', str(source), '--output', str(target), 'unexpected'], ['--unknown']]:\n        result = subprocess.run([str(executable), *arguments], env=env, capture_output=True, timeout=5)\n        assert result.returncode == 2 and not result.stdout and result.stderr, result\nprint('GO_NATIVE_BUFFERED_EXPORT_RECOVERY_ASSERTIONS_PASSED', flush=True)\n",
+        "incident/go.mod": "module incidentfixture\n\ngo 1.23\n",
+        "incident/task.go": "package practice\nimport(\"bufio\";\"io\")\nfunc Export(dst io.WriteCloser, records []string)error{\n    writer:=bufio.NewWriterSize(dst,4096)\n    for _,record:=range records{writer.WriteString(record+\"\\n\")}\n    return dst.Close()\n}\n",
+        "incident/cmd/exporter/main.go": "package main\n\nimport (\n    \"bytes\"\n    \"crypto/sha256\"\n    \"encoding/hex\"\n    \"encoding/json\"\n    \"errors\"\n    \"flag\"\n    \"fmt\"\n    \"io\"\n    \"os\"\n    \"unicode/utf8\"\n\n    \"incidentfixture\"\n)\n\nfunc run(args []string) error {\n    flags := flag.NewFlagSet(\"exporter\", flag.ContinueOnError)\n    flags.SetOutput(io.Discard)\n    input := flags.String(\"input\", \"\", \"JSON records file\")\n    output := flags.String(\"output\", \"\", \"export destination\")\n    if err := flags.Parse(args); err != nil { return err }\n    if *input == \"\" || *output == \"\" || flags.NArg() != 0 {\n        return errors.New(\"--input and --output are required; no positional arguments\")\n    }\n    inputInfo, err := os.Stat(*input)\n    if err != nil { return fmt.Errorf(\"input: %w\", err) }\n    if !inputInfo.Mode().IsRegular() { return errors.New(\"input must be a regular file\") }\n    raw, err := os.ReadFile(*input)\n    if err != nil { return fmt.Errorf(\"input: %w\", err) }\n    if len(raw) > 1048576 || !utf8.Valid(raw) { return errors.New(\"input must be UTF-8 JSON, at most 1 MiB\") }\n    var records []string\n    if err = json.Unmarshal(raw, &records); err != nil { return fmt.Errorf(\"records JSON: %w\", err) }\n    outputInfo, statErr := os.Stat(*output)\n    if statErr == nil {\n        if os.SameFile(inputInfo, outputInfo) { return errors.New(\"input and output must be different files\") }\n        if !outputInfo.Mode().IsRegular() && *output != \"/dev/full\" {\n            return errors.New(\"output must be a regular file, or the explicit /dev/full fixture\")\n        }\n    } else if !os.IsNotExist(statErr) { return fmt.Errorf(\"output: %w\", statErr) }\n    destination, err := os.Create(*output)\n    if err != nil { return fmt.Errorf(\"create output: %w\", err) }\n    if err = practice.Export(destination, records); err != nil { return fmt.Errorf(\"export incomplete: %w\", err) }\n    var wanted bytes.Buffer\n    for _, record := range records { wanted.WriteString(record); wanted.WriteByte('\\n') }\n    digest := sha256.Sum256(wanted.Bytes())\n    report := struct {\n        Status string `json:\"status\"`\n        Records int `json:\"records\"`\n        Bytes int `json:\"bytes\"`\n        SHA256 string `json:\"sha256\"`\n    }{\"complete\", len(records), wanted.Len(), hex.EncodeToString(digest[:])}\n    if err = json.NewEncoder(os.Stdout).Encode(report); err != nil {\n        return fmt.Errorf(\"export completed; status output failed: %w\", err)\n    }\n    return nil\n}\n\nfunc main() {\n    if err := run(os.Args[1:]); err != nil {\n        fmt.Fprintln(os.Stderr, err)\n        os.Exit(2)\n    }\n}\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-go-109",
+      "original_title": "导出任务返回成功，但小报告文件为0字节，大报告只保留前一部分；使用bufio.Writer后只关闭底层文件。如何桌面排查？",
+      "original_type": "case",
+      "preserve_history": true
+    },
+    "question_format": "case",
+    "explanation": "真实文件导出恢复与API错误边界分别验证；原函数保持，病例按实际机制验收。",
+    "workitem_id": "question:curated-parallel-go-109"
+  },
+  {
+    "id": "code-python-log",
+    "category": "Python",
+    "module": "python",
+    "level": 2,
+    "title": "Python：编写 HTTP 日志统计器",
+    "language": "python",
+    "body": "## 操作任务\n实现 count_status(lines)：lines 是字符串的有限可迭代对象，可只遍历一次。读取每行按空白拆分后的最后一个字段；仅完整三位 ASCII 数字且数值100–599有效，返回 {原三位字符串: 正整数次数}。空行、非ASCII数字、范围外或带附加字符的字段忽略。单个合法状态码也算一行。保留输入列表原顺序和内容，空输入返回空字典。\n\n## 操作环境\n网页代码编辑器及隔离 Linux 工作区；只运行本地临时输入，不访问线上服务。\n\n## 产物\n`main.py` 完整实现。题给可见测试可自行运行；最终判分由独立验收脚本执行，修改可见测试不会得到通过。\n\n## 验收方法\n运行真实程序，逐项比较正常结果、边界输入、错误处理和输入保护；参考实现通过，初始实现及独立错误实现必须失败。",
+    "files": {
+      "main.py": "def count_status(lines):\n    # TODO: validate each line and count status codes\n    return {}\n",
+      "test_main.py": "import unittest\nfrom main import count_status\nclass Tests(unittest.TestCase):\n    def test_counts(self):\n        self.assertEqual(count_status(['GET / 200', 'POST /api 500', 'GET / 200']), {'200':2,'500':1})\n    def test_bad_data(self):\n        self.assertEqual(count_status(['', 'bad', 'GET / 999', 'GET / 201']), {'201':1})\n    def test_empty(self):\n        self.assertEqual(count_status([]), {})\nif __name__ == '__main__': unittest.main()\n"
+    },
+    "run": "",
+    "answer": "```python\ndef count_status(lines):\n    result = {}\n    for line in lines:\n        parts = line.split()\n        if not parts:\n            continue\n        code = parts[-1]\n        if len(code) == 3 and code.isascii() and code.isdigit() and 100 <= int(code) <= 599:\n            result[code] = result.get(code, 0) + 1\n    return result\n```\n\n只接收末尾完整的三位 ASCII 状态码，逐行统计并跳过不符合合同的字段。计数逻辑不能依赖固定样例，输入可为一次性迭代器。",
+    "hints": [
+      "先 split，再检查列表是否为空。",
+      "验证状态码长度、数字与范围，使用字典累加。"
+    ],
+    "rubric": [
+      "正确统计",
+      "忽略无效数据",
+      "空输入正常",
+      "函数无外部副作用"
+    ],
+    "type": "code",
+    "has_answer": true,
+    "source": "OpsForge 原创编程任务",
+    "version": 2,
+    "minutes": 60,
+    "intro": "先保存文件，再在真实隔离环境运行；未启用真实环境时可编辑、保存与对照解析。",
+    "related_modules": [
+      "python"
+    ],
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "difficulty": "进阶",
+    "topic": "文本与文件处理",
+    "solution_files": {
+      "main.py": "def count_status(lines):\n    result = {}\n    for line in lines:\n        parts = line.split()\n        if not parts:\n            continue\n        code = parts[-1]\n        if len(code) == 3 and code.isascii() and code.isdigit() and 100 <= int(code) <= 599:\n            result[code] = result.get(code, 0) + 1\n    return result\n"
+    },
+    "negative_files": {
+      "main.py": "def count_status(lines):\n    result = {}\n    for line in lines:\n        parts = line.split()\n        if not parts:\n            continue\n        code = parts[-1]\n        if len(code) == 3 and code.isdigit() and 100 <= int(code) <= 599:\n            result[code] = result.get(code, 0) + 1\n    return result\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-local-python-bash",
+      "operation": "实现 count_status(lines)：lines 是字符串的有限可迭代对象，可只遍历一次。读取每行按空白拆分后的最后一个字段；仅完整三位 ASCII 数字且数值100–599有效，返回 {原三位字符串: 正整数次数}。空行、非ASCII数字、范围外或带附加字符的字段忽略。单个合法状态码也算一行。保留输入列表原顺序和内容，空输入返回空字典。",
+      "deliverables": [
+        "main.py"
+      ],
+      "verification": "Execute against trusted independent normal/boundary/error inputs; preserve source input."
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": []
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib,random,collections\nspec=importlib.util.spec_from_file_location('learner',pathlib.Path('main.py').resolve());module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)\ndef check(lines,expected):\n    before=list(lines);result=module.count_status(lines)\n    assert isinstance(result,dict) and result==expected,(result,expected)\n    assert all(type(k) is str and type(v) is int and v>0 for k,v in result.items()),'exact string keys and integer counts required'\n    assert lines==before,'input list changed'\ncheck([],{});check(['GET / 200','POST / 500','GET / 200'],{'200':2,'500':1})\ncheck(['','  ','bad','100','599','GET\\t/\\t201','GET / 099','GET / 600','GET / +200','GET / 0200','GET / 200x','GET / ２０４','GET / ٢٠٠','GET / 500 trailing'],{'100':1,'599':1,'201':1})\ncheck(['GET / 200\\r\\n','POST /中文 404\\t','POST / 500 204'],{'200':1,'404':1,'204':1})\nrng=random.Random(71429);lines=[];expected=collections.Counter()\nfor _ in range(200):\n    code=str(rng.randrange(100,600));lines.append('GET /item/'+str(rng.randrange(10000))+' '+code);expected[code]+=1\n    lines.append('noise '+rng.choice(['99','600','2xx','200.0','٢٠٠']))\nrng.shuffle(lines);check(lines,dict(expected))\nassert module.count_status(iter(['x 418','y 418','x 503']))=={'418':2,'503':1},'one-pass iterables must work'\nassert module.count_status(())=={}\nprint('Actual log parser: ASCII/range/last-field/generator/invalid input and immutability checks passed')\n"
+      }
+    },
+    "conversion": {
+      "original_id": "code-python-log",
+      "original_type": "code",
+      "original_title": "Python：编写 HTTP 日志统计器",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "code-shell-check",
+    "category": "Shell",
+    "module": "shell",
+    "level": 2,
+    "title": "Shell：稳健统计 ERROR 日志",
+    "body": "## 操作任务\n编写 check.sh，恰好接收一个普通可读日志文件路径，输出包含字面大写 ERROR 的行数，只输出该整数及可选末尾换行。按行计数，同一行多次出现仍算1；大小写敏感。空文件、零匹配均输出0并成功。缺参数、多参数、目录、不存在或不可读文件均错误退出。文件名允许空格、中文、连字符开头和 x=y.log，不能改动源文件。输入是文本日志，可使用CRLF且末行可无换行。\n\n## 操作环境\n网页代码编辑器及隔离 Linux 工作区；只运行本地临时输入，不访问线上服务。\n\n## 产物\n`check.sh` 完整实现。题给可见测试可自行运行；最终判分由独立验收脚本执行，修改可见测试不会得到通过。\n\n## 验收方法\n运行真实程序，逐项比较正常结果、边界输入、错误处理和输入保护；参考实现通过，初始实现及独立错误实现必须失败。",
+    "language": "shell",
+    "run": "",
+    "files": {
+      "check.sh": "#!/usr/bin/env bash\n# TODO: validate path, count matching lines\nexit 1\n",
+      "test.sh": "#!/usr/bin/env bash\nset -eu\ntmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT\nprintf 'INFO ok\\nERROR one\\nERROR two\\n' > \"$tmp/a b.log\"\n[ \"$(bash check.sh \"$tmp/a b.log\")\" = 2 ]\nprintf 'INFO ok\\n' > \"$tmp/ok.log\"\n[ \"$(bash check.sh \"$tmp/ok.log\")\" = 0 ]\nif bash check.sh \"$tmp/missing\"; then exit 1; fi\nif bash check.sh; then exit 1; fi\nprintf 'All checks passed\\n'\n"
+    },
+    "answer": "```bash\n#!/usr/bin/env bash\nif [ \"$#\" -ne 1 ] || [ ! -f \"$1\" ] || [ ! -r \"$1\" ]; then\n  printf 'Usage: check.sh readable-regular-log\n' >&2\n  exit 2\nfi\nLC_ALL=C awk '/ERROR/ {n++} END {print n+0}' < \"$1\"\n```\n\n通过标准输入重定向把路径与 awk 参数解析隔开，避免连字符或赋值形式文件名被解释成选项或变量。按行统计字面 ERROR；没有匹配也是成功结果。非普通文件、不可读文件及错误参数应明确失败。",
+    "hints": [
+      "先检查参数个数，再引用路径。",
+      "grep 无匹配时的退出码需要处理；也可用 awk 统计。"
+    ],
+    "rubric": [
+      "路径正确引用",
+      "空匹配输出零",
+      "异常输入错误退出"
+    ],
+    "type": "code",
+    "has_answer": true,
+    "source": "OpsForge 原创编程任务",
+    "version": 2,
+    "minutes": 60,
+    "intro": "先保存文件，再在真实隔离环境运行；未启用真实环境时可编辑、保存与对照解析。",
+    "related_modules": [
+      "shell"
+    ],
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "difficulty": "进阶",
+    "topic": "文本与文件处理",
+    "solution_files": {
+      "check.sh": "#!/usr/bin/env bash\nif [ \"$#\" -ne 1 ] || [ ! -f \"$1\" ] || [ ! -r \"$1\" ]; then\n  printf 'Usage: check.sh readable-regular-log\n' >&2\n  exit 2\nfi\nLC_ALL=C awk '/ERROR/ {n++} END {print n+0}' < \"$1\"\n"
+    },
+    "negative_files": {
+      "check.sh": "#!/usr/bin/env bash\nif [ \"$#\" -ne 1 ] || [ ! -f \"$1\" ] || [ ! -r \"$1\" ]; then exit 2; fi\ngrep -c 'ERROR' -- \"$1\"\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-local-python-bash",
+      "operation": "编写 check.sh，恰好接收一个普通可读日志文件路径，输出包含字面大写 ERROR 的行数，只输出该整数及可选末尾换行。按行计数，同一行多次出现仍算1；大小写敏感。空文件、零匹配均输出0并成功。缺参数、多参数、目录、不存在或不可读文件均错误退出。文件名允许空格、中文、连字符开头和 x=y.log，不能改动源文件。输入是文本日志，可使用CRLF且末行可无换行。",
+      "deliverables": [
+        "check.sh"
+      ],
+      "verification": "Execute against trusted independent normal/boundary/error inputs; preserve source input."
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash",
+          "awk"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,pathlib,secrets,subprocess,tempfile\nscript=pathlib.Path('check.sh').resolve();env=dict(os.environ);env.pop('BASH_ENV',None);env.pop('ENV',None);env['LC_ALL']='C'\ndef run(root,args):return subprocess.run(['bash',str(script),*args],cwd=root,env=env,capture_output=True,text=True,encoding='utf8',timeout=3)\nwith tempfile.TemporaryDirectory(prefix='log-count-') as directory:\n    root=pathlib.Path(directory)\n    samples=[('normal.log','INFO ok\\nERROR a\\nERROR b\\n',2),('space file.log','INFO only\\n',0),('-leading.log','ERROR ERROR\\nerror lower\\nXERRORY\\n',2),('x=y.log','ERROR no-final-newline',1),('empty.log','',0),('中文.log','INFO 中文\\r\\nERROR 故障\\r\\n',1)]\n    for name,text,want in samples:\n        path=root/name;before=text.encode();path.write_bytes(before);result=run(root,[name])\n        assert result.returncode==0,(name,result.stderr)\n        assert result.stdout in (str(want),str(want)+'\\n'),(name,result.stdout,want)\n        assert path.read_bytes()==before,'source log changed'\n    # A fresh generated corpus prevents passing only by matching public examples.\n    lines=[];want=0\n    for i in range(117):\n        if i%4==0:lines.append('ERROR '+secrets.token_hex(5)+' ERROR');want+=1\n        else:lines.append('INFO '+secrets.token_hex(5))\n    path=root/'random data.log';path.write_text('\\n'.join(lines),encoding='utf8');before=path.read_bytes()\n    result=run(root,[path.name]);assert result.returncode==0 and result.stdout in (str(want),str(want)+'\\n')\n    assert path.read_bytes()==before,'generated source log changed'\n    (root/'a-directory').mkdir()\n    for args in ([],['missing'],['a-directory'],['normal.log','extra']):\n        result=run(root,args);assert result.returncode!=0,(args,result.stdout)\n    path=root/'unreadable.log';path.write_text('ERROR private\\n');path.chmod(0)\n    try:\n        assert os.getuid()!=0,'permission case requires nonroot Linux'\n        assert run(root,[path.name]).returncode!=0,'unreadable input accepted'\n    finally:path.chmod(0o600)\nprint('Actual Bash log counting: line semantics, zero-match success, special paths, unreadable file and input protection passed')\n"
+      }
+    },
+    "conversion": {
+      "original_id": "code-shell-check",
+      "original_type": "code",
+      "original_title": "Shell：稳健统计 ERROR 日志",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "src-14dc4a591a21c7c4",
+    "title": "用真实伪终端和重定向核对三个标准流的TTY属性",
+    "answer": "```python\nimport json, os, pathlib, sys\nreport = {name: os.isatty(fd) for fd, name in enumerate(('stdin', 'stdout', 'stderr'))}\npathlib.Path(sys.argv[1]).write_text(json.dumps(report) + '\\n', encoding='utf8')\n```\n\n验收实际创建匿名伪终端，将三个标准流独立接到PTY或/dev/null，并交叉设置或移除TERM。逐字段核对真实内核结果与JSON布尔类型；把三个流当作相同、根据环境变量猜测、固定返回真/假均不能通过。全部描述符在结束后回收。",
+    "category": "计算机与环境",
+    "difficulty": "入门",
+    "section": "杂项",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/linux/README.md",
+    "sources": [
+      "topics/linux/README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "Linux",
+    "original_title": "什么是TTY设备？",
+    "module": "basics",
+    "topic": "操作系统与运行环境",
+    "level": 0,
+    "body": "## 操作任务\n实现 python3 collect.py REPORT：分别检查当前进程的文件描述符0、1、2是否关联终端，将恰好三个布尔字段 stdin、stdout、stderr 写入REPORT JSON文件。三个流可能连接不同对象；TERM环境变量可以缺失或故意与实际描述符不符。不要据TERM、Shell名或父进程猜测，不读取输入、不改变终端设置。只判断TTY关联，不推断控制终端、会话负责人或用户是否正在键盘输入。\n\n## 操作环境\n平台隔离 Linux、Python3；只访问教学进程、匿名伪终端或临时文件，不访问业务服务器。\n\n## 产物\ncollect.py 完整实现及要求的输出。\n\n## 验收方法\n验收实际创建匿名伪终端，将三个标准流独立接到PTY或/dev/null，并交叉设置或移除TERM。逐字段核对真实内核结果与JSON布尔类型；把三个流当作相同、根据环境变量猜测、固定返回真/假均不能通过。全部描述符在结束后回收。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "真实执行并产生要求的产物",
+      "正常与边界输入结果正确",
+      "不硬编码样例或修改教学输入"
+    ],
+    "related_modules": [
+      "basics"
+    ],
+    "language": "python",
+    "run": "",
+    "files": {
+      "collect.py": "raise NotImplementedError('collect descriptor evidence')\n"
+    },
+    "solution_files": {
+      "collect.py": "import json, os, pathlib, sys\nreport = {name: os.isatty(fd) for fd, name in enumerate(('stdin', 'stdout', 'stderr'))}\npathlib.Path(sys.argv[1]).write_text(json.dumps(report) + '\\n', encoding='utf8')\n"
+    },
+    "negative_files": {
+      "collect.py": "import json, os, pathlib, sys\nreport = dict.fromkeys(('stdin', 'stdout', 'stderr'), bool(os.environ.get('TERM')))\npathlib.Path(sys.argv[1]).write_text(json.dumps(report), encoding='utf8')\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-linux-python3",
+      "operation": "实现 python3 collect.py REPORT：分别检查当前进程的文件描述符0、1、2是否关联终端，将恰好三个布尔字段 stdin、stdout、stderr 写入REPORT JSON文件。三个流可能连接不同对象；TERM环境变量可以缺失或故意与实际描述符不符。不要据TERM、Shell名或父进程猜测，不读取输入、不改变终端设置。只判断TTY关联，不推断控制终端、会话负责人或用户是否正在键盘输入。",
+      "deliverables": [
+        "collect.py"
+      ],
+      "verification": "验收实际创建匿名伪终端，将三个标准流独立接到PTY或/dev/null，并交叉设置或移除TERM。逐字段核对真实内核结果与JSON布尔类型；把三个流当作相同、根据环境变量猜测、固定返回真/假均不能通过。全部描述符在结束后回收。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": []
+      },
+      "test_files": {
+        "checks/check.py": "import json, os, pathlib, subprocess, sys, tempfile, termios\nscript = pathlib.Path('collect.py').resolve()\nassert hasattr(os, 'openpty'), 'This contract requires the platform Linux workspace'\nwith tempfile.TemporaryDirectory(prefix='tty-evidence-') as tmp:\n    root = pathlib.Path(tmp)\n    for number, (wanted, term) in enumerate([\n        ((False, False, False), 'xterm-256color'),\n        ((True, False, False), None), ((False, True, False), 'dumb'),\n        ((False, False, True), None), ((True, True, True), None),\n        ((False, True, True), 'xterm')]):\n        master, slave = os.openpty()\n        try:\n            attributes = termios.tcgetattr(slave)\n            env = dict(os.environ)\n            if term is None: env.pop('TERM', None)\n            else: env['TERM'] = term\n            report = root / ('result ' + str(number) + '.json')\n            stream = [slave if value else subprocess.DEVNULL for value in wanted]\n            child = subprocess.run([sys.executable, str(script), str(report)],\n                stdin=stream[0], stdout=stream[1], stderr=stream[2], env=env, timeout=4)\n            assert child.returncode == 0, 'collector must succeed for terminal and redirected descriptors'\n            assert termios.tcgetattr(slave) == attributes, 'inspection must not change terminal attributes'\n            result = json.loads(report.read_text(encoding='utf8'))\n            assert set(result) == {'stdin', 'stdout', 'stderr'}\n            assert all(type(result[name]) is bool for name in result), 'real JSON booleans required'\n            assert tuple(result[name] for name in ('stdin','stdout','stderr')) == wanted, 'each descriptor has an independent terminal association; TERM is not proof'\n        finally:\n            os.close(master); os.close(slave)\nprint('Actual PTY/devnull descriptor matrix passed; no terminal window or shell identity inferred')\n"
+      }
+    },
+    "hints": [],
+    "conversion": {
+      "original_id": "src-14dc4a591a21c7c4",
+      "original_type": "source",
+      "original_title": "什么是TTY设备？",
+      "preserve_history": true,
+      "mechanism": "actual-independent-stdio-terminal-association"
+    }
+  },
+  {
+    "id": "src-d84635fd748b7021",
+    "title": "实际测量子进程的经过时间与CPU时间并保留退出结果",
+    "answer": "```python\nimport resource, subprocess, time\n\ndef measure(command):\n    before = resource.getrusage(resource.RUSAGE_CHILDREN)\n    start = time.monotonic()\n    result = subprocess.run(command, capture_output=True)\n    elapsed = time.monotonic() - start\n    after = resource.getrusage(resource.RUSAGE_CHILDREN)\n    return {'exit_code': result.returncode, 'stdout': result.stdout.decode('utf8'), 'stderr': result.stderr.decode('utf8'),\n            'elapsed_seconds': elapsed,\n            'child_cpu_seconds': (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)}\n```\n\n真实启动CPU运算、sleep等待及非零退出的Python子进程，独立观察RUSAGE_CHILDREN增量和单调时钟。先运行耗CPU的进程再测sleep，防止累计历史开销；替换调用者墙钟为回拨序列，验证仍使用真实单调时钟。保留输出、退出码和argv；允许小量调度误差，不把固定时间常量当成性能证据。",
+    "category": "计算机与环境",
+    "difficulty": "进阶",
+    "section": "故障排除和调试",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/linux/README.md",
+    "sources": [
+      "topics/linux/README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "Linux",
+    "original_title": "如何测量程序的执行时间？",
+    "module": "basics",
+    "topic": "时钟与日历语义",
+    "level": 2,
+    "body": "## 操作任务\n在 measure.py 实现 measure(command)，command为可信教学程序的argv列表，不经Shell，不修改列表。同步等待这一个子进程结束，返回恰好五字段：exit_code整数、stdout和stderr的UTF-8文本原样内容、elapsed_seconds经过秒数、child_cpu_seconds子进程用户态加内核态CPU秒数。本题单次只运行一个不派生后代的子进程，不与其他子进程并发；两种时间都非负有限。非零退出是被测结果，不能当成功或丢弃输出。CPU时间必须是本次调用增量，不能累计之前的子进程；耗时不能依赖可能回拨的墙钟。此处不测试CPU利用率、异步进程池、真实业务性能或持久化租约。\n\n## 操作环境\n平台隔离 Linux、Python3；只访问教学进程、匿名伪终端或临时文件，不访问业务服务器。\n\n## 产物\nmeasure.py 完整实现及要求的输出。\n\n## 验收方法\n真实启动CPU运算、sleep等待及非零退出的Python子进程，独立观察RUSAGE_CHILDREN增量和单调时钟。先运行耗CPU的进程再测sleep，防止累计历史开销；替换调用者墙钟为回拨序列，验证仍使用真实单调时钟。保留输出、退出码和argv；允许小量调度误差，不把固定时间常量当成性能证据。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "真实执行并产生要求的产物",
+      "正常与边界输入结果正确",
+      "不硬编码样例或修改教学输入"
+    ],
+    "related_modules": [
+      "basics"
+    ],
+    "language": "python",
+    "run": "",
+    "files": {
+      "measure.py": "def measure(command):\n    raise NotImplementedError('measure real process')\n"
+    },
+    "solution_files": {
+      "measure.py": "import resource, subprocess, time\n\ndef measure(command):\n    before = resource.getrusage(resource.RUSAGE_CHILDREN)\n    start = time.monotonic()\n    result = subprocess.run(command, capture_output=True)\n    elapsed = time.monotonic() - start\n    after = resource.getrusage(resource.RUSAGE_CHILDREN)\n    return {'exit_code': result.returncode, 'stdout': result.stdout.decode('utf8'), 'stderr': result.stderr.decode('utf8'),\n            'elapsed_seconds': elapsed,\n            'child_cpu_seconds': (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)}\n"
+    },
+    "negative_files": {
+      "measure.py": "import resource, subprocess, time\n\ndef measure(command):\n    before = resource.getrusage(resource.RUSAGE_CHILDREN)\n    start = time.monotonic()\n    result = subprocess.run(command, capture_output=True)\n    elapsed = time.monotonic() - start\n    after = resource.getrusage(resource.RUSAGE_CHILDREN)\n    return {'exit_code': result.returncode, 'stdout': result.stdout.decode('utf8'), 'stderr': result.stderr.decode('utf8'),\n            'elapsed_seconds': elapsed,\n            'child_cpu_seconds': elapsed}\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-linux-python3",
+      "operation": "在 measure.py 实现 measure(command)，command为可信教学程序的argv列表，不经Shell，不修改列表。同步等待这一个子进程结束，返回恰好五字段：exit_code整数、stdout和stderr的UTF-8文本原样内容、elapsed_seconds经过秒数、child_cpu_seconds子进程用户态加内核态CPU秒数。本题单次只运行一个不派生后代的子进程，不与其他子进程并发；两种时间都非负有限。非零退出是被测结果，不能当成功或丢弃输出。CPU时间必须是本次调用增量，不能累计之前的子进程；耗时不能依赖可能回拨的墙钟。此处不测试CPU利用率、异步进程池、真实业务性能或持久化租约。",
+      "deliverables": [
+        "measure.py"
+      ],
+      "verification": "真实启动CPU运算、sleep等待及非零退出的Python子进程，独立观察RUSAGE_CHILDREN增量和单调时钟。先运行耗CPU的进程再测sleep，防止累计历史开销；替换调用者墙钟为回拨序列，验证仍使用真实单调时钟。保留输出、退出码和argv；允许小量调度误差，不把固定时间常量当成性能证据。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": []
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util, math, pathlib, resource, sys, time\nspec = importlib.util.spec_from_file_location('learner_measure', pathlib.Path('measure.py').resolve())\nmodule = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)\n\ndef check(code, expected_exit, expected_out, expected_err, sleeping=False):\n    command = [sys.executable, '-B', '-c', code]; original = list(command)\n    before = resource.getrusage(resource.RUSAGE_CHILDREN); start = time.monotonic()\n    observed = module.measure(command)\n    elapsed = time.monotonic() - start; after = resource.getrusage(resource.RUSAGE_CHILDREN)\n    cpu = (after.ru_utime + after.ru_stime) - (before.ru_utime + before.ru_stime)\n    assert command == original, 'argv mutated'\n    assert isinstance(observed, dict) and set(observed) == {'exit_code','stdout','stderr','elapsed_seconds','child_cpu_seconds'}\n    assert type(observed['exit_code']) is int and observed['exit_code'] == expected_exit\n    assert observed['stdout'] == expected_out and observed['stderr'] == expected_err\n    for key in ('elapsed_seconds', 'child_cpu_seconds'):\n        assert type(observed[key]) in (float,int) and math.isfinite(observed[key]) and observed[key] >= 0\n    assert abs(observed['elapsed_seconds'] - elapsed) < 0.06, 'measure elapsed time, including waits'\n    assert abs(observed['child_cpu_seconds'] - cpu) < 0.025, 'report child CPU delta, not wall time or parent CPU'\n    if sleeping:\n        assert observed['elapsed_seconds'] >= 0.18\n        assert observed['elapsed_seconds'] - observed['child_cpu_seconds'] > 0.08, 'sleep is elapsed time, not child CPU work'\n    return observed\n\n# A large prior child CPU charge must not be attributed to the next command.\nspin = \"import time; end=time.process_time()+0.12\\nwhile time.process_time()<end: pass\\nprint('CPU')\"\ncheck(spin, 0, 'CPU\\n', '')\ncheck(\"import time;time.sleep(0.22);print('等待')\", 0, '等待\\n', '', True)\ncheck(\"import sys;print('out');print('err',file=sys.stderr);sys.exit(7)\",7,'out\\n','err\\n')\ncheck(\"import sys;sys.stdout.buffer.write(bytes([65,13,10,66,13,67]));sys.stderr.buffer.write(bytes([88,13,89]))\",0,'A\\r\\nB\\rC','X\\rY')\n# Inject a backwards wall clock in the caller; the actual child and monotonic clock remain real.\noriginal_wall = time.time\ncounter = iter([1000000.0, -1000000.0] * 100)\ntry:\n    time.time = lambda: next(counter)\n    # Re-import after patching to also cover `from time import time` bindings.\n    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)\n    check(\"import time;time.sleep(0.22)\",0,'','',True)\nfinally:\n    time.time = original_wall\nprint('Real child CPU, elapsed wait, nonzero exit, prior-accounting delta and backwards-wall-clock cases passed')\n"
+      }
+    },
+    "hints": [],
+    "conversion": {
+      "original_id": "src-d84635fd748b7021",
+      "original_type": "source",
+      "original_title": "如何测量程序的执行时间？",
+      "preserve_history": true,
+      "mechanism": "real-child-cpu-versus-monotonic-wall-time"
+    }
+  },
+  {
+    "id": "curated-parallel-basics-021",
+    "module": "basics",
+    "category": "计算机与环境",
+    "level": 1,
+    "topic": "数据表示与交换格式",
+    "title": "为搜索链接分别处理URL查询编码和HTML文本转义",
+    "answer": "```python\nimport html, json, pathlib, sys, urllib.parse\ndata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf8'))\nhref = '/search?' + urllib.parse.urlencode({'q': data['query']})\npage = '<a href=\"' + html.escape(href, quote=True) + '\">' + html.escape(data['label']).replace(chr(13), '&#13;') + '</a>'\npathlib.Path(sys.argv[2]).write_text(page, encoding='utf8')\n```\n\n真实运行生成HTML文件，用HTML解析器核对节点、唯一属性和可见文字，再独立解析href验证仅一个q及原样值。包含标签文字、引号、参数分隔符、片段符号、空字符串与Unicode；把HTML转义当URL编码会产生多参数或片段，漏掉文本转义会产生额外节点。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "真实执行并产生要求的产物",
+      "正常与边界输入结果正确",
+      "不硬编码样例或修改教学输入"
+    ],
+    "references": [],
+    "related_modules": [
+      "basics"
+    ],
+    "language": "python",
+    "run": "",
+    "files": {
+      "render.py": "raise NotImplementedError('render the two separate encoding contexts')\n"
+    },
+    "solution_files": {
+      "render.py": "import html, json, pathlib, sys, urllib.parse\ndata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf8'))\nhref = '/search?' + urllib.parse.urlencode({'q': data['query']})\npage = '<a href=\"' + html.escape(href, quote=True) + '\">' + html.escape(data['label']).replace(chr(13), '&#13;') + '</a>'\npathlib.Path(sys.argv[2]).write_text(page, encoding='utf8')\n"
+    },
+    "negative_files": {
+      "render.py": "import html, json, pathlib, sys, urllib.parse\ndata = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding='utf8'))\nhref = '/search?q=' + data['query']\npage = '<a href=\"' + html.escape(href, quote=True) + '\">' + html.escape(data['label']).replace(chr(13), '&#13;') + '</a>'\npathlib.Path(sys.argv[2]).write_text(page, encoding='utf8')\n"
+    },
+    "body": "## 操作任务\n实现 python3 render.py INPUT_JSON OUTPUT_HTML。输入恰有字符串label和query，不含U+0000或Unicode代理码点。输出一个HTML锚点，文本节点内容（textContent，不比较CSS显示效果）必须与label完全相同，包含CR/LF；href是同源相对路径/search，且查询参数恰有一个q，其解码值必须与query完全相同。label是普通文字而非可信HTML，即使包含标签、引号、&也不能变成元素或属性；query中的&、#、+、=、%和中文必须仍是一个参数值。输出只允许一个带唯一href属性的a元素，可有外侧空白；不得修改输入。这里验收HTML产物与URL语义，不发起真实搜索请求，不把所有上下文通用转义视为安全方案。\n\n## 操作环境\n平台隔离 Linux、Python3；只访问教学进程、匿名伪终端或临时文件，不访问业务服务器。\n\n## 产物\nrender.py 完整实现及要求的输出。\n\n## 验收方法\n真实运行生成HTML文件，用HTML解析器核对节点、唯一属性和可见文字，再独立解析href验证仅一个q及原样值。包含标签文字、引号、参数分隔符、片段符号、空字符串与Unicode；把HTML转义当URL编码会产生多参数或片段，漏掉文本转义会产生额外节点。",
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-linux-python3",
+      "operation": "实现 python3 render.py INPUT_JSON OUTPUT_HTML。输入恰有字符串label和query，不含U+0000或Unicode代理码点。输出一个HTML锚点，文本节点内容（textContent，不比较CSS显示效果）必须与label完全相同，包含CR/LF；href是同源相对路径/search，且查询参数恰有一个q，其解码值必须与query完全相同。label是普通文字而非可信HTML，即使包含标签、引号、&也不能变成元素或属性；query中的&、#、+、=、%和中文必须仍是一个参数值。输出只允许一个带唯一href属性的a元素，可有外侧空白；不得修改输入。这里验收HTML产物与URL语义，不发起真实搜索请求，不把所有上下文通用转义视为安全方案。",
+      "deliverables": [
+        "render.py"
+      ],
+      "verification": "真实运行生成HTML文件，用HTML解析器核对节点、唯一属性和可见文字，再独立解析href验证仅一个q及原样值。包含标签文字、引号、参数分隔符、片段符号、空字符串与Unicode；把HTML转义当URL编码会产生多参数或片段，漏掉文本转义会产生额外节点。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": []
+      },
+      "test_files": {
+        "checks/check.py": "import html.parser, json, pathlib, secrets, subprocess, sys, tempfile, urllib.parse\nscript = pathlib.Path('render.py').resolve()\nclass Anchor(html.parser.HTMLParser):\n    def __init__(self):\n        super().__init__(convert_charrefs=True); self.depth=0; self.labels=[]; self.hrefs=[]\n    def handle_starttag(self, tag, attrs):\n        assert tag=='a' and self.depth==0 and len(attrs)==1 and attrs[0][0]=='href', 'one anchor with one href only'\n        self.depth=1; self.hrefs.append(attrs[0][1])\n    def handle_endtag(self, tag):\n        assert tag=='a' and self.depth==1; self.depth=0\n    def handle_data(self,data):\n        if self.depth: self.labels.append(data)\n        else: assert not data.strip(), 'unexpected outside text'\n    def handle_comment(self, data): raise AssertionError('unexpected markup')\n    def handle_decl(self, data): raise AssertionError('unexpected declaration')\n    def handle_pi(self, data): raise AssertionError('unexpected processing instruction')\n    def unknown_decl(self, data): raise AssertionError('unexpected unknown declaration')\n\ncases=[('普通搜索','hello world'),('A&B <标签>','a&admin=true'),('\" onclick=\"alert(1)','x#private'),\n       ('<script>not executable</script>','a/b?c=d%20e'),('前后 空格 ','+/%#?=&'),\n       ('单引号'+chr(39)+'与双引号'+chr(34),'中文😀'),('',''),\n       ('A'+chr(13)+chr(10)+'B'+chr(13)+'C'+chr(10)+'D','line'+chr(13)+chr(10)+'query')]\ncases.append(('原样 '+secrets.token_hex(6),secrets.token_hex(7)+'&x=1#tail'))\nwith tempfile.TemporaryDirectory(prefix='html-url-') as tmp:\n    root=pathlib.Path(tmp)\n    for index,(label,query) in enumerate(cases):\n        source=root/('input '+str(index)+'.json');target=root/('page '+str(index)+'.html')\n        source.write_text(json.dumps({'label':label,'query':query},ensure_ascii=False),encoding='utf8');before=source.read_bytes()\n        run=subprocess.run([sys.executable,str(script),str(source),str(target)],capture_output=True,text=True,timeout=4)\n        assert run.returncode==0,run.stderr\n        with target.open(encoding='utf8',newline='') as page_file: page=page_file.read()\n        # HTML tokenization normalizes literal CR; character references preserve it.\n        page=page.replace(chr(13)+chr(10),chr(10)).replace(chr(13),chr(10))\n        parser=Anchor();parser.feed(page);parser.close()\n        assert parser.depth==0 and len(parser.hrefs)==1 and ''.join(parser.labels)==label, 'label must remain literal HTML text'\n        url=urllib.parse.urlsplit(parser.hrefs[0])\n        assert not url.scheme and not url.netloc and url.path=='/search' and not url.fragment\n        assert urllib.parse.parse_qsl(url.query,keep_blank_values=True,strict_parsing=True)==[('q',query)], 'query encoding and HTML escaping are different layers'\n        assert source.read_bytes()==before\nprint('Actual generated HTML parsing and query round trip passed, including markup, ampersands, fragment and Unicode boundaries')\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-basics-021",
+      "original_type": "interview",
+      "original_title": "URL 编码与HTML转义为什么不能混用？",
+      "preserve_history": true,
+      "mechanism": "url-query-encoding-versus-html-text-attribute-contexts"
+    }
+  },
+  {
+    "id": "curated-parallel-basics-042",
+    "module": "basics",
+    "category": "计算机与环境",
+    "level": 2,
+    "topic": "HTTP与浏览器行为",
+    "title": "修复删除接口客户端：204成功不解析JSON也不重复删除",
+    "answer": "```python\nimport http.client, json, urllib.parse\n\ndef remove(url):\n    parts = urllib.parse.urlsplit(url)\n    target = (parts.path or '/') + (('?' + parts.query) if parts.query else '')\n    conn = http.client.HTTPConnection(parts.hostname, parts.port, timeout=2)\n    try:\n        conn.request('DELETE', target)\n        response = conn.getresponse()\n        status = response.status\n        if not 200 <= status < 300:\n            raise RuntimeError(str(status))\n        if status == 204:\n            return status, None\n        payload = json.loads(response.read().decode('utf8'))\n        return status, payload\n    finally:\n        conn.close()\n```\n\n启动真实临时回环HTTP接口，记录每次请求的方法和原始目标。交叉返回204、含动态值的200、202数组、JSON null/false、空或损坏JSON、404/503/302；核对返回值或异常及一次DELETE，确保成功删除不会因空响应而被重试。端口与资源标识动态生成，结束关闭服务。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "实际发送符合契约的 HTTP 请求",
+      "正确处理协议边界并保留原始数据",
+      "不重复请求、不硬编码教学响应"
+    ],
+    "references": [],
+    "related_modules": [
+      "basics"
+    ],
+    "language": "python",
+    "run": "",
+    "files": {
+      "delete_client.py": "raise NotImplementedError('implement the HTTP task')\n"
+    },
+    "solution_files": {
+      "delete_client.py": "import http.client, json, urllib.parse\n\ndef remove(url):\n    parts = urllib.parse.urlsplit(url)\n    target = (parts.path or '/') + (('?' + parts.query) if parts.query else '')\n    conn = http.client.HTTPConnection(parts.hostname, parts.port, timeout=2)\n    try:\n        conn.request('DELETE', target)\n        response = conn.getresponse()\n        status = response.status\n        if not 200 <= status < 300:\n            raise RuntimeError(str(status))\n        if status == 204:\n            return status, None\n        payload = json.loads(response.read().decode('utf8'))\n        return status, payload\n    finally:\n        conn.close()\n"
+    },
+    "negative_files": {
+      "delete_client.py": "import http.client, json, urllib.parse\n\ndef remove(url):\n    parts = urllib.parse.urlsplit(url)\n    target = (parts.path or '/') + (('?' + parts.query) if parts.query else '')\n    conn = http.client.HTTPConnection(parts.hostname, parts.port, timeout=2)\n    try:\n        conn.request('DELETE', target)\n        response = conn.getresponse()\n        status = response.status\n        if not 200 <= status < 300:\n            raise RuntimeError(str(status))\n        payload = json.loads(response.read().decode('utf8'))\n        return status, payload\n    finally:\n        conn.close()\n"
+    },
+    "body": "## 操作任务\n实现 delete_client.py 的 remove(url)，向给定本地 http:// URL 发送一次 DELETE，返回二元组 (HTTP状态码, JSON值)。204应直接返回(204,None)，即使响应Content-Type是application/json也不解析空内容；其余2xx按UTF-8 JSON解析，保留对象、数组、布尔值和null的类型。非204的空或错误JSON必须抛ValueError；非2xx（含重定向）必须抛RuntimeError且错误文字包含状态码。不得自动重试或跟随重定向，不得把解析错误改成成功空对象；请求结束关闭连接。URL为有效ASCII形式的本地HTTP地址，不要求HTTPS、认证或代理。\n\n## 操作环境\n平台隔离 Linux 与 Python3 标准库；验收只启动临时回环 HTTP 服务，不访问任何业务系统。\n\n## 产物\ndelete_client.py 完整实现。\n\n## 验收方法\n启动真实临时回环HTTP接口，记录每次请求的方法和原始目标。交叉返回204、含动态值的200、202数组、JSON null/false、空或损坏JSON、404/503/302；核对返回值或异常及一次DELETE，确保成功删除不会因空响应而被重试。端口与资源标识动态生成，结束关闭服务。",
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-linux-python3",
+      "operation": "实现 delete_client.py 的 remove(url)，向给定本地 http:// URL 发送一次 DELETE，返回二元组 (HTTP状态码, JSON值)。204应直接返回(204,None)，即使响应Content-Type是application/json也不解析空内容；其余2xx按UTF-8 JSON解析，保留对象、数组、布尔值和null的类型。非204的空或错误JSON必须抛ValueError；非2xx（含重定向）必须抛RuntimeError且错误文字包含状态码。不得自动重试或跟随重定向，不得把解析错误改成成功空对象；请求结束关闭连接。URL为有效ASCII形式的本地HTTP地址，不要求HTTPS、认证或代理。",
+      "deliverables": [
+        "delete_client.py"
+      ],
+      "verification": "启动真实临时回环HTTP接口，记录每次请求的方法和原始目标。交叉返回204、含动态值的200、202数组、JSON null/false、空或损坏JSON、404/503/302；核对返回值或异常及一次DELETE，确保成功删除不会因空响应而被重试。端口与资源标识动态生成，结束关闭服务。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": []
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util, json, pathlib, secrets, socket, threading\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n\nspec=importlib.util.spec_from_file_location('answer', pathlib.Path('delete_client.py').resolve())\nmodule=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)\nreceived=[]; active={}; connections=[]\ndef same_json(actual,wanted):\n    if isinstance(wanted,dict):\n        return type(actual) is dict and actual.keys()==wanted.keys() and all(same_json(actual[k],wanted[k]) for k in wanted)\n    if isinstance(wanted,list):\n        return type(actual) is list and len(actual)==len(wanted) and all(same_json(a,b) for a,b in zip(actual,wanted))\n    if type(wanted) in (int,float):\n        return type(actual) in (int,float) and actual==wanted\n    return type(actual) is type(wanted) and actual==wanted\nclass Handler(BaseHTTPRequestHandler):\n    protocol_version='HTTP/1.1'\n    def setup(self):\n        super().setup(); self.connection.settimeout(2)\n        self.closed_event=threading.Event(); connections.append((self.connection,self.closed_event))\n    def finish(self):\n        try: super().finish()\n        finally: self.closed_event.set()\n    def handle_request(self):\n        received.append((self.command,self.path))\n        self.send_response(active['status'])\n        self.send_header('Content-Type','application/json')\n        if active['status'] != 204: self.send_header('Content-Length',str(len(active['body'])))\n        if active['status'] == 302: self.send_header('Location','/must-not-follow')\n        self.end_headers()\n        if active['status'] != 204:\n            try: self.wfile.write(active['body'])\n            except (BrokenPipeError, ConnectionResetError): pass\n    do_DELETE=handle_request\n    do_GET=handle_request\n    def log_message(self,*args): pass\n\nserver=ThreadingHTTPServer(('127.0.0.1',0),Handler)\nserver.timeout=0.1\nthread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':0.02},daemon=True); thread.start()\ntry:\n    token=secrets.token_hex(8)\n    samples=[(204,b'',None,None),\n        (200,json.dumps({'removed':token,'count':3,'label':'测试'},ensure_ascii=False).encode(),{'removed':token,'count':3,'label':'测试'},None),\n        (202,b'[true,null,17,{\"ok\":false}]',[True,None,17,{'ok':False}],None),(200,b'null',None,None),\n        (201,b'false',False,None),(200,b'',None,ValueError),(200,b'{broken',None,ValueError),\n        (404,b'{\"error\":\"missing\"}',None,RuntimeError),(503,b'upstream down',None,RuntimeError),\n        (302,b'',None,RuntimeError),(204,b'',None,None)]\n    for number,(status,body,wanted,error) in enumerate(samples):\n        active.update(status=status,body=body)\n        path='/items/'+token+'/'+str(number)+'?confirm=yes&tag=%23'\n        start=len(received); first_connection=len(connections)\n        try:\n            result=module.remove('http://127.0.0.1:'+str(server.server_port)+path)\n        except Exception as exc:\n            assert error is not None and isinstance(exc,error), ('unexpected exception',status,type(exc).__name__)\n            if error is RuntimeError: assert str(status) in str(exc), 'HTTP failure must expose the HTTP status'\n        else:\n            assert error is None, ('missing error',status)\n            assert isinstance(result,tuple) and len(result)==2 and type(result[0]) is int and result[0]==status\n            assert same_json(result[1],wanted), 'preserve nested JSON type and value; bool is not number; 204 has no JSON'\n        assert received[start:]==[('DELETE',path)], 'one DELETE only: no retry, redirect follow or substituted method'\n        assert len(connections)>first_connection, 'a real request connection is required'\n        assert all(event.wait(0.8) for _,event in connections[first_connection:]), 'client must close persistent connections on success and errors'\nfinally:\n    for connection,_ in connections:\n        try: connection.shutdown(socket.SHUT_RDWR)\n        except OSError: pass\n        connection.close()\n    server.shutdown(); server.server_close(); thread.join(timeout=2)\nassert not thread.is_alive()\nprint('Real local HTTP: 204 no JSON; success/error distinctions; no duplicate deletion')\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-basics-042",
+      "original_type": "interview",
+      "original_title": "HTTP 204响应为什么不应按必有JSON响应体处理？",
+      "preserve_history": true,
+      "mechanism": "actual-http-delete-no-content-versus-json-error-and-retry"
+    }
+  },
+  {
+    "id": "curated-parallel-basics-096",
+    "module": "basics",
+    "category": "计算机与环境",
+    "level": 1,
+    "topic": "HTTP与浏览器行为",
+    "title": "用本地HTTP服务验证查询参数会发送而片段不会发送",
+    "answer": "```python\nimport http.client, urllib.parse\n\ndef fetch_url(url):\n    parts=urllib.parse.urlsplit(url)\n    target=(parts.path or '/') + (('?' + parts.query) if parts.query else '')\n    conn=http.client.HTTPConnection(parts.hostname,parts.port,timeout=2)\n    try:\n        conn.request('GET',target)\n        response=conn.getresponse()\n        return response.read()\n    finally:\n        conn.close()\n```\n\n真实回环HTTP服务直接记录收到的request-target，并返回动态二进制内容。交叉检验查询/片段、编码%23、中文百分号编码、重复和空参数、空路径及含?的片段；验证实际一条GET和原样响应字节，不能仅调用URL解析函数后打印预设结论。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021-supplement",
+    "hints": [],
+    "rubric": [
+      "实际发送符合契约的 HTTP 请求",
+      "正确处理协议边界并保留原始数据",
+      "不重复请求、不硬编码教学响应"
+    ],
+    "references": [],
+    "related_modules": [
+      "basics"
+    ],
+    "language": "python",
+    "run": "",
+    "files": {
+      "fetch_url.py": "raise NotImplementedError('implement the HTTP task')\n"
+    },
+    "solution_files": {
+      "fetch_url.py": "import http.client, urllib.parse\n\ndef fetch_url(url):\n    parts=urllib.parse.urlsplit(url)\n    target=(parts.path or '/') + (('?' + parts.query) if parts.query else '')\n    conn=http.client.HTTPConnection(parts.hostname,parts.port,timeout=2)\n    try:\n        conn.request('GET',target)\n        response=conn.getresponse()\n        return response.read()\n    finally:\n        conn.close()\n"
+    },
+    "negative_files": {
+      "fetch_url.py": "import http.client, urllib.parse\n\ndef fetch_url(url):\n    parts=urllib.parse.urlsplit(url)\n    target=(parts.path or '/') + (('?' + parts.query) if parts.query else '')\n    conn=http.client.HTTPConnection(parts.hostname,parts.port,timeout=2)\n    try:\n        conn.request('GET',target + (('#' + parts.fragment) if parts.fragment else ''))\n        response=conn.getresponse()\n        return response.read()\n    finally:\n        conn.close()\n"
+    },
+    "body": "## 操作任务\n实现 fetch_url.py 的 fetch_url(url)，对给定ASCII形式的本地 http:// URL 发送一次GET并原样返回响应bytes。请求目标仅含路径和非空查询串，空路径按/；URL的#片段不发给服务端。路径、查询中的%23属于已编码数据，不得提前解码或再次编码；保留重复参数、空值、+及参数次序。空查询分隔符?可省略，片段中出现?或多个#仍只是片段。关闭连接，不打印伪造结果。本题接口均返回200，不要求重定向、浏览器执行脚本或HTTPS。\n\n## 操作环境\n平台隔离 Linux 与 Python3 标准库；验收只启动临时回环 HTTP 服务，不访问任何业务系统。\n\n## 产物\nfetch_url.py 完整实现。\n\n## 验收方法\n真实回环HTTP服务直接记录收到的request-target，并返回动态二进制内容。交叉检验查询/片段、编码%23、中文百分号编码、重复和空参数、空路径及含?的片段；验证实际一条GET和原样响应字节，不能仅调用URL解析函数后打印预设结论。",
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-linux-python3",
+      "operation": "实现 fetch_url.py 的 fetch_url(url)，对给定ASCII形式的本地 http:// URL 发送一次GET并原样返回响应bytes。请求目标仅含路径和非空查询串，空路径按/；URL的#片段不发给服务端。路径、查询中的%23属于已编码数据，不得提前解码或再次编码；保留重复参数、空值、+及参数次序。空查询分隔符?可省略，片段中出现?或多个#仍只是片段。关闭连接，不打印伪造结果。本题接口均返回200，不要求重定向、浏览器执行脚本或HTTPS。",
+      "deliverables": [
+        "fetch_url.py"
+      ],
+      "verification": "真实回环HTTP服务直接记录收到的request-target，并返回动态二进制内容。交叉检验查询/片段、编码%23、中文百分号编码、重复和空参数、空路径及含?的片段；验证实际一条GET和原样响应字节，不能仅调用URL解析函数后打印预设结论。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": []
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util, pathlib, secrets, socket, threading\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n\nspec=importlib.util.spec_from_file_location('answer',pathlib.Path('fetch_url.py').resolve())\nmodule=importlib.util.module_from_spec(spec); spec.loader.exec_module(module)\nreceived=[]; payload=b''; connections=[]\nclass Handler(BaseHTTPRequestHandler):\n    protocol_version='HTTP/1.1'\n    def setup(self):\n        super().setup(); self.connection.settimeout(2)\n        self.closed_event=threading.Event(); connections.append((self.connection,self.closed_event))\n    def finish(self):\n        try: super().finish()\n        finally: self.closed_event.set()\n    def do_GET(self):\n        received.append((self.command,self.path))\n        self.send_response(200); self.send_header('Content-Length',str(len(payload))); self.end_headers()\n        try: self.wfile.write(payload)\n        except (BrokenPipeError,ConnectionResetError): pass\n    def log_message(self,*args): pass\n\nserver=ThreadingHTTPServer(('127.0.0.1',0),Handler)\nthread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':0.02},daemon=True); thread.start()\ntry:\n    tag=secrets.token_hex(6)\n    pairs=[('/'+tag+'?a=1&a=2#panel?not=query','/'+tag+'?a=1&a=2'),\n        ('/x%23y?value=%23%3F&plus=a+b#fragment','/x%23y?value=%23%3F&plus=a+b'),\n        ('#only-fragment','/'),('/empty?#ignored','/empty'),\n        ('/doc?q=%E4%B8%AD%E6%96%87#%E7%AB%A0%E8%8A%82','/doc?q=%E4%B8%AD%E6%96%87'),\n        ('/same?x=#','/same?x='),('/plain','/plain'),\n        ('/p?empty=&a=%2523#first#second','/p?empty=&a=%2523')]\n    for number,(suffix,wanted) in enumerate(pairs):\n        payload=bytes([0,255,number])+secrets.token_bytes(13)+b'\\r\\n'\n        before=len(received); first_connection=len(connections)\n        got=module.fetch_url('http://127.0.0.1:'+str(server.server_port)+suffix)\n        assert type(got) is bytes and got==payload, 'return actual response bytes unchanged'\n        acceptable=[('GET',wanted)]\n        if suffix.split('#',1)[0].endswith('?'): acceptable.append(('GET',wanted+'?'))\n        assert len(received[before:])==1 and received[before] in acceptable, ('wire target mismatch',suffix,received[before:],acceptable)\n        assert len(connections)>first_connection\n        assert all(event.wait(0.8) for _,event in connections[first_connection:]), 'close the persistent HTTP connection after reading'\nfinally:\n    for connection,_ in connections:\n        try: connection.shutdown(socket.SHUT_RDWR)\n        except OSError: pass\n        connection.close()\n    server.shutdown(); server.server_close(); thread.join(timeout=2)\nassert not thread.is_alive()\nprint('Real HTTP wire target preserves query/percent-encoded hash and omits client fragment')\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-basics-096",
+      "original_type": "interview",
+      "original_title": "URL中的#片段和?查询参数，哪部分通常会发送给HTTP服务器？",
+      "preserve_history": true,
+      "mechanism": "actual-http-request-target-query-versus-client-fragment"
+    }
+  },
+  {
+    "id": "curated-parallel-basics-034",
+    "module": "basics",
+    "category": "计算机与环境",
+    "level": 1,
+    "topic": "操作系统与运行环境",
+    "title": "观察父进程环境修改前后，存活子进程与新子进程的实际差异",
+    "answer": "```python\nimport json,subprocess\n\ndef observe(worker_argv, change_parent):\n    child=subprocess.Popen([*worker_argv,'hold'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,\n                           stderr=subprocess.PIPE,text=True,encoding='utf8')\n    try:\n        first=json.loads(child.stdout.readline())\n        change_parent()\n        child.stdin.write('read\\n');child.stdin.flush()\n        again=json.loads(child.stdout.readline())\n        child.stdin.close()\n        child.wait(timeout=3)\n        if child.returncode!=0:raise RuntimeError('held child failed')\n        new=subprocess.run([*worker_argv,'once'],capture_output=True,text=True,\n                           encoding='utf8',check=True,timeout=3)\n        return {'before':first,'same_child':again,'new_child':json.loads(new.stdout)}\n    finally:\n        if child.poll() is None:child.kill()\n        child.wait(timeout=3)\n        for stream in (child.stdin,child.stdout,child.stderr):\n            if stream and not stream.closed:stream.close()\n```\n\n在隔离工作区运行真实两个Python子进程，通过只读观察程序实际写出的PID/环境记录核对返回值；覆盖普通值、缺失与空值互换、中文换行及回调失败。旧进程必须保持原值，新进程必须继承新值，成功和失败均不可遗留子进程。\n环境在创建进程时被继承，父进程后续修改不会自动传播到已经运行的进程；这与最小环境白名单过滤是不同知识点。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "真实同一子进程前后观察",
+      "新进程继承当前环境且缺失不等于空值",
+      "失败时回收自己的进程并保留父环境回调结果"
+    ],
+    "references": [],
+    "related_modules": [
+      "basics"
+    ],
+    "language": "python",
+    "run": "",
+    "files": {
+      "inheritance.py": "def observe(worker_argv, change_parent):\n    raise NotImplementedError('complete the real process observations')\n",
+      "fixtures/env_reader.py": "import json,os,pathlib,sys\nfolder=pathlib.Path(sys.argv[1]);mode=sys.argv[2]\ndef emit(stage):\n    row={'pid':os.getpid(),'value':os.environ.get('OPSFORGE_ENV_PROBE'),'stage':stage}\n    (folder/(str(os.getpid())+'-'+stage+'.json')).write_text(json.dumps(row),encoding='utf8')\n    print(json.dumps(row),flush=True)\nemit('initial')\nif mode=='hold':\n    assert sys.stdin.readline()=='read\\n'\n    assert (folder/'parent-changed').is_file(), 'parent mutation must precede second observation'\n    emit('again')\nelif mode!='once':\n    raise ValueError('invalid mode')\n"
+    },
+    "solution_files": {
+      "inheritance.py": "import json,subprocess\n\ndef observe(worker_argv, change_parent):\n    child=subprocess.Popen([*worker_argv,'hold'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,\n                           stderr=subprocess.PIPE,text=True,encoding='utf8')\n    try:\n        first=json.loads(child.stdout.readline())\n        change_parent()\n        child.stdin.write('read\\n');child.stdin.flush()\n        again=json.loads(child.stdout.readline())\n        child.stdin.close()\n        child.wait(timeout=3)\n        if child.returncode!=0:raise RuntimeError('held child failed')\n        new=subprocess.run([*worker_argv,'once'],capture_output=True,text=True,\n                           encoding='utf8',check=True,timeout=3)\n        return {'before':first,'same_child':again,'new_child':json.loads(new.stdout)}\n    finally:\n        if child.poll() is None:child.kill()\n        child.wait(timeout=3)\n        for stream in (child.stdin,child.stdout,child.stderr):\n            if stream and not stream.closed:stream.close()\n"
+    },
+    "negative_files": {
+      "inheritance.py": "import json,subprocess\n\ndef observe(worker_argv, change_parent):\n    child=subprocess.Popen([*worker_argv,'hold'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,\n                           stderr=subprocess.PIPE,text=True,encoding='utf8')\n    try:\n        first=json.loads(child.stdout.readline())\n        change_parent()\n        child.stdin.write('read\\n');child.stdin.flush()\n        again=json.loads(child.stdout.readline());again['value']=__import__('os').environ.get('OPSFORGE_ENV_PROBE')\n        child.stdin.close()\n        child.wait(timeout=3)\n        if child.returncode!=0:raise RuntimeError('held child failed')\n        new=subprocess.run([*worker_argv,'once'],capture_output=True,text=True,\n                           encoding='utf8',check=True,timeout=3)\n        return {'before':first,'same_child':again,'new_child':json.loads(new.stdout)}\n    finally:\n        if child.poll() is None:child.kill()\n        child.wait(timeout=3)\n        for stream in (child.stdin,child.stdout,child.stderr):\n            if stream and not stream.closed:stream.close()\n"
+    },
+    "body": "## 操作任务\n补齐inheritance.py中的observe(worker_argv, change_parent)，完成真实父子进程环境变量实验。worker_argv是平台提供的Python只读观察程序参数数组；追加hold启动常驻子进程，追加once启动单次子进程。观察程序每行输出一个JSON对象，含pid、value、stage；value是OPSFORGE_ENV_PROBE的值，缺失为null、空串仍为空串。hold启动时输出stage=initial，收到标准输入的一行read后从自己的环境再次读取并输出stage=again，然后退出；once只输出initial后退出。\n按顺序：启动hold并读取首次观察；调用change_parent()一次（它真实修改当前父进程变量并写入教学同步标记）；给原子进程发送read并读取第二次观察；回收原子进程；启动once取得新进程观察。观察程序会验证父变更标记已经存在后才记录第二次观察，不得自行写入或修改该标记。返回恰好三键before、same_child、new_child，值分别是三次原始JSON观察对象。不得将当前父进程的值填进旧子进程报告，不重启旧子进程冒充第二次读取，不传自造env覆盖平台当前环境。只使用参数数组，不通过shell拼接。\n无论成功或change_parent抛错，均关闭管道并回收自己启动的子进程；回调异常原样抛出，不修改其他进程。不要恢复回调修改的变量，实验外层负责恢复。只处理此教学程序，单条输出很小，不要求实现通用交互终端。\n\n## 操作环境\n隔离Linux、Python3标准库，不需要真实集群或业务账号。\n\n## 产物\ninheritance.py；真实子进程产生的三次环境观察记录。\n\n## 验收方法\n在隔离工作区运行真实两个Python子进程，通过只读观察程序实际写出的PID/环境记录核对返回值；覆盖普通值、缺失与空值互换、中文换行及回调失败。旧进程必须保持原值，新进程必须继承新值，成功和失败均不可遗留子进程。",
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-linux-python3",
+      "operation": "补齐inheritance.py中的observe(worker_argv, change_parent)，完成真实父子进程环境变量实验。worker_argv是平台提供的Python只读观察程序参数数组；追加hold启动常驻子进程，追加once启动单次子进程。观察程序每行输出一个JSON对象，含pid、value、stage；value是OPSFORGE_ENV_PROBE的值，缺失为null、空串仍为空串。hold启动时输出stage=initial，收到标准输入的一行read后从自己的环境再次读取并输出stage=again，然后退出；once只输出initial后退出。\n按顺序：启动hold并读取首次观察；调用change_parent()一次（它真实修改当前父进程变量并写入教学同步标记）；给原子进程发送read并读取第二次观察；回收原子进程；启动once取得新进程观察。观察程序会验证父变更标记已经存在后才记录第二次观察，不得自行写入或修改该标记。返回恰好三键before、same_child、new_child，值分别是三次原始JSON观察对象。不得将当前父进程的值填进旧子进程报告，不重启旧子进程冒充第二次读取，不传自造env覆盖平台当前环境。只使用参数数组，不通过shell拼接。\n无论成功或change_parent抛错，均关闭管道并回收自己启动的子进程；回调异常原样抛出，不修改其他进程。不要恢复回调修改的变量，实验外层负责恢复。只处理此教学程序，单条输出很小，不要求实现通用交互终端。",
+      "deliverables": [
+        "inheritance.py"
+      ],
+      "verification": "在隔离工作区运行真实两个Python子进程，通过只读观察程序实际写出的PID/环境记录核对返回值；覆盖普通值、缺失与空值互换、中文换行及回调失败。旧进程必须保持原值，新进程必须继承新值，成功和失败均不可遗留子进程。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 20,
+      "requires": {
+        "commands": []
+      },
+      "test_files": {
+        "checks/check.py": "import hashlib,importlib.util,json,os,pathlib,secrets,sys,tempfile\nROOT=pathlib.Path.cwd()\nassert hashlib.sha256((ROOT/'fixtures/env_reader.py').read_bytes()).hexdigest()=='4e9b6912bc29dc4a7d42100a0760fde5b89dc378bbb8be7cfacc2cb5df72b18b'\nspec=importlib.util.spec_from_file_location('learner',ROOT/'inheritance.py');m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\nkey='OPSFORGE_ENV_PROBE';original=os.environ.copy()\ndef set_value(value):\n    if value is None:os.environ.pop(key,None)\n    else:os.environ[key]=value\ntry:\n    for before,after in [('before-'+secrets.token_hex(9),'after-'+secrets.token_hex(9)),(None,''),('',None),('用户\\n一','用户\\n二')]:\n        with tempfile.TemporaryDirectory(prefix='env snapshot 空格 ') as temp:\n            folder=pathlib.Path(temp);set_value(before);baseline=os.environ.copy();called=[]\n            def change():\n                assert not called,'parent mutation callback must run exactly once'\n                files=list(folder.glob('*-initial.json'));assert len(files)==1,'first real child must have emitted before parent changes'\n                assert not list(folder.glob('*-again.json')),'second observation must occur after parent mutation'\n                seen=json.loads(files[0].read_text(encoding='utf8'));assert seen['value']==before\n                if os.name=='posix':os.kill(seen['pid'],0)\n                called.append(seen);set_value(after);(folder/'parent-changed').write_text('parent mutation complete',encoding='utf8')\n            result=m.observe([sys.executable,'-B',str(ROOT/'fixtures/env_reader.py'),str(folder)],change)\n            assert len(called)==1 and type(result) is dict and set(result)=={'before','same_child','new_child'}\n            first=result['before'];same=result['same_child'];new=result['new_child']\n            for row in (first,same,new):assert type(row) is dict and set(row)=={'pid','value','stage'} and type(row['pid']) is int\n            assert first==called[0] and first['pid']==same['pid'] and new['pid']!=first['pid']\n            assert first['stage']=='initial' and same['stage']=='again' and new['stage']=='initial'\n            assert first['value']==before and same['value']==before and new['value']==after,'running child retains creation snapshot; new child inherits changed parent'\n            actual={p.name:json.loads(p.read_text(encoding='utf8')) for p in folder.glob('*.json')}\n            expected={str(row['pid'])+'-'+row['stage']+'.json':row for row in (first,same,new)}\n            assert actual==expected,'reported evidence must match the real worker observations exactly'\n            expected_env=dict(baseline)\n            if after is None:expected_env.pop(key,None)\n            else:expected_env[key]=after\n            assert dict(os.environ)==expected_env,'learner must not replace the parent environment or undo the callback'\n            if os.name=='posix':\n                for pid in (first['pid'],new['pid']):\n                    try:os.kill(pid,0)\n                    except ProcessLookupError:pass\n                    else:raise AssertionError('learner child was not reaped')\n    with tempfile.TemporaryDirectory(prefix='env failure ') as temp:\n        folder=pathlib.Path(temp);sentinel=RuntimeError('teaching callback fails')\n        def fail():raise sentinel\n        try:m.observe([sys.executable,'-B',str(ROOT/'fixtures/env_reader.py'),str(folder)],fail)\n        except RuntimeError as exc:assert exc is sentinel,'propagate the original callback failure'\n        else:raise AssertionError('callback exception swallowed')\n        if os.name=='posix':\n            for file in folder.glob('*-initial.json'):\n                pid=json.loads(file.read_text())['pid']\n                try:os.kill(pid,0)\n                except ProcessLookupError:pass\n                else:raise AssertionError('child left running after parent callback failure')\nfinally:\n    os.environ.clear();os.environ.update(original)\nprint('real existing child retained environment, new child inherited changed parent, missing/empty/Unicode distinguished, child cleanup verified')\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-basics-034",
+      "original_type": "interview",
+      "original_title": "父进程修改自己的环境变量会自动更新已运行子进程吗？",
+      "preserve_history": true,
+      "mechanism": "live-process environment inheritance across actual parent mutation; distinct from environment allowlist filtering"
+    }
+  },
+  {
+    "id": "curated-parallel-basics-022",
+    "module": "basics",
+    "category": "计算机与环境",
+    "level": 1,
+    "topic": "数据表示与交换格式",
+    "title": "实测十进制字面值与float真实二进制值的精确偏差",
+    "answer": "```python\nimport re\nfrom fractions import Fraction\n\ndef represent(text):\n    if not isinstance(text,str) or re.fullmatch(r'-?[0-9]{1,12}(?:\\.[0-9]{1,12})?',text) is None:\n        raise ValueError('bounded ordinary decimal string required')\n    value=float(text)\n    binary=Fraction(*value.as_integer_ratio())\n    exact=Fraction(text)\n    error=binary-exact\n    return {'hex':value.hex(),\n            'binary_ratio':[binary.numerator,binary.denominator],\n            'decimal_ratio':[exact.numerator,exact.denominator],\n            'error_ratio':[error.numerator,error.denominator],\n            'direction':'higher' if error>0 else 'lower' if error<0 else 'exact'}\n```\n\n0.1的实际二进制值略大于精确1/10，误差为1/180143985094819840；0.3略小，0.5可以精确表示。\n对0.1、0.3、0.5及正负值、负零、长小数和动态输入实际运行函数；验收器独立从真实binary64位模式还原有理数，与输入数字精确值对照，检查误差的大小、符号和规范输出。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "观察真实float表示而非显示字符串",
+      "区分精确十进制值与有符号误差",
+      "负零、规范有理数及输入边界处理"
+    ],
+    "references": [],
+    "related_modules": [
+      "basics"
+    ],
+    "language": "python",
+    "run": "",
+    "files": {
+      "representation.py": "def represent(text):\n    # Use float.hex(), float.as_integer_ratio() and Fraction for the experiment.\n    raise NotImplementedError('return actual representation and exact signed error')\n"
+    },
+    "solution_files": {
+      "representation.py": "import re\nfrom fractions import Fraction\n\ndef represent(text):\n    if not isinstance(text,str) or re.fullmatch(r'-?[0-9]{1,12}(?:\\.[0-9]{1,12})?',text) is None:\n        raise ValueError('bounded ordinary decimal string required')\n    value=float(text)\n    binary=Fraction(*value.as_integer_ratio())\n    exact=Fraction(text)\n    error=binary-exact\n    return {'hex':value.hex(),\n            'binary_ratio':[binary.numerator,binary.denominator],\n            'decimal_ratio':[exact.numerator,exact.denominator],\n            'error_ratio':[error.numerator,error.denominator],\n            'direction':'higher' if error>0 else 'lower' if error<0 else 'exact'}\n"
+    },
+    "negative_files": {
+      "representation.py": "import re\nfrom fractions import Fraction\n\ndef represent(text):\n    if not isinstance(text,str) or re.fullmatch(r'-?[0-9]{1,12}(?:\\.[0-9]{1,12})?',text) is None:\n        raise ValueError('bounded ordinary decimal string required')\n    value=float(text)\n    binary=Fraction(str(value))\n    exact=Fraction(text)\n    error=binary-exact\n    return {'hex':value.hex(),\n            'binary_ratio':[binary.numerator,binary.denominator],\n            'decimal_ratio':[exact.numerator,exact.denominator],\n            'error_ratio':[error.numerator,error.denominator],\n            'direction':'higher' if error>0 else 'lower' if error<0 else 'exact'}\n"
+    },
+    "body": "## 操作任务\n补齐representation.py的represent(text)，实际观察Python float的二进制表示，并与输入十进制的精确值对比。输入为可选负号、1～12位整数及可选小数点后1～12位数字组成的字符串；允许前导零，不接受空格、指数、NaN/Infinity或其他类型。可直接使用float.hex、float.as_integer_ratio和fractions.Fraction，不需要手写IEEE编码器。\n返回恰有五键的字典：hex是实际float.hex()文本；binary_ratio是float实际值的[分子,分母]；decimal_ratio是原十进制字面值的精确有理数；error_ratio是binary_ratio减decimal_ratio的精确有符号差；direction为higher/lower/exact，分别表示实际二进制值偏大、偏小、完全相等。三个有理数使用整数列表、最简分数和正分母，零为[0,1]；hex保留负零符号。不接受输入时抛ValueError或TypeError。\n不要先把float转换成显示字符串再当作其精确值，不把误差取绝对值或四舍五入成0；此题观察单个数的实际表示，不另做金额累加、舍入或精度预算业务。\n\n## 操作环境\n隔离Python3标准库；不使用网络或业务服务。\n\n## 产物\nrepresentation.py，返回真实数值观察报告。\n\n## 验收方法\n对0.1、0.3、0.5及正负值、负零、长小数和动态输入实际运行函数；验收器独立从真实binary64位模式还原有理数，与输入数字精确值对照，检查误差的大小、符号和规范输出。",
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-python3",
+      "operation": "补齐representation.py的represent(text)，实际观察Python float的二进制表示，并与输入十进制的精确值对比。输入为可选负号、1～12位整数及可选小数点后1～12位数字组成的字符串；允许前导零，不接受空格、指数、NaN/Infinity或其他类型。可直接使用float.hex、float.as_integer_ratio和fractions.Fraction，不需要手写IEEE编码器。\n返回恰有五键的字典：hex是实际float.hex()文本；binary_ratio是float实际值的[分子,分母]；decimal_ratio是原十进制字面值的精确有理数；error_ratio是binary_ratio减decimal_ratio的精确有符号差；direction为higher/lower/exact，分别表示实际二进制值偏大、偏小、完全相等。三个有理数使用整数列表、最简分数和正分母，零为[0,1]；hex保留负零符号。不接受输入时抛ValueError或TypeError。\n不要先把float转换成显示字符串再当作其精确值，不把误差取绝对值或四舍五入成0；此题观察单个数的实际表示，不另做金额累加、舍入或精度预算业务。",
+      "deliverables": [
+        "representation.py"
+      ],
+      "verification": "对0.1、0.3、0.5及正负值、负零、长小数和动态输入实际运行函数；验收器独立从真实binary64位模式还原有理数，与输入数字精确值对照，检查误差的大小、符号和规范输出。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": []
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,math,pathlib,re,secrets,struct\nfrom fractions import Fraction\nspec=importlib.util.spec_from_file_location('learner',pathlib.Path('representation.py').resolve());m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef expected_binary(text):\n    # Independent IEEE-754 binary64 decomposition rather than the learner's ratio API.\n    raw=struct.unpack('>Q',struct.pack('>d',float(text)))[0]\n    sign=-1 if raw>>63 else 1;exponent=(raw>>52)&2047;tail=raw&((1<<52)-1)\n    mantissa=tail if exponent==0 else (1<<52)|tail\n    power=(1-1023-52) if exponent==0 else exponent-1023-52\n    return Fraction(sign*mantissa)*(Fraction(2)**power)\ncases=['0.1','0.2','0.3','0.5','-0.1','-0.3','0','-0','-0.000','0001.2500','999999999999.999999999999','0.000000000001']\ncases += [str(secrets.randbelow(1000000000000))+'.'+str(secrets.randbelow(1000000000000)).zfill(12) for _ in range(12)]\nfor text in cases:\n    result=m.represent(text)\n    assert type(result) is dict and set(result)=={'hex','binary_ratio','decimal_ratio','error_ratio','direction'}\n    ratios={}\n    for key in ('binary_ratio','decimal_ratio','error_ratio'):\n        pair=result[key]\n        assert type(pair) is list and len(pair)==2 and all(type(x) is int for x in pair) and pair[1]>0\n        assert math.gcd(pair[0],pair[1])==1,'fractions must be reduced, positive denominator; zero is 0/1'\n        ratios[key]=Fraction(*pair)\n    # Parse decimal digits without converting them through float.\n    sign=-1 if text.startswith('-') else 1\n    unsigned=text.lstrip('-');whole,dot,part=unsigned.partition('.')\n    exact=Fraction(sign*int(whole+part),10**len(part))\n    binary=expected_binary(text);difference=binary-exact\n    assert ratios['binary_ratio']==binary and ratios['decimal_ratio']==exact\n    assert ratios['error_ratio']==difference,'report signed exact error, not a rounded display or zero from decimal repr(float)'\n    assert result['direction']==('higher' if difference>0 else 'lower' if difference<0 else 'exact')\n    assert type(result['hex']) is str and result['hex']==float(text).hex(),'actual float hex must preserve negative zero sign'\nassert m.represent('0.1')['error_ratio']==[1,180143985094819840]\nassert m.represent('0.3')['direction']=='lower'\nassert m.represent('0.5')['error_ratio']==[0,1]\nfor bad in ('NaN','Infinity','1e2',' 0.1','1.','1_000','+1','',True,1,None,'1'*13,'0.'+'1'*13,'１２.３','١.٢'):\n    try:m.represent(bad)\n    except (TypeError,ValueError):pass\n    else:raise AssertionError('non-contract input accepted: '+repr(bad))\nprint('native binary64 observation, exact signed error, missing precision and signed zero checks passed')\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-basics-022",
+      "original_type": "interview",
+      "original_title": "十进制 0.1 在二进制浮点中为何可能无法精确表示？",
+      "preserve_history": true,
+      "mechanism": "actual binary64 representation and exact signed rational error; not monetary accumulation"
+    }
+  },
+  {
+    "id": "curated-parallel-basics-101",
+    "module": "basics",
+    "category": "计算机与环境",
+    "level": 2,
+    "topic": "数据表示与交换格式",
+    "title": "实现 multipart 文件上传并验证真实服务端回执",
+    "answer": "```python\nimport json\nimport secrets\nfrom pathlib import Path\nfrom urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler\n\nclass NoRedirect(HTTPRedirectHandler):\n    def redirect_request(self, req, fp, code, msg, headers, newurl):\n        return None\n\ndef upload(url, path):\n    path = Path(path)\n    name = path.name\n    # This L2 task specifies printable ASCII basenames, including quote/backslash.\n    if not name or any(ord(c) < 32 or ord(c) > 126 for c in name):\n        raise ValueError('printable ASCII basename required')\n    data = path.read_bytes()\n    if len(data) > 65536:\n        raise ValueError('file exceeds exercise limit')\n    while True:\n        boundary = 'opsforge-' + secrets.token_hex(16)\n        if boundary.encode('ascii') not in data:\n            break\n    quoted = name.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"')\n    head = ('--'+boundary+'\\r\\n'\n            'Content-Disposition: form-data; name=\"file\"; filename=\"'+quoted+'\"\\r\\n'\n            'Content-Type: application/octet-stream\\r\\n\\r\\n').encode('ascii')\n    body = head + data + ('\\r\\n--'+boundary+'--\\r\\n').encode('ascii')\n    request = Request(url, data=body, method='POST', headers={\n        'Content-Type': 'multipart/form-data; boundary='+boundary})\n    with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=3) as response:\n        return json.loads(response.read().decode('utf8'))\n```\n\n验收器在随机本机端口启动真实 HTTP 接收端，以 MIME 解析器独立检查头与正文边界、字段名及文件字节。实际上传空文件、全字节序列、中文正文、CRLF、类似边界内容及 64KiB 文件，检查随机服务端回执、源文件未变、503 不重试及超限请求前拒绝。\n本题考客户端编码和真实请求，不重复实现服务端 multipart 解析器。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021-supplement",
+    "hints": [],
+    "rubric": [
+      "匹配 boundary 和 multipart 正文",
+      "原样传输文件字节及名称",
+      "真实回执、失败响应及源文件完整性"
+    ],
+    "references": [],
+    "related_modules": [
+      "basics"
+    ],
+    "language": "python",
+    "run": "",
+    "files": {
+      "upload.py": "def upload(url, path):\n    raise NotImplementedError('send multipart POST and return the server receipt')\n"
+    },
+    "solution_files": {
+      "upload.py": "import json\nimport secrets\nfrom pathlib import Path\nfrom urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler\n\nclass NoRedirect(HTTPRedirectHandler):\n    def redirect_request(self, req, fp, code, msg, headers, newurl):\n        return None\n\ndef upload(url, path):\n    path = Path(path)\n    name = path.name\n    # This L2 task specifies printable ASCII basenames, including quote/backslash.\n    if not name or any(ord(c) < 32 or ord(c) > 126 for c in name):\n        raise ValueError('printable ASCII basename required')\n    data = path.read_bytes()\n    if len(data) > 65536:\n        raise ValueError('file exceeds exercise limit')\n    while True:\n        boundary = 'opsforge-' + secrets.token_hex(16)\n        if boundary.encode('ascii') not in data:\n            break\n    quoted = name.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"')\n    head = ('--'+boundary+'\\r\\n'\n            'Content-Disposition: form-data; name=\"file\"; filename=\"'+quoted+'\"\\r\\n'\n            'Content-Type: application/octet-stream\\r\\n\\r\\n').encode('ascii')\n    body = head + data + ('\\r\\n--'+boundary+'--\\r\\n').encode('ascii')\n    request = Request(url, data=body, method='POST', headers={\n        'Content-Type': 'multipart/form-data; boundary='+boundary})\n    with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=3) as response:\n        return json.loads(response.read().decode('utf8'))\n"
+    },
+    "negative_files": {
+      "upload.py": "import json\nimport secrets\nfrom pathlib import Path\nfrom urllib.request import Request, build_opener, ProxyHandler, HTTPRedirectHandler\n\nclass NoRedirect(HTTPRedirectHandler):\n    def redirect_request(self, req, fp, code, msg, headers, newurl):\n        return None\n\ndef upload(url, path):\n    path = Path(path)\n    name = path.name\n    # This L2 task specifies printable ASCII basenames, including quote/backslash.\n    if not name or any(ord(c) < 32 or ord(c) > 126 for c in name):\n        raise ValueError('printable ASCII basename required')\n    data = path.read_bytes()\n    if len(data) > 65536:\n        raise ValueError('file exceeds exercise limit')\n    while True:\n        boundary = 'opsforge-' + secrets.token_hex(16)\n        if boundary.encode('ascii') not in data:\n            break\n    quoted = name.replace('\\\\', '\\\\\\\\').replace('\"', '\\\\\"')\n    head = ('--'+boundary+'\\r\\n'\n            'Content-Disposition: form-data; name=\"file\"; filename=\"'+quoted+'\"\\r\\n'\n            'Content-Type: application/octet-stream\\r\\n\\r\\n').encode('ascii')\n    body = head + data + ('\\r\\n--'+boundary+'--\\r\\n').encode('ascii')\n    request = Request(url, data=body, method='POST', headers={\n        'Content-Type': 'multipart/form-data'})\n    with build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=3) as response:\n        return json.loads(response.read().decode('utf8'))\n"
+    },
+    "body": "## 操作任务\n补齐 upload.py 中的 upload(url, path)，向题目提供的本机 HTTP 地址发送一次 multipart/form-data POST，上传一个名为 file 的字段；filename 为原文件的 basename。文件可为空或含任意二进制字节，最大 65536 字节；超过上限应在请求前抛 ValueError/TypeError。为控制本题难度，文件名限定可打印 ASCII（含空格，引号和反斜杠），不要求处理国际化文件名。URL 路径和查询串必须原样保留。\n实际生成 multipart 分隔边界，并让 Content-Type 中的 boundary 与正文一致；正确转义 filename，保留文件原始内容，包括 NUL、非 UTF-8 字节和末尾 CRLF。不得修改源文件。成功返回服务端的 JSON 回执字典；非 2xx 响应应抛异常，不自动重试，不把本地算出的哈希伪装成服务端回执。仅调用隔离验收器提供的本机地址，不使用企业代理或外部服务。可以使用 Python 标准库 urllib.request、secrets 和 json。\n\n## 操作环境\n隔离 Python 3 标准库及本机 HTTP 验收服务；无公网依赖。\n\n## 产物\nupload.py。\n\n## 验收方法\n验收器在随机本机端口启动真实 HTTP 接收端，以 MIME 解析器独立检查头与正文边界、字段名及文件字节。实际上传空文件、全字节序列、中文正文、CRLF、类似边界内容及 64KiB 文件，检查随机服务端回执、源文件未变、503 不重试及超限请求前拒绝。",
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-python3",
+      "operation": "补齐 upload.py 中的 upload(url, path)，向题目提供的本机 HTTP 地址发送一次 multipart/form-data POST，上传一个名为 file 的字段；filename 为原文件的 basename。文件可为空或含任意二进制字节，最大 65536 字节；超过上限应在请求前抛 ValueError/TypeError。为控制本题难度，文件名限定可打印 ASCII（含空格，引号和反斜杠），不要求处理国际化文件名。URL 路径和查询串必须原样保留。\n实际生成 multipart 分隔边界，并让 Content-Type 中的 boundary 与正文一致；正确转义 filename，保留文件原始内容，包括 NUL、非 UTF-8 字节和末尾 CRLF。不得修改源文件。成功返回服务端的 JSON 回执字典；非 2xx 响应应抛异常，不自动重试，不把本地算出的哈希伪装成服务端回执。仅调用隔离验收器提供的本机地址，不使用企业代理或外部服务。可以使用 Python 标准库 urllib.request、secrets 和 json。",
+      "deliverables": [
+        "upload.py"
+      ],
+      "verification": "验收器在随机本机端口启动真实 HTTP 接收端，以 MIME 解析器独立检查头与正文边界、字段名及文件字节。实际上传空文件、全字节序列、中文正文、CRLF、类似边界内容及 64KiB 文件，检查随机服务端回执、源文件未变、503 不重试及超限请求前拒绝。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 20,
+      "requires": {
+        "commands": []
+      },
+      "test_files": {
+        "checks/check.py": "import hashlib, importlib.util, json, os, pathlib, secrets, tempfile, threading\nfrom email.parser import BytesParser\nfrom email.policy import default\nfrom http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\nfrom urllib.parse import unquote\n\nspec=importlib.util.spec_from_file_location('learner',pathlib.Path('upload.py').resolve())\nlearner=importlib.util.module_from_spec(spec);spec.loader.exec_module(learner)\nrequests=[]; failures=[]; unexpected_gets=[]\nexpected={}\nclass Handler(BaseHTTPRequestHandler):\n    def log_message(self,*args): pass\n    def do_GET(self):\n        unexpected_gets.append(self.path)\n        payload=json.dumps(requests[-1]['result']).encode('utf8')\n        self.send_response(200);self.send_header('Content-Length',str(len(payload)))\n        self.end_headers();self.wfile.write(payload)\n    def do_POST(self):\n        try:\n            self.connection.settimeout(2)\n            assert self.path==expected['url_path'], 'path and query must be preserved'\n            length=int(self.headers.get('Content-Length','-1'))\n            assert 0 <= length <= 262144, 'finite request size required'\n            body=self.rfile.read(length)\n            assert len(body)==length\n            content_type=self.headers.get('Content-Type','')\n            message=BytesParser(policy=default).parsebytes(('Content-Type: '+content_type+'\\r\\nMIME-Version: 1.0\\r\\n\\r\\n').encode('ascii')+body)\n            assert message.get_content_type()=='multipart/form-data' and message.get_boundary()\n            assert not message.defects and message.is_multipart(), 'actual boundary must match header'\n            parts=list(message.iter_parts())\n            assert len(parts)==1 and not parts[0].defects\n            part=parts[0]\n            assert part.get_content_disposition()=='form-data'\n            assert part.get_param('name',header='content-disposition')=='file'\n            filename=part.get_filename()\n            # RFC 7578 permits percent encoding; accept either legitimate representation.\n            assert filename==expected['filename'] or unquote(filename or '',errors='strict')==expected['filename']\n            assert part.get_payload(decode=True)==expected['data'], 'file bytes changed or boundary collision truncated data'\n            result={'receipt':secrets.token_hex(12),'sha256':hashlib.sha256(expected['data']).hexdigest(),\n                    'size':len(expected['data']),'filename':expected['filename']}\n            requests.append({'result':result,'boundary':message.get_boundary(),'body':body})\n            status=expected.get('status',201)\n        except Exception as exc:\n            failures.append(repr(exc));result={'error':repr(exc)};status=422\n        payload=json.dumps(result,ensure_ascii=False).encode('utf8')\n        self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8')\n        if 300 <= status < 400: self.send_header('Location','/redirected-upload')\n        self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload)\n\nserver=ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=True\nthread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':0.01},daemon=True);thread.start()\ntry:\n    with tempfile.TemporaryDirectory() as tmp:\n        folder=pathlib.Path(tmp)\n        cases=[('empty.bin',b''),('report '+secrets.token_hex(4)+'.bin',bytes(range(256))*2),\n               ('utf8.txt','中文内容\\r\\n第二行\\x00'.encode()),('tail.bin',b'line\\r\\n'),\n               ('boundary.bin',b'\\r\\n--boundary\\r\\nContent-Disposition: form-data\\r\\n\\r\\nnot-a-part\\r\\n--opsforge--\\r\\n'),\n               ('limit.bin',secrets.token_bytes(65536))]\n        if os.name!='nt': cases.append(('quote\"and\\\\slash.bin',secrets.token_bytes(47)))\n        for name,data in cases:\n            path=folder/name;path.write_bytes(data)\n            expected.update(filename=name,data=data,url_path='/upload/'+secrets.token_hex(5)+'?tenant=a%2Bb&keep=1')\n            expected.pop('status',None)\n            before=len(requests)\n            result=learner.upload('http://127.0.0.1:'+str(server.server_port)+expected['url_path'],str(path))\n            assert not failures,failures\n            assert len(requests)==before+1,'must perform exactly one actual HTTP upload'\n            assert result==requests[-1]['result'],'return actual server receipt, not locally fabricated checksum'\n            assert path.read_bytes()==data,'upload must not mutate source file'\n        # A private body containing the preceding boundary must remain data on the next request.\n        collision=folder/'collision.bin'\n        data=b'prefix\\r\\n--'+requests[-1]['boundary'].encode()+b'\\r\\n\\r\\ncollision\\r\\n'\n        collision.write_bytes(data)\n        expected.update(filename=collision.name,data=data,url_path='/upload?round=collision')\n        result=learner.upload('http://127.0.0.1:'+str(server.server_port)+expected['url_path'],str(collision))\n        assert not failures and result==requests[-1]['result']\n        # HTTP rejection must not be reported as an accepted upload.\n        for status in (302,303,307,308,503):\n            expected['status']=status\n            before=len(requests)\n            try: learner.upload('http://127.0.0.1:'+str(server.server_port)+expected['url_path'],str(collision))\n            except Exception: pass\n            else: raise AssertionError('server rejection was returned as success: '+str(status))\n            assert len(requests)==before+1 and not unexpected_gets,'do not retry or follow redirects automatically'\n        oversize=folder/'too-big.bin';oversize.write_bytes(b'x'*65537)\n        before=len(requests)\n        try: learner.upload('http://127.0.0.1:'+str(server.server_port)+'/upload',str(oversize))\n        except (ValueError,TypeError): pass\n        else: raise AssertionError('oversized input accepted')\n        assert len(requests)==before,'validate size before HTTP request'\nfinally:\n    server.shutdown();server.server_close();thread.join(2)\nassert not thread.is_alive()\nprint('actual multipart boundary, binary preservation, source integrity, receipt and rejection checks passed')\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-basics-101",
+      "original_type": "interview",
+      "original_title": "向multipart/form-data请求手工设置Content-Type却遗漏boundary，为什么服务端读不到文件？",
+      "preserve_history": true,
+      "mechanism": "real HTTP multipart client encoding and server receipts; not server-side multipart parsing"
+    }
+  },
+  {
+    "id": "curated-parallel-basics-060",
+    "module": "basics",
+    "category": "计算机与环境",
+    "level": 2,
+    "topic": "计算机体系结构与资源模型",
+    "title": "按真实 C ABI 绑定结构体并完成 ctypes 双向调用",
+    "answer": "```python\nimport ctypes as C\n\nclass Record(C.Structure):\n    _fields_=[('tag',C.c_uint8),('count',C.c_uint32),('flags',C.c_uint16)]\n\ndef load(path):\n    lib=C.CDLL(path)\n    lib.native_make.argtypes=[C.c_uint8,C.c_uint32,C.c_uint16]\n    lib.native_make.restype=Record\n    lib.native_score.argtypes=[Record]\n    lib.native_score.restype=C.c_uint64\n    lib.native_bump.argtypes=[C.POINTER(Record),C.c_uint32]\n    lib.native_bump.restype=None\n    return lib\n```\n\n真实 GCC 编译共享库，独立读取 sizeof/offsetof 与 ctypes 布局比对；以边界值和随机值进行 C 按值返回、Python 按值传入、64 位无符号返回及指针原地修改。错误打包、字段宽度、返回类型或指针声明均不得通过。\n相同 API 名称和参数含义并不保证 ABI 一致：内存布局、按值或指针传递、返回宽度和有无符号都必须与实际库匹配。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "本机结构体布局一致",
+      "按值与指针调用方向正确",
+      "无符号返回不截断且类型检查生效"
+    ],
+    "references": [],
+    "related_modules": [
+      "basics"
+    ],
+    "language": "python",
+    "run": "",
+    "files": {
+      "abi.py": "import ctypes as C\n\nclass Record(C.Structure):\n    _fields_=[]\n\ndef load(path):\n    raise NotImplementedError('declare native signatures and return CDLL')\n"
+    },
+    "solution_files": {
+      "abi.py": "import ctypes as C\n\nclass Record(C.Structure):\n    _fields_=[('tag',C.c_uint8),('count',C.c_uint32),('flags',C.c_uint16)]\n\ndef load(path):\n    lib=C.CDLL(path)\n    lib.native_make.argtypes=[C.c_uint8,C.c_uint32,C.c_uint16]\n    lib.native_make.restype=Record\n    lib.native_score.argtypes=[Record]\n    lib.native_score.restype=C.c_uint64\n    lib.native_bump.argtypes=[C.POINTER(Record),C.c_uint32]\n    lib.native_bump.restype=None\n    return lib\n"
+    },
+    "negative_files": {
+      "abi.py": "import ctypes as C\n\nclass Record(C.Structure):\n    _pack_=1\n    _fields_=[('tag',C.c_uint8),('count',C.c_uint32),('flags',C.c_uint16)]\n\ndef load(path):\n    lib=C.CDLL(path)\n    lib.native_make.argtypes=[C.c_uint8,C.c_uint32,C.c_uint16]\n    lib.native_make.restype=Record\n    lib.native_score.argtypes=[Record]\n    lib.native_score.restype=C.c_uint64\n    lib.native_bump.argtypes=[C.POINTER(Record),C.c_uint32]\n    lib.native_bump.restype=None\n    return lib\n"
+    },
+    "body": "## 操作任务\n根据下面给定的 C API，补齐 abi.py：定义 ctypes.Structure 子类 Record，以及 load(path)；load 接收验收器创建的共享库绝对路径，返回 CDLL 实例，并为三个函数配置正确 argtypes/restype。Record 字段名称和顺序必须与头文件一致，使用 ctypes.c_uint8/c_uint32/c_uint16，不设置 _pack_ 强行紧凑排列。native_make 按值返回 Record，native_score 接收按值 Record 并返回无符号 64 位整数，native_bump 接收 Record 指针及无符号 32 位 delta，返回 void。\n这不是二进制文件格式解析：保持本机编译器规定的结构体填充和对齐。可以使用给出的 ctypes 类型与 POINTER；不需要编写 C 编译器、共享库或手工计算寄存器传参规则。验收器会自行编译给定 C 实现，并调用你的绑定观察跨语言传值。\n\n```c\n#include <stdint.h>\ntypedef struct { uint8_t tag; uint32_t count; uint16_t flags; } Record;\nRecord native_make(uint8_t tag, uint32_t count, uint16_t flags);\nuint64_t native_score(Record record);\nvoid native_bump(Record *record, uint32_t delta);\n```\n\n## 操作环境\n隔离 Linux、Python3、GCC 与 C 标准库头文件；只编译临时夹具，不连接其他服务。\n\n## 产物\nabi.py。\n\n## 验收方法\n真实 GCC 编译共享库，独立读取 sizeof/offsetof 与 ctypes 布局比对；以边界值和随机值进行 C 按值返回、Python 按值传入、64 位无符号返回及指针原地修改。错误打包、字段宽度、返回类型或指针声明均不得通过。",
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-linux-python-gcc",
+      "operation": "根据下面给定的 C API，补齐 abi.py：定义 ctypes.Structure 子类 Record，以及 load(path)；load 接收验收器创建的共享库绝对路径，返回 CDLL 实例，并为三个函数配置正确 argtypes/restype。Record 字段名称和顺序必须与头文件一致，使用 ctypes.c_uint8/c_uint32/c_uint16，不设置 _pack_ 强行紧凑排列。native_make 按值返回 Record，native_score 接收按值 Record 并返回无符号 64 位整数，native_bump 接收 Record 指针及无符号 32 位 delta，返回 void。\n这不是二进制文件格式解析：保持本机编译器规定的结构体填充和对齐。可以使用给出的 ctypes 类型与 POINTER；不需要编写 C 编译器、共享库或手工计算寄存器传参规则。验收器会自行编译给定 C 实现，并调用你的绑定观察跨语言传值。",
+      "deliverables": [
+        "abi.py"
+      ],
+      "verification": "真实 GCC 编译共享库，独立读取 sizeof/offsetof 与 ctypes 布局比对；以边界值和随机值进行 C 按值返回、Python 按值传入、64 位无符号返回及指针原地修改。错误打包、字段宽度、返回类型或指针声明均不得通过。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 20,
+      "requires": {
+        "commands": [
+          "gcc"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import ctypes as C,importlib.util,pathlib,secrets,subprocess,tempfile\nspec=importlib.util.spec_from_file_location('learner',pathlib.Path('abi.py').resolve())\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\nwith tempfile.TemporaryDirectory() as temp:\n    library=pathlib.Path(temp)/('lib-'+secrets.token_hex(8)+'.so')\n    subprocess.run(['gcc','-std=c11','-shared','-fPIC','-O0',str(pathlib.Path('checks/record.c').resolve()),'-o',str(library)],check=True,capture_output=True,timeout=10)\n    trusted=C.CDLL(str(library))\n    for name in ('record_size','offset_tag','offset_count','offset_flags'):\n        getattr(trusted,name).argtypes=[];getattr(trusted,name).restype=C.c_size_t\n    assert issubclass(m.Record,C.Structure)\n    assert C.sizeof(m.Record)==trusted.record_size(),'native struct ABI includes compiler alignment, not a packed byte protocol'\n    assert [field[0] for field in m.Record._fields_]==['tag','count','flags']\n    for field in ('tag','count','flags'):\n        assert getattr(m.Record,field).offset==getattr(trusted,'offset_'+field)(),'field offsets differ from the actual C ABI'\n    lib=m.load(str(library))\n    # Signatures are part of this exercise's public binding contract, including pointer safety.\n    assert tuple(lib.native_make.argtypes or ())==(C.c_uint8,C.c_uint32,C.c_uint16)\n    assert lib.native_make.restype is m.Record\n    assert tuple(lib.native_score.argtypes or ())==(m.Record,)\n    assert tuple(lib.native_bump.argtypes or ())==(C.POINTER(m.Record),C.c_uint32)\n    assert lib.native_bump.restype is None\n    cases=[(0,0,0),(255,4294967295,65535),(128,2147483648,32768),(1,65536,256)]\n    cases += [(secrets.randbelow(256),secrets.randbelow(2**32),secrets.randbelow(2**16)) for _ in range(12)]\n    for tag,count,flags in cases:\n        r=lib.native_make(tag,count,flags)\n        assert isinstance(r,m.Record) and (r.tag,r.count,r.flags)==(tag,count,flags)\n        assert lib.native_score(r)==((tag<<56)|(count<<16)|flags),'64-bit unsigned result was truncated or signed'\n        # Reverse direction: Python-created struct is passed BY VALUE to C.\n        other=m.Record(tag,count,flags)\n        assert lib.native_score(other)==((tag<<56)|(count<<16)|flags)\n        original=(r.tag,r.flags);delta=secrets.randbelow(2**32)\n        lib.native_bump(C.byref(r),delta)\n        assert r.count==(count+delta)%(2**32) and (r.tag,r.flags)==original\n    # Native calls really happen; fake Python-only bindings do not replace the named C symbols.\n    for name in ('native_make','native_score','native_bump'):\n        assert isinstance(getattr(lib,name),C._CFuncPtr)\n    try: lib.native_bump('not-a-Record-pointer',1)\n    except (C.ArgumentError,TypeError): pass\n    else: raise AssertionError('unsafe pointer argument accepted')\nprint('native compiler layout, by-value roundtrip, unsigned 64-bit return and pointer update passed')\n",
+        "checks/record.c": "#include <stdint.h>\ntypedef struct { uint8_t tag; uint32_t count; uint16_t flags; } Record;\nRecord native_make(uint8_t tag, uint32_t count, uint16_t flags);\nuint64_t native_score(Record record);\nvoid native_bump(Record *record, uint32_t delta);\n#include <stddef.h>\nRecord native_make(uint8_t tag, uint32_t count, uint16_t flags) {\n    Record r={0};r.tag=tag;r.count=count;r.flags=flags;return r;\n}\nuint64_t native_score(Record r) {\n    return ((uint64_t)r.tag<<56)|((uint64_t)r.count<<16)|r.flags;\n}\nvoid native_bump(Record *r,uint32_t delta) { r->count += delta; }\nsize_t record_size(void) { return sizeof(Record); }\nsize_t offset_tag(void) { return offsetof(Record,tag); }\nsize_t offset_count(void) { return offsetof(Record,count); }\nsize_t offset_flags(void) { return offsetof(Record,flags); }\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-basics-060",
+      "original_type": "interview",
+      "original_title": "ABI 与 API 的兼容范围有什么不同？",
+      "preserve_history": true,
+      "mechanism": "actual native C ABI and ctypes struct by-value/pointer calls; not serialized endian formats or library search paths"
+    }
+  },
+  {
+    "id": "curated-parallel-basics-074",
+    "module": "basics",
+    "category": "计算机与环境",
+    "level": 3,
+    "topic": "操作系统与运行环境",
+    "title": "生成可加载的 Python 配置并保留 JSON 字符串原值",
+    "answer": "```python\nimport json\nfrom pathlib import Path\n\ndef build(input_path, output_path):\n    def unique(pairs):\n        obj={}\n        for key,value in pairs:\n            if key in obj:\n                raise ValueError('duplicate field')\n            obj[key]=value\n        return obj\n    incoming=Path(input_path)\n    outgoing=Path(output_path)\n    if incoming.resolve()==outgoing.resolve():\n        raise ValueError('input and output must be different files')\n    data=json.loads(incoming.read_text(encoding='utf8'),object_pairs_hook=unique)\n    if not isinstance(data,dict) or set(data)!={'path','pattern'} or any(type(v) is not str for v in data.values()):\n        raise ValueError('exactly two string fields required')\n    code='PATH = '+ascii(data['path'])+'\\nPATTERN = '+ascii(data['pattern'])+'\\n'\n    outgoing.write_text(code,encoding='utf8')\n```\n\n验收实际读取生成的配置文件，先检查只有字符串常量赋值，再在新的 Python 解释器中真实加载；与 JSON 原值逐字符对照，覆盖字面反斜杠与真实换行的差异、引号注入、Unicode/代理码点、动态值及错误输入不覆盖旧配置。\nJSON 解析负责 JSON 这一层；repr/ascii 负责 Python 源码这一层。两层各处理一次，避免把路径中的反斜杠再次当转义指令。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "JSON 单次解码与输入模式校验",
+      "合法 Python 字面量且原值不变",
+      "错误输入保留源文件与旧输出"
+    ],
+    "references": [],
+    "related_modules": [
+      "basics"
+    ],
+    "language": "python",
+    "run": "",
+    "files": {
+      "build_config.py": "def build(input_path, output_path):\n    raise NotImplementedError('validate JSON and generate two literal assignments')\n"
+    },
+    "solution_files": {
+      "build_config.py": "import json\nfrom pathlib import Path\n\ndef build(input_path, output_path):\n    def unique(pairs):\n        obj={}\n        for key,value in pairs:\n            if key in obj:\n                raise ValueError('duplicate field')\n            obj[key]=value\n        return obj\n    incoming=Path(input_path)\n    outgoing=Path(output_path)\n    if incoming.resolve()==outgoing.resolve():\n        raise ValueError('input and output must be different files')\n    data=json.loads(incoming.read_text(encoding='utf8'),object_pairs_hook=unique)\n    if not isinstance(data,dict) or set(data)!={'path','pattern'} or any(type(v) is not str for v in data.values()):\n        raise ValueError('exactly two string fields required')\n    code='PATH = '+ascii(data['path'])+'\\nPATTERN = '+ascii(data['pattern'])+'\\n'\n    outgoing.write_text(code,encoding='utf8')\n"
+    },
+    "negative_files": {
+      "build_config.py": "import json\nfrom pathlib import Path\n\ndef build(input_path, output_path):\n    def unique(pairs):\n        obj={}\n        for key,value in pairs:\n            if key in obj:\n                raise ValueError('duplicate field')\n            obj[key]=value\n        return obj\n    incoming=Path(input_path)\n    outgoing=Path(output_path)\n    if incoming.resolve()==outgoing.resolve():\n        raise ValueError('input and output must be different files')\n    data=json.loads(incoming.read_text(encoding='utf8'),object_pairs_hook=unique)\n    if not isinstance(data,dict) or set(data)!={'path','pattern'} or any(type(v) is not str for v in data.values()):\n        raise ValueError('exactly two string fields required')\n    code='PATH = '+ascii(data['path'].encode('utf8').decode('unicode_escape'))+'\\nPATTERN = '+ascii(data['pattern'])+'\\n'\n    outgoing.write_text(code,encoding='utf8')\n"
+    },
+    "body": "## 操作任务\n实现 build_config.py 的 build(input_path, output_path)，把 UTF-8 JSON 配置文件转成 UTF-8 Python 数据模块。输入必须是恰好包含 path 和 pattern 两个字符串字段的对象，重复字段、缺失、多余字段、非字符串及无效 JSON 都要抛 ValueError/TypeError；输入和输出路径相同也必须拒绝。先完成验证，再写输出，错误输入不能破坏已有输出或修改原 JSON。\n输出文件只能包含 PATH、PATTERN 两条顶层字符串字面量赋值（允许注释和空白，顺序不限），不能导入、执行函数或把输入当代码。实际加载输出模块后，两变量必须与 JSON 解码一次后的原字符串逐字符相同：保留 Windows 风格反斜杠、正则表达式、引号、末尾反斜杠、中文、真实控制字符、NUL 和 JSON 转义表示的独立代理码点。不得再用 unicode_escape 二次解码。可用 repr/ascii 生成合法 Python 字符串字面量；无需手写转义器，也不会实际访问这些示例路径。\n\n## 操作环境\n隔离 Python3 标准库与临时配置文件；不连接服务器，不访问示例路径。\n\n## 产物\nbuild_config.py；运行后生成 config.py 数据模块。\n\n## 验收方法\n验收实际读取生成的配置文件，先检查只有字符串常量赋值，再在新的 Python 解释器中真实加载；与 JSON 原值逐字符对照，覆盖字面反斜杠与真实换行的差异、引号注入、Unicode/代理码点、动态值及错误输入不覆盖旧配置。",
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-python3",
+      "operation": "实现 build_config.py 的 build(input_path, output_path)，把 UTF-8 JSON 配置文件转成 UTF-8 Python 数据模块。输入必须是恰好包含 path 和 pattern 两个字符串字段的对象，重复字段、缺失、多余字段、非字符串及无效 JSON 都要抛 ValueError/TypeError；输入和输出路径相同也必须拒绝。先完成验证，再写输出，错误输入不能破坏已有输出或修改原 JSON。\n输出文件只能包含 PATH、PATTERN 两条顶层字符串字面量赋值（允许注释和空白，顺序不限），不能导入、执行函数或把输入当代码。实际加载输出模块后，两变量必须与 JSON 解码一次后的原字符串逐字符相同：保留 Windows 风格反斜杠、正则表达式、引号、末尾反斜杠、中文、真实控制字符、NUL 和 JSON 转义表示的独立代理码点。不得再用 unicode_escape 二次解码。可用 repr/ascii 生成合法 Python 字符串字面量；无需手写转义器，也不会实际访问这些示例路径。",
+      "deliverables": [
+        "build_config.py"
+      ],
+      "runtime_artifacts": [
+        "config.py"
+      ],
+      "verification": "验收实际读取生成的配置文件，先检查只有字符串常量赋值，再在新的 Python 解释器中真实加载；与 JSON 原值逐字符对照，覆盖字面反斜杠与真实换行的差异、引号注入、Unicode/代理码点、动态值及错误输入不覆盖旧配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 20,
+      "requires": {
+        "commands": []
+      },
+      "test_files": {
+        "checks/check.py": "import ast,importlib.util,json,pathlib,secrets,subprocess,sys,tempfile\nspec=importlib.util.spec_from_file_location('learner',pathlib.Path('build_config.py').resolve())\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\nbs=chr(92)\ncases=[{'path':'C:'+bs+'temp'+bs+'new'+bs+'config','pattern':bs+'buser'+bs+'d+'+bs+'s+end'+bs+'b'},\n       {'path':'trailing'+bs,'pattern':'quote'+chr(34)+' single'+chr(39)+' triple'+chr(34)*3},\n       {'path':'real'+chr(9)+'tab'+chr(10)+'newline'+chr(13)+'return','pattern':'literal'+bs+'t'+bs+'n'+bs+'r'},\n       {'path':'中文路径/文档','pattern':'[中文🙂]+'+chr(0)},\n       {'path':'','pattern':''},\n       {'path':'\"; __import__(\"pathlib\").Path(\"injected\").touch(); #','pattern':chr(39)+bs+chr(10)+\"__import__('os').system('echo unsafe')#\"},\n       {'path':chr(0xd800),'pattern':chr(0xdfff)}]\ncases += [{'path':'C:'+bs+secrets.token_hex(8)+bs+'new'+bs,'pattern':'^'+secrets.token_hex(6)+bs+'d{2,4}$'} for _ in range(4)]\nwith tempfile.TemporaryDirectory() as tmp:\n    folder=pathlib.Path(tmp);incoming=folder/'input.json';output=folder/'config.py'\n    for expected in cases:\n        # ensure_ascii is required for lone-surrogate JSON representation, not an extra learner restriction.\n        payload=json.dumps(expected,ensure_ascii=True).encode('utf8');incoming.write_bytes(payload)\n        m.build(str(incoming),str(output))\n        assert incoming.read_bytes()==payload,'do not rewrite the JSON source'\n        text=output.read_text(encoding='utf8');tree=ast.parse(text)\n        # The artifact is a DATA module, never execute interpolated input code.\n        assert len(tree.body)==2 and all(isinstance(n,ast.Assign) and len(n.targets)==1 and isinstance(n.targets[0],ast.Name) and isinstance(n.value,ast.Constant) and type(n.value.value) is str for n in tree.body),'only two string literal assignments allowed'\n        values={node.targets[0].id:node.value.value for node in tree.body}\n        assert set(values)=={'PATH','PATTERN'}\n        assert values=={'PATH':expected['path'],'PATTERN':expected['pattern']},'escaping changed characters across JSON and Python layers'\n        # Also compile and execute the actual generated module in a fresh interpreter.\n        runner='import json,runpy,sys; c=runpy.run_path(sys.argv[1]); print(json.dumps([c[\"PATH\"],c[\"PATTERN\"]],ensure_ascii=True))'\n        process=subprocess.run([sys.executable,'-I','-B','-c',runner,str(output)],cwd=folder,capture_output=True,text=True,encoding='utf8',timeout=3)\n        assert process.returncode==0,process.stderr\n        assert json.loads(process.stdout)==[expected['path'],expected['pattern']]\n        assert not (folder/'injected').exists()\n    marker=b'# keep previous configuration\\n'\n    invalid=['{\"path\":\"a\",\"path\":\"b\",\"pattern\":\"c\"}','{\"path\":3,\"pattern\":\"x\"}',\n             '{\"path\":\"a\"}','{\"path\":\"a\",\"pattern\":\"b\",\"extra\":\"c\"}',\n             'null','[]','{\"path\":true,\"pattern\":\"x\"}','{\"path\":\"x\",\"pattern\":null}','not JSON']\n    for payload in invalid:\n        incoming.write_text(payload,encoding='utf8');before=incoming.read_bytes();output.write_bytes(marker)\n        try: m.build(str(incoming),str(output))\n        except (ValueError,TypeError): pass\n        else: raise AssertionError('invalid JSON configuration accepted')\n        assert incoming.read_bytes()==before and output.read_bytes()==marker,'validate fully before replacing output'\n    incoming.write_text('{\"path\":\"a\",\"pattern\":\"b\"}',encoding='utf8');before=incoming.read_bytes()\n    try: m.build(str(incoming),str(incoming))\n    except (ValueError,TypeError): pass\n    else: raise AssertionError('input file overwritten')\n    assert incoming.read_bytes()==before\nprint('actual JSON decode -> Python data module -> fresh interpreter roundtrip passed')\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-basics-074",
+      "original_type": "interview",
+      "original_title": "路径字符串中的反斜杠为何可能被不同解析层多次解释？",
+      "preserve_history": true,
+      "mechanism": "actual JSON-to-Python-source-to-loaded-config boundary; not shell quoting or HTML escaping"
+    }
+  },
+  {
+    "id": "src-e3271ce5621649bb",
+    "title": "解析真实 getdents64 批次并无损输出目录项",
+    "answer": "```c\n#define _GNU_SOURCE\n#include <errno.h>\n#include <fcntl.h>\n#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\n#include <stdint.h>\n#include <stddef.h>\n#include <sys/types.h>\nstruct entry64 {\n    uint64_t ino;\n    int64_t offset;\n    unsigned short reclen;\n    unsigned char type;\n    char name[];\n};\n/* Provided helper: actual SYS_getdents64, with one simulated EINTR per run. */\nssize_t read_dir_batch(int fd, void *buffer, size_t size);\nint list_names(const char *path);\n\nint list_names(const char *path) {\n    int fd=open(path,O_RDONLY|O_DIRECTORY|O_CLOEXEC);\n    if(fd<0) return 1;\n    union { uint64_t align; unsigned char bytes[512]; } storage;\n    int result=0;\n    for(;;) {\n        ssize_t n=read_dir_batch(fd,storage.bytes,sizeof storage.bytes);\n        if(n<0) { if(errno==EINTR) continue; result=1; break; }\n        if(n==0) break;\n        size_t pos=0;\n        while(pos<(size_t)n) {\n            size_t head=offsetof(struct entry64,name);\n            if((size_t)n-pos<head+1) { result=1; break; }\n            struct entry64 *e=(struct entry64 *)(storage.bytes+pos);\n            size_t len=e->reclen;\n            if(len<head+1 || len>(size_t)n-pos) { result=1; break; }\n            char *end=memchr(e->name,0,len-head);\n            if(!end) { result=1; break; }\n            size_t count=(size_t)(end-e->name);\n            if(strcmp(e->name,\".\") && strcmp(e->name,\"..\")) {\n                for(size_t i=0;i<count;i++) {\n                    if(printf(\"%02x\",(unsigned char)e->name[i])<0) { result=1; break; }\n                }\n                if(putchar('\\n')==EOF) result=1;\n            }\n            if(result) break;\n            pos+=len;\n        }\n        if(result) break;\n    }\n    if(close(fd)<0) result=1;\n    return result;\n}\n```\n\n验收器用真实 GCC 编译你的 C 文件与可信系统调用适配器；在随机名称、跨多个批次、空目录、长名称、换行/非 UTF-8 名称、子目录和断链上，与独立目录清单逐字节比较。检查 EINTR 重试、实际读取至 EOF、失败返回值和 FD 数量回到原值。\nreaddir 是 C 库逐项目录流接口，通常在库内部缓存批量读取结果；getdents64 返回多个变长记录的字节块。d_off 不是下一条内存记录的步长，名称也不能假设为 UTF-8。",
+    "category": "计算机与环境",
+    "difficulty": "入门",
+    "section": "系统调用",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/linux/README.md",
+    "sources": [
+      "topics/linux/README.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "Linux",
+    "original_title": "readdir() 系统调用的作用是什么？",
+    "module": "basics",
+    "topic": "操作系统与运行环境",
+    "level": 2,
+    "body": "## 操作任务\n补齐 entries.c 的 int list_names(const char *path)。给定下方 entry64 布局和 read_dir_batch 原型；验收器提供该函数实现，实际调用 Linux SYS_getdents64，且先注入一次 EINTR 来检查重试。你不需要编写系统调用汇编或主函数。\n打开 path 为私有只读目录 FD，以 512 字节对齐缓冲区反复调用 read_dir_batch，直到返回 0；返回 -1 且 errno==EINTR 时重试，其他错误返回非零。按每条记录的 reclen 前进，不可用 sizeof(struct entry64) 或 offset 代替记录长度。在返回字节范围内读取以 NUL 结尾的 name。\n除精确的 . 和 .. 外，所有直接子项（包括隐藏名、子目录、断链）都输出一次；不递归、不按 type 过滤。每个名称按原始字节编码为十六进制（大小写均可），每行一个，顺序不限。这样换行符和非 UTF-8 文件名也不会被误拆或丢失。所有成功/失败路径关闭自己打开的 FD；成功返回 0，路径不存在或不是目录返回非零。只能读取给定临时目录，不修改其中内容。\n本题专门练习批量系统调用接口，请使用给定 read_dir_batch；不以 readdir、ls 或其他遍历器绕过本题接口。可按下方骨架使用 stddef.h 的 offsetof、memchr、memcmp/strcmp 和 stdio 输出。\n\n```c\n#include <stdint.h>\n#include <stddef.h>\n#include <sys/types.h>\nstruct entry64 {\n    uint64_t ino;\n    int64_t offset;\n    unsigned short reclen;\n    unsigned char type;\n    char name[];\n};\n/* Provided helper: actual SYS_getdents64, with one simulated EINTR per run. */\nssize_t read_dir_batch(int fd, void *buffer, size_t size);\nint list_names(const char *path);\n```\n\n## 操作环境\n隔离 Linux、GCC 与标准 C 头文件，普通用户、临时目录；无需集群或服务器。\n\n## 产物\nentries.c。\n\n## 验收方法\n验收器用真实 GCC 编译你的 C 文件与可信系统调用适配器；在随机名称、跨多个批次、空目录、长名称、换行/非 UTF-8 名称、子目录和断链上，与独立目录清单逐字节比较。检查 EINTR 重试、实际读取至 EOF、失败返回值和 FD 数量回到原值。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "按 reclen 逐条解析并读取至 EOF",
+      "字节级名称与所有直接子项保留",
+      "错误处理与 FD 清理正确"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-66aed373c0fbdbc5",
+        "title": "什么系统调用用于列出文件？"
+      }
+    ],
+    "related_modules": [
+      "basics"
+    ],
+    "language": "text",
+    "run": "",
+    "files": {
+      "entries.c": "#define _GNU_SOURCE\n#include <errno.h>\n#include <fcntl.h>\n#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\n#include <stdint.h>\n#include <stddef.h>\n#include <sys/types.h>\nstruct entry64 {\n    uint64_t ino;\n    int64_t offset;\n    unsigned short reclen;\n    unsigned char type;\n    char name[];\n};\n/* Provided helper: actual SYS_getdents64, with one simulated EINTR per run. */\nssize_t read_dir_batch(int fd, void *buffer, size_t size);\nint list_names(const char *path);\n\nint list_names(const char *path) { (void)path; return 1; }\n"
+    },
+    "solution_files": {
+      "entries.c": "#define _GNU_SOURCE\n#include <errno.h>\n#include <fcntl.h>\n#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\n#include <stdint.h>\n#include <stddef.h>\n#include <sys/types.h>\nstruct entry64 {\n    uint64_t ino;\n    int64_t offset;\n    unsigned short reclen;\n    unsigned char type;\n    char name[];\n};\n/* Provided helper: actual SYS_getdents64, with one simulated EINTR per run. */\nssize_t read_dir_batch(int fd, void *buffer, size_t size);\nint list_names(const char *path);\n\nint list_names(const char *path) {\n    int fd=open(path,O_RDONLY|O_DIRECTORY|O_CLOEXEC);\n    if(fd<0) return 1;\n    union { uint64_t align; unsigned char bytes[512]; } storage;\n    int result=0;\n    for(;;) {\n        ssize_t n=read_dir_batch(fd,storage.bytes,sizeof storage.bytes);\n        if(n<0) { if(errno==EINTR) continue; result=1; break; }\n        if(n==0) break;\n        size_t pos=0;\n        while(pos<(size_t)n) {\n            size_t head=offsetof(struct entry64,name);\n            if((size_t)n-pos<head+1) { result=1; break; }\n            struct entry64 *e=(struct entry64 *)(storage.bytes+pos);\n            size_t len=e->reclen;\n            if(len<head+1 || len>(size_t)n-pos) { result=1; break; }\n            char *end=memchr(e->name,0,len-head);\n            if(!end) { result=1; break; }\n            size_t count=(size_t)(end-e->name);\n            if(strcmp(e->name,\".\") && strcmp(e->name,\"..\")) {\n                for(size_t i=0;i<count;i++) {\n                    if(printf(\"%02x\",(unsigned char)e->name[i])<0) { result=1; break; }\n                }\n                if(putchar('\\n')==EOF) result=1;\n            }\n            if(result) break;\n            pos+=len;\n        }\n        if(result) break;\n    }\n    if(close(fd)<0) result=1;\n    return result;\n}\n"
+    },
+    "negative_files": {
+      "entries.c": "#define _GNU_SOURCE\n#include <errno.h>\n#include <fcntl.h>\n#include <stdio.h>\n#include <string.h>\n#include <unistd.h>\n#include <stdint.h>\n#include <stddef.h>\n#include <sys/types.h>\nstruct entry64 {\n    uint64_t ino;\n    int64_t offset;\n    unsigned short reclen;\n    unsigned char type;\n    char name[];\n};\n/* Provided helper: actual SYS_getdents64, with one simulated EINTR per run. */\nssize_t read_dir_batch(int fd, void *buffer, size_t size);\nint list_names(const char *path);\n\nint list_names(const char *path) {\n    int fd=open(path,O_RDONLY|O_DIRECTORY|O_CLOEXEC);\n    if(fd<0) return 1;\n    union { uint64_t align; unsigned char bytes[512]; } storage;\n    int result=0;\n    for(;;) {\n        ssize_t n=read_dir_batch(fd,storage.bytes,sizeof storage.bytes);\n        if(n<0) { if(errno==EINTR) continue; result=1; break; }\n        if(n==0) break;\n        size_t pos=0;\n        while(pos<(size_t)n) {\n            size_t head=offsetof(struct entry64,name);\n            if((size_t)n-pos<head+1) { result=1; break; }\n            struct entry64 *e=(struct entry64 *)(storage.bytes+pos);\n            size_t len=e->reclen;\n            if(len<head+1 || len>(size_t)n-pos) { result=1; break; }\n            char *end=memchr(e->name,0,len-head);\n            if(!end) { result=1; break; }\n            size_t count=(size_t)(end-e->name);\n            if(strcmp(e->name,\".\") && strcmp(e->name,\"..\")) {\n                for(size_t i=0;i<count;i++) {\n                    if(printf(\"%02x\",(unsigned char)e->name[i])<0) { result=1; break; }\n                }\n                if(putchar('\\n')==EOF) result=1;\n            }\n            if(result) break;\n            pos+=sizeof(struct entry64);\n        }\n        if(result) break;\n    }\n    if(close(fd)<0) result=1;\n    return result;\n}\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-linux-gcc",
+      "operation": "补齐 entries.c 的 int list_names(const char *path)。给定下方 entry64 布局和 read_dir_batch 原型；验收器提供该函数实现，实际调用 Linux SYS_getdents64，且先注入一次 EINTR 来检查重试。你不需要编写系统调用汇编或主函数。\n打开 path 为私有只读目录 FD，以 512 字节对齐缓冲区反复调用 read_dir_batch，直到返回 0；返回 -1 且 errno==EINTR 时重试，其他错误返回非零。按每条记录的 reclen 前进，不可用 sizeof(struct entry64) 或 offset 代替记录长度。在返回字节范围内读取以 NUL 结尾的 name。\n除精确的 . 和 .. 外，所有直接子项（包括隐藏名、子目录、断链）都输出一次；不递归、不按 type 过滤。每个名称按原始字节编码为十六进制（大小写均可），每行一个，顺序不限。这样换行符和非 UTF-8 文件名也不会被误拆或丢失。所有成功/失败路径关闭自己打开的 FD；成功返回 0，路径不存在或不是目录返回非零。只能读取给定临时目录，不修改其中内容。\n本题专门练习批量系统调用接口，请使用给定 read_dir_batch；不以 readdir、ls 或其他遍历器绕过本题接口。可按下方骨架使用 stddef.h 的 offsetof、memchr、memcmp/strcmp 和 stdio 输出。",
+      "deliverables": [
+        "entries.c"
+      ],
+      "verification": "验收器用真实 GCC 编译你的 C 文件与可信系统调用适配器；在随机名称、跨多个批次、空目录、长名称、换行/非 UTF-8 名称、子目录和断链上，与独立目录清单逐字节比较。检查 EINTR 重试、实际读取至 EOF、失败返回值和 FD 数量回到原值。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "requires": {
+        "commands": [
+          "gcc"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import collections,os,pathlib,re,secrets,subprocess,tempfile\nwith tempfile.TemporaryDirectory() as td:\n    root=pathlib.Path(td); exe=root/'scan'\n    subprocess.run(['gcc','-std=c11','-O0','entries.c','checks/driver.c','-o',str(exe)],check=True,capture_output=True,timeout=10)\n    directories=[root/'empty',root/'populated']\n    for d in directories:d.mkdir()\n    base=os.fsencode(directories[1])\n    names=[b'a',b'name with spaces',b'line\\nbreak',b'\\xff\\xfe', '中文'.encode(),b'.hidden']\n    names += [secrets.token_hex(5).encode()+b'-'+b'x'*(i%210) for i in range(80)]\n    for name in names:\n        fd=os.open(base+b'/'+name,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);os.close(fd)\n    os.mkdir(base+b'/subdir');os.symlink(b'absent-target',base+b'/broken-link')\n    for d in directories:\n        result=subprocess.run([str(exe),str(d)],capture_output=True,timeout=5)\n        assert result.returncode==0,result.stderr\n        lines=result.stdout.splitlines()\n        assert all(re.fullmatch(b'(?:[0-9a-fA-F]{2})+',line) for line in lines),'one hex-encoded basename per line'\n        actual=[bytes.fromhex(line.decode('ascii')) for line in lines]\n        expected=os.listdir(os.fsencode(d))\n        assert collections.Counter(actual)==collections.Counter(expected),'variable records, batches, raw names, types or dot-entry exclusion differ'\n        guard=re.search(rb'GUARD fds=0 calls=(\\d+)',result.stderr)\n        assert guard,'private directory FD must close'\n        assert int(guard[1]) >= (3 if expected else 2),'use actual batch helper through EOF, not libc scan or a single batch'\n    result=subprocess.run([str(exe),str(directories[1])],capture_output=True,timeout=5,env={**os.environ,'OPSFORGE_DIR_FAULT':'1'})\n    assert result.returncode==1 and b'GUARD fds=0' in result.stderr,'a read error after a real batch must not become successful EOF'\n    for p in (root/'missing',directories[1]/'a'):\n        result=subprocess.run([str(exe),str(p)],capture_output=True,timeout=5)\n        assert result.returncode==1 and b'GUARD fds=0' in result.stderr,'missing/non-directory must fail without descriptor leaks'\nprint('real getdents64 batches, EINTR retry, byte-exact filenames, all entry types and FD cleanup passed')\n",
+        "checks/driver.c": "#define _GNU_SOURCE\n#include <sys/syscall.h>\n#include <unistd.h>\n#include <dirent.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <errno.h>\n#include <stddef.h>\nextern int list_names(const char *path);\nstatic int interrupted=0, real_calls=0;\nssize_t read_dir_batch(int fd, void *buffer,size_t size) {\n    if(!interrupted) { interrupted=1; errno=EINTR; return -1; }\n    if(size<280 || size>512) { errno=EINVAL; return -1; }\n    if(getenv(\"OPSFORGE_DIR_FAULT\") && real_calls>=1) { errno=EIO; return -1; }\n    real_calls++;\n    return syscall(SYS_getdents64,fd,buffer,size);\n}\nstatic int count_fds(void) {\n    DIR *d=opendir(\"/proc/self/fd\"); if(!d) return -1;\n    int count=0; while(readdir(d)) count++;\n    closedir(d); return count;\n}\nint main(int argc,char **argv) {\n    if(argc!=2) return 99;\n    int before=count_fds(); if(before<0) return 98;\n    int result=list_names(argv[1]);\n    if(fflush(stdout)) result=1;\n    int after=count_fds();\n    fprintf(stderr,\"GUARD fds=%d calls=%d\\n\",after-before,real_calls);\n    if(after!=before) return 97;\n    return result?1:0;\n}\n"
+      }
+    },
+    "hints": [],
+    "conversion": {
+      "original_id": "src-e3271ce5621649bb",
+      "original_type": "source",
+      "original_title": "C 库 readdir 与 Linux getdents64 系统调用分别做什么？",
+      "preserve_history": true,
+      "mechanism": "actual getdents64 variable records and libc interface distinction; not file tree filtering or native struct call ABI"
+    },
+    "references": [
+      "https://github.com/torvalds/linux/blob/master/fs/readdir.c"
+    ]
+  },
+  {
+    "id": "curated-system-basics-025",
+    "module": "basics",
+    "category": "计算机与环境",
+    "topic": "解释器与字节码缓存",
+    "level": 3,
+    "type": "code",
+    "title": "修复保留修改时间发布导致的 Python 陈旧字节码缓存",
+    "body": "## 操作任务\n发布工具保留了 Python 源码的修改时间；新文件与旧文件大小相同，旧 timestamp .pyc 因而仍可能被使用。编写 repair_cache.py 中的 repair(root)，为给定发布树内所有 .py 文件（包括子目录）重新生成当前解释器、优化级别 0 的标准 __pycache__ 缓存，明确采用 py_compile.PycInvalidationMode.CHECKED_HASH。\n输入树只含普通文件/目录，无符号链接；路径可含空格和中文。修复只能编译源码，不得导入或执行模块，不改变 .py 原始字节和 st_mtime_ns，也不改其他非缓存文件。缓存必须实际存在且头部对应当前源码哈希；不能仅删除缓存、touch 源码或使用 UNCHECKED_HASH。再次以相同长度和 mtime 替换源码后，无需重跑 repair，新解释器也应执行新代码。\n可以使用 py_compile 或 compileall 的标准 API；返回值不作要求。任何源码语法错误须向调用者抛出异常；本题不要求整树事务回滚。验收时使用普通解释器的默认 hash-pyc 检查策略，不使用 --check-hash-based-pycs=never。\n\n## 操作环境\n隔离本地 Python 3.11+ 标准库与临时发布树；不连接服务器，不修改系统缓存。\n\n## 产物\nrepair_cache.py，以及执行时生成的标准 __pycache__/*.pyc。\n\n## 验收方法\n先真实制造 timestamp 缓存，并证明同大小/时间换源仍执行旧值；调用修复后独立检查 .pyc magic、checked-hash flags 和源哈希，再用全新 Python 进程导入两代不同源码核对实际结果。同时检查递归覆盖、不执行模块、副作用、源码元数据保持和语法错误传播。",
+    "files": {
+      "repair_cache.py": "def repair(root):\n    raise NotImplementedError(\"rebuild checked-hash caches without importing source\")\n"
+    },
+    "language": "python",
+    "run": "",
+    "answer": "```python\nfrom pathlib import Path\nimport py_compile\n\ndef repair(root):\n    for source in sorted(Path(root).rglob('*.py')):\n        py_compile.compile(str(source),doraise=True,optimize=0,\n            invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH)\n```\n\n先真实制造 timestamp 缓存，并证明同大小/时间换源仍执行旧值；调用修复后独立检查 .pyc magic、checked-hash flags 和源哈希，再用全新 Python 进程导入两代不同源码核对实际结果。同时检查递归覆盖、不执行模块、副作用、源码元数据保持和语法错误传播。\nchecked-hash 校验的是缓存是否对应当前源码，不是代码签名，也不证明源码可信。单纯移除旧缓存只能修复当前一次加载，不能保证下一次保留时间/大小发布仍失效。",
+    "solution_files": {
+      "repair_cache.py": "from pathlib import Path\nimport py_compile\n\ndef repair(root):\n    for source in sorted(Path(root).rglob('*.py')):\n        py_compile.compile(str(source),doraise=True,optimize=0,\n            invalidation_mode=py_compile.PycInvalidationMode.CHECKED_HASH)\n"
+    },
+    "negative_files": {
+      "repair_cache.py": "from pathlib import Path\nimport py_compile\n\ndef repair(root):\n    for source in sorted(Path(root).rglob('*.py')):\n        py_compile.compile(str(source),doraise=True,optimize=0,\n            invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-python-standard-library",
+      "operation": "发布工具保留了 Python 源码的修改时间；新文件与旧文件大小相同，旧 timestamp .pyc 因而仍可能被使用。编写 repair_cache.py 中的 repair(root)，为给定发布树内所有 .py 文件（包括子目录）重新生成当前解释器、优化级别 0 的标准 __pycache__ 缓存，明确采用 py_compile.PycInvalidationMode.CHECKED_HASH。\n输入树只含普通文件/目录，无符号链接；路径可含空格和中文。修复只能编译源码，不得导入或执行模块，不改变 .py 原始字节和 st_mtime_ns，也不改其他非缓存文件。缓存必须实际存在且头部对应当前源码哈希；不能仅删除缓存、touch 源码或使用 UNCHECKED_HASH。再次以相同长度和 mtime 替换源码后，无需重跑 repair，新解释器也应执行新代码。\n可以使用 py_compile 或 compileall 的标准 API；返回值不作要求。任何源码语法错误须向调用者抛出异常；本题不要求整树事务回滚。验收时使用普通解释器的默认 hash-pyc 检查策略，不使用 --check-hash-based-pycs=never。",
+      "deliverables": [
+        "repair_cache.py"
+      ],
+      "verification": "先真实制造 timestamp 缓存，并证明同大小/时间换源仍执行旧值；调用修复后独立检查 .pyc magic、checked-hash flags 和源哈希，再用全新 Python 进程导入两代不同源码核对实际结果。同时检查递归覆盖、不执行模块、副作用、源码元数据保持和语法错误传播。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "test_files": {
+        "checks/check.py": "import importlib.util,json,marshal,os,pathlib,py_compile,secrets,subprocess,sys,tempfile\nspec=importlib.util.spec_from_file_location('repairer',pathlib.Path('repair_cache.py').resolve())\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\nprobe=\"import importlib.util,sys; s=importlib.util.spec_from_file_location('probe',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.VALUE)\"\ndef execute(path):\n    p=subprocess.run([sys.executable,'-I','-B','-c',probe,str(path)],capture_output=True,text=True,encoding='utf8',timeout=5)\n    assert p.returncode==0,p.stderr\n    return p.stdout.strip()\ndef write_preserving_time(path,content,ns):\n    path.write_bytes(content);os.utime(path,ns=(ns,ns))\nwith tempfile.TemporaryDirectory() as td:\n    root=pathlib.Path(td)/'release with spaces';root.mkdir()\n    (root/'pkg').mkdir()\n    marker=root/'executed.txt'\n    prefix='from pathlib import Path\\nPath('+repr(str(marker))+').write_text(\"executed\")\\nVALUE='\n    versions=[secrets.token_hex(8) for _ in range(3)]\n    app=root/'application.py';ns=1700000000123456789\n    payloads=[(prefix+repr(v)+'\\n').encode('utf8') for v in versions]\n    assert len({len(p) for p in payloads})==1\n    write_preserving_time(app,payloads[0],ns)\n    py_compile.compile(str(app),doraise=True,optimize=0,invalidation_mode=py_compile.PycInvalidationMode.TIMESTAMP)\n    cache=pathlib.Path(importlib.util.cache_from_source(str(app),optimization=''))\n    assert int.from_bytes(cache.read_bytes()[4:8],'little')==0\n    write_preserving_time(app,payloads[1],ns)\n    assert execute(app)==versions[0],'fixture must reproduce the stale timestamp cache'\n    marker.unlink()\n    (root/'pkg/__init__.py').write_text('LABEL=\"package\"\\n',encoding='utf8')\n    (root/'pkg/模块.py').write_text('raise RuntimeError(\"compilation must not execute me\")\\n',encoding='utf8')\n    (root/'notice.txt').write_bytes(b'keep this non-Python file unchanged')\n    sources=sorted(root.rglob('*.py'))\n    before={str(p.relative_to(root)):(p.read_bytes(),p.stat().st_mtime_ns) for p in root.rglob('*') if p.is_file() and p.suffix!='.pyc'}\n    m.repair(str(root))\n    assert not marker.exists(),'repair imported/executed a release module'\n    expected_caches={pathlib.Path(importlib.util.cache_from_source(str(p),optimization='')) for p in sources}\n    for p in sources:\n        c=pathlib.Path(importlib.util.cache_from_source(str(p),optimization=''))\n        raw=c.read_bytes()\n        assert raw[:4]==importlib.util.MAGIC_NUMBER and int.from_bytes(raw[4:8],'little')==3,'must produce checked-hash caches, not timestamp or unchecked hash'\n        assert raw[8:16]==importlib.util.source_hash(p.read_bytes()),'cache hash must match the actual source'\n        assert marshal.loads(raw[16:])==compile(p.read_bytes(),str(p),'exec',dont_inherit=True,optimize=0),'cache payload must be compiled from this source, not just a matching header'\n    actual_noncache={str(p.relative_to(root)):(p.read_bytes(),p.stat().st_mtime_ns) for p in root.rglob('*') if p.is_file() and p not in expected_caches}\n    assert actual_noncache==before,'source bytes/mtime or unrelated files were changed'\n    assert {p for p in root.rglob('*.pyc')}==expected_caches,'unexpected cache location or optimization level'\n    assert execute(app)==versions[1],'fresh interpreter still executes stale code'\n    write_preserving_time(app,payloads[2],ns)\n    assert execute(app)==versions[2],'a future same-size, same-mtime update must invalidate without repairing again'\n    # Independent error propagation, no transaction/all-or-nothing promise.\n    invalid=root/'invalid';invalid.mkdir();(invalid/'broken.py').write_text('def broken(:\\n',encoding='utf8')\n    try:m.repair(str(invalid))\n    except Exception:pass\n    else:raise AssertionError('compilation failure was silently accepted')\nprint('stale timestamp cache reproduced; checked-hash artifact, fresh-process imports, future invalidation and no source execution passed')\n"
+      }
+    },
+    "case_signature": "basics|checked-hash-bytecode|same-size-mtime-source-replacement|future-cache-invalidation",
+    "review_status": "reviewed",
+    "review_note": "现有题差异化改编：参考、初始和错误实现已独立本地验证；旧执行合同已保留，不增加题量，不涉及线上服务。",
+    "version": 2,
+    "has_answer": true,
+    "source": "OpsForge 原创环境操作练习",
+    "related_modules": [
+      "basics"
+    ],
+    "hints": [],
+    "rubric": [
+      "真实 checked-hash 缓存产物",
+      "未来保留时间及大小变更仍失效",
+      "源码不执行且元数据不变"
+    ],
+    "conversion": {
+      "original_id": "curated-system-basics-025",
+      "original_type": "code",
+      "original_title": "给不可信工具传递最小环境白名单",
+      "preserve_history": true,
+      "mechanism": "replace confirmed minimal-environment duplicate with actual checked-hash bytecode cache freshness; not import reload or disabling cache writes",
+      "duplicate_of": "curated-process-005"
+    },
+    "references": [
+      "https://docs.python.org/3/library/py_compile.html"
+    ]
+  }
+]

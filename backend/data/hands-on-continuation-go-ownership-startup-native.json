@@ -1,0 +1,152 @@
+[
+  {
+    "id": "curated-parallel-go-104",
+    "module": "go",
+    "category": "Go 运维开发",
+    "level": 4,
+    "topic": "并发同步与取消",
+    "title": "Go缓存值复制后共享同一把锁，拒绝复制Mutex保护共享map",
+    "answer": "```go\npackage exercise\nimport \"sync\"\ntype cacheState struct { mu sync.Mutex; values map[string]int }\ntype Cache struct { state *cacheState }\nfunc NewCache() Cache { return Cache{state: &cacheState{values: make(map[string]int)}} }\nfunc (c Cache) Add(key string, delta int) int {\n c.state.mu.Lock(); defer c.state.mu.Unlock()\n c.state.values[key] += delta\n return c.state.values[key]\n}\nfunc (c Cache) Get(key string) (int, bool) {\n c.state.mu.Lock(); defer c.state.mu.Unlock()\n value, ok := c.state.values[key]; return value, ok\n}\n```\n\n原题知识说明：\n审查方法接收者和结构体所有复制路径，结合race报告证明map共享而锁被复制。不同调用锁住各自副本，不能保护同一底层map。暂停问题版本的扩流，必要时回到已批准稳定制品；交开发改为稳定共享锁与指针所有权并清理其他复制点。验收并发读写、复制路径静态检查与race覆盖，不能只在报错函数额外增加一把局部锁。",
+    "type": "code",
+    "incident_signature": "go:mutex-copy-breaks-shared-map-lock",
+    "source": "独立编审：Go特有数据与并发故障",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "用类型/栈/字节证据证明根因",
+      "正确交接开发修复与运维止损",
+      "列出本故障的正常和边界验收"
+    ],
+    "references": [
+      "https://pkg.go.dev/sync",
+      "https://go.dev/ref/spec#Select_statements",
+      "https://go.dev/doc/articles/race_detector"
+    ],
+    "language": "go",
+    "conversion": {
+      "original_id": "curated-parallel-go-104",
+      "original_title": "并发缓存偶发concurrent map writes，方法看起来都加了锁，但接收者是含Mutex和map的结构体值。如何桌面排查？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n提交package exercise的task.go，实现NewCache() Cache、Cache.Add(string,int) int和Cache.Get(string)(int,bool)。NewCache建立独立缓存；Cache值可被赋值、传参和复制，所有源自同一实例的别名必须共享数据和同一同步边界，已复制值的并发Add/Get也不能复制Mutex、竞态或丢更新。不同NewCache实例保持隔离；Get区分缺失键和合法零值。建议Cache仅持有指向私有状态的指针，私有状态同时拥有锁与map。零值Cache不在合同内。不得以全局缓存或全局值替代每实例状态。\n\n## 提交产物\ntask.go\n\n## 验收方法\n独立Go测试使用go test -race编译并执行提交代码，再执行go vet -copylocks；不构建容器镜像。\n\n## 能力边界\n真实Go编译、并发共享别名测试与copylocks静态检查；测试只操作隔离进程内存，不访问生产缓存。通过不等同于所有业务路径无竞态，题目限定NewCache及这些公开方法。",
+    "files": {
+      "task.go": "package exercise\ntype Cache struct{}\nfunc NewCache() Cache {panic(\"NotImplementedError\")}\nfunc (Cache) Add(string,int) int {panic(\"NotImplementedError\")}\nfunc (Cache) Get(string)(int,bool){panic(\"NotImplementedError\")}\n"
+    },
+    "solution_files": {
+      "task.go": "package exercise\nimport \"sync\"\ntype cacheState struct { mu sync.Mutex; values map[string]int }\ntype Cache struct { state *cacheState }\nfunc NewCache() Cache { return Cache{state: &cacheState{values: make(map[string]int)}} }\nfunc (c Cache) Add(key string, delta int) int {\n c.state.mu.Lock(); defer c.state.mu.Unlock()\n c.state.values[key] += delta\n return c.state.values[key]\n}\nfunc (c Cache) Get(key string) (int, bool) {\n c.state.mu.Lock(); defer c.state.mu.Unlock()\n value, ok := c.state.values[key]; return value, ok\n}\n"
+    },
+    "negative_files": {
+      "task.go": "package exercise\nimport \"sync\"\ntype Cache struct { mu sync.Mutex; values map[string]int }\nfunc NewCache() Cache { return Cache{values: make(map[string]int)} }\nfunc (c Cache) Add(key string, delta int) int {\n c.mu.Lock(); defer c.mu.Unlock(); c.values[key] += delta; return c.values[key]\n}\nfunc (c Cache) Get(key string) (int, bool) {\n c.mu.Lock(); defer c.mu.Unlock(); v, ok := c.values[key]; return v, ok\n}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "既有隔离Linux，Go标准库和本地编译器；无外网、无第三方依赖",
+      "operation": "提交package exercise的task.go，实现NewCache() Cache、Cache.Add(string,int) int和Cache.Get(string)(int,bool)。NewCache建立独立缓存；Cache值可被赋值、传参和复制，所有源自同一实例的别名必须共享数据和同一同步边界，已复制值的并发Add/Get也不能复制Mutex、竞态或丢更新。不同NewCache实例保持隔离；Get区分缺失键和合法零值。建议Cache仅持有指向私有状态的指针，私有状态同时拥有锁与map。零值Cache不在合同内。不得以全局缓存或全局值替代每实例状态。",
+      "deliverables": [
+        "task.go"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Go编译、并发共享别名测试与copylocks静态检查；测试只操作隔离进程内存，不访问生产缓存。通过不等同于所有业务路径无竞态，题目限定NewCache及这些公开方法。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "go"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/task_test.go": "package exercise\nimport (\"testing\"; \"sync\"; \"fmt\")\nfunc TestAliases(t *testing.T) {\n c := NewCache(); alias := c\n if c.Add(\"before\", 9) != 9 { t.Fatal(\"initial\") }\n if v, ok := alias.Get(\"before\"); !ok || v != 9 { t.Fatal(\"copy no longer aliases shared cache\") }\n if _, ok := c.Get(\"missing\"); ok { t.Fatal(\"missing versus zero\") }\n if c.Add(\"zero\", 0) != 0 { t.Fatal(\"zero\") }\n if v, ok := alias.Get(\"zero\"); !ok || v != 0 { t.Fatal(\"zero value presence\") }\n var wg sync.WaitGroup\n for worker := 0; worker < 8; worker++ {\n  handle := c; if worker%2 == 1 { handle = alias }\n  wg.Add(1); go func(n int, h Cache) { defer wg.Done(); for i:=0;i<300;i++ {\n   h.Add(\"total\", 1); h.Add(fmt.Sprintf(\"worker-%d\",n), 1); h.Get(\"total\")\n  } }(worker,handle)\n }\n wg.Wait()\n if v, ok := alias.Get(\"total\"); !ok || v != 2400 { t.Fatalf(\"lost update: %d %v\",v,ok) }\n for i:=0;i<8;i++ { if v,_:=c.Get(fmt.Sprintf(\"worker-%d\",i)); v!=300 {t.Fatal(\"worker total\",i,v)} }\n other:=NewCache();other.Add(\"total\",17)\n if v,_:=c.Get(\"total\");v!=2400 {t.Fatal(\"independent NewCache instances share state\")}\n}\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,subprocess\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED: compile and execute submitted Go module',flush=True)\nenv={**os.environ,'GOCACHE':'/tmp/opsforge-go-cache','GOMODCACHE':'/tmp/opsforge-go-modcache','GOTOOLCHAIN':'local','GOPROXY':'off','GOSUMDB':'off','CGO_ENABLED':'1','GOMAXPROCS':'2'}\ndef run(root,args,timeout=100):\n p=subprocess.run(['go',*args],cwd=root,env=env,capture_output=True,text=True,timeout=timeout)\n detail=p.stdout+p.stderr\n if len(detail)>5000:detail=detail[:4000]+'\\n[diagnostic shortened; original process exit preserved]\\n'+detail[-1000:]\n assert p.returncode==0, 'Go validation failed: '+detail\n return p.stdout+p.stderr\nwith tempfile.TemporaryDirectory(prefix='opsforge-go-') as directory:\n root=pathlib.Path(directory)\n (root/'go.mod').write_text('module opsforge.local/exercise\\n\\ngo 1.23\\n',encoding='utf8')\n (root/'task.go').write_bytes(pathlib.Path('task.go').read_bytes())\n (root/'task_test.go').write_bytes(pathlib.Path('checks/task_test.go').read_bytes())\n run(root,['test','-race','-vet=off','-count=1','-timeout=8s','./...'])\n run(root,['vet','-copylocks','./...'])\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "go"
+    ]
+  },
+  {
+    "id": "curated-parallel-go-108",
+    "module": "go",
+    "category": "Go 运维开发",
+    "level": 4,
+    "topic": "并发同步与取消",
+    "title": "Go worker启动校验nil输入并消费传入通道，取消后有界退出",
+    "answer": "```go\npackage exercise\nimport (\"context\"; \"errors\")\nfunc Start(ctx context.Context, input <-chan int, handle func(int) error) (<-chan error, error) {\n if ctx==nil || input==nil || handle==nil { return nil, errors.New(\"worker dependencies must be non-nil\") }\n result:=make(chan error,1)\n go func() {\n  defer close(result)\n  for {\n   select {\n   case <-ctx.Done(): result<-ctx.Err();return\n   case value,ok:=<-input:\n    if !ok {result<-nil;return}\n    if err:=handle(value);err!=nil {result<-err;return}\n   }\n  }\n }()\n return result,nil\n}\n```\n\n原题知识说明：\n核对构造路径、变量遮蔽和赋值顺序，结合goroutine栈确认select中的输入通道值。nil channel通信永远阻塞，在select里相当于禁用该分支，所以只有取消分支可走。停止接受新任务并排出未处理清单，开发在启动前校验依赖非nil并消除错误遮蔽。验收正常输入可消费、缺依赖启动失败及取消可退出，不能用default忙轮询掩盖nil输入。",
+    "type": "code",
+    "incident_signature": "go:nil-channel-select-disables-worker-path",
+    "source": "独立编审：Go特有数据与并发故障",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "用类型/栈/字节证据证明根因",
+      "正确交接开发修复与运维止损",
+      "列出本故障的正常和边界验收"
+    ],
+    "references": [
+      "https://pkg.go.dev/sync",
+      "https://go.dev/ref/spec#Select_statements",
+      "https://go.dev/doc/articles/race_detector"
+    ],
+    "language": "go",
+    "conversion": {
+      "original_id": "curated-parallel-go-108",
+      "original_title": "Goworker启动后一直等待取消，发送通道有任务；诊断显示worker的局部输入channel仍为nil。如何桌面排查？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n提交package exercise的task.go，公开Start(ctx context.Context,input <-chan int,handle func(int)error)(<-chan error,error)。ctx、input、handle任一为nil时同步返回nil结果通道及非nil错误，不得启动等待取消的worker。有效依赖启动一个worker，顺序消费传入input（不能被局部nil变量遮蔽）；input关闭时结果为nil；ctx取消时结果为ctx.Err()；handler返回错误时原样返回且不再消费后续任务。结果通道缓冲1个结果，发送恰一次后关闭；worker不得关闭调用方input。handler按合同有界返回，不要求强行终止阻塞handler。不得增加default忙轮询。\n\n## 提交产物\ntask.go\n\n## 验收方法\n独立Go测试使用go test -race编译并执行提交代码，再执行go vet -copylocks；不构建容器镜像。\n\n## 能力边界\n真实Go worker进程测试：同步拒绝缺失依赖、消费配置的真实通道、零值、EOF关闭、取消及handler错误对账；不验证生产队列持久性和阻塞handler的强制中断。",
+    "files": {
+      "task.go": "package exercise\nimport \"context\"\nfunc Start(context.Context,<-chan int,func(int)error)(<-chan error,error){panic(\"NotImplementedError\")}\n"
+    },
+    "solution_files": {
+      "task.go": "package exercise\nimport (\"context\"; \"errors\")\nfunc Start(ctx context.Context, input <-chan int, handle func(int) error) (<-chan error, error) {\n if ctx==nil || input==nil || handle==nil { return nil, errors.New(\"worker dependencies must be non-nil\") }\n result:=make(chan error,1)\n go func() {\n  defer close(result)\n  for {\n   select {\n   case <-ctx.Done(): result<-ctx.Err();return\n   case value,ok:=<-input:\n    if !ok {result<-nil;return}\n    if err:=handle(value);err!=nil {result<-err;return}\n   }\n  }\n }()\n return result,nil\n}\n"
+    },
+    "negative_files": {
+      "task.go": "package exercise\nimport (\"context\"; \"errors\")\nfunc Start(ctx context.Context, input <-chan int, handle func(int) error) (<-chan error, error) {\n if ctx==nil || input==nil || handle==nil { return nil, errors.New(\"worker dependencies must be non-nil\") }\n input=nil // copied constructor lost the supplied channel\n result:=make(chan error,1)\n go func() {\n  defer close(result)\n  for {\n   select {\n   case <-ctx.Done(): result<-ctx.Err();return\n   case value,ok:=<-input:\n    if !ok {result<-nil;return}\n    if err:=handle(value);err!=nil {result<-err;return}\n   }\n  }\n }()\n return result,nil\n}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "既有隔离Linux，Go标准库和本地编译器；无外网、无第三方依赖",
+      "operation": "提交package exercise的task.go，公开Start(ctx context.Context,input <-chan int,handle func(int)error)(<-chan error,error)。ctx、input、handle任一为nil时同步返回nil结果通道及非nil错误，不得启动等待取消的worker。有效依赖启动一个worker，顺序消费传入input（不能被局部nil变量遮蔽）；input关闭时结果为nil；ctx取消时结果为ctx.Err()；handler返回错误时原样返回且不再消费后续任务。结果通道缓冲1个结果，发送恰一次后关闭；worker不得关闭调用方input。handler按合同有界返回，不要求强行终止阻塞handler。不得增加default忙轮询。",
+      "deliverables": [
+        "task.go"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Go worker进程测试：同步拒绝缺失依赖、消费配置的真实通道、零值、EOF关闭、取消及handler错误对账；不验证生产队列持久性和阻塞handler的强制中断。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "go"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/task_test.go": "package exercise\nimport (\"testing\"; \"context\"; \"errors\"; \"time\"; \"reflect\")\nfunc wait(t *testing.T, result <-chan error) error {\n t.Helper();select {case err,ok:=<-result:if !ok {t.Fatal(\"closed without result\")};\n select {case _,ok=<-result:if ok{t.Fatal(\"extra result\")};case <-time.After(time.Second):t.Fatal(\"result never closed\")};return err\n case <-time.After(time.Second):t.Fatal(\"worker did not terminate\");return nil}\n}\nfunc TestStartup(t *testing.T) {\n input:=make(chan int)\n for _,params:=range []struct{ctx context.Context;in <-chan int;fn func(int)error}{\n  {context.Background(),nil,func(int)error{return nil}},\n  {nil,input,func(int)error{return nil}},\n  {context.Background(),input,nil},\n } {done,err:=Start(params.ctx,params.in,params.fn);if err==nil||done!=nil {t.Fatal(\"invalid dependencies started a worker\")}}\n}\nfunc TestConfiguredChannelAndClose(t *testing.T) {\n input:=make(chan int,3);input<-0;input<-7;input<-19;close(input)\n got:=[]int{};done,err:=Start(context.Background(),input,func(v int)error{got=append(got,v);return nil})\n if err!=nil {t.Fatal(err)};if err=wait(t,done);err!=nil{t.Fatal(err)}\n if !reflect.DeepEqual(got,[]int{0,7,19}){t.Fatal(\"wrong or shadowed input channel\",got)}\n}\nfunc TestCancellation(t *testing.T) {\n ctx,cancel:=context.WithCancel(context.Background());defer cancel();input:=make(chan int,1)\n done,err:=Start(ctx,input,func(int)error{return nil});if err!=nil{t.Fatal(err)};cancel()\n if err=wait(t,done);!errors.Is(err,context.Canceled){t.Fatal(\"cancellation\",err)}\n input<-42 // worker must not close caller-owned input\n}\nfunc TestHandlerError(t *testing.T) {\n input:=make(chan int,2);input<-3;input<-8;sentinel:=errors.New(\"write failed\");calls:=0\n done,err:=Start(context.Background(),input,func(int)error{calls++;return sentinel});if err!=nil{t.Fatal(err)}\n if err=wait(t,done);!errors.Is(err,sentinel)||calls!=1{t.Fatal(\"lost handler failure\",err,calls)}\n if <-input!=8{t.Fatal(\"consumed later input after failure\")}\n}\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,subprocess\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED: compile and execute submitted Go module',flush=True)\nenv={**os.environ,'GOCACHE':'/tmp/opsforge-go-cache','GOMODCACHE':'/tmp/opsforge-go-modcache','GOTOOLCHAIN':'local','GOPROXY':'off','GOSUMDB':'off','CGO_ENABLED':'1','GOMAXPROCS':'2'}\ndef run(root,args,timeout=100):\n p=subprocess.run(['go',*args],cwd=root,env=env,capture_output=True,text=True,timeout=timeout)\n detail=p.stdout+p.stderr\n if len(detail)>5000:detail=detail[:4000]+'\\n[diagnostic shortened; original process exit preserved]\\n'+detail[-1000:]\n assert p.returncode==0, 'Go validation failed: '+detail\n return p.stdout+p.stderr\nwith tempfile.TemporaryDirectory(prefix='opsforge-go-') as directory:\n root=pathlib.Path(directory)\n (root/'go.mod').write_text('module opsforge.local/exercise\\n\\ngo 1.23\\n',encoding='utf8')\n (root/'task.go').write_bytes(pathlib.Path('task.go').read_bytes())\n (root/'task_test.go').write_bytes(pathlib.Path('checks/task_test.go').read_bytes())\n run(root,['test','-race','-vet=off','-count=1','-timeout=8s','./...'])\n run(root,['vet','-copylocks','./...'])\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "go"
+    ]
+  }
+]

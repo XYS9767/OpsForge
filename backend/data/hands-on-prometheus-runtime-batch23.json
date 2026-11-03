@@ -1,0 +1,89 @@
+[
+  {
+    "id": "curated-parallel-prometheus-007",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "抓取配置与采集质量",
+    "title": "修复抓取超时并以实际Targets证据区分慢响应、HTTP错误和恢复",
+    "answer": "```yaml\njob_name: probe\nscrape_interval: 1s\nscrape_timeout: 750ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n```\n```yaml\ngroups:\n- name: probe-health\n  interval: 500ms\n  rules:\n  - alert: ScrapeFailure\n    expr: up{job=\"probe\"} == 0\n    for: 1s\n    labels:\n      severity: warning\n```\n750ms覆盖550ms受控正常响应且小于1秒采集间隔。HTTP503仍应失败，不应通过更长timeout把失败隐藏；结合lastError和duration可以区分超时与快速服务错误。up是抓取健康指标，告警需在恢复后解除。\n\n原题原理：它们分别提示最近采集时间、耗时与失败原因。目标显示UP仍要检查所需指标存在和标签正确；历史断续故障需时间序列而非只看当前页面。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它们分别提示最近采集时间、耗时与失败原因。",
+      "目标显示UP仍要检查所需指标存在和标签正确；历史断续故障需时间序列而非只看当前页面。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/",
+      "https://prometheus.io/docs/prometheus/latest/querying/api/#targets",
+      "https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "job.yaml": "job_name: probe\nscrape_interval: 1s\nscrape_timeout: 100ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n",
+      "rules.yaml": "groups:\n- name: probe-health\n  interval: 500ms\n  rules:\n  - alert: ScrapeFailure\n    expr: up{job=\"probe\"} == 0\n    for: 1s\n    labels:\n      severity: warning\n",
+      "timing-contract.json": "{\n  \"scrape_interval\": \"1s\",\n  \"healthy_delays_ms\": [\n    350,\n    550\n  ],\n  \"failure_http_status\": 503,\n  \"alert\": \"ScrapeFailure\",\n  \"for\": \"1s\"\n}\n"
+    },
+    "solution_files": {
+      "job.yaml": "job_name: probe\nscrape_interval: 1s\nscrape_timeout: 750ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n",
+      "rules.yaml": "groups:\n- name: probe-health\n  interval: 500ms\n  rules:\n  - alert: ScrapeFailure\n    expr: up{job=\"probe\"} == 0\n    for: 1s\n    labels:\n      severity: warning\n"
+    },
+    "negative_files": {
+      "job.yaml": "job_name: probe\nscrape_interval: 1s\nscrape_timeout: 750ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n",
+      "rules.yaml": "groups:\n- name: probe-health\n  interval: 500ms\n  rules:\n  - alert: ScrapeFailure\n    expr: up{job=\"probe\"} == 1\n    for: 1s\n    labels:\n      severity: warning\n"
+    },
+    "body": "## 环境与初始材料\n平台启动隔离Prometheus与受控指标端。端点正常响应分别耗时350ms、550ms，随后返回HTTP503，再恢复。job.yaml目前只允许100ms导致正常端点也被判抓取失败。timing-contract.json给出时序；目标端口19100由平台替换为环回随机端口。\n\n## 操作任务\n保持probe作业、1秒采集间隔与目标身份，修正scrape_timeout，使两个正常时延都能完成抓取；不能关闭目标或把采集间隔调大来掩盖问题。可选600/700/750/800/900ms或1s，2s会因超出采集间隔被原生配置拒绝。保持probe-health规则组500ms评估，ScrapeFailure告警应只对job=probe的up=0持续1秒后触发，恢复后消失，标签severity=warning。\n\n## 产物\n提交job.yaml与rules.yaml。timeout和PromQL可采用满足行为的等价写法；其他作业身份、组名、等待时间和告警标签按材料保持。修复的是采集超时配置与采集失败告警，不能把HTTP503解释成超时问题或业务成功。\n\n## 验收方法\n运行python3 checks/check.py。原生Targets必须先up，真实指标probe_value=17且duration反映350ms；增至550ms后仍up且无告警。注入快速503后，lastError包含503、duration低于慢响应，up=0并形成唯一firing告警，完整标签必须准确。恢复200后Targets/up/业务指标恢复且告警清除。初始100ms会使真实采集失败；错误把up=1当故障则在正常期被拦截。过程有实际HTTP请求和原生规则评估，未用离线文本匹配冒充运行。\n\n## 边界\n此处时延来自固定受控端点，仅用于理解timeout、duration与lastError。生产timeout应由目标延迟分布和采集预算决定，不能把750ms通用套用；up=1也不代表业务正确。本题不访问外部主机或调整系统时钟。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-scrape-diagnostics",
+      "deliverables": [
+        "job.yaml",
+        "rules.yaml"
+      ],
+      "operation": "修正采集超时并交付按抓取健康触发和解除的告警",
+      "verification": "真实350/550ms采集、503、Targets字段和告警生命周期",
+      "capability_gap": [
+        "不代表生产时延容量或业务成功验收"
+      ],
+      "failure_examples": [
+        "100ms超时导致假故障",
+        "超时大于采集间隔",
+        "用up=1触发故障告警"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1s','evaluation_interval':'500ms'},'scrape_configs':[JOB],'rule_files':[str(root/'probe-rules.yaml')]}\n (root/'probe-rules.yaml').write_text(yaml.safe_dump(RULES),encoding='utf-8')\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\nEXPECTED={'job_name': 'probe', 'scrape_interval': '1s', 'scrape_timeout': '750ms', 'static_configs': [{'targets': ['127.0.0.1:19100']}]}\n\nJOB=yaml.load(pathlib.Path('job.yaml').read_text(encoding='utf-8'),Loader=Strict)\nassert isinstance(JOB,dict) and set(JOB)==set(EXPECTED)\nassert all(JOB[k]==v for k,v in EXPECTED.items() if k!='scrape_timeout')\nassert JOB['scrape_timeout'] in ['100ms','600ms','700ms','750ms','800ms','900ms','1s','2s']\nRULES=yaml.load(pathlib.Path('rules.yaml').read_text(encoding='utf-8'),Loader=Strict)\nassert isinstance(RULES,dict) and set(RULES)=={'groups'} and len(RULES['groups'])==1\ngroup=RULES['groups'][0];assert set(group)=={'name','interval','rules'} and group['name']=='probe-health' and group['interval']=='500ms' and len(group['rules'])==1\nalert=group['rules'][0];assert set(alert)=={'alert','expr','for','labels'} and alert['alert']=='ScrapeFailure' and alert['for']=='1s' and alert['labels']=={'severity':'warning'}\nassert isinstance(alert['expr'],str) and 0<len(alert['expr'])<=1000\nstate={'delay':.35,'status':200,'hits':0}\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  delay,status=state['delay'],state['status'];state['hits']+=1\n  if status==200:time.sleep(delay)\n  body=b'probe_value 17\\n' if status==200 else b'fixture unavailable'\n  try:\n   self.send_response(status);self.send_header('Content-Type','text/plain; version=0.0.4');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n  except (BrokenPipeError,ConnectionResetError,ConnectionAbortedError):pass\n def log_message(self,*args):pass\nhttpd=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()\nJOB=copy.deepcopy(JOB);JOB['static_configs'][0]['targets']=['127.0.0.1:'+str(httpd.server_port)]\ndef wait(fn,message,seconds=8):\n end=time.monotonic()+seconds\n while time.monotonic()<end:\n  value=fn()\n  if value:return value\n  time.sleep(.1)\n raise AssertionError(message)\ndef target(api):\n rows=api('/api/v1/targets')['data']['activeTargets'];return rows[0] if len(rows)==1 else {}\ndef alerts(api):return api('/api/v1/alerts')['data']['alerts']\ndef healthy(api):\n t=target(api);rows=vector(api,'probe_value')\n return t.get('health')=='up' and not t.get('lastError') and len(rows)==1 and float(rows[0]['value'][1])==17\ntry:\n with tempfile.TemporaryDirectory(prefix='trusted-prom-timeout-') as d:\n  try:\n   with server(pathlib.Path(d),'source') as (url,api):\n    wait(lambda:healthy(api),'350ms target must be scraped successfully')\n    first=target(api);assert first['lastScrapeDuration']>=.30\n    assert not alerts(api),'healthy scrape must not create pending/firing alerts'\n    before=state['hits'];state['delay']=.55\n    wait(lambda:state['hits']>=before+3 and healthy(api) and target(api).get('lastScrapeDuration',0)>=.50,'timeout must also accommodate 550ms response')\n    assert not alerts(api)\n    state['status']=503\n    wait(lambda:target(api).get('health')=='down' and '503' in target(api).get('lastError',''),'real HTTP failure must remain visible, not hidden by timeout changes')\n    failed=target(api);assert failed['lastScrapeDuration']<.3\n    wait(lambda:len(alerts(api))==1 and alerts(api)[0].get('state')=='firing','scrape failure must sustain and fire the configured alert')\n    a=alerts(api)[0];assert a['labels']=={'alertname':'ScrapeFailure','instance':'127.0.0.1:'+str(httpd.server_port),'job':'probe','severity':'warning'}\n    ups=vector(api,'up{job=\"probe\"}');assert len(ups)==1 and float(ups[0]['value'][1])==0\n    state['delay']=.35;state['status']=200\n    wait(lambda:healthy(api) and not alerts(api),'recovered scraper must clear failure alert')\n    print('Targets diagnostic evidence:',json.dumps({'healthy_duration':first['lastScrapeDuration'],'http_error':failed['lastError'],'http_error_duration':failed['lastScrapeDuration'],'hits':state['hits']}))\n  finally:print('native lifecycle:',json.dumps(STATS))\nfinally:httpd.shutdown();httpd.server_close();thread.join(timeout=2)\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_scrape_timeout_vs_fast_http_failure_targets_diagnostics_and_alert_recovery",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-007",
+      "original_type": "interview",
+      "original_title": "Targets页面的last scrape、duration与last error各能帮助判断什么？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

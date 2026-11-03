@@ -1,0 +1,71 @@
+[
+  {
+    "id": "curated-advanced-alertmanager-015",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 5,
+    "topic": "接收器集成与通知模板",
+    "title": "通知接收器HTTP响应与有界重试合同",
+    "answer": "```python\nimport json,urllib.request,urllib.error,urllib.parse\n\ndef deliver(url,payload,max_attempts=3):\n    parsed=urllib.parse.urlsplit(url)\n    if parsed.scheme!='http' or parsed.hostname!='127.0.0.1' or not parsed.port or parsed.path!='/notify' or parsed.query or parsed.fragment:raise ValueError('loopback fixture endpoint required')\n    if isinstance(max_attempts,bool) or not isinstance(max_attempts,int) or not 1<=max_attempts<=5:raise ValueError('invalid attempt limit')\n    body=json.dumps(payload,ensure_ascii=False,sort_keys=True).encode('utf8')\n    key=str(payload.get('notification_id',''))\n    if not key:raise ValueError('notification_id required')\n    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n    for attempt in range(1,max_attempts+1):\n        req=urllib.request.Request(url,data=body,headers={'Content-Type':'application/json','Idempotency-Key':key},method='POST')\n        try:\n            with opener.open(req,timeout=1) as response:\n                status=response.status;raw=response.read(4096)\n        except urllib.error.HTTPError as exc:\n            status=exc.code;raw=exc.read(4096)\n        except (OSError,TimeoutError):\n            status=503;raw=b''\n        try:result=json.loads(raw) if raw else {}\n        except (ValueError,UnicodeDecodeError):result={}\n        if 200<=status<300:\n            if result.get('accepted') is True:return {'ok':True,'attempts':attempt}\n            return {'ok':False,'kind':'business_rejected','attempts':attempt}\n        if status==429 or 500<=status<600:\n            if attempt<max_attempts:continue\n            return {'ok':False,'kind':'transient_exhausted','attempts':attempt}\n        return {'ok':False,'kind':'permanent_rejected','attempts':attempt}\n```\n\n原题知识说明：\n交付各通知集成与版本的响应矩阵、接收端幂等规则及观测指标。用受控端点返回超时、5xx、429、其他4xx和2xx业务失败，实际核对实现是否重试、何时结束及是否保留失败证据；不从HTTP常识推断所有集成一致。验收重复请求不会重复创建业务对象，永久错误可被操作人员发现。若接收端合同不匹配，应由维护者修正接口或适配器，再验证上线。回退仍需处理已成功但响应丢失的请求，不得全量重放历史通知。核验集成实际的重试实现，并记录一次失败对应的发送尝试数量。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "给出题设要求的具体交付物与关键机制",
+      "用可观察结果验证约束和失败分支",
+      "明确停止条件及回退或恢复边界"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "body": "## 操作任务\n实现deliver(url,payload,max_attempts=3)，使用HTTP POST和稳定Idempotency-Key向私有回环测试接收器交付JSON。200-299仅在JSON accepted=true时成功；业务拒绝不重试。429与5xx可重试且受1至5次上限约束；其它4xx立即停止。限制目标为127.0.0.1的/notify路径，禁止代理和外部网络。\n\n## 提交产物\ntask.py\n\n## 验收方法\n仅对本机回环HTTP测试接收器发请求；验证429/503重试、永久4xx、200业务拒绝、稳定请求体与幂等键及上限。\n\n## 能力边界\n在隔离Linux进程中对本机临时HTTPServer验证真实HTTP请求/响应、重试与拒绝分类；不验证Alertmanager服务本身的重试实现、真实渠道可靠性或接收方持久幂等存储。",
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-alertmanager-015",
+      "original_title": "交付通知接收器的响应合同测试，要求明确网络失败、限流、永久拒绝和业务失败的重试行为。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json,urllib.request,urllib.error,urllib.parse\n\ndef deliver(url,payload,max_attempts=3):\n    parsed=urllib.parse.urlsplit(url)\n    if parsed.scheme!='http' or parsed.hostname!='127.0.0.1' or not parsed.port or parsed.path!='/notify' or parsed.query or parsed.fragment:raise ValueError('loopback fixture endpoint required')\n    if isinstance(max_attempts,bool) or not isinstance(max_attempts,int) or not 1<=max_attempts<=5:raise ValueError('invalid attempt limit')\n    body=json.dumps(payload,ensure_ascii=False,sort_keys=True).encode('utf8')\n    key=str(payload.get('notification_id',''))\n    if not key:raise ValueError('notification_id required')\n    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n    for attempt in range(1,max_attempts+1):\n        req=urllib.request.Request(url,data=body,headers={'Content-Type':'application/json','Idempotency-Key':key},method='POST')\n        try:\n            with opener.open(req,timeout=1) as response:\n                status=response.status;raw=response.read(4096)\n        except urllib.error.HTTPError as exc:\n            status=exc.code;raw=exc.read(4096)\n        except (OSError,TimeoutError):\n            status=503;raw=b''\n        try:result=json.loads(raw) if raw else {}\n        except (ValueError,UnicodeDecodeError):result={}\n        if 200<=status<300:\n            if result.get('accepted') is True:return {'ok':True,'attempts':attempt}\n            return {'ok':False,'kind':'business_rejected','attempts':attempt}\n        if status==429 or 500<=status<600:\n            if attempt<max_attempts:continue\n            return {'ok':False,'kind':'transient_exhausted','attempts':attempt}\n        return {'ok':False,'kind':'permanent_rejected','attempts':attempt}\n"
+    },
+    "negative_files": {
+      "task.py": "import json,urllib.request,urllib.error,urllib.parse\n\ndef deliver(url,payload,max_attempts=3):\n    parsed=urllib.parse.urlsplit(url)\n    if parsed.scheme!='http' or parsed.hostname!='127.0.0.1' or not parsed.port or parsed.path!='/notify' or parsed.query or parsed.fragment:raise ValueError('loopback fixture endpoint required')\n    if isinstance(max_attempts,bool) or not isinstance(max_attempts,int) or not 1<=max_attempts<=5:raise ValueError('invalid attempt limit')\n    body=json.dumps(payload,ensure_ascii=False,sort_keys=True).encode('utf8')\n    key=str(payload.get('notification_id',''))\n    if not key:raise ValueError('notification_id required')\n    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n    for attempt in range(1,max_attempts+1):\n        req=urllib.request.Request(url,data=body,headers={'Content-Type':'application/json','Idempotency-Key':key},method='POST')\n        try:\n            with opener.open(req,timeout=1) as response:\n                status=response.status;raw=response.read(4096)\n        except urllib.error.HTTPError as exc:\n            status=exc.code;raw=exc.read(4096)\n        except (OSError,TimeoutError):\n            status=503;raw=b''\n        try:result=json.loads(raw) if raw else {}\n        except (ValueError,UnicodeDecodeError):result={}\n        if 200<=status<300:\n            if result.get('accepted') is True:return {'ok':True,'attempts':attempt}\n            return {'ok':False,'kind':'business_rejected','attempts':attempt}\n        if 500<=status<600:\n            if attempt<max_attempts:continue\n            return {'ok':False,'kind':'transient_exhausted','attempts':attempt}\n        return {'ok':False,'kind':'permanent_rejected','attempts':attempt}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现deliver(url,payload,max_attempts=3)，使用HTTP POST和稳定Idempotency-Key向私有回环测试接收器交付JSON。200-299仅在JSON accepted=true时成功；业务拒绝不重试。429与5xx可重试且受1至5次上限约束；其它4xx立即停止。限制目标为127.0.0.1的/notify路径，禁止代理和外部网络。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "在隔离Linux进程中对本机临时HTTPServer验证真实HTTP请求/响应、重试与拒绝分类；不验证Alertmanager服务本身的重试实现、真实渠道可靠性或接收方持久幂等存储。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,threading,json\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: deliver loopback webhook',flush=True)\nfrom http.server import BaseHTTPRequestHandler,HTTPServer\nplans=[];seen=[]\nclass Handler(BaseHTTPRequestHandler):\n def do_POST(self):\n  raw=self.rfile.read(int(self.headers.get('Content-Length','0')));seen.append((self.headers.get('Idempotency-Key'),raw))\n  status,body=plans.pop(0);encoded=json.dumps(body).encode();self.send_response(status);self.send_header('Content-Length',str(len(encoded)));self.end_headers();self.wfile.write(encoded)\n def log_message(self,*args):pass\nserver=HTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start();url='http://127.0.0.1:%d/notify'%server.server_port\npayload={'notification_id':'stable-1','text':'混合恢复 Unicode'}\ntry:\n plans[:]=[(429,{}),(200,{'accepted':True})];seen.clear();assert task.deliver(url,payload)=={'ok':True,'attempts':2};assert len(seen)==2 and seen[0]==seen[1]\n plans[:]=[(503,{}),(503,{}),(503,{})];seen.clear();assert task.deliver(url,payload)=={'ok':False,'kind':'transient_exhausted','attempts':3};assert len(seen)==3\n plans[:]=[(400,{'error':'invalid'})];seen.clear();assert task.deliver(url,payload)=={'ok':False,'kind':'permanent_rejected','attempts':1};assert len(seen)==1\n plans[:]=[(200,{'accepted':False})];seen.clear();assert task.deliver(url,payload)=={'ok':False,'kind':'business_rejected','attempts':1};assert len(seen)==1\n for bad in ('http://example.com/notify','http://localhost/notify','http://127.0.0.1:80/other'):\n  try:task.deliver(bad,payload)\n  except ValueError:pass\n  else:raise AssertionError('nonfixture endpoint accepted')\n for count in (0,6,True):\n  try:task.deliver(url,payload,count)\n  except ValueError:pass\n  else:raise AssertionError('invalid attempt limit accepted')\nfinally:server.shutdown();server.server_close();thread.join(2)\nassert not thread.is_alive()\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

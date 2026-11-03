@@ -1,0 +1,72 @@
+[
+  {
+    "id": "curated-network-completion-043",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 4,
+    "topic": "双栈连接竞速与截止时间",
+    "title": "实现双栈错峰竞速连接并验证失败回退和资源回收",
+    "answer": "```python\nimport socket,selectors,time,errno,ipaddress\ndef execute(endpoints,stagger=.05,timeout=.5):\n    if not isinstance(endpoints,list) or not 1<=len(endpoints)<=8:raise ValueError('1..8 endpoints required')\n    if isinstance(stagger,bool) or isinstance(timeout,bool) or not isinstance(stagger,(int,float)) or not isinstance(timeout,(int,float)) or not 0<stagger<=.1 or not stagger<timeout<=1:raise ValueError('invalid timing')\n    for family,host,port in endpoints:\n        if not isinstance(host,str):raise ValueError('numeric IP text required')\n        address=ipaddress.ip_address(host)\n        if not address.is_loopback or family not in [socket.AF_INET,socket.AF_INET6] or address.version!=(4 if family==socket.AF_INET else 6) or type(port) is not int or not 1<=port<=65535:raise ValueError('numeric loopback endpoint required')\n    selector=selectors.DefaultSelector();pending={};next_index=0;next_launch=time.monotonic();deadline=next_launch+timeout;last_error=errno.ECONNREFUSED\n    def finish(connection,index):\n        connection.setblocking(True);connection.settimeout(1);return connection,index\n    try:\n        while time.monotonic()<deadline:\n            now=time.monotonic()\n            if next_index<len(endpoints) and (now>=next_launch or not pending):\n                index=next_index;next_index+=1;family,host,port=endpoints[index]\n                try:connection=socket.socket(family,socket.SOCK_STREAM)\n                except OSError as error:last_error=error.errno;next_launch=now;continue\n                try:\n                    connection.setblocking(False);code=connection.connect_ex((host,port))\n                    if code==0:return finish(connection,index)\n                    if code in (errno.EINPROGRESS,errno.EWOULDBLOCK,errno.EALREADY,errno.EINTR):\n                        selector.register(connection,selectors.EVENT_WRITE);pending[connection]=index;next_launch=now+stagger\n                    else:connection.close();last_error=code;next_launch=now;continue\n                except Exception:connection.close();raise\n            if not pending and next_index==len(endpoints):raise OSError(last_error,'all connection attempts failed')\n            now=time.monotonic();wait=max(0,deadline-now)\n            if next_index<len(endpoints):wait=min(wait,max(0,next_launch-now))\n            for key,mask in selector.select(wait):\n                connection=key.fileobj;index=pending.pop(connection);selector.unregister(connection)\n                code=connection.getsockopt(socket.SOL_SOCKET,socket.SO_ERROR)\n                if code==0:return finish(connection,index)\n                last_error=code;connection.close()\n        raise TimeoutError('connection deadline exceeded')\n    finally:\n        for connection in pending:connection.close()\n        selector.close()\n```\n\n\n分别测试两个地址族与客户端回退时间，确认 AAAA 指向未就绪的 IPv6 路径。按回退计划撤回错误记录或修通完整 IPv6 路径，同时考虑旧 TTL 缓存；不要只修改某个浏览器偏好掩盖服务端问题。验收覆盖纯 IPv6、纯 IPv4 和双栈来源以及 TLS/业务请求。",
+    "type": "code",
+    "source": "OpsForge 原创网络专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\n非root Linux、Python3，真实IPv4/IPv6回环监听。验收使用本题IPv6监听的饱和accept队列制造挂起握手，不改路由/防火墙、不连接公网。这是客户端连接调度实验，不声称重现真实公网IPv6黑洞。\n\n## 操作任务\n实现execute(endpoints,stagger=.05,timeout=.5)，endpoints为按优先顺序的(family,数字回环地址,port)列表、最多8个。用非阻塞socket与selector在首个连接尚未完成时按stagger继续发起后续候选；首个成功连接返回(socket,index)，供调用者关闭。立即拒绝可立即尝试下一项；全部失败抛OSError，所有连接仍挂起至统一deadline则抛TimeoutError。成功连接改为阻塞并设1秒IO超时，关闭所有未获选的socket和selector；不能每个地址都耗尽完整timeout才继续。只接受匹配地址族的回环IP和1..65535端口，0<stagger<=.1且stagger<timeout<=1秒。验证IPv6可用优先、IPv6连接挂起时IPv4及时成功、IPv6拒绝立即回退、全挂起/全拒绝及无FD泄漏。\n\n## 提交产物\ntask.py中的execute；返回真正已连接socket而非状态字符串或模拟结果。\n\n## 验收方法\npython3 checks/check.py真实填满本题IPv6队列，确认握手仍挂起后，要求IPv4候选在0.35秒内完成（总deadline0.5秒、stagger0.03秒）；随后真实传输数据。正常IPv6优先、拒绝回退、全挂起deadline、非法公网地址拒绝和FD计数恢复均须通过，退出0。仅本机调度行为已验证，不证明DNS发布或真实IPv6路由恢复。\n\n失败示例：先用0.5秒阻塞连接IPv6，再连IPv4，即使最后成功，用户仍被完整IPv6超时拖慢。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "incident_signature": "network-aaaa-published-before-ipv6-route-ready",
+    "exercise_mode": "tabletop",
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "def execute(endpoints,stagger=.05,timeout=.5):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,selectors,time,errno,ipaddress\ndef execute(endpoints,stagger=.05,timeout=.5):\n    if not isinstance(endpoints,list) or not 1<=len(endpoints)<=8:raise ValueError('1..8 endpoints required')\n    if isinstance(stagger,bool) or isinstance(timeout,bool) or not isinstance(stagger,(int,float)) or not isinstance(timeout,(int,float)) or not 0<stagger<=.1 or not stagger<timeout<=1:raise ValueError('invalid timing')\n    for family,host,port in endpoints:\n        if not isinstance(host,str):raise ValueError('numeric IP text required')\n        address=ipaddress.ip_address(host)\n        if not address.is_loopback or family not in [socket.AF_INET,socket.AF_INET6] or address.version!=(4 if family==socket.AF_INET else 6) or type(port) is not int or not 1<=port<=65535:raise ValueError('numeric loopback endpoint required')\n    selector=selectors.DefaultSelector();pending={};next_index=0;next_launch=time.monotonic();deadline=next_launch+timeout;last_error=errno.ECONNREFUSED\n    def finish(connection,index):\n        connection.setblocking(True);connection.settimeout(1);return connection,index\n    try:\n        while time.monotonic()<deadline:\n            now=time.monotonic()\n            if next_index<len(endpoints) and (now>=next_launch or not pending):\n                index=next_index;next_index+=1;family,host,port=endpoints[index]\n                try:connection=socket.socket(family,socket.SOCK_STREAM)\n                except OSError as error:last_error=error.errno;next_launch=now;continue\n                try:\n                    connection.setblocking(False);code=connection.connect_ex((host,port))\n                    if code==0:return finish(connection,index)\n                    if code in (errno.EINPROGRESS,errno.EWOULDBLOCK,errno.EALREADY,errno.EINTR):\n                        selector.register(connection,selectors.EVENT_WRITE);pending[connection]=index;next_launch=now+stagger\n                    else:connection.close();last_error=code;next_launch=now;continue\n                except Exception:connection.close();raise\n            if not pending and next_index==len(endpoints):raise OSError(last_error,'all connection attempts failed')\n            now=time.monotonic();wait=max(0,deadline-now)\n            if next_index<len(endpoints):wait=min(wait,max(0,next_launch-now))\n            for key,mask in selector.select(wait):\n                connection=key.fileobj;index=pending.pop(connection);selector.unregister(connection)\n                code=connection.getsockopt(socket.SOL_SOCKET,socket.SO_ERROR)\n                if code==0:return finish(connection,index)\n                last_error=code;connection.close()\n        raise TimeoutError('connection deadline exceeded')\n    finally:\n        for connection in pending:connection.close()\n        selector.close()\n"
+    },
+    "negative_files": {
+      "task.py": "import socket\ndef execute(endpoints,stagger=.05,timeout=.5):\n    last=None\n    for index,(family,host,port) in enumerate(endpoints):\n        connection=socket.socket(family,socket.SOCK_STREAM);connection.settimeout(timeout)\n        try:connection.connect((host,port));return connection,index\n        except OSError as error:last=error;connection.close()\n    raise last\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(endpoints,stagger=.05,timeout=.5)，endpoints为按优先顺序的(family,数字回环地址,port)列表、最多8个。用非阻塞socket与selector在首个连接尚未完成时按stagger继续发起后续候选；首个成功连接返回(socket,index)，供调用者关闭。立即拒绝可立即尝试下一项；全部失败抛OSError，所有连接仍挂起至统一deadline则抛TimeoutError。成功连接改为阻塞并设1秒IO超时，关闭所有未获选的socket和selector；不能每个地址都耗尽完整timeout才继续。只接受匹配地址族的回环IP和1..65535端口，0<stagger<=.1且stagger<timeout<=1秒。验证IPv6可用优先、IPv6连接挂起时IPv4及时成功、IPv6拒绝立即回退、全挂起/全拒绝及无FD泄漏。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实双栈套接字、饱和队列挂起、竞速延迟与全局deadline、传输及FD回收",
+      "failure_examples": [
+        "逐地址阻塞耗尽完整timeout后才尝试下一个"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,sys,socket,time,select,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef fd_count():return len(list(pathlib.Path('/proc/self/fd').iterdir()))\n@contextlib.contextmanager\ndef listener(family,backlog=4):\n    with socket.socket(family,socket.SOCK_STREAM) as server:\n        if family==socket.AF_INET6:server.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,1)\n        server.bind(('::1' if family==socket.AF_INET6 else '127.0.0.1',0));server.listen(backlog);server.settimeout(1)\n        yield server\ndef endpoint(server):return (server.family,server.getsockname()[0],server.getsockname()[1])\nbaseline=fd_count()\nwith listener(socket.AF_INET6) as six,listener(socket.AF_INET) as four:\n    connection,index=task.execute([endpoint(six),endpoint(four)])\n    with connection:\n        assert index==0 and connection.family==socket.AF_INET6\n        accepted,_=six.accept()\n        with accepted:connection.sendall(b'ipv6');assert accepted.recv(4)==b'ipv6'\n# Real Linux backlog saturation creates a pending v6 handshake; it is not a public routing fault.\nwith listener(socket.AF_INET6,1) as blocked,listener(socket.AF_INET) as four:\n    fillers=[]\n    try:\n        for _ in range(2):fillers.append(socket.create_connection(blocked.getsockname()[:2],timeout=1))\n        with socket.socket(socket.AF_INET6,socket.SOCK_STREAM) as verify:\n            verify.setblocking(False);verify.connect_ex(blocked.getsockname()[:2])\n            assert not select.select([], [verify], [], .03)[1],'fixture did not create a pending handshake'\n        start=time.monotonic();connection,index=task.execute([endpoint(blocked),endpoint(four)],.03,.5);elapsed=time.monotonic()-start\n        with connection:\n            assert index==1 and connection.family==socket.AF_INET and elapsed<.35,(index,elapsed)\n            accepted,_=four.accept()\n            with accepted:connection.sendall(b'fallback');assert accepted.recv(8)==b'fallback'\n        before=fd_count();start=time.monotonic()\n        try:task.execute([endpoint(blocked)],.03,.12)\n        except TimeoutError:pass\n        else:raise AssertionError('all-pending attempts must time out')\n        assert .09<=time.monotonic()-start<.5 and fd_count()==before\n    finally:\n        for connection in fillers:connection.close()\nwith listener(socket.AF_INET6) as closed:refused=endpoint(closed)\nwith listener(socket.AF_INET) as live:\n    connection,index=task.execute([refused,endpoint(live)])\n    with connection:\n        assert index==1\n        accepted,_=live.accept();accepted.close()\ntry:task.execute([refused],.03,.2)\nexcept OSError:pass\nelse:raise AssertionError('all-refused attempts accepted')\nfor endpoints,stagger,timeout in [([], .03,.2),([(socket.AF_INET,'203.0.113.1',80)],.03,.2),([(socket.AF_INET,'127.0.0.1',0)],.03,.2),([refused],0,.2),([refused],.1,.1)]:\n    try:task.execute(endpoints,stagger,timeout)\n    except ValueError:pass\n    else:raise AssertionError('invalid endpoints or timing accepted')\nassert fd_count()==baseline,(fd_count(),baseline)\n\nfor endpoints,stagger,timeout in [([(socket.AF_INET,2130706433,12345)],.03,.2),([(socket.AF_INET6,'127.0.0.1',12345)],.03,.2),([(socket.AF_INET,'127.0.0.1',True)],.03,.2),([refused]*9,.03,.2),([refused],True,.2),([refused],.03,True)]:\n    before=fd_count()\n    try:task.execute(endpoints,stagger,timeout)\n    except ValueError:pass\n    else:raise AssertionError('type/family/resource boundary accepted')\n    assert fd_count()==before\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": []
+      }
+    },
+    "case_signature": "network-dualstack|staggered-nonblocking-race-real-pending-v6-to-v4-global-deadline",
+    "conversion": {
+      "original_id": "curated-network-completion-043",
+      "original_title": "发布 AAAA 记录后部分客户端首屏明显变慢，IPv4 正常而 IPv6 路由不可达。如何处理？",
+      "original_type": "case",
+      "preserve_history": true
+    }
+  }
+]

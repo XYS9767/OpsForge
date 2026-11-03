@@ -1,0 +1,72 @@
+[
+  {
+    "id": "curated-parallel-alertmanager-045",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 1,
+    "topic": "接收器集成与通知模板",
+    "title": "真实接收器更名去重边界：同一告警和groupKey仍可能再次通知，不代表新事故",
+    "answer": "```python\nimport copy\ndef rename_receiver(config,old,new):\n    result=copy.deepcopy(config)\n    if not isinstance(old,str) or not old or not isinstance(new,str) or not new or old==new:raise ValueError(\"distinct receiver names required\")\n    found=[r for r in result[\"receivers\"] if r[\"name\"]==old]\n    if len(found)!=1 or any(r[\"name\"]==new for r in result[\"receivers\"]):raise ValueError(\"one old receiver and unused new name required\")\n    found[0][\"name\"]=new\n    def walk(route):\n        if route.get(\"receiver\")==old:route[\"receiver\"]=new\n        for child in route.get(\"routes\",[]):walk(child)\n    walk(result[\"route\"])\n    return result\n```\n\n原题知识说明：\n路由/接收器标识与通知历史组织有关，更名可能被视为新的投递路径并重新通知。变更前评估活动告警和接收端幂等，不能只把名称当界面文字。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "路由/接收器标识与通知历史组织有关，更名可能被视为新的投递路径并重新通知。",
+      "变更前评估活动告警和接收端幂等，不能只把名称当界面文字。"
+    ],
+    "references": [
+      "https://github.com/prometheus/alertmanager/blob/v0.28.1/notify/notify.go",
+      "https://prometheus.io/docs/alerting/latest/notifications/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-045",
+      "original_title": "receiver名称变化为何可能影响通知去重体验？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现rename_receiver(config,old,new)：深拷贝，只把恰好一个old接收器定义名称改为未使用的new，并递归更新route中显式等于old的receiver；不为继承路由新增字段，不变更其他接收器/配置/原输入。old/new必须不同的非空字符串，old唯一且new未使用，否则ValueError。真实Alertmanager先证明同一接收器下重复提交相同firing告警被去重；再对参考更名结果在同一进程热重载，保持告警标签/注解/startsAt和group_by不变，确认新receiver再次收到同一groupKey、fingerprint和startsAt的告警。说明这是通知去重接收器身份变化，不能当成新事故，也不能承诺更名无重发；业务侧幂等需按自己的事件合同另行验收。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n官方Alertmanager0.28.1 Windows原生进程、真实去重缓存及回环Webhook、同PID重载。未修改生产接收器、未发外部消息，没有声称跨版本升级、集群分区、业务工单平台的幂等已验证。只证明本题单实例同类webhook接收器更名边界，不能从groupKey单独推断新事故。自有临时配置和进程，不改默认身份或服务，不构建镜像。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef rename_receiver(config,old,new):\n    result=copy.deepcopy(config)\n    if not isinstance(old,str) or not old or not isinstance(new,str) or not new or old==new:raise ValueError(\"distinct receiver names required\")\n    found=[r for r in result[\"receivers\"] if r[\"name\"]==old]\n    if len(found)!=1 or any(r[\"name\"]==new for r in result[\"receivers\"]):raise ValueError(\"one old receiver and unused new name required\")\n    found[0][\"name\"]=new\n    def walk(route):\n        if route.get(\"receiver\")==old:route[\"receiver\"]=new\n        for child in route.get(\"routes\",[]):walk(child)\n    walk(result[\"route\"])\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef rename_receiver(config,old,new):\n    result=copy.deepcopy(config)\n    if not isinstance(old,str) or not old or not isinstance(new,str) or not new or old==new:raise ValueError(\"distinct receiver names required\")\n    found=[r for r in result[\"receivers\"] if r[\"name\"]==old]\n    if len(found)!=1 or any(r[\"name\"]==new for r in result[\"receivers\"]):raise ValueError(\"one old receiver and unused new name required\")\n    found[0][\"name\"]=new\n    def walk(route):\n        if False:route[\"receiver\"]=new\n        for child in route.get(\"routes\",[]):walk(child)\n    walk(result[\"route\"])\n    return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "官方Alertmanager0.28.1与Python，Windows临时回环Webhook和单实例私有数据目录",
+      "operation": "实现rename_receiver(config,old,new)：深拷贝，只把恰好一个old接收器定义名称改为未使用的new，并递归更新route中显式等于old的receiver；不为继承路由新增字段，不变更其他接收器/配置/原输入。old/new必须不同的非空字符串，old唯一且new未使用，否则ValueError。真实Alertmanager先证明同一接收器下重复提交相同firing告警被去重；再对参考更名结果在同一进程热重载，保持告警标签/注解/startsAt和group_by不变，确认新receiver再次收到同一groupKey、fingerprint和startsAt的告警。说明这是通知去重接收器身份变化，不能当成新事故，也不能承诺更名无重发；业务侧幂等需按自己的事件合同另行验收。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "官方Alertmanager0.28.1 Windows原生进程、真实去重缓存及回环Webhook、同PID重载。未修改生产接收器、未发外部消息，没有声称跨版本升级、集群分区、业务工单平台的幂等已验证。只证明本题单实例同类webhook接收器更名边界，不能从groupKey单独推断新事故。自有临时配置和进程，不改默认身份或服务，不构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "alertmanager"
+        ],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import copy,datetime,json,pathlib,shutil,socket,subprocess,tempfile,threading,time,urllib.request,urllib.error\nfrom http.server import BaseHTTPRequestHandler,ThreadingHTTPServer\nimport task\nbinary=shutil.which(\"alertmanager\") or shutil.which(\"alertmanager.exe\")\nassert binary and \"0.28.1\" in subprocess.check_output([binary,\"--version\"],stderr=subprocess.STDOUT,text=True,timeout=5)\nprint(\"NATIVE_PLATFORM_READY\",flush=True)\nseen=[]\nclass Hook(BaseHTTPRequestHandler):\n def do_POST(self):\n  seen.append(json.loads(self.rfile.read(int(self.headers[\"Content-Length\"]))));self.send_response(200);self.send_header(\"Content-Length\",\"0\");self.end_headers()\n def log_message(self,*args):pass\nserver=ThreadingHTTPServer((\"127.0.0.1\",0),Hook);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()\ndef request(method,url,payload=None):\n req=urllib.request.Request(url,data=json.dumps(payload).encode() if payload is not None else (b\"\" if method==\"POST\" else None),method=method,headers={\"Content-Type\":\"application/json\"})\n try:\n  with urllib.request.urlopen(req,timeout=3) as r:return r.status,r.read().decode()\n except urllib.error.HTTPError as e:return e.code,e.read().decode()\ndef wait_for(condition):\n end=time.monotonic()+7\n while time.monotonic()<end:\n  if condition():return\n  time.sleep(.05)\n raise AssertionError(\"native receiver rename notification witness missing\")\nproc=None\ntry:\n with tempfile.TemporaryDirectory(prefix=\"opsforge-receiver-rename-\") as temp:\n  root=pathlib.Path(temp);config={\"route\":{\"receiver\":\"old-team\",\"group_by\":[\"alertname\"],\"group_wait\":\"0s\",\"group_interval\":\"1s\",\"repeat_interval\":\"1h\",\"routes\":[{\"receiver\":\"other-team\",\"matchers\":[\"team=other\"]}]},\"receivers\":[{\"name\":\"old-team\",\"webhook_configs\":[{\"url\":\"http://127.0.0.1:\"+str(server.server_port)}]},{\"name\":\"other-team\"}]};original=copy.deepcopy(config)\n  path=root/\"config.json\";path.write_text(json.dumps(config),encoding=\"utf8\")\n  with socket.socket() as s:s.bind((\"127.0.0.1\",0));port=s.getsockname()[1]\n  base=\"http://127.0.0.1:\"+str(port)\n  with (root/\"native.log\").open(\"wb\") as log:\n   proc=subprocess.Popen([binary,\"--config.file=\"+str(path),\"--storage.path=\"+str(root/\"data\"),\"--web.listen-address=127.0.0.1:\"+str(port),\"--cluster.listen-address=\",\"--log.level=error\"],stdout=log,stderr=subprocess.STDOUT)\n   try:\n    def ready():\n     if proc.poll() is not None:raise RuntimeError(\"NATIVE_ENVIRONMENT_ERROR: receiver rename startup\")\n     try:return request(\"GET\",base+\"/-/ready\")[0]==200\n     except OSError:return False\n    wait_for(ready)\n    now=datetime.datetime.now(datetime.timezone.utc);alert={\"labels\":{\"alertname\":\"PrivateReceiverRename\",\"instance\":\"owned-host\"},\"annotations\":{\"summary\":\"same incident throughout\"},\"startsAt\":now.isoformat(),\"endsAt\":(now+datetime.timedelta(minutes=5)).isoformat()}\n    request(\"POST\",base+\"/api/v2/alerts\",[alert]);wait_for(lambda:len(seen)==1)\n    first=copy.deepcopy(seen[0]);assert first[\"receiver\"]==\"old-team\"\n    request(\"POST\",base+\"/api/v2/alerts\",[alert]);time.sleep(1.2);assert len(seen)==1,\"same receiver should still deduplicate unchanged firing set\"\n    print(\"NATIVE_ALERTMANAGER_SAME_RECEIVER_SAME_FIRING_SET_REPOST_REMAINS_DEDUPLICATED\",flush=True)\n    print(\"STUDENT_OPERATION_ENTERED: rename receiver while preserving real alert and grouping identities\",flush=True)\n    fixed=task.rename_receiver(config,\"old-team\",\"new-team\")\n    path.write_text(json.dumps(fixed),encoding=\"utf8\");pid=proc.pid;assert request(\"POST\",base+\"/-/reload\")[0]==200\n    request(\"POST\",base+\"/api/v2/alerts\",[alert]);wait_for(lambda:any(p[\"receiver\"]==\"new-team\" for p in seen))\n    second=next(p for p in seen if p[\"receiver\"]==\"new-team\")\n    assert proc.poll() is None and proc.pid==pid\n    assert first[\"groupKey\"]==second[\"groupKey\"] and first[\"groupLabels\"]==second[\"groupLabels\"]\n    a,b=first[\"alerts\"][0],second[\"alerts\"][0]\n    assert a[\"fingerprint\"]==b[\"fingerprint\"] and a[\"labels\"]==b[\"labels\"] and a[\"startsAt\"]==b[\"startsAt\"] and a[\"status\"]==b[\"status\"]==\"firing\"\n    expected=copy.deepcopy(original);expected[\"receivers\"][0][\"name\"]=\"new-team\";expected[\"route\"][\"receiver\"]=\"new-team\"\n    assert fixed==expected and config==original\n    try:task.rename_receiver(config,\"old-team\",\"other-team\")\n    except ValueError:pass\n    else:raise AssertionError(\"receiver name collision accepted\")\n    print(\"NATIVE_ALERTMANAGER_RECEIVER_RENAME_RENOTIFIES_SAME_GROUPKEY_FINGERPRINT_STARTSAT_SAME_PID_NOT_NEW_INCIDENT\",flush=True)\n   finally:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\nfinally:server.shutdown();server.server_close();thread.join(timeout=2)\nprint(\"NATIVE_SEMANTIC_ASSERTIONS_PASSED\",flush=True)\n"
+      }
+    },
+    "question_format": "practice"
+  }
+]

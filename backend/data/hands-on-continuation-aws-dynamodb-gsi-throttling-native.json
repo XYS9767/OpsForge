@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-parallel-aws-098",
+    "module": "aws",
+    "category": "AWS 云模拟",
+    "level": 4,
+    "topic": "存储数据库与恢复",
+    "title": "基表写容量有余量但GSI写入持续限流",
+    "answer": "```python\ndef diagnose_throttling(reason,resource_arn):\n    if not isinstance(reason,str) or not isinstance(resource_arn,str):raise ValueError(\"reason and resource ARN must be strings\")\n    parts=resource_arn.split(\":table/\",1)\n    if len(parts)!=2 or not parts[1]:raise ValueError(\"invalid DynamoDB table/index ARN\")\n    resource=parts[1].split(\"/index/\",1)\n    is_index=len(resource)==2\n    target=resource[1] if is_index else resource[0]\n    if reason.startswith(\"Index\")!=is_index:raise ValueError(\"throttling reason resource type disagrees with ARN\")\n    if \"WriteProvisionedThroughputExceeded\" in reason:\n        action=\"increase or autoscale the identified GSI write capacity; inspect its WriteProvisionedThroughputThrottleEvents and ConsumedWriteCapacityUnits; base-table headroom does not disprove GSI back-pressure\"\n    elif \"KeyRangeThroughputExceeded\" in reason:\n        action=\"identify hot partition keys and improve write distribution; raising total index capacity alone may not fix a single hot key\"\n    elif \"AccountLimitExceeded\" in reason:action=\"check account-level on-demand throughput quota for the identified resource\"\n    else:action=\"inspect the complete reason and matching table/index metrics before changing capacity\"\n    return {\"resource_type\":\"index\" if is_index else \"table\",\"resource_name\":target,\"reason\":reason,\"action\":action}\n```\n\n原题知识说明：\n保存限流原因与ResourceArn，分别检查基表和该GSI的写容量、消费量、自动扩容上限；GSI无法及时写入会对基表写入施加反压，基表余量不能替代索引容量。先按业务优先级限速并用有界退避重试，经授权调整该索引容量或扩容配置；不能直接删除查询依赖索引。验收基表写成功率、索引限流消退及索引查询追上；保留幂等键，避免重试产生重复副作用。",
+    "type": "code",
+    "incident_signature": "aws-dynamodb-gsi-provisioned-write-backpressure",
+    "source": "独立编审：AWS特定服务根因",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "用服务配置与审计证明根因",
+      "保持权限/数据安全边界",
+      "验证恢复及拒绝路径"
+    ],
+    "references": [
+      "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/throttling-diagnosing-workflow.html",
+      "https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/throttling-provisioned-capacity-exceeded-mitigation.html"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-aws-098",
+      "original_title": "DynamoDB基表写容量有余量，PutItem却持续被限流，ThrottlingReasons指向GSI的IndexWriteProvisionedThroughputExceeded。如何桌面处置？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现diagnose_throttling(reason,resource_arn)：根据DynamoDB ThrottlingReasons解析受限对象是表还是GSI、读写方向与限额类型；核对reason的Index/Table前缀与资源ARN一致。IndexWriteProvisionedThroughputExceeded只指导检查被点名GSI写容量/自动扩缩和指标，表WCU有余量不能排除GSI背压；KeyRange原因应检查热键分布，不能只盲目扩总容量。\n\n## 提交产物\ntask.py\n\n## 验收方法\n对照GSI provisioned容量、GSI hot partition和表级容量原因，并拒绝reason与ARN不一致。\n\n## 能力边界\n通过本地合成DynamoDB异常原因和ARN验证资源归属及排障分流；不访问DynamoDB，不调整真实容量或声明写入恢复。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def diagnose_throttling(reason,resource_arn):\n    if not isinstance(reason,str) or not isinstance(resource_arn,str):raise ValueError(\"reason and resource ARN must be strings\")\n    parts=resource_arn.split(\":table/\",1)\n    if len(parts)!=2 or not parts[1]:raise ValueError(\"invalid DynamoDB table/index ARN\")\n    resource=parts[1].split(\"/index/\",1)\n    is_index=len(resource)==2\n    target=resource[1] if is_index else resource[0]\n    if reason.startswith(\"Index\")!=is_index:raise ValueError(\"throttling reason resource type disagrees with ARN\")\n    if \"WriteProvisionedThroughputExceeded\" in reason:\n        action=\"increase or autoscale the identified GSI write capacity; inspect its WriteProvisionedThroughputThrottleEvents and ConsumedWriteCapacityUnits; base-table headroom does not disprove GSI back-pressure\"\n    elif \"KeyRangeThroughputExceeded\" in reason:\n        action=\"identify hot partition keys and improve write distribution; raising total index capacity alone may not fix a single hot key\"\n    elif \"AccountLimitExceeded\" in reason:action=\"check account-level on-demand throughput quota for the identified resource\"\n    else:action=\"inspect the complete reason and matching table/index metrics before changing capacity\"\n    return {\"resource_type\":\"index\" if is_index else \"table\",\"resource_name\":target,\"reason\":reason,\"action\":action}\n"
+    },
+    "negative_files": {
+      "task.py": "def diagnose_throttling(reason,resource_arn):\n    if not isinstance(reason,str) or not isinstance(resource_arn,str):raise ValueError(\"reason and resource ARN must be strings\")\n    parts=resource_arn.split(\":table/\",1)\n    if len(parts)!=2 or not parts[1]:raise ValueError(\"invalid DynamoDB table/index ARN\")\n    resource=parts[1].split(\"/index/\",1)\n    is_index=len(resource)==2\n    target=resource[0]\n    if reason.startswith(\"Index\")!=is_index:raise ValueError(\"throttling reason resource type disagrees with ARN\")\n    if \"WriteProvisionedThroughputExceeded\" in reason:\n        action=\"increase or autoscale the identified GSI write capacity; inspect its WriteProvisionedThroughputThrottleEvents and ConsumedWriteCapacityUnits; base-table headroom does not disprove GSI back-pressure\"\n    elif \"KeyRangeThroughputExceeded\" in reason:\n        action=\"identify hot partition keys and improve write distribution; raising total index capacity alone may not fix a single hot key\"\n    elif \"AccountLimitExceeded\" in reason:action=\"check account-level on-demand throughput quota for the identified resource\"\n    else:action=\"inspect the complete reason and matching table/index metrics before changing capacity\"\n    return {\"resource_type\":\"index\" if is_index else \"table\",\"resource_name\":target,\"reason\":reason,\"action\":action}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现diagnose_throttling(reason,resource_arn)：根据DynamoDB ThrottlingReasons解析受限对象是表还是GSI、读写方向与限额类型；核对reason的Index/Table前缀与资源ARN一致。IndexWriteProvisionedThroughputExceeded只指导检查被点名GSI写容量/自动扩缩和指标，表WCU有余量不能排除GSI背压；KeyRange原因应检查热键分布，不能只盲目扩总容量。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "通过本地合成DynamoDB异常原因和ARN验证资源归属及排障分流；不访问DynamoDB，不调整真实容量或声明写入恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'));task=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: identify DynamoDB throttled resource',flush=True)\narn='arn:aws:dynamodb:us-east-1:123456789012:table/Orders/index/ByDate'\ngsi=task.diagnose_throttling('IndexWriteProvisionedThroughputExceeded',arn);assert gsi['resource_type']=='index' and gsi['resource_name']=='ByDate' and 'GSI write capacity' in gsi['action']\nhot=task.diagnose_throttling('IndexWriteKeyRangeThroughputExceeded',arn);assert 'hot partition keys' in hot['action']\ntable=task.diagnose_throttling('TableWriteProvisionedThroughputExceeded','arn:aws:dynamodb:us-east-1:123456789012:table/Orders');assert table['resource_type']=='table' and table['resource_name']=='Orders'\ntry:task.diagnose_throttling('IndexWriteProvisionedThroughputExceeded','arn:aws:dynamodb:us-east-1:123456789012:table/Orders')\nexcept ValueError:pass\nelse:raise AssertionError('reason/ARN mismatch accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "aws"
+    ]
+  }
+]

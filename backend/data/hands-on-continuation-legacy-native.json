@@ -1,0 +1,146 @@
+[
+  {
+    "id": "curated-parallel-process-047",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 2,
+    "topic": "进程性能与故障诊断",
+    "title": "执行磁盘冷文件与私有COW实验，拒绝把major fault直接认定为Swap",
+    "answer": "```python\ndef diagnose_faults(run_probe):\n    sample=run_probe()\n    return {'cold_file_major':sample['cold_file_major'],'cow_minor':sample['cow_minor'],\n            'major_proves_swap':False,'cow_requires_disk_io':False,'nonce':sample['nonce']}\n```\n\n原题说明：\nmajor fault 通常需要 I/O 来装入缺失页，minor fault 不需要这样的 I/O；文件映射也能产生 major fault，因此并非所有 major fault 都是 swap。结合 swap 速率、映射类型及存储读请求才能归因。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原候选ID重新提供可复现合同；只按精确源码对应的原生验收证据认定通过。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "major fault 通常需要 I/O 来装入缺失页，minor fault 不需要这样的 I/O；文件映射也能产生 major fault，因此并非所有 major fault 都是 swap。",
+      "结合 swap 速率、映射类型及存储读请求才能归因。"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man2/getrusage.2.html",
+      "https://man7.org/linux/man-pages/man2/posix_fadvise.2.html",
+      "https://man7.org/linux/man-pages/man2/mmap.2.html"
+    ],
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-process-047",
+      "original_title": "major fault 与 minor fault 的差异能否直接判断 Swap？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现 diagnose_faults(run_probe)，恰好调用一次可信回调run_probe()执行真实C程序，并返回cold_file_major、cow_minor的原始计数和nonce，另返回major_proves_swap=False、cow_requires_disk_io=False。回调在磁盘文件上执行fsync、POSIX_FADV_DONTNEED、mincore确认冷页、MAP_PRIVATE读取与写时复制，并验证原文件未变。不能把两类计数互换、凭空填写或由major>0推断Swap。实验需要支持冷页回收的磁盘文件系统；tmpfs不满足时属于环境不可用。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py，真实原生接口和独立反例。\n\n## 能力边界\n真实非root磁盘文件实验；不禁用Swap、不耗尽主机内存、不清空全局页缓存。计数是进程区间观测，不是逐页IO追踪，也不证明生产机Swap状态。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement the requested function\")\n"
+    },
+    "solution_files": {
+      "task.py": "def diagnose_faults(run_probe):\n    sample=run_probe()\n    return {'cold_file_major':sample['cold_file_major'],'cow_minor':sample['cow_minor'],\n            'major_proves_swap':False,'cow_requires_disk_io':False,'nonce':sample['nonce']}\n"
+    },
+    "negative_files": {
+      "task.py": "def diagnose_faults(run_probe):\n    sample=run_probe()\n    return {'cold_file_major':sample['cold_file_major'],'cow_minor':sample['cow_minor'],\n            'major_proves_swap':sample['cold_file_major']>0,'cow_requires_disk_io':False,'nonce':sample['nonce']}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux原生实验，按requires检查工具",
+      "operation": "实现 diagnose_faults(run_probe)，恰好调用一次可信回调run_probe()执行真实C程序，并返回cold_file_major、cow_minor的原始计数和nonce，另返回major_proves_swap=False、cow_requires_disk_io=False。回调在磁盘文件上执行fsync、POSIX_FADV_DONTNEED、mincore确认冷页、MAP_PRIVATE读取与写时复制，并验证原文件未变。不能把两类计数互换、凭空填写或由major>0推断Swap。实验需要支持冷页回收的磁盘文件系统；tmpfs不满足时属于环境不可用。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实非root磁盘文件实验；不禁用Swap、不耗尽主机内存、不清空全局页缓存。计数是进程区间观测，不是逐页IO追踪，也不证明生产机Swap状态。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "gcc"
+        ],
+        "features": [
+          "linux:nonroot_dac",
+          "linux:file_backed_faults"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,hashlib,json,copy\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nsource=pathlib.Path('checks/fault_probe.c').resolve()\nwith tempfile.TemporaryDirectory(prefix='opsforge-fault-disk-') as directory:\n root=pathlib.Path(directory);binary=root/'probe'\n compilation=subprocess.run(['gcc','-O0',str(source),'-o',str(binary)],capture_output=True,text=True,timeout=5)\n if compilation.returncode:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: probe compilation failed: '+compilation.stderr)\n calls=[];nonce=secrets.token_hex(12)\n def run_probe():\n  proc=subprocess.run([str(binary)],cwd=root,capture_output=True,text=True,timeout=5)\n  if proc.returncode:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: disk-backed cold-file/COW experiment unavailable: '+proc.stdout+proc.stderr)\n  sample=json.loads(proc.stdout)\n  if not (sample['cold_file_major']>0 and sample['cow_minor']>=sample['pages'] and sample['cow_major']==0 and sample['uid']==os.getuid()):\n   raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: actual fault observations unavailable')\n  sample['nonce']=nonce;calls.append(copy.deepcopy(sample));return sample\n print('STUDENT_OPERATION_ENTERED:diagnose_faults',flush=True)\n answer=task.diagnose_faults(run_probe)\n assert len(calls)==1,'must execute the supplied real native experiment exactly once'\n sample=calls[0]\n assert answer=={'cold_file_major':sample['cold_file_major'],'cow_minor':sample['cow_minor'],'major_proves_swap':False,'cow_requires_disk_io':False,'nonce':nonce},'file-backed major faults do not establish swap; private write COW is minor in this actual experiment'\n assert sorted(p.name for p in root.iterdir())==['probe'],'probe file or mapping not cleaned up'\n print('NATIVE_FILE_MAJOR_AND_PRIVATE_COW:'+json.dumps(sample),flush=True)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n",
+        "checks/fault_probe.c": "#define _GNU_SOURCE\n#include <sys/mman.h>\n#include <sys/resource.h>\n#include <unistd.h>\n#include <fcntl.h>\n#include <stdlib.h>\n#include <stdio.h>\n#include <string.h>\n#include <errno.h>\n\nint main(void) {\n    long page=sysconf(_SC_PAGESIZE);\n    const size_t pages=4;\n    int fd=-1, status=2;\n    char name[]=\"opsf-file-fault-XXXXXX\";\n    unsigned char *source=NULL,*mapping=MAP_FAILED, resident[4]={0};\n    struct rusage before={0},read_done={0},write_done={0};\n    if(page<=0 || page>65536) goto cleanup;\n    size_t bytes=(size_t)page*pages;\n    source=malloc(bytes);if(!source) goto cleanup;\n    memset(source,0x31,bytes);\n    fd=mkstemp(name);if(fd<0) goto cleanup;\n    if(write(fd,source,bytes)!=(ssize_t)bytes || fsync(fd)) goto cleanup;\n    int advised=posix_fadvise(fd,0,(off_t)bytes,POSIX_FADV_DONTNEED);\n    if(advised){errno=advised;goto cleanup;}\n    mapping=mmap(NULL,bytes,PROT_READ|PROT_WRITE,MAP_PRIVATE,fd,0);\n    if(mapping==MAP_FAILED || madvise(mapping,bytes,MADV_NOHUGEPAGE)) goto cleanup;\n    if(mincore(mapping,bytes,resident)) goto cleanup;\n    for(size_t i=0;i<pages;i++) if(resident[i]&1){errno=EBUSY;goto cleanup;}\n    /* Warm the counter structures; process-wide counts are not an exact per-page I/O trace. */\n    getrusage(RUSAGE_SELF,&before);getrusage(RUSAGE_SELF,&read_done);getrusage(RUSAGE_SELF,&write_done);\n    volatile unsigned char *view=mapping;\n    volatile unsigned long sum=0;\n    if(getrusage(RUSAGE_SELF,&before)) goto cleanup;\n    for(size_t i=0;i<pages;i++) sum+=view[i*(size_t)page];\n    if(getrusage(RUSAGE_SELF,&read_done)) goto cleanup;\n    for(size_t i=0;i<pages;i++) view[i*(size_t)page]=0x52;\n    if(getrusage(RUSAGE_SELF,&write_done)) goto cleanup;\n    unsigned char check;\n    for(size_t i=0;i<pages;i++) {\n        if(pread(fd,&check,1,(off_t)(i*(size_t)page))!=1 || check!=0x31 || view[i*(size_t)page]!=0x52) goto cleanup;\n    }\n    printf(\"{\\\"page_size\\\":%ld,\\\"pages\\\":%zu,\\\"cold_file_major\\\":%ld,\\\"cold_file_minor\\\":%ld,\\\"cow_minor\\\":%ld,\\\"cow_major\\\":%ld,\\\"sum\\\":%lu,\\\"uid\\\":%lu}\\n\",page,pages,read_done.ru_majflt-before.ru_majflt,read_done.ru_minflt-before.ru_minflt,write_done.ru_minflt-read_done.ru_minflt,write_done.ru_majflt-read_done.ru_majflt,sum,(unsigned long)getuid());\n    status=(read_done.ru_majflt>before.ru_majflt && write_done.ru_minflt-read_done.ru_minflt>=(long)pages && write_done.ru_majflt==read_done.ru_majflt)?0:3;\ncleanup:\n    if(status==2) fprintf(stderr,\"file-fault capability unavailable: errno=%d (%s)\\n\",errno,strerror(errno));\n    if(mapping!=MAP_FAILED) munmap(mapping,(size_t)page*pages);\n    if(fd>=0){close(fd);unlink(name);}\n    free(source);\n    return status;\n}\n"
+      }
+    }
+  },
+  {
+    "id": "curated-advanced-cicd-004",
+    "module": "cicd",
+    "category": "CI/CD 与 GitOps",
+    "level": 4,
+    "topic": "构建依赖与制品",
+    "title": "真实Ed25519验签之外核对SLSA构建者、构建参数与源码策略",
+    "body": "## 操作任务\n实现 verify_provenance(envelope,policy,artifact)，输入为JSON兼容DSSE信封、可信本地策略和产物bytes，返回严格bool。验证application/vnd.in-toto+json的DSSE PAE及Ed25519签名；只信任policy.trusted_builders中keyid对应的公钥与builder_id组合。要求Statement/v1、provenance/v1、单一subject的名称和真实产物SHA256一致，buildType、externalParameters和唯一resolvedDependencies分别与策略精确一致。未知参数拒绝，重复JSON键和非有限数拒绝，不信任信封自带公钥，失败闭合返回False。字段结构见验收用例与参考解；策略由可信调用方提供，不从信封生成。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py，真实原生接口和独立反例。\n\n## 能力边界\n固定的离线SLSA v1 provenance子集及本题更严格的源码依赖策略；实际生成Ed25519密钥并验签。不构建镜像，不运行远端CI，不证明SLSA等级、构建平台隔离、Sigstore证书或透明日志。",
+    "answer": "```python\nimport base64,binascii,hashlib,json\nfrom cryptography.exceptions import InvalidSignature\nfrom cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey\ndef _unique(pairs):\n    result={}\n    for key,value in pairs:\n        if key in result:raise ValueError('duplicate JSON key')\n        result[key]=value\n    return result\ndef _bad_constant(value):raise ValueError('nonfinite JSON')\ndef _same_json(left,right):\n    if type(left) is not type(right):return False\n    if isinstance(left,dict):return left.keys()==right.keys() and all(_same_json(left[k],right[k]) for k in left)\n    if isinstance(left,list):return len(left)==len(right) and all(_same_json(a,b) for a,b in zip(left,right))\n    return left==right\ndef verify_provenance(envelope,policy,artifact):\n    try:\n        if not isinstance(envelope,dict) or envelope.get('payloadType')!='application/vnd.in-toto+json':return False\n        encoded=envelope['payload']\n        if not isinstance(encoded,str) or len(encoded)>131072:return False\n        payload=base64.b64decode(encoded,validate=True)\n        document=json.loads(payload.decode('utf8'),object_pairs_hook=_unique,parse_constant=_bad_constant)\n        if document['_type']!='https://in-toto.io/Statement/v1' or document['predicateType']!='https://slsa.dev/provenance/v1':return False\n        if document['subject']!=[{'name':policy['artifact_name'],'digest':{'sha256':hashlib.sha256(artifact).hexdigest()}}]:return False\n        predicate=document['predicate'];definition=predicate['buildDefinition'];builder=predicate['runDetails']['builder']['id']\n        if definition['buildType']!=policy['build_type']:return False\n        if not _same_json(definition['externalParameters'],policy['external_parameters']):return False\n        if definition['resolvedDependencies']!=[policy['source_dependency']]:return False\n        signatures=envelope['signatures']\n        if not isinstance(signatures,list) or not 1<=len(signatures)<=8:return False\n        media=envelope['payloadType'].encode('utf8')\n        pae=b'DSSEv1 '+str(len(media)).encode()+b' '+media+b' '+str(len(payload)).encode()+b' '+payload\n        for signature in signatures:\n            if not isinstance(signature,dict):continue\n            spec=policy['trusted_builders'].get(signature.get('keyid'))\n            if not spec:continue\n            if spec['builder_id']!=builder:continue\n            try:\n                key=Ed25519PublicKey.from_public_bytes(base64.b64decode(spec['public_key'],validate=True))\n                key.verify(base64.b64decode(signature['sig'],validate=True),pae)\n                return True\n            except (InvalidSignature,ValueError,binascii.Error,KeyError,TypeError):continue\n        return False\n    except (KeyError,TypeError,ValueError,UnicodeError,binascii.Error):return False\n```\n\n原题说明：\nsubject摘要把证明绑定到产物，但攻击者可以让不受信构建器为任意产物生成结构合法且签名有效的证明。还需核对builder身份、构建类型、来源及实际解析依赖，并判断哪些参数由调用者控制、哪些由可信构建平台产生；证明中的文本不能因为位于JSON里就天然可信。验证策略应绑定允许的构建器及工作流语义，对无法解释的外部参数和未固定输入拒绝或显式例外，不把SBOM当作同类证明替代品。推理反例应包含正确摘要但错误构建器、来源指向另一仓库、声明依赖与解析依赖不一致和过期信任配置。签名证明的是特定身份作了陈述，最终接受规则仍需要说明该身份为何有权证明这一构建过程。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原候选ID重新提供可复现合同；只按精确源码对应的原生验收证据认定通过。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "说明平台语义而非只列发布通用步骤",
+      "把证据绑定具体身份、输入与执行路径",
+      "检查拒绝、取消和部分完成的结果"
+    ],
+    "references": [
+      "https://slsa.dev/spec/v1.0/verifying-artifacts",
+      "https://github.com/secure-systems-lab/dsse/blob/master/protocol.md"
+    ],
+    "related_modules": [
+      "cicd"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-cicd-004",
+      "original_title": "验证SLSA provenance时，为什么只比对subject摘要与签名仍不足以确认可信构建？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement the requested function\")\n"
+    },
+    "solution_files": {
+      "task.py": "import base64,binascii,hashlib,json\nfrom cryptography.exceptions import InvalidSignature\nfrom cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey\ndef _unique(pairs):\n    result={}\n    for key,value in pairs:\n        if key in result:raise ValueError('duplicate JSON key')\n        result[key]=value\n    return result\ndef _bad_constant(value):raise ValueError('nonfinite JSON')\ndef _same_json(left,right):\n    if type(left) is not type(right):return False\n    if isinstance(left,dict):return left.keys()==right.keys() and all(_same_json(left[k],right[k]) for k in left)\n    if isinstance(left,list):return len(left)==len(right) and all(_same_json(a,b) for a,b in zip(left,right))\n    return left==right\ndef verify_provenance(envelope,policy,artifact):\n    try:\n        if not isinstance(envelope,dict) or envelope.get('payloadType')!='application/vnd.in-toto+json':return False\n        encoded=envelope['payload']\n        if not isinstance(encoded,str) or len(encoded)>131072:return False\n        payload=base64.b64decode(encoded,validate=True)\n        document=json.loads(payload.decode('utf8'),object_pairs_hook=_unique,parse_constant=_bad_constant)\n        if document['_type']!='https://in-toto.io/Statement/v1' or document['predicateType']!='https://slsa.dev/provenance/v1':return False\n        if document['subject']!=[{'name':policy['artifact_name'],'digest':{'sha256':hashlib.sha256(artifact).hexdigest()}}]:return False\n        predicate=document['predicate'];definition=predicate['buildDefinition'];builder=predicate['runDetails']['builder']['id']\n        if definition['buildType']!=policy['build_type']:return False\n        if not _same_json(definition['externalParameters'],policy['external_parameters']):return False\n        if definition['resolvedDependencies']!=[policy['source_dependency']]:return False\n        signatures=envelope['signatures']\n        if not isinstance(signatures,list) or not 1<=len(signatures)<=8:return False\n        media=envelope['payloadType'].encode('utf8')\n        pae=b'DSSEv1 '+str(len(media)).encode()+b' '+media+b' '+str(len(payload)).encode()+b' '+payload\n        for signature in signatures:\n            if not isinstance(signature,dict):continue\n            spec=policy['trusted_builders'].get(signature.get('keyid'))\n            if not spec:continue\n            if spec['builder_id']!=builder:continue\n            try:\n                key=Ed25519PublicKey.from_public_bytes(base64.b64decode(spec['public_key'],validate=True))\n                key.verify(base64.b64decode(signature['sig'],validate=True),pae)\n                return True\n            except (InvalidSignature,ValueError,binascii.Error,KeyError,TypeError):continue\n        return False\n    except (KeyError,TypeError,ValueError,UnicodeError,binascii.Error):return False\n"
+    },
+    "negative_files": {
+      "task.py": "import base64,binascii,hashlib,json\nfrom cryptography.exceptions import InvalidSignature\nfrom cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey\ndef _unique(pairs):\n    result={}\n    for key,value in pairs:\n        if key in result:raise ValueError('duplicate JSON key')\n        result[key]=value\n    return result\ndef _bad_constant(value):raise ValueError('nonfinite JSON')\ndef _same_json(left,right):\n    if type(left) is not type(right):return False\n    if isinstance(left,dict):return left.keys()==right.keys() and all(_same_json(left[k],right[k]) for k in left)\n    if isinstance(left,list):return len(left)==len(right) and all(_same_json(a,b) for a,b in zip(left,right))\n    return left==right\ndef verify_provenance(envelope,policy,artifact):\n    try:\n        if not isinstance(envelope,dict) or envelope.get('payloadType')!='application/vnd.in-toto+json':return False\n        encoded=envelope['payload']\n        if not isinstance(encoded,str) or len(encoded)>131072:return False\n        payload=base64.b64decode(encoded,validate=True)\n        document=json.loads(payload.decode('utf8'),object_pairs_hook=_unique,parse_constant=_bad_constant)\n        if document['_type']!='https://in-toto.io/Statement/v1' or document['predicateType']!='https://slsa.dev/provenance/v1':return False\n        if document['subject']!=[{'name':policy['artifact_name'],'digest':{'sha256':hashlib.sha256(artifact).hexdigest()}}]:return False\n        predicate=document['predicate'];definition=predicate['buildDefinition'];builder=predicate['runDetails']['builder']['id']\n        if definition['buildType']!=policy['build_type']:return False\n        if not _same_json(definition['externalParameters'],policy['external_parameters']):return False\n        if definition['resolvedDependencies']!=[policy['source_dependency']]:return False\n        signatures=envelope['signatures']\n        if not isinstance(signatures,list) or not 1<=len(signatures)<=8:return False\n        media=envelope['payloadType'].encode('utf8')\n        pae=b'DSSEv1 '+str(len(media)).encode()+b' '+media+b' '+str(len(payload)).encode()+b' '+payload\n        for signature in signatures:\n            if not isinstance(signature,dict):continue\n            spec=policy['trusted_builders'].get(signature.get('keyid'))\n            if not spec:continue\n            if False:continue\n            try:\n                key=Ed25519PublicKey.from_public_bytes(base64.b64decode(spec['public_key'],validate=True))\n                key.verify(base64.b64decode(signature['sig'],validate=True),pae)\n                return True\n            except (InvalidSignature,ValueError,binascii.Error,KeyError,TypeError):continue\n        return False\n    except (KeyError,TypeError,ValueError,UnicodeError,binascii.Error):return False\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux原生实验，按requires检查工具",
+      "operation": "实现 verify_provenance(envelope,policy,artifact)，输入为JSON兼容DSSE信封、可信本地策略和产物bytes，返回严格bool。验证application/vnd.in-toto+json的DSSE PAE及Ed25519签名；只信任policy.trusted_builders中keyid对应的公钥与builder_id组合。要求Statement/v1、provenance/v1、单一subject的名称和真实产物SHA256一致，buildType、externalParameters和唯一resolvedDependencies分别与策略精确一致。未知参数拒绝，重复JSON键和非有限数拒绝，不信任信封自带公钥，失败闭合返回False。字段结构见验收用例与参考解；策略由可信调用方提供，不从信封生成。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "固定的离线SLSA v1 provenance子集及本题更严格的源码依赖策略；实际生成Ed25519密钥并验签。不构建镜像，不运行远端CI，不证明SLSA等级、构建平台隔离、Sigstore证书或透明日志。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "cryptography"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,hashlib,json,copy\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nimport base64\nfrom cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey\nfrom cryptography.hazmat.primitives.serialization import Encoding,PublicFormat\nkey=Ed25519PrivateKey.generate();other=Ed25519PrivateKey.generate();artifact=secrets.token_bytes(200)\ndef pub(private):return base64.b64encode(private.public_key().public_bytes(Encoding.Raw,PublicFormat.Raw)).decode()\npolicy={'artifact_name':'output-'+secrets.token_hex(6),'build_type':'https://build.example.invalid/typed/v1',\n 'external_parameters':{'source':'git+https://source.example.invalid/team/repo','ref':'refs/tags/v1','release':True},\n 'source_dependency':{'uri':'git+https://source.example.invalid/team/repo','digest':{'gitCommit':secrets.token_hex(20)}},\n 'trusted_builders':{'trusted':{'public_key':pub(key),'builder_id':'https://builder.example.invalid/release'}}}\nstatement={'_type':'https://in-toto.io/Statement/v1','subject':[{'name':policy['artifact_name'],'digest':{'sha256':hashlib.sha256(artifact).hexdigest()}}],\n 'predicateType':'https://slsa.dev/provenance/v1','predicate':{'buildDefinition':{'buildType':policy['build_type'],\n 'externalParameters':copy.deepcopy(policy['external_parameters']),'resolvedDependencies':[copy.deepcopy(policy['source_dependency'])]},\n 'runDetails':{'builder':{'id':'https://builder.example.invalid/release'}}}}\ndef sign(document,private=key,keyid='trusted',payload_type='application/vnd.in-toto+json',raw=None):\n payload=raw if raw is not None else json.dumps(document,ensure_ascii=False,separators=(',',':')).encode()\n media=payload_type.encode();pae=b'DSSEv1 '+str(len(media)).encode()+b' '+media+b' '+str(len(payload)).encode()+b' '+payload\n return {'payloadType':payload_type,'payload':base64.b64encode(payload).decode(),'signatures':[{'keyid':keyid,'sig':base64.b64encode(private.sign(pae)).decode()}]}\ndef verify(envelope,expected,why,body=artifact):\n saved=copy.deepcopy((envelope,policy));print('STUDENT_OPERATION_ENTERED:verify_provenance',flush=True)\n assert task.verify_provenance(envelope,policy,body) is expected,why\n assert (envelope,policy)==saved,'input envelope or trusted policy changed'\nverify(sign(statement),True,'real trusted signature and matching build policy must pass')\nbad=copy.deepcopy(statement);bad['predicate']['runDetails']['builder']['id']='https://attacker.example.invalid/builder'\nverify(sign(bad),False,'valid signature and artifact hash do not authorize another builder identity')\nbad=copy.deepcopy(statement);bad['predicate']['buildDefinition']['externalParameters']['debug']=True\nverify(sign(bad),False,'unknown build parameter was accepted')\nbad=copy.deepcopy(statement);bad['predicate']['buildDefinition']['externalParameters']['release']=1\nverify(sign(bad),False,'JSON number was treated as the approved boolean')\nbad=copy.deepcopy(statement);bad['predicate']['buildDefinition']['resolvedDependencies'][0]['digest']['gitCommit']='0'*40\nverify(sign(bad),False,'unapproved source commit accepted')\nbad=copy.deepcopy(statement);bad['predicate']['buildDefinition']['buildType']='https://build.example.invalid/untrusted/v1'\nverify(sign(bad),False,'unapproved build type accepted')\nbad=copy.deepcopy(statement);bad['predicateType']='https://slsa.dev/provenance/v0.2'\nverify(sign(bad),False,'wrong predicate schema accepted')\nverify(sign(statement,private=other),False,'signature from untrusted key accepted')\nverify(sign(statement,keyid='unknown'),False,'unrecognized key label accepted')\nverify(sign(statement,payload_type='application/json'),False,'wrong authenticated payload type accepted')\nverify(sign(statement),False,'different artifact accepted',body=artifact+b'!')\nbad=sign(statement);bad['payload']=base64.b64encode(json.dumps({**statement,'subject':[]}).encode()).decode()\nverify(bad,False,'tampered signed payload accepted')\nraw=json.dumps(statement,separators=(',',':')).encode();raw=raw.replace(b'\"predicateType\":',b'\"predicateType\":\"https://slsa.dev/provenance/v0.2\",\"predicateType\":',1)\nverify(sign(statement,raw=raw),False,'duplicate JSON fields accepted')\nbad=sign(statement);bad['payload']='!invalid-base64!';verify(bad,False,'malformed payload must fail closed')\nbad=sign(statement);bad['signatures']=[];verify(bad,False,'unsigned statement accepted')\nbad=sign(statement);bad['signatures']=[None];verify(bad,False,'malformed signature element must fail closed')\n# DSSE signs exact UTF-8 bytes, not reserialized JSON; harmless formatting is valid.\nverify(sign(statement,raw=json.dumps(statement,indent=2).encode()),True,'reserializing payload before signature verification broke a valid signature')\nprint('REAL_ED25519_DSSE_POLICY_CASES:17',flush=True)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

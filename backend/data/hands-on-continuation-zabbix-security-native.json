@@ -1,0 +1,163 @@
+[
+  {
+    "id": "curated-parallel-zabbix-076",
+    "module": "zabbix",
+    "category": "Zabbix",
+    "level": 3,
+    "topic": "容量存储与安全维护",
+    "title": "真实AllowKey/DenyKey首匹配：精确拒绝先于宽泛允许，并保留默认拒绝",
+    "answer": "```python\nimport copy\ndef restrict_keys(settings):\n    fixed=copy.deepcopy(settings)\n    fixed['KeyRules']=[['DenyKey','agent.version'],['AllowKey','agent.*'],['DenyKey','*']]\n    return fixed\n```\n\n原题知识说明：\n核对实际agent版本的匹配与规则顺序，列出必需键并拒绝高风险或未使用能力。通过允许和拒绝两类测试验证，而不是仅检查配置语法；尤其检查通配符是否扩大到system.run等执行型键，避免宽泛允许规则绕过后续拒绝意图。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "核对实际agent版本的匹配与规则顺序，列出必需键并拒绝高风险或未使用能力。",
+      "通过允许和拒绝两类测试验证，而不是仅检查配置语法；尤其检查通配符是否扩大到system.run等执行型键，避免宽泛允许规则绕过后续拒绝意图。"
+    ],
+    "references": [
+      "https://www.zabbix.com/documentation/7.0/en/manual/config/items/restrict_checks"
+    ],
+    "related_modules": [
+      "zabbix"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-zabbix-076",
+      "original_title": "Zabbix 的 AllowKey/DenyKey 规则应如何审核？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现restrict_keys(settings)深拷贝后仅调整KeyRules有序列表。教学渲染器将每个[action,pattern]按给定顺序写为真实Agent AllowKey/DenyKey行，其他配置不变。题定策略允许agent.*但明确拒绝agent.version，其他所有key拒绝；精确拒绝必须位于宽泛允许之前，最后保留DenyKey=*。原错误顺序先AllowKey=agent.*，导致后面的agent.version拒绝无效。验收实际查询ping/hostname继续可用，而version/system.uptime/system.hostname全部返回原生Unsupported，不能只做字符串排序或删除最后拒绝。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实classic Agent7.0.32远程被动key访问规则；仅题定私有策略，不改变宿主机Agent或全局访问，未验证Server角色权限、sudo或任意远程命令执行。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef restrict_keys(settings):\n    fixed=copy.deepcopy(settings)\n    fixed['KeyRules']=[['DenyKey','agent.version'],['AllowKey','agent.*'],['DenyKey','*']]\n    return fixed\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef restrict_keys(settings):\n    fixed=copy.deepcopy(settings)\n    fixed['KeyRules']=[['AllowKey','agent.*'],['DenyKey','agent.version'],['DenyKey','*']]\n    return fixed\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现restrict_keys(settings)深拷贝后仅调整KeyRules有序列表。教学渲染器将每个[action,pattern]按给定顺序写为真实Agent AllowKey/DenyKey行，其他配置不变。题定策略允许agent.*但明确拒绝agent.version，其他所有key拒绝；精确拒绝必须位于宽泛允许之前，最后保留DenyKey=*。原错误顺序先AllowKey=agent.*，导致后面的agent.version拒绝无效。验收实际查询ping/hostname继续可用，而version/system.uptime/system.hostname全部返回原生Unsupported，不能只做字符串排序或删除最后拒绝。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实classic Agent7.0.32远程被动key访问规则；仅题定私有策略，不改变宿主机Agent或全局访问，未验证Server角色权限、sudo或任意远程命令执行。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "zabbix_agentd"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/zabbix_native.py": "\"\"\"Private Zabbix classic agent 7.0.32 with bounded framed passive requests.\"\"\"\nimport json,os,pathlib,secrets,shutil,signal,socket,struct,subprocess,tempfile,time,zlib\n\nclass Rejected(Exception):pass\n\ndef free_port():\n for _ in range(64):\n  port=20000+secrets.randbelow(10000)\n  with socket.socket() as endpoint:\n   try:endpoint.bind(('127.0.0.1',port));return port\n   except OSError:pass\n raise RuntimeError('private agent port allocation exhausted')\n\ndef recv_exact(conn,n):\n out=b''\n while len(out)<n:\n  chunk=conn.recv(n-len(out))\n  if not chunk:raise Rejected('agent closed the framed request, including source access rejection')\n  out+=chunk\n return out\n\ndef exchange(port,key,source='127.0.0.1'):\n payload=key.encode('utf8')\n with socket.create_connection(('127.0.0.1',port),timeout=2,source_address=(source,0)) as endpoint:\n  endpoint.sendall(b'ZBXD\\x01'+struct.pack('<Q',len(payload))+payload)\n  try:header=recv_exact(endpoint,5)\n  except ConnectionResetError as error:raise Rejected('agent reset the unapproved source') from error\n  if header[:4]!=b'ZBXD' or header[4] not in (1,3):raise RuntimeError('unexpected native Zabbix protocol')\n  first,second=struct.unpack('<II',recv_exact(endpoint,8))\n  if first>1048576 or second>1048576:raise RuntimeError('bounded native frame exceeded')\n  raw=recv_exact(endpoint,first)\n  return zlib.decompress(raw) if header[4]==3 else raw\n\nclass Agent:\n def __init__(self,settings=None):self.settings=dict(settings or {});self.process=None;self.temp=None;self.log=None\n def __enter__(self):\n  binary=shutil.which('zabbix_agentd')\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: static zabbix_agentd required')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '(Zabbix) 7.0.32' not in version.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: exact Zabbix7.0.32 required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-zabbix-');self.root=pathlib.Path(self.temp.name);self.port=free_port()\n  values={'PidFile':str(self.root/'agent.pid'),'LogFile':str(self.root/'agent.log'),'DebugLevel':'3','Server':'127.0.0.1','ListenIP':'127.0.0.1','ListenPort':str(self.port),'StartAgents':'1','Hostname':'opsforge-private-agent','Timeout':'1',**self.settings}\n  self.config=self.root/'agent.conf';lines=[]\n  for key,value in values.items():\n   if key=='KeyRules':\n    for action,pattern in value:\n     if action not in ('AllowKey','DenyKey') or not isinstance(pattern,str) or any(c in pattern for c in '\\r\\n'):raise ValueError('ordered literal key rule')\n     lines.append(action+'='+pattern)\n    continue\n   if value is not None:\n    if '\\n' in key+str(value) or '\\r' in key+str(value):raise ValueError('literal bounded agent configuration')\n    lines.append(key+'='+str(value))\n  self.config.write_text('\\n'.join(lines)+'\\n',encoding='utf8');self.log=(self.root/'foreground.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--foreground','--config',str(self.config)],stdout=self.log,stderr=self.log,start_new_session=True)\n   deadline=time.monotonic()+4\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:\n     detail=(self.root/'foreground.log').read_text(errors='replace')[-1600:]\n     if (self.root/'agent.log').exists():detail+=(self.root/'agent.log').read_text(errors='replace')[-1600:]\n     raise RuntimeError('agent rejected config: '+detail)\n    try:\n     with socket.create_connection(('127.0.0.1',self.port),timeout=.1):break\n    except OSError:time.sleep(.02)\n   else:raise RuntimeError('agent private listener readiness deadline')\n   print('NATIVE_ZABBIX_AGENT_READY:7.0.32',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def query(self,key,source='127.0.0.1'):return exchange(self.port,key,source)\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:os.killpg(self.process.pid,signal.SIGTERM)\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:os.killpg(self.process.pid,signal.SIGKILL);self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student agent operation failed: '+type(error).__name__) from error\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,copy,json,secrets,subprocess,struct\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom zabbix_native import Agent,Rejected,student\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nbase={'Hostname':'approved-key-agent','Server':'127.0.0.1','KeyRules':[['AllowKey','agent.*'],['DenyKey','agent.version'],['DenyKey','*']]};before=copy.deepcopy(base)\nwith Agent(base) as baseline:\n assert baseline.query('agent.version')==b'7.0.32','native first-match rule baseline was not reproduced'\nfixed=student(task.restrict_keys,base);assert base==before\nwith Agent(fixed) as agent:\n assert agent.query('agent.ping')==b'1' and agent.query('agent.hostname')==b'approved-key-agent'\n for key in ('agent.version','system.uptime','system.hostname'):\n  assert agent.query(key).startswith(b'ZBX_NOTSUPPORTED\\x00'),'denied key was accepted: '+key\nleft=copy.deepcopy(fixed);right=copy.deepcopy(base);left.pop('KeyRules');right.pop('KeyRules');assert left==right,'source or identity changed while restricting keys'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-zabbix-075",
+    "module": "zabbix",
+    "category": "Zabbix",
+    "level": 3,
+    "topic": "容量存储与安全维护",
+    "title": "真实UserParameter参数防线：可信脚本路径正确引用，危险字符在执行前被Agent拒绝",
+    "answer": "```python\nimport copy,pathlib,shlex,sys\ndef configure_parameter(settings,script_path):\n    path=pathlib.Path(script_path)\n    if not path.is_file() or path.is_symlink():raise ValueError('approved regular collection script')\n    fixed=copy.deepcopy(settings);fixed['UnsafeUserParameters']='0'\n    fixed['UserParameter']='of.double[*],'+shlex.quote(sys.executable)+' '+shlex.quote(str(path))+' \"$1\"'\n    return fixed\n```\n\n原题知识说明：\n优先固定无参数的只读采集键；确需参数则使用受限枚举并在执行边界严格校验，避免拼接未经验证的shell内容。限制允许访问agent的来源与可调用键、运行账户权限，关闭不需要的远程命令能力；加密传输不能替代命令授权。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "优先固定无参数的只读采集键；确需参数则使用受限枚举并在执行边界严格校验，避免拼接未经验证的shell内容。",
+      "限制允许访问agent的来源与可调用键、运行账户权限，关闭不需要的远程命令能力；加密传输不能替代命令授权。"
+    ],
+    "references": [
+      "https://www.zabbix.com/documentation/7.0/en/manual/config/items/userparameters",
+      "https://www.zabbix.com/documentation/7.0/en/manual/appendix/config/zabbix_agentd"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "JXf6dzoDuotNvdx9nnfcpWLHnIr",
+          "L4SwdzG6foA5ivx1KU0cFNRPnBf",
+          "Mo9ed5ab4oGYGwxCKsMcoyg7nRe",
+          "E7fdd2ywdoeBohxLNHIcW6xYnGe",
+          "CxT5dt0qUoVvdRxdcx6cNrvnnJf",
+          "SPkrdkhShoC0v4xyb9IcBm92nlg",
+          "PjzxdUvpkoKwjsxXaDTc2l8Enjd",
+          "QmiddCM65oqlmZxZaQhcU9mtnQg",
+          "R95GdnZ1AoR3QLxPG0gc85ypndh",
+          "K04mdPMboo6vxcxkQDiclDvBnCf",
+          "LwfWdtVkroB00MxvnC2c74mQnAh"
+        ]
+      }
+    ],
+    "related_modules": [
+      "zabbix"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-zabbix-075",
+      "original_title": "UserParameter 接受外部参数时，怎样避免把采集接口变成任意命令接口？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现configure_parameter(settings,script_path)，返回深拷贝，仅设置UnsafeUserParameters=0和UserParameter。script_path是题定只读可信Python采集程序的普通非软链接文件，路径可能含空格；UserParameter为of.double[*]，用当前Python解释器执行该文件并以双引号包围$1，路径使用正确shell引用。合法单参数调用of.double[0/7/19]分别得到0/14/38；含分号的参数必须由原生Agent拒绝为Unsupported，且可信程序的调用日志不得增加。不得放开UnsafeUserParameters、硬编码示例值、更改脚本、Server或Hostname。可信脚本本身只接受1..3位十进制参数。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实classic Agent7.0.32 UserParameter与隔离只读教学脚本，验证Agent特殊字符门禁及路径引用，不执行恶意系统命令、不改变宿主脚本；不证明任意外部脚本都安全，未替代访问控制、TLS或完整输入业务校验。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy,pathlib,shlex,sys\ndef configure_parameter(settings,script_path):\n    path=pathlib.Path(script_path)\n    if not path.is_file() or path.is_symlink():raise ValueError('approved regular collection script')\n    fixed=copy.deepcopy(settings);fixed['UnsafeUserParameters']='0'\n    fixed['UserParameter']='of.double[*],'+shlex.quote(sys.executable)+' '+shlex.quote(str(path))+' \"$1\"'\n    return fixed\n"
+    },
+    "negative_files": {
+      "task.py": "import copy,pathlib,shlex,sys\ndef configure_parameter(settings,script_path):\n    path=pathlib.Path(script_path)\n    if not path.is_file() or path.is_symlink():raise ValueError('approved regular collection script')\n    fixed=copy.deepcopy(settings);fixed['UnsafeUserParameters']='1'\n    fixed['UserParameter']='of.double[*],'+shlex.quote(sys.executable)+' '+shlex.quote(str(path))+' \"$1\"'\n    return fixed\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现configure_parameter(settings,script_path)，返回深拷贝，仅设置UnsafeUserParameters=0和UserParameter。script_path是题定只读可信Python采集程序的普通非软链接文件，路径可能含空格；UserParameter为of.double[*]，用当前Python解释器执行该文件并以双引号包围$1，路径使用正确shell引用。合法单参数调用of.double[0/7/19]分别得到0/14/38；含分号的参数必须由原生Agent拒绝为Unsupported，且可信程序的调用日志不得增加。不得放开UnsafeUserParameters、硬编码示例值、更改脚本、Server或Hostname。可信脚本本身只接受1..3位十进制参数。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实classic Agent7.0.32 UserParameter与隔离只读教学脚本，验证Agent特殊字符门禁及路径引用，不执行恶意系统命令、不改变宿主脚本；不证明任意外部脚本都安全，未替代访问控制、TLS或完整输入业务校验。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "zabbix_agentd"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/zabbix_native.py": "\"\"\"Private Zabbix classic agent 7.0.32 with bounded framed passive requests.\"\"\"\nimport json,os,pathlib,secrets,shutil,signal,socket,struct,subprocess,tempfile,time,zlib\n\nclass Rejected(Exception):pass\n\ndef free_port():\n for _ in range(64):\n  port=20000+secrets.randbelow(10000)\n  with socket.socket() as endpoint:\n   try:endpoint.bind(('127.0.0.1',port));return port\n   except OSError:pass\n raise RuntimeError('private agent port allocation exhausted')\n\ndef recv_exact(conn,n):\n out=b''\n while len(out)<n:\n  chunk=conn.recv(n-len(out))\n  if not chunk:raise Rejected('agent closed the framed request, including source access rejection')\n  out+=chunk\n return out\n\ndef exchange(port,key,source='127.0.0.1'):\n payload=key.encode('utf8')\n with socket.create_connection(('127.0.0.1',port),timeout=2,source_address=(source,0)) as endpoint:\n  endpoint.sendall(b'ZBXD\\x01'+struct.pack('<Q',len(payload))+payload)\n  try:header=recv_exact(endpoint,5)\n  except ConnectionResetError as error:raise Rejected('agent reset the unapproved source') from error\n  if header[:4]!=b'ZBXD' or header[4] not in (1,3):raise RuntimeError('unexpected native Zabbix protocol')\n  first,second=struct.unpack('<II',recv_exact(endpoint,8))\n  if first>1048576 or second>1048576:raise RuntimeError('bounded native frame exceeded')\n  raw=recv_exact(endpoint,first)\n  return zlib.decompress(raw) if header[4]==3 else raw\n\nclass Agent:\n def __init__(self,settings=None):self.settings=dict(settings or {});self.process=None;self.temp=None;self.log=None\n def __enter__(self):\n  binary=shutil.which('zabbix_agentd')\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: static zabbix_agentd required')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '(Zabbix) 7.0.32' not in version.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: exact Zabbix7.0.32 required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-zabbix-');self.root=pathlib.Path(self.temp.name);self.port=free_port()\n  values={'PidFile':str(self.root/'agent.pid'),'LogFile':str(self.root/'agent.log'),'DebugLevel':'3','Server':'127.0.0.1','ListenIP':'127.0.0.1','ListenPort':str(self.port),'StartAgents':'1','Hostname':'opsforge-private-agent','Timeout':'1',**self.settings}\n  self.config=self.root/'agent.conf';lines=[]\n  for key,value in values.items():\n   if key=='KeyRules':\n    for action,pattern in value:\n     if action not in ('AllowKey','DenyKey') or not isinstance(pattern,str) or any(c in pattern for c in '\\r\\n'):raise ValueError('ordered literal key rule')\n     lines.append(action+'='+pattern)\n    continue\n   if value is not None:\n    if '\\n' in key+str(value) or '\\r' in key+str(value):raise ValueError('literal bounded agent configuration')\n    lines.append(key+'='+str(value))\n  self.config.write_text('\\n'.join(lines)+'\\n',encoding='utf8');self.log=(self.root/'foreground.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--foreground','--config',str(self.config)],stdout=self.log,stderr=self.log,start_new_session=True)\n   deadline=time.monotonic()+4\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:\n     detail=(self.root/'foreground.log').read_text(errors='replace')[-1600:]\n     if (self.root/'agent.log').exists():detail+=(self.root/'agent.log').read_text(errors='replace')[-1600:]\n     raise RuntimeError('agent rejected config: '+detail)\n    try:\n     with socket.create_connection(('127.0.0.1',self.port),timeout=.1):break\n    except OSError:time.sleep(.02)\n   else:raise RuntimeError('agent private listener readiness deadline')\n   print('NATIVE_ZABBIX_AGENT_READY:7.0.32',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def query(self,key,source='127.0.0.1'):return exchange(self.port,key,source)\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:os.killpg(self.process.pid,signal.SIGTERM)\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:os.killpg(self.process.pid,signal.SIGKILL);self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student agent operation failed: '+type(error).__name__) from error\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,copy,json,secrets,subprocess,struct\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom zabbix_native import Agent,Rejected,student\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith tempfile.TemporaryDirectory() as directory:\n root=pathlib.Path(directory);script=root/'trusted double.py';calls=root/'invoked.log'\n program=\"import pathlib,re,sys\\nwith pathlib.Path(\"+repr(str(calls))+\").open('a') as stream:stream.write('called;')\\nif len(sys.argv)!=2 or not re.fullmatch(r'[0-9]{1,3}',sys.argv[1]):raise SystemExit('digits only')\\nprint(int(sys.argv[1])*2)\\n\"\n script.write_text(program,encoding='utf8');script.chmod(0o444);before_program=script.read_bytes()\n base={'Server':'127.0.0.1','Hostname':'approved-param-agent'};before=copy.deepcopy(base)\n # Verify the trusted program itself independently before constructing agent config.\n test=subprocess.run([sys.executable,str(script),'7'],capture_output=True,text=True,timeout=2);assert test.returncode==0 and test.stdout.strip()=='14',test.stderr\n calls.unlink()\n fixed=student(task.configure_parameter,base,str(script));assert base==before\n with Agent(fixed) as agent:\n  for number in (0,7,19):assert agent.query('of.double['+str(number)+']')==str(number*2).encode(),'parameter was ignored or script path quoting failed'\n  before_calls=calls.read_bytes();response=agent.query('of.double[\"7;forbidden\"]')\n  assert response.startswith(b'ZBX_NOTSUPPORTED\\x00') and calls.read_bytes()==before_calls,'unsafe argument reached the collection script'\n assert script.read_bytes()==before_program and script.stat().st_mode&0o777==0o444\n left=copy.deepcopy(fixed);right=copy.deepcopy(base)\n for key in ('UserParameter','UnsafeUserParameters'):left.pop(key)\n assert left==right,'source or host identity was modified'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

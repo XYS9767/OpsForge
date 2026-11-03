@@ -1,0 +1,93 @@
+[
+  {
+    "id": "curated-parallel-prometheus-072",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 3,
+    "topic": "指标模型与监控架构",
+    "title": "以Agent模式抓取并真实远写，保留集中查询与本地诊断边界",
+    "answer": "```yaml\nglobal:\n  scrape_interval: 1s\n  external_labels:\n    site: edge-a\nscrape_configs:\n- job_name: edge-probe\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\nremote_write:\n- url: http://127.0.0.1:19090/api/v1/write\n  queue_config:\n    max_shards: 1\n    capacity: 1000\n    max_samples_per_send: 100\n    batch_send_deadline: 1s\n  write_relabel_configs:\n  - source_labels:\n    - __name__\n    regex: edge_queue_depth|up\n    action: keep\n```\n\n```json\n{\n  \"agent\": true\n}\n```\nAgent复用抓取和remote_write，但不承担本地PromQL与规则服务。external_labels进入远端样本帮助识别采集位置；仅过滤非必要debug指标，不丢业务或up。短期WAL为重发提供基础，不能因此声称已测试长期容灾。\n\n原题原理：Agent侧重抓取和远端写入，减少本地完整查询/规则存储能力，适合边缘采集转发；需要本地查询告警则需完整Server或其他组件。具体功能按目标版本核对，不能只改模式而默认原规则仍执行。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "实际Agent而非Server伪装",
+      "原生protobuf远写闭环",
+      "仅保留业务及up",
+      "本地诊断/WAL与集中查询的能力边界"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/command-line/prometheus/",
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/#remote_write"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "agent.yaml": "global:\n  scrape_interval: 1s\n  external_labels:\n    site: edge-a\nscrape_configs:\n- job_name: edge-probe\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\nremote_write:\n- url: http://127.0.0.1:19090/api/v1/write\n  queue_config:\n    max_shards: 1\n    capacity: 1000\n    max_samples_per_send: 100\n    batch_send_deadline: 1s\n  write_relabel_configs:\n  - source_labels:\n    - __name__\n    regex: edge_queue_depth|up\n    action: keep\n",
+      "mode.json": "{\n  \"agent\": false\n}\n",
+      "materials.json": "{\n  \"source\": \"one gauge edge_queue_depth(service=checkout), initially7 then11; debug_sequence99 must not remote-write\",\n  \"receiver\": \"isolated Prometheus remote-write receiver, ephemeral localhost URL replaces placeholder\",\n  \"not_available_in_agent\": \"local PromQL engine and server TSDB blocks\"\n}\n"
+    },
+    "solution_files": {
+      "agent.yaml": "global:\n  scrape_interval: 1s\n  external_labels:\n    site: edge-a\nscrape_configs:\n- job_name: edge-probe\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\nremote_write:\n- url: http://127.0.0.1:19090/api/v1/write\n  queue_config:\n    max_shards: 1\n    capacity: 1000\n    max_samples_per_send: 100\n    batch_send_deadline: 1s\n  write_relabel_configs:\n  - source_labels:\n    - __name__\n    regex: edge_queue_depth|up\n    action: keep\n",
+      "mode.json": "{\n  \"agent\": true\n}\n"
+    },
+    "negative_files": {
+      "agent.yaml": "global:\n  scrape_interval: 1s\n  external_labels:\n    site: edge-a\nscrape_configs:\n- job_name: edge-probe\n  scrape_interval: 1s\n  scrape_timeout: 500ms\n  static_configs:\n  - targets:\n    - 127.0.0.1:19100\nremote_write:\n- url: http://127.0.0.1:19090/api/v1/write\n  queue_config:\n    max_shards: 1\n    capacity: 1000\n    max_samples_per_send: 100\n    batch_send_deadline: 1s\n  write_relabel_configs:\n  - source_labels:\n    - __name__\n    regex: up\n    action: keep\n",
+      "mode.json": "{\n  \"agent\": true\n}\n"
+    },
+    "body": "## 环境与初始材料\n平台提供Prometheus 3.5二进制和本地隔离指标端、原生remote-write receiver，不需要学员配置真实远端存储。agent.yaml是可执行采集配置；mode.json控制平台是否传入--agent。19100/19090仅占位，验收时替换为本工作区随机环回端口。指标端的edge_queue_depth带service=checkout，值由7变11；debug_sequence固定99。\n\n## 操作任务\n交付Agent模式的边缘采集配置：保留1秒抓取、external_labels.site=edge-a和完整目标；只向远端发送edge_queue_depth与up，不发送debug_sequence。保留给定小队列预算、最多1个远写分片及1秒批次等待。mode.json设为真正Agent模式，不能用完整Server也能远写就冒充Agent。业务查询必须在集中receiver上完成；Agent的Targets仍可诊断抓取，但本地PromQL不应可用。本地为Agent WAL，不是完整Server TSDB块。\n\n## 产物\n提交agent.yaml和mode.json。仅修改远写keep/drop过滤与agent布尔模式，保持其他明确配置及占位地址；验收替换端口，不接受外部地址、代理或业务凭据。允许等价正则过滤。\n\n## 验收方法\n执行python3 checks/check.py。真实启动一个原生receiver与一个候选采集进程：远端应实际查询到唯一edge_queue_depth且标签service/job/instance/site完整，值先7后11；up=1，debug_sequence不存在。候选本地Targets健康，而查询vector(1)必须收到Agent模式不支持的原生错误；检查Agent WAL存在且没有Server持久块。原始Server模式应因本地查询可用而失败，只远写up的错误配置应因业务数据缺失失败。仅监听127.0.0.1，两个进程GOMAXPROCS=2、GOMEMLIMIT=96MiB，各设限时/RSS监控，finally停止。\n\n## 边界\n这是实际本地protobuf远写与查询闭环，不是仅检查URL或YAML；不验证生产远端存储兼容性、长期WAL恢复、断网队列容量、告警服务或HA去重。Agent模式不是“完全无本地磁盘”，本题确认其WAL存在，不能将它宣传成零磁盘方案。集中receiver为受限测试进程，不接触应用持久化数据库。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-agent-remote-write",
+      "deliverables": [
+        "agent.yaml",
+        "mode.json"
+      ],
+      "operation": "切换真实Agent并交付受限远写配置，验证集中查询与本地诊断边界",
+      "verification": "原生remote-write接收值7→11、标签/up/过滤、Agent本地查询拒绝、WAL与无Server块",
+      "capability_gap": [
+        "不测试真实远端产品、长期WAL恢复/断网/HA"
+      ],
+      "failure_examples": [
+        "使用Server模式仍可本地查询",
+        "只远写up丢掉业务指标",
+        "发出debug数据违反明确过滤要求"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "features": [
+          "prometheus:v3.5"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config=copy.deepcopy(AGENT_CONFIG) if data=='agent' else {'global':{'scrape_interval':'1m'},'scrape_configs':[]}\n extra=['--web.enable-remote-write-receiver'] if data=='receiver' else (['--agent'] if AGENT_MODE else [])\n storage='--storage.agent.path=' if data=='agent' and AGENT_MODE else '--storage.tsdb.path='\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),storage+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error',*extra],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\nEXPECTED={'global': {'scrape_interval': '1s', 'external_labels': {'site': 'edge-a'}}, 'scrape_configs': [{'job_name': 'edge-probe', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'static_configs': [{'targets': ['127.0.0.1:19100']}]}], 'remote_write': [{'url': 'http://127.0.0.1:19090/api/v1/write', 'queue_config': {'max_shards': 1, 'capacity': 1000, 'max_samples_per_send': 100, 'batch_send_deadline': '1s'}, 'write_relabel_configs': [{'source_labels': ['__name__'], 'regex': 'edge_queue_depth|up', 'action': 'keep'}]}]}\n\ncandidate=yaml.load(pathlib.Path('agent.yaml').read_text(encoding='utf-8'),Loader=Strict)\nmode=json.loads(pathlib.Path('mode.json').read_text(encoding='utf-8'))\nassert isinstance(mode,dict) and set(mode)=={'agent'} and type(mode['agent']) is bool\nassert isinstance(candidate,dict) and set(candidate)==set(EXPECTED)\nassert candidate['global']==EXPECTED['global'] and candidate['scrape_configs']==EXPECTED['scrape_configs']\nassert len(candidate['remote_write'])==1\nrw=candidate['remote_write'][0];assert set(rw)=={'url','queue_config','write_relabel_configs'}\nassert rw['url']==EXPECTED['remote_write'][0]['url'] and rw['queue_config']==EXPECTED['remote_write'][0]['queue_config']\nassert isinstance(rw['write_relabel_configs'],list) and len(rw['write_relabel_configs'])<=5\nfor r in rw['write_relabel_configs']:\n assert isinstance(r,dict) and set(r)<={'source_labels','action','regex','separator'}\n assert r.get('action') in {'keep','drop'} and r.get('source_labels')==['__name__']\nAGENT_MODE=mode['agent'];AGENT_CONFIG=copy.deepcopy(candidate)\nstate={'value':7}\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  if self.path!='/metrics':self.send_error(404);return\n  body=('# TYPE edge_queue_depth gauge\\nedge_queue_depth{service=\"checkout\"} '+str(state['value'])+'\\n# TYPE debug_sequence gauge\\ndebug_sequence 99\\n').encode()\n  self.send_response(200);self.send_header('Content-Type','text/plain; version=0.0.4');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n def log_message(self,*args):pass\nhttpd=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()\ndef wait(fn):\n end=time.monotonic()+9\n while time.monotonic()<end:\n  if fn():return\n  time.sleep(.15)\n raise AssertionError('native remote write did not deliver the required samples')\ndef value(api,want):\n rows=vector(api,'edge_queue_depth')\n if len(rows)!=1:return False\n row=rows[0];assert row['metric']=={'__name__':'edge_queue_depth','service':'checkout','job':'edge-probe','instance':'127.0.0.1:'+str(httpd.server_port),'site':'edge-a'}\n return float(row['value'][1])==want\ntry:\n with tempfile.TemporaryDirectory(prefix='trusted-prom-agent-') as d:\n  root=pathlib.Path(d)\n  try:\n   with server(root,'receiver') as (receiver,remote):\n    AGENT_CONFIG['remote_write'][0]['url']=receiver+'/api/v1/write'\n    AGENT_CONFIG['scrape_configs'][0]['static_configs'][0]['targets']=['127.0.0.1:'+str(httpd.server_port)]\n    with server(root,'agent') as (agent,local):\n     wait(lambda:value(remote,7))\n     assert vector(remote,'debug_sequence')==[],'debug family must not enter receiver'\n     rows=vector(remote,'up');assert len(rows)==1 and float(rows[0]['value'][1])==1\n     targets=local('/api/v1/targets')['data']['activeTargets'];assert len(targets)==1 and targets[0]['health']=='up'\n     try:\n      local('/api/v1/query',{'query':'vector(1)'})\n     except urllib.error.HTTPError as exc:\n      body=exc.read().decode();assert exc.code>=400 and 'agent' in body.lower(),(exc.code,body)\n     else:raise AssertionError('agent must not expose a working local PromQL query engine')\n     assert not list((root/'agent').glob('*/meta.json')),'agent must not create server TSDB blocks'\n     assert (root/'agent'/'wal').is_dir(),'agent WAL material must exist'\n     state['value']=11;wait(lambda:value(remote,11))\n     assert vector(remote,'debug_sequence')==[]\n  finally:print('native lifecycle:',json.dumps(STATS))\nfinally:\n httpd.shutdown();httpd.server_close();thread.join(timeout=2)\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_agent_remote_write_delivery_and_local_query_engine_boundary",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-072",
+      "original_type": "interview",
+      "original_title": "Prometheus Agent模式与完整Server模式应怎样选？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-advanced-process-015",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 5,
+    "topic": "服务托管与systemd",
+    "title": "进程重启命名FD接管：先验布局、资源身份和共享偏移，旧进程退出后仍能恢复",
+    "answer": "```python\ndef takeover(entries,supported):\n    import fcntl,os,socket,stat\n    if type(supported) is not int or supported!=1 or not isinstance(entries,list) or len(entries)!=2:raise ValueError('supported layout and exactly two named handles required')\n    if any(not isinstance(row,dict) or row.get('layout')!=supported or type(row.get('layout')) is not int for row in entries):raise ValueError('incompatible application layout')\n    names=[row.get('name') for row in entries];fds=[row.get('fd') for row in entries]\n    if set(names)!={'state','listener'} or len(set(names))!=2 or any(type(fd) is not int or fd<3 for fd in fds) or len(set(fds))!=2:raise ValueError('missing or duplicate handle')\n    result={}\n    for row in entries:\n        fd=row['fd'];info=os.fstat(fd)\n        if info.st_dev!=row['dev'] or info.st_ino!=row['ino']:raise ValueError('retained resource identity changed')\n        if row['name']=='state':\n            if not stat.S_ISREG(info.st_mode) or fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE!=os.O_RDONLY or os.lseek(fd,0,os.SEEK_CUR)!=row['offset']:raise ValueError('state mode or shared offset changed')\n        else:\n            if not stat.S_ISSOCK(info.st_mode):raise ValueError('listener is not a socket')\n            with socket.socket(fileno=os.dup(fd)) as listener:\n                if listener.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_STREAM or not listener.getsockopt(socket.SOL_SOCKET,socket.SO_ACCEPTCONN) or list(listener.getsockname())!=row['address']:raise ValueError('listener binding changed')\n        result[row['name']]=fd\n    return result\n```\n\n原题知识说明：\n交付被保存fd的类型、命名、数量上限和新进程接收合同。使用systemd支持的fd store能力前，必须由开发制品明确发送及取回协议；管理器保存句柄不等于保存完整应用状态。验收重启后套接字或文件身份、偏移与访问模式一致，同时覆盖未提供fd、重复名称和版本布局变化。存储上限与泄漏监控需记录，不能用无限句柄保持一切资源。若新版本无法解释继承资源，应停止切换并由旧兼容版本接管或按受控流程关闭重建，不能随意把未知fd当标准输入使用。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "给出题设要求的具体交付物与关键机制",
+      "用可观察结果验证约束和失败分支",
+      "明确停止条件及回退或恢复边界"
+    ],
+    "references": [
+      "https://www.freedesktop.org/software/systemd/man/257/sd_notify.html"
+    ],
+    "body": "## 操作任务\n实现takeover(entries,supported)。supported仅接受整数1（非bool）；entries恰两个命名句柄state/listener，fd为>=3非bool整数且互异，每个layout为同一整数版本。先校验数量、名称唯一及全体layout，再访问fd；缺失、重复或不兼容ValueError。metadata含dev/ino，须fstat匹配；state须普通只读文件且当前共享偏移等于offset，不读、不seek改偏移；listener须流式监听socket且getsockname等于address，可dup检查后关闭副本。成功只返回{name:原fd}，不改entries、不关闭/替换原fd。任何拒绝都保留原句柄和共享偏移，供旧兼容版本接管。可信夹具用真实Unix SCM_RIGHTS，每个FD单独携带名字和应用布局元数据，保留上限2；收到确认后原创建进程退出，再启动新进程显式继承句柄。新进程实际接回环连接并从原文件偏移读随机状态，核对文件和listener inode未变、偏移属于同一open file description。不得按路径重开或把未知fd当标准输入。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Linux SCM_RIGHTS、两次独立子进程、原创建进程退出后的文件/监听socket保留与接管；命名消息采用FDSTORE/FDNAME形状和X_OPSFORGE_METADATA私有扩展。保留器为受控教学夹具，不是实际systemd PID1、NotifyAccess、barrier或sd_listen_fds环境接入证明；管理器保留句柄不保存任意应用状态。区别高级007只读fd委派的对端鉴权，本题考察命名、版本、有限保留和重启接管，不复制普通fd传递题。不部署、不构建镜像。",
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-process-015",
+      "original_title": "交付服务文件描述符存储的重启恢复演练，要求继承资源可追踪且版本不兼容时不会错误复用。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def takeover(entries,supported):\n    import fcntl,os,socket,stat\n    if type(supported) is not int or supported!=1 or not isinstance(entries,list) or len(entries)!=2:raise ValueError('supported layout and exactly two named handles required')\n    if any(not isinstance(row,dict) or row.get('layout')!=supported or type(row.get('layout')) is not int for row in entries):raise ValueError('incompatible application layout')\n    names=[row.get('name') for row in entries];fds=[row.get('fd') for row in entries]\n    if set(names)!={'state','listener'} or len(set(names))!=2 or any(type(fd) is not int or fd<3 for fd in fds) or len(set(fds))!=2:raise ValueError('missing or duplicate handle')\n    result={}\n    for row in entries:\n        fd=row['fd'];info=os.fstat(fd)\n        if info.st_dev!=row['dev'] or info.st_ino!=row['ino']:raise ValueError('retained resource identity changed')\n        if row['name']=='state':\n            if not stat.S_ISREG(info.st_mode) or fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE!=os.O_RDONLY or os.lseek(fd,0,os.SEEK_CUR)!=row['offset']:raise ValueError('state mode or shared offset changed')\n        else:\n            if not stat.S_ISSOCK(info.st_mode):raise ValueError('listener is not a socket')\n            with socket.socket(fileno=os.dup(fd)) as listener:\n                if listener.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_STREAM or not listener.getsockopt(socket.SOL_SOCKET,socket.SO_ACCEPTCONN) or list(listener.getsockname())!=row['address']:raise ValueError('listener binding changed')\n        result[row['name']]=fd\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "def takeover(entries,supported):\n    import fcntl,os,socket,stat\n    if type(supported) is not int or supported!=1 or not isinstance(entries,list) or len(entries)!=2:raise ValueError('supported layout and exactly two named handles required')\n    if any(not isinstance(row,dict) or row.get('layout')!=supported or type(row.get('layout')) is not int for row in entries):raise ValueError('incompatible application layout')\n    names=[row.get('name') for row in entries];fds=[row.get('fd') for row in entries]\n    if set(names)!={'state','listener'} or len(set(names))!=2 or any(type(fd) is not int or fd<3 for fd in fds) or len(set(fds))!=2:raise ValueError('missing or duplicate handle')\n    result={}\n    for row in entries:\n        fd=row['fd'];info=os.fstat(fd)\n        if info.st_dev!=row['dev'] or info.st_ino!=row['ino']:raise ValueError('retained resource identity changed')\n        if row['name']=='state':\n            if not stat.S_ISREG(info.st_mode) or fcntl.fcntl(fd,fcntl.F_GETFL)&os.O_ACCMODE!=os.O_RDONLY or os.lseek(fd,0,os.SEEK_CUR)!=row['offset']:raise ValueError('state mode or shared offset changed')\n        else:\n            if not stat.S_ISSOCK(info.st_mode):raise ValueError('listener is not a socket')\n            with socket.socket(fileno=os.dup(fd)) as listener:\n                if listener.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_STREAM or not listener.getsockopt(socket.SOL_SOCKET,socket.SO_ACCEPTCONN) or list(listener.getsockname())!=row['address']:raise ValueError('listener binding changed')\n        if row['name']=='state':os.lseek(fd,0,os.SEEK_SET)\n        result[row['name']]=fd\n    return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现takeover(entries,supported)。supported仅接受整数1（非bool）；entries恰两个命名句柄state/listener，fd为>=3非bool整数且互异，每个layout为同一整数版本。先校验数量、名称唯一及全体layout，再访问fd；缺失、重复或不兼容ValueError。metadata含dev/ino，须fstat匹配；state须普通只读文件且当前共享偏移等于offset，不读、不seek改偏移；listener须流式监听socket且getsockname等于address，可dup检查后关闭副本。成功只返回{name:原fd}，不改entries、不关闭/替换原fd。任何拒绝都保留原句柄和共享偏移，供旧兼容版本接管。可信夹具用真实Unix SCM_RIGHTS，每个FD单独携带名字和应用布局元数据，保留上限2；收到确认后原创建进程退出，再启动新进程显式继承句柄。新进程实际接回环连接并从原文件偏移读随机状态，核对文件和listener inode未变、偏移属于同一open file description。不得按路径重开或把未知fd当标准输入。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Linux SCM_RIGHTS、两次独立子进程、原创建进程退出后的文件/监听socket保留与接管；命名消息采用FDSTORE/FDNAME形状和X_OPSFORGE_METADATA私有扩展。保留器为受控教学夹具，不是实际systemd PID1、NotifyAccess、barrier或sd_listen_fds环境接入证明；管理器保留句柄不保存任意应用状态。区别高级007只读fd委派的对端鉴权，本题考察命名、版本、有限保留和重启接管，不复制普通fd传递题。不部署、不构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/named_fd_store.py": "\"\"\"Controlled FD retention/restart fixture; not a systemd/PID1 implementation.\"\"\"\nimport array,base64,copy,json,os,pathlib,secrets,socket,subprocess,sys,tempfile\nCREATOR=r'''\nimport array,base64,json,os,pathlib,socket,sys\nconnection=socket.socket(fileno=int(sys.argv[1]));root=pathlib.Path(sys.argv[2]);payload=sys.argv[3].encode()\npath=root/'state';path.write_bytes(b'HEAD|'+payload)\nfd=os.open(path,os.O_RDONLY);os.lseek(fd,5,os.SEEK_SET)\nlistener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(2)\nfor name,number in [('state',fd),('listener',listener.fileno())]:\n stat=os.fstat(number);meta=dict(name=name,layout=1,dev=stat.st_dev,ino=stat.st_ino,offset=5 if name=='state' else None,address=list(listener.getsockname()) if name=='listener' else None)\n encoded=base64.b64encode(json.dumps(meta).encode()).decode()\n message=('FDSTORE=1\\nFDNAME='+name+'\\nX_OPSFORGE_METADATA='+encoded).encode()\n connection.sendmsg([message],[(socket.SOL_SOCKET,socket.SCM_RIGHTS,array.array('i',[number]))])\nassert connection.recv(32)==b'STORED_TWO_HANDLES'\nos.close(fd);listener.close();connection.close()\n'''\nRECEIVER=r'''\nimport copy,fcntl,json,os,socket,sys\nimport task\nentries=json.loads(sys.argv[1]);payload=sys.argv[2].encode()\ninitial={row['fd']:(os.fstat(row['fd']).st_ino,fcntl.fcntl(row['fd'],fcntl.F_GETFL)) for row in entries}\nstate=next(row['fd'] for row in entries if row['name']=='state')\ninvalid=[entries[:1],[dict(entries[0]),dict(entries[1],name='state')],[dict(row,layout=2) for row in entries],[dict(entries[0],ino=entries[0]['ino']+1),dict(entries[1])],[dict(entries[0],offset=0),dict(entries[1])]]\nfor rows in invalid:\n before=os.lseek(state,0,os.SEEK_CUR)\n try:task.takeover(rows,1)\n except ValueError:pass\n else:raise AssertionError('missing/duplicate/incompatible/wrong-resource handoff accepted')\n assert os.lseek(state,0,os.SEEK_CUR)==before,'rejected takeover changed shared file offset'\n assert initial=={row['fd']:(os.fstat(row['fd']).st_ino,fcntl.fcntl(row['fd'],fcntl.F_GETFL)) for row in entries},'rejected takeover closed or replaced retained resource'\nbefore=copy.deepcopy(entries);result=task.takeover(entries,1)\nassert entries==before and result=={row['name']:row['fd'] for row in entries}\nassert os.lseek(state,0,os.SEEK_CUR)==5,'takeover reset retained open-file-description offset'\nassert os.read(result['state'],4096)==payload,'retained state resumed at wrong offset'\nwith socket.socket(fileno=os.dup(result['listener'])) as listener:\n listener.settimeout(3)\n with listener.accept()[0] as client:\n  client.settimeout(3);data=client.recv(4096);assert data==payload\n  client.sendall(b'RESTART-OK:'+payload)\nfor row in entries:os.close(row['fd'])\nprint('NAMED_FD_RESTART_CHILD_SERVED_SAME_LISTENER_AND_RESUMED_SAME_FILE',flush=True)\n'''\ndef exercise():\n with tempfile.TemporaryDirectory(prefix='named-fd-store-') as directory:\n  root=pathlib.Path(directory);payload=secrets.token_hex(16)\n  manager,creator=socket.socketpair(socket.AF_UNIX,socket.SOCK_DGRAM);manager.settimeout(4)\n  descriptors=[];proc=None;new=None\n  try:\n   proc=subprocess.Popen([sys.executable,'-B','-c',CREATOR,str(creator.fileno()),str(root),payload],pass_fds=(creator.fileno(),),stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n   creator.close();entries=[]\n   for _ in range(2):\n    raw,ancillary,flags,_=manager.recvmsg(4096,socket.CMSG_SPACE(array.array('i').itemsize),socket.MSG_CMSG_CLOEXEC)\n    assert not flags&(socket.MSG_TRUNC|socket.MSG_CTRUNC)\n    fields=dict(line.split('=',1) for line in raw.decode().splitlines())\n    assert fields['FDSTORE']=='1'\n    fds=array.array('i')\n    for level,kind,data in ancillary:\n     assert (level,kind)==(socket.SOL_SOCKET,socket.SCM_RIGHTS);fds.frombytes(data[:len(data)//fds.itemsize*fds.itemsize])\n    assert len(fds)==1;descriptors.extend(fds)\n    meta=json.loads(base64.b64decode(fields['X_OPSFORGE_METADATA']));assert meta['name']==fields['FDNAME']\n    meta['fd']=fds[0];entries.append(meta)\n   assert {row['name'] for row in entries}=={'state','listener'} and len(descriptors)==2\n   manager.send(b'STORED_TWO_HANDLES')\n   stdout,stderr=proc.communicate(timeout=4);assert proc.returncode==0,(stdout,stderr)\n   assert all(not os.get_inheritable(fd) for fd in descriptors)\n   state=next(row for row in entries if row['name']=='state');listener=next(row for row in entries if row['name']=='listener')\n   assert os.lseek(state['fd'],0,os.SEEK_CUR)==5\n   new=subprocess.Popen([sys.executable,'-B','-c',RECEIVER,json.dumps(entries),payload],pass_fds=tuple(descriptors),stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n   with socket.create_connection(tuple(listener['address']),timeout=3) as client:\n    client.settimeout(3);client.sendall(payload.encode())\n    try:response=client.recv(4096)\n    except TimeoutError:response=b''\n   stdout,stderr=new.communicate(timeout=5)\n   assert new.returncode==0,(stdout,stderr)\n   assert response==b'RESTART-OK:'+payload.encode()\n   assert os.lseek(state['fd'],0,os.SEEK_CUR)==5+len(payload),'inherited descriptor did not share original open file description'\n   assert os.fstat(state['fd']).st_ino==state['ino'] and os.fstat(listener['fd']).st_ino==listener['ino']\n   print('NATIVE_NAMED_FD_ORIGINAL_CREATOR_EXITED_RETENTION_LIMIT_TWO_NEW_CHILD_SAME_LISTENER_FILE_OFFSET',flush=True)\n   print('NATIVE_NAMED_FD_MISSING_DUPLICATE_LAYOUT_IDENTITY_OFFSET_REJECTED_WITHOUT_RESOURCE_LOSS',flush=True)\n  finally:\n   for child in (proc,new):\n    if child is not None and child.poll() is None:child.kill();child.communicate(timeout=3)\n   for fd in descriptors:os.close(fd)\n   manager.close();creator.close()\n",
+        "checks/check.py": "import os,sys,pathlib\nsys.path[:0]=[os.getcwd(),str(pathlib.Path.cwd()/'checks')]\nimport task\nfrom named_fd_store import exercise\nassert os.geteuid()==1000 and sys.platform=='linux'\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED:named_fd_application_layout_identity_bounded_restart_takeover',flush=True)\nexercise()\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "project"
+  }
+]

@@ -1,0 +1,76 @@
+[
+  {
+    "id": "curated-advanced-git-012",
+    "module": "git",
+    "category": "Git",
+    "level": 5,
+    "topic": "身份权限与安全",
+    "title": "真实Git quarantine扫描门禁：继承接收环境，拒绝、异常、超时均不落正式引用或对象",
+    "body": "## 操作任务\n实现scan(oid,report,scanner)，由实际pre-receive调用。同步运行[*scanner,oid]并继承接收环境，0.4秒超时；禁止丢弃GIT_OBJECT_DIRECTORY/GIT_ALTERNATE_OBJECT_DIRECTORIES/GIT_QUARANTINE_PATH。scanner退出0为accepted、3为rejected、其他为error；TimeoutExpired为timeout、OSError为error。无论是否通过，都把{oid,state,scanner_exit,quarantine:GIT_QUARANTINE_PATH}写入给定隔离区外的report，超时/未启动scanner_exit=None；仅accepted返回True。禁止后台放行、改ref或手搬对象。真实扫描器git show新对象，验证通过迁移和拒绝/异常/超时的隔离区清理、正式对象不可见及原ref保持；路径含空格。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Git receive-pack/pre-receive，只在自建临时file://源仓与裸仓传输，网络关闭，不推送OpsForge真实项目或外部仓库，不改变默认身份。扫描器是受控教学进程；本题验证接收隔离区可见性及同步失败关闭，不代表生产恶意内容检测、畸形pack协议解析、扫描器进程树/资源沙箱或托管服务部署完成。",
+    "answer": "```python\nimport os,subprocess,json,pathlib\ndef scan(oid,report,scanner):\n    try:\n        proc=subprocess.run([*scanner,oid],capture_output=True,text=True,timeout=.4)\n        status=proc.returncode;state='accepted' if status==0 else 'rejected' if status==3 else 'error'\n    except subprocess.TimeoutExpired:state='timeout';status=None\n    except OSError:state='error';status=None\n    evidence=dict(oid=oid,state=state,scanner_exit=status,quarantine=os.environ.get('GIT_QUARANTINE_PATH'))\n    path=pathlib.Path(report);path.write_text(json.dumps(evidence),encoding='utf8')\n    return state=='accepted'\n```\n\n原题知识说明：\n交付接收阶段图，区分新对象进入临时隔离区、pre-receive审查以及接受后进入正式对象库与更新引用的时机。钩子读取新对象必须使用受支持的接收环境，不能把全局对象目录中暂时查不到内容误报为空，也不能在pre-receive里建立指向隔离对象的正式引用。验收通过推送、扫描拒绝、畸形pack和钩子异常，核对失败时正式引用未前进且没有悬空正式引用；用于诊断的报告应自行安全保存，因为隔离区可能被清除。扫描超时采用明确拒绝策略，防止后台扫描尚未完成就允许发布。回退到旧钩子需要保持最低接收门禁并停用未验证新规则；不手工搬运隔离对象来绕开被拒推送。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "说明对象、引用或协议的特有边界",
+      "交付正反例验收及来源记录",
+      "定义失败中止和共享历史保护规则"
+    ],
+    "references": [
+      "https://git-scm.com/docs/git-receive-pack#_quarantine_environment",
+      "https://git-scm.com/docs/githooks#pre-receive"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-git-012",
+      "original_title": "Git服务端接收钩子要扫描新对象，怎样交付quarantine隔离区中的可见性与拒绝行为验证？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,subprocess,json,pathlib\ndef scan(oid,report,scanner):\n    try:\n        proc=subprocess.run([*scanner,oid],capture_output=True,text=True,timeout=.4)\n        status=proc.returncode;state='accepted' if status==0 else 'rejected' if status==3 else 'error'\n    except subprocess.TimeoutExpired:state='timeout';status=None\n    except OSError:state='error';status=None\n    evidence=dict(oid=oid,state=state,scanner_exit=status,quarantine=os.environ.get('GIT_QUARANTINE_PATH'))\n    path=pathlib.Path(report);path.write_text(json.dumps(evidence),encoding='utf8')\n    return state=='accepted'\n"
+    },
+    "negative_files": {
+      "task.py": "import os,subprocess,json,pathlib\ndef scan(oid,report,scanner):\n    try:\n        proc=subprocess.run([*scanner,oid],capture_output=True,text=True,timeout=.4)\n        status=proc.returncode;state='accepted' if status==0 else 'rejected' if status==3 else 'error'\n    except subprocess.TimeoutExpired:state='timeout';status=None\n    except OSError:state='error';status=None\n    evidence=dict(oid=oid,state=state,scanner_exit=status,quarantine=os.environ.get('GIT_QUARANTINE_PATH'))\n    path=pathlib.Path(report);path.write_text(json.dumps(evidence),encoding='utf8')\n    return True\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现scan(oid,report,scanner)，由实际pre-receive调用。同步运行[*scanner,oid]并继承接收环境，0.4秒超时；禁止丢弃GIT_OBJECT_DIRECTORY/GIT_ALTERNATE_OBJECT_DIRECTORIES/GIT_QUARANTINE_PATH。scanner退出0为accepted、3为rejected、其他为error；TimeoutExpired为timeout、OSError为error。无论是否通过，都把{oid,state,scanner_exit,quarantine:GIT_QUARANTINE_PATH}写入给定隔离区外的report，超时/未启动scanner_exit=None；仅accepted返回True。禁止后台放行、改ref或手搬对象。真实扫描器git show新对象，验证通过迁移和拒绝/异常/超时的隔离区清理、正式对象不可见及原ref保持；路径含空格。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Git receive-pack/pre-receive，只在自建临时file://源仓与裸仓传输，网络关闭，不推送OpsForge真实项目或外部仓库，不改变默认身份。扫描器是受控教学进程；本题验证接收隔离区可见性及同步失败关闭，不代表生产恶意内容检测、畸形pack协议解析、扫描器进程树/资源沙箱或托管服务部署完成。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "git"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/scanner.py": "import sys,os,subprocess,time\nmode,oid=sys.argv[1:]\nassert os.environ.get('GIT_QUARANTINE_PATH'),'receiving quarantine context lost'\np=subprocess.run(['git','show',oid+':policy.txt'],capture_output=True,text=True,timeout=2)\nassert p.returncode==0,'new commit not visible in scanner environment'\nassert os.path.isdir(os.environ['GIT_QUARANTINE_PATH'])\nif mode=='timeout':time.sleep(10)\nif mode=='error':raise RuntimeError('scanner internal failure')\nraise SystemExit(3 if p.stdout.strip()=='deny-fixture' else 0)\n",
+        "checks/gate.py": "#!/usr/bin/env python3\nimport sys,os,json\nsys.path.insert(0,os.path.dirname(os.path.abspath(__file__)))\nimport task\nold,new,ref=sys.stdin.readline().split()\nif ref!='refs/heads/main':raise SystemExit(1)\nscanner=[sys.executable,os.environ['OPSF_SCANNER'],os.environ['OPSF_MODE']]\nraise SystemExit(0 if task.scan(new,os.environ['OPSF_REPORT'],scanner) else 1)\n",
+        "checks/check.py": "import sys,os,pathlib,tempfile,subprocess,secrets,json,hashlib\nsys.path.insert(0,os.getcwd());import task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nenv={k:v for k,v in os.environ.items() if not k.startswith('GIT_')};env.update(GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_GLOBAL=os.devnull,GIT_TERMINAL_PROMPT='0',GIT_AUTHOR_NAME='Fixture',GIT_AUTHOR_EMAIL='fixture@example.invalid',GIT_COMMITTER_NAME='Fixture',GIT_COMMITTER_EMAIL='fixture@example.invalid')\ndef git(repo,*args,ok=True):\n p=subprocess.run(['git','-c','protocol.file.allow=always','-c','maintenance.auto=false','-c','commit.gpgsign=false','-C',str(repo),*args],env=env,capture_output=True,text=True,timeout=5)\n if ok:assert p.returncode==0,p.stderr\n return p\nwith tempfile.TemporaryDirectory(prefix='of-quarantine-') as directory:\n root=pathlib.Path(directory);sender=root/'sender';sender.mkdir();target=root/'receiver.git'\n git(sender,'init','--object-format=sha1','-b','main');git(root,'init','--bare','--object-format=sha1',str(target))\n (sender/'policy.txt').write_text('baseline');git(sender,'add','.');git(sender,'commit','-m','fixture baseline');git(sender,'push',target.as_uri(),'main:refs/heads/main')\n git(target,'symbolic-ref','HEAD','refs/heads/main')\n hooks=target/'hooks';(hooks/'task.py').write_bytes(pathlib.Path(task.__file__).read_bytes());scanner=root/'scanner with spaces.py';scanner.write_bytes((pathlib.Path.cwd()/'checks/scanner.py').read_bytes())\n hook=hooks/'pre-receive';hook.write_bytes((pathlib.Path.cwd()/'checks/gate.py').read_bytes());hook.chmod(0o700)\n env['OPSF_SCANNER']=str(scanner);config=(target/'config').read_bytes()\n print('STUDENT_OPERATION_ENTERED:scan_in_actual_receive_quarantine_fail_closed',flush=True)\n for index,(policy,mode,state,success) in enumerate([('allow-fixture','normal','accepted',True),('deny-fixture','normal','rejected',False),('allow-fixture','error','error',False),('allow-fixture','timeout','timeout',False)]):\n  before=git(target,'rev-parse','refs/heads/main').stdout.strip()\n  (sender/'policy.txt').write_text(policy);(sender/'nonce.txt').write_text(secrets.token_hex(16));git(sender,'add','.')\n  tree=git(sender,'write-tree').stdout.strip();oid=git(sender,'commit-tree',tree,'-p',before,'-m','candidate '+str(index)).stdout.strip()\n  report=root/('scan-'+str(index)+'.json');env.update(OPSF_REPORT=str(report),OPSF_MODE=mode)\n  pushed=git(sender,'push',target.as_uri(),oid+':refs/heads/main',ok=False)\n  assert (pushed.returncode==0)==success,pushed.stderr\n  assert report.is_file(),'scanner evidence must survive quarantine cleanup'\n  evidence=json.loads(report.read_bytes());assert evidence['oid']==oid and evidence['state']==state,evidence\n  assert evidence['quarantine'] and not pathlib.Path(evidence['quarantine']).exists(),'quarantine directory survived receive completion'\n  if mode=='timeout':assert evidence['scanner_exit'] is None\n  after=git(target,'rev-parse','refs/heads/main').stdout.strip();assert after==(oid if success else before)\n  visible=git(target,'cat-file','-e',oid+'^{commit}',ok=False);assert (visible.returncode==0)==success,'rejected commit leaked into permanent object database'\n  assert (target/'config').read_bytes()==config\n  refs=git(target,'for-each-ref','--format=%(refname) %(objectname)').stdout.splitlines();assert refs==['refs/heads/main '+after],'hook created an extra reference'\n  assert not git(target,'fsck','--full','--no-reflogs',ok=False).stderr.strip(),'receiver contains object/reference inconsistency'\n print('NATIVE_GIT_QUARANTINE_VISIBLE_ONLY_DURING_SCAN_ACCEPT_MIGRATES_REJECT_ERROR_TIMEOUT_KEEP_REFS_AND_REPORT',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "git"
+    ]
+  }
+]

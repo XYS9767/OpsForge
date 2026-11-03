@@ -1,0 +1,180 @@
+[
+  {
+    "id": "curated-advanced-redis-013",
+    "module": "redis",
+    "category": "Redis",
+    "level": 5,
+    "topic": "事务脚本与协调",
+    "title": "真实库存预留对账：最终订单才可确认或释放，未知订单不补偿，丢回复重试不双退库存",
+    "body": "## 操作任务\n实现reconcile(command,database,sku,reservation,stock_key,holds_key)。SQLite orders(reservation PRIMARY KEY,sku,qty,state)的committed/cancelled是题定不可变最终结果，pending/不存在均返回unknown，不能只凭Redis预留expires_at已过期就返还库存。Redis holds Hash中JSON记录sku/qty/state及其他属性；匹配最终订单才可reserved→confirmed（不改stock）或reserved→released（stock加回qty）。在一次EVAL内验证当前预留并转状态，相同最终状态幂等返回，目标冲突或sku/数量不一致ValueError且不改库存；最终订单但无预留返回missing。库存是非负整数且不大于1000000，最终订单qty为1..1000000整数，拒绝不合法状态。不得修改SQL订单，未知或冲突交人工/上游核实。传输异常应传播；EVAL已完成但回复丢失时可重跑，不得再次加库存。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Redis7.2 Lua状态转移及SQLite最终订单快照，复现丢回复后的重试；不宣称跨Redis/数据库强事务、任意Lua错误自动回滚或生产订单服务已对接。最终状态不可变是题定前提，原子预留机制复用不重复计数。",
+    "answer": "```python\ndef reconcile(command,database,sku,reservation,stock_key,holds_key):\n    order=database.execute('SELECT sku,qty,state FROM orders WHERE reservation=?',(reservation,)).fetchone()\n    if order is None or order[2]=='pending':return 'unknown'\n    if order[0]!=sku or type(order[1]) is not int or not 1<=order[1]<=1000000 or order[2] not in ('committed','cancelled'):raise ValueError('approved immutable order result')\n    target='confirmed' if order[2]=='committed' else 'released'\n    script=\"\"\"local raw=redis.call('HGET',KEYS[2],ARGV[1]);if not raw then return {0,'missing'} end\nlocal good,hold=pcall(cjson.decode,raw);if not good or hold.sku~=ARGV[2] or hold.qty~=tonumber(ARGV[3]) then return {-1,'hold payload mismatch'} end\nif hold.state==ARGV[4] then return {1,hold.state} end\nif hold.state~='reserved' then return {-1,'conflicting final hold state'} end\nif ARGV[4]=='released' then\n local stock=redis.call('GET',KEYS[1]);local value=tonumber(stock)\n if not value or value<0 or value~=math.floor(value) or value>1000000 then return {-1,'invalid stock counter'} end\n redis.call('INCRBY',KEYS[1],tonumber(ARGV[3]))\nend\nhold.state=ARGV[4];redis.call('HSET',KEYS[2],ARGV[1],cjson.encode(hold));return {1,hold.state}\"\"\"\n    result=command('EVAL',script,2,stock_key,holds_key,reservation,sku,order[1],target)\n    if result[0]<0:raise ValueError(result[1])\n    return result[1]\n```\n\n原题知识说明：\n交付预留ID、预留期限、确认与释放状态机以及权威库存归属。缓存预扣只能作为流量控制或临时预留，数据库最终提交必须使用幂等约束和真实库存规则；过期通知不可靠，不能成为唯一释放任务来源。建立可扫描的待决记录与定期对账，已确认订单不可因迟到释放再次增加可售库存。验收覆盖预扣后崩溃、订单提交成功但响应丢失、释放与确认并发及Redis数据回退，检查库存守恒和状态单调性。交付人工处理的结果未知队列与超卖拒绝条件；没有跨系统原子提交时明确中间态，不能凭一个Lua脚本宣称端到端精确一次。",
+    "type": "code",
+    "source": "advanced-expansion-20261022:data:redis",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题述对象的正确性边界",
+      "提供答案要求的针对性证据与验收",
+      "列明故障或不确定结果的处理"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/develop/programmability/eval-intro/",
+      "https://docs.python.org/3.11/library/sqlite3.html"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-redis-013",
+      "original_title": "设计Redis库存预留与数据库最终订单之间的状态对账项目。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def reconcile(command,database,sku,reservation,stock_key,holds_key):\n    order=database.execute('SELECT sku,qty,state FROM orders WHERE reservation=?',(reservation,)).fetchone()\n    if order is None or order[2]=='pending':return 'unknown'\n    if order[0]!=sku or type(order[1]) is not int or not 1<=order[1]<=1000000 or order[2] not in ('committed','cancelled'):raise ValueError('approved immutable order result')\n    target='confirmed' if order[2]=='committed' else 'released'\n    script=\"\"\"local raw=redis.call('HGET',KEYS[2],ARGV[1]);if not raw then return {0,'missing'} end\nlocal good,hold=pcall(cjson.decode,raw);if not good or hold.sku~=ARGV[2] or hold.qty~=tonumber(ARGV[3]) then return {-1,'hold payload mismatch'} end\nif hold.state==ARGV[4] then return {1,hold.state} end\nif hold.state~='reserved' then return {-1,'conflicting final hold state'} end\nif ARGV[4]=='released' then\n local stock=redis.call('GET',KEYS[1]);local value=tonumber(stock)\n if not value or value<0 or value~=math.floor(value) or value>1000000 then return {-1,'invalid stock counter'} end\n redis.call('INCRBY',KEYS[1],tonumber(ARGV[3]))\nend\nhold.state=ARGV[4];redis.call('HSET',KEYS[2],ARGV[1],cjson.encode(hold));return {1,hold.state}\"\"\"\n    result=command('EVAL',script,2,stock_key,holds_key,reservation,sku,order[1],target)\n    if result[0]<0:raise ValueError(result[1])\n    return result[1]\n"
+    },
+    "negative_files": {
+      "task.py": "def reconcile(command,database,sku,reservation,stock_key,holds_key):\n    order=database.execute('SELECT sku,qty,state FROM orders WHERE reservation=?',(reservation,)).fetchone()\n    if order is None or order[2]=='pending':order=(sku,2,'cancelled') # wrongly compensated an uncertain order\n    if order[0]!=sku or type(order[1]) is not int or not 1<=order[1]<=1000000 or order[2] not in ('committed','cancelled'):raise ValueError('approved immutable order result')\n    target='confirmed' if order[2]=='committed' else 'released'\n    script=\"\"\"local raw=redis.call('HGET',KEYS[2],ARGV[1]);if not raw then return {0,'missing'} end\nlocal good,hold=pcall(cjson.decode,raw);if not good or hold.sku~=ARGV[2] or hold.qty~=tonumber(ARGV[3]) then return {-1,'hold payload mismatch'} end\nif hold.state==ARGV[4] then return {1,hold.state} end\nif hold.state~='reserved' then return {-1,'conflicting final hold state'} end\nif ARGV[4]=='released' then\n local stock=redis.call('GET',KEYS[1]);local value=tonumber(stock)\n if not value or value<0 or value~=math.floor(value) or value>1000000 then return {-1,'invalid stock counter'} end\n redis.call('INCRBY',KEYS[1],tonumber(ARGV[3]))\nend\nhold.state=ARGV[4];redis.call('HSET',KEYS[2],ARGV[1],cjson.encode(hold));return {1,hold.state}\"\"\"\n    result=command('EVAL',script,2,stock_key,holds_key,reservation,sku,order[1],target)\n    if result[0]<0:raise ValueError(result[1])\n    return result[1]\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现reconcile(command,database,sku,reservation,stock_key,holds_key)。SQLite orders(reservation PRIMARY KEY,sku,qty,state)的committed/cancelled是题定不可变最终结果，pending/不存在均返回unknown，不能只凭Redis预留expires_at已过期就返还库存。Redis holds Hash中JSON记录sku/qty/state及其他属性；匹配最终订单才可reserved→confirmed（不改stock）或reserved→released（stock加回qty）。在一次EVAL内验证当前预留并转状态，相同最终状态幂等返回，目标冲突或sku/数量不一致ValueError且不改库存；最终订单但无预留返回missing。库存是非负整数且不大于1000000，最终订单qty为1..1000000整数，拒绝不合法状态。不得修改SQL订单，未知或冲突交人工/上游核实。传输异常应传播；EVAL已完成但回复丢失时可重跑，不得再次加库存。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Redis7.2 Lua状态转移及SQLite最终订单快照，复现丢回复后的重试；不宣称跨Redis/数据库强事务、任意Lua错误自动回滚或生产订单服务已对接。最终状态不可变是题定前提，原子预留机制复用不重复计数。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,json,copy,sqlite3,secrets,subprocess,struct,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as error:raise AssertionError('student native operation failed') from error\nfrom redis_native import NativeRedis\nwith NativeRedis() as redis,tempfile.TemporaryDirectory() as directory:\n db=sqlite3.connect(pathlib.Path(directory)/'orders.sqlite',isolation_level=None);db.execute('CREATE TABLE orders(reservation TEXT PRIMARY KEY,sku TEXT,qty INTEGER,state TEXT)')\n prefix='of-'+secrets.token_hex(6);sku='approved-sku';stock=prefix+':{sku}:stock';holds=prefix+':{sku}:holds';c=redis.command;c('SET',stock,10)\n cases={'committed':('committed',3),'cancelled':('cancelled',2),'pending':('pending',2),'absent':(None,2)}\n for name,(state,qty) in cases.items():\n  c('DECRBY',stock,qty);c('HSET',holds,name,json.dumps({'sku':sku,'qty':qty,'state':'reserved','expires_at':1}))\n  if state:db.execute('INSERT INTO orders VALUES(?,?,?,?)',(name,sku,qty,state))\n original_orders=db.execute('SELECT * FROM orders ORDER BY reservation').fetchall();assert c('GET',stock)=='1'\n assert student(task.reconcile,c,db,sku,'committed',stock,holds)=='confirmed' and c('GET',stock)=='1'\n before=c('HGETALL',holds)\n for name in ('pending','absent'):\n  assert task.reconcile(c,db,sku,name,stock,holds)=='unknown','expired hold alone does not prove no final order exists'\n assert c('HGETALL',holds)==before and c('GET',stock)=='1'\n # Native mutation completed, but the client lost only the reply.\n dropped=[]\n def lose_reply(*args):\n  value=c(*args)\n  if args[0]=='EVAL' and not dropped:dropped.append(True);raise ConnectionError('teaching lost reply after native commit')\n  return value\n try:task.reconcile(lose_reply,db,sku,'cancelled',stock,holds)\n except ConnectionError:pass\n else:raise AssertionError('transport uncertainty was swallowed')\n assert c('GET',stock)=='3' and json.loads(c('HGET',holds,'cancelled'))['state']=='released'\n assert task.reconcile(c,db,sku,'cancelled',stock,holds)=='released' and c('GET',stock)=='3','retry returned stock twice'\n assert task.reconcile(c,db,sku,'committed',stock,holds)=='confirmed' and c('GET',stock)=='3'\n db.execute('INSERT INTO orders VALUES(?,?,?,?)',('mismatch','other-sku',1,'cancelled'));before_stock=c('GET',stock)\n try:task.reconcile(c,db,sku,'mismatch',stock,holds)\n except ValueError:pass\n else:raise AssertionError('foreign SKU was reconciled')\n assert c('GET',stock)==before_stock\n db.execute('INSERT INTO orders VALUES(?,?,?,?)',('conflict',sku,1,'cancelled'));c('HSET',holds,'conflict',json.dumps({'sku':sku,'qty':1,'state':'confirmed'}));before=c('HGETALL',holds)\n try:task.reconcile(c,db,sku,'conflict',stock,holds)\n except ValueError:pass\n else:raise AssertionError('conflicting confirmed inventory was automatically undone')\n assert c('GET',stock)==before_stock and c('HGETALL',holds)==before\n assert db.execute('SELECT * FROM orders WHERE reservation IN (?,?,?) ORDER BY reservation',('committed','cancelled','pending')).fetchall()==[row for row in original_orders if row[0]!='absent']\n db.close()\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "src-12b24d3ed945a75d",
+    "title": "真实mkswap格式工件：私有无空洞文件、页尾签名和UUID读回，不启用系统交换",
+    "answer": "```python\nimport os,pathlib,re,subprocess,uuid\ndef prepare_swap(path,size,identity,label):\n    page=os.sysconf('SC_PAGE_SIZE');path=pathlib.Path(path)\n    if type(size) is not int or not 1024*1024<=size<=16*1024*1024 or size%page or not isinstance(label,str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,15}',label):raise ValueError('bounded dense page-aligned swap artifact')\n    try:parsed=uuid.UUID(identity)\n    except (ValueError,TypeError,AttributeError) as error:raise ValueError('canonical UUID') from error\n    if str(parsed)!=identity or parsed.int==0:raise ValueError('canonical nonzero UUID')\n    fd=None;created=False\n    try:\n        fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o600);created=True;os.fchmod(fd,0o600)\n        os.posix_fallocate(fd,0,size);os.close(fd);fd=None\n        subprocess.run(['mkswap','--pagesize',str(page),'--uuid',identity,'--label',label,str(path)],capture_output=True,text=True,check=True,timeout=4)\n        return identity\n    except BaseException:\n        if fd is not None:os.close(fd)\n        if created:path.unlink(missing_ok=True)\n        raise\n```\n\n原题知识说明：\nSwap 为匿名内存页提供磁盘等后备空间，可缓解部分内存压力，也可配合特定休眠配置使用。它比内存慢，持续换入换出会使延迟恶化；有 swap 不保证不会 OOM。应结合工作负载、cgroup 限制和内核设置评估，不应把无限增大 swap 当作容量解决方案。",
+    "category": "磁盘与文件系统",
+    "difficulty": "入门",
+    "section": "调试",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "original_category": "Linux",
+    "original_title": "什么是交换分区? 它用来做什么的?",
+    "module": "disk",
+    "topic": "存储介质与设备模型",
+    "level": 1,
+    "body": "## 操作任务\n实现prepare_swap(path,size,identity,label)：新建非软链接目标普通文件，已存在路径（含软链接）必须FileExistsError且不改任何内容；size为1..16MiB、按当前SC_PAGE_SIZE对齐的整数且拒绝bool，identity为规范小写非零UUID，label为1..15位ASCII字母数字/点/下划线/连字符，不合法ValueError且不留文件。以0600权限实际预分配完整大小、不能只truncate留空洞，再使用原生mkswap按当前页大小、给定UUID/标签写格式头，返回UUID。用实际stat块分配、swap头版本/末页/页尾SWAPSPACE2及blkid读回验收。不得执行swapon、修改fstab、调整系统Swap或制造内存压力。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Linux非root posix_fallocate/mkswap/blkid和交换格式头；验证环境在私有tmpfs中，只交付未激活的教学格式工件，不是可直接上线的交换文件，不证明真实换页、交换I/O或tmpfs支持swapon。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-4b6a532fcfa91fbc",
+        "title": "什么是交换分区？它的用途是什么？",
+        "category": "Linux",
+        "source": "topics/linux/README.md",
+        "sources": [
+          "topics/linux/README.md"
+        ]
+      }
+    ],
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "HPuddSUJaoRgY2x4Ws8cm8YznWd",
+        "question": "14、swap文件系统类型的作用"
+      }
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man8/mkswap.8.html",
+      "https://man7.org/linux/man-pages/man2/fallocate.2.html"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "HPuddSUJaoRgY2x4Ws8cm8YznWd"
+        ]
+      }
+    ],
+    "related_modules": [
+      "disk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "src-12b24d3ed945a75d",
+      "original_title": "什么是交换分区? 它用来做什么的?",
+      "original_type": "source"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,pathlib,re,subprocess,uuid\ndef prepare_swap(path,size,identity,label):\n    page=os.sysconf('SC_PAGE_SIZE');path=pathlib.Path(path)\n    if type(size) is not int or not 1024*1024<=size<=16*1024*1024 or size%page or not isinstance(label,str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,15}',label):raise ValueError('bounded dense page-aligned swap artifact')\n    try:parsed=uuid.UUID(identity)\n    except (ValueError,TypeError,AttributeError) as error:raise ValueError('canonical UUID') from error\n    if str(parsed)!=identity or parsed.int==0:raise ValueError('canonical nonzero UUID')\n    fd=None;created=False\n    try:\n        fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o600);created=True;os.fchmod(fd,0o600)\n        os.posix_fallocate(fd,0,size);os.close(fd);fd=None\n        subprocess.run(['mkswap','--pagesize',str(page),'--uuid',identity,'--label',label,str(path)],capture_output=True,text=True,check=True,timeout=4)\n        return identity\n    except BaseException:\n        if fd is not None:os.close(fd)\n        if created:path.unlink(missing_ok=True)\n        raise\n"
+    },
+    "negative_files": {
+      "task.py": "import os,pathlib,re,subprocess,uuid\ndef prepare_swap(path,size,identity,label):\n    page=os.sysconf('SC_PAGE_SIZE');path=pathlib.Path(path)\n    if type(size) is not int or not 1024*1024<=size<=16*1024*1024 or size%page or not isinstance(label,str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,15}',label):raise ValueError('bounded dense page-aligned swap artifact')\n    try:parsed=uuid.UUID(identity)\n    except (ValueError,TypeError,AttributeError) as error:raise ValueError('canonical UUID') from error\n    if str(parsed)!=identity or parsed.int==0:raise ValueError('canonical nonzero UUID')\n    fd=None;created=False\n    try:\n        fd=os.open(path,os.O_CREAT|os.O_EXCL|os.O_RDWR,0o600);created=True;os.fchmod(fd,0o600)\n        os.ftruncate(fd,size) # left sparse holes;os.close(fd);fd=None\n        subprocess.run(['mkswap','--pagesize',str(page),'--uuid',identity,'--label',label,str(path)],capture_output=True,text=True,check=True,timeout=4)\n        return identity\n    except BaseException:\n        if fd is not None:os.close(fd)\n        if created:path.unlink(missing_ok=True)\n        raise\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现prepare_swap(path,size,identity,label)：新建非软链接目标普通文件，已存在路径（含软链接）必须FileExistsError且不改任何内容；size为1..16MiB、按当前SC_PAGE_SIZE对齐的整数且拒绝bool，identity为规范小写非零UUID，label为1..15位ASCII字母数字/点/下划线/连字符，不合法ValueError且不留文件。以0600权限实际预分配完整大小、不能只truncate留空洞，再使用原生mkswap按当前页大小、给定UUID/标签写格式头，返回UUID。用实际stat块分配、swap头版本/末页/页尾SWAPSPACE2及blkid读回验收。不得执行swapon、修改fstab、调整系统Swap或制造内存压力。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Linux非root posix_fallocate/mkswap/blkid和交换格式头；验证环境在私有tmpfs中，只交付未激活的教学格式工件，不是可直接上线的交换文件，不证明真实换页、交换I/O或tmpfs支持swapon。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "mkswap",
+          "blkid"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,json,copy,sqlite3,secrets,subprocess,struct,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as error:raise AssertionError('student native operation failed') from error\nwith tempfile.TemporaryDirectory() as directory:\n root=pathlib.Path(directory);path=root/'teaching.swap';identity=str(uuid.uuid4());label='swap-'+secrets.token_hex(3);size=8*1024*1024;page=os.sysconf('SC_PAGE_SIZE')\n assert student(task.prepare_swap,path,size,identity,label)==identity\n st=path.stat();assert st.st_size==size and st.st_blocks*512>=size and st.st_mode&0o777==0o600,'swap format artifact is sparse or not private'\n with path.open('rb') as stream:header=stream.read(page)\n assert header[-10:]==b'SWAPSPACE2' and struct.unpack_from('<III',header,1024)==(1,size//page-1,0)\n assert str(uuid.UUID(bytes=header[1036:1052]))==identity and header[1052:1068].rstrip(b'\\0').decode()==label\n probe=subprocess.run(['blkid','-p','-o','export',str(path)],capture_output=True,text=True,check=True);fields=dict(line.split('=',1) for line in probe.stdout.splitlines() if '=' in line)\n assert fields['TYPE']=='swap' and fields['UUID']==identity and fields['LABEL']==label\n before=path.read_bytes()\n try:task.prepare_swap(path,size,str(uuid.uuid4()),'other')\n except FileExistsError:pass\n else:raise AssertionError('existing artifact was overwritten')\n assert path.read_bytes()==before\n link=root/'link';link.symlink_to(path)\n try:task.prepare_swap(link,size,identity,label)\n except FileExistsError:pass\n else:raise AssertionError('symlink destination was followed')\n assert link.is_symlink() and path.read_bytes()==before\n for bad_size,bad_id,bad_label in [(True,identity,label),(size+1,identity,label),(size,'not-a-uuid',label),(size,identity,'too-long-label-for-format')]:\n  target=root/('invalid-'+secrets.token_hex(3))\n  try:task.prepare_swap(target,bad_size,bad_id,bad_label)\n  except ValueError:pass\n  else:raise AssertionError('invalid input accepted')\n  assert not target.exists()\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

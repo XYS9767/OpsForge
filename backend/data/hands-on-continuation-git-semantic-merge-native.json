@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-advanced-git-011",
+    "module": "git",
+    "category": "Git",
+    "level": 5,
+    "topic": "分支合并与历史",
+    "title": "真实Git自定义三方合并驱动：文本可合并也须拒绝跨服务端口碰撞",
+    "body": "## 操作任务\n实现merge(base_path,ours_path,theirs_path)，供实际Git merge driver的%O/%A/%B调用，成功True覆盖ours，冲突False且ours原字节不变。JSON必须仅含services字典，非空服务名→非bool整数端口1..65535，各输入端口不得重复，重复JSON键/非法JSON/额外root字段拒绝。按服务名做三方合并：ours=theirs采用；ours=base采用theirs；theirs=base采用ours；两侧对同键不同更改（含删除对修改）冲突。缺键不同于值；合并后还必须验证全局端口唯一，否则拒绝，即使每侧各自有效且文本改动分离。成功输出UTF8合法JSON。平台在五个临时真实仓库配置driver，检查Git确实调用、成功merge双父，失败HEAD不进且index冲突stage保留；不修改用户/系统Git配置。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Git merge/gitattributes/外部driver，只操作自建临时仓库，没有OpsForge实际Git历史操作、远程推送或默认身份变化。封闭的平面services→port教学schema，不是任意JSON语义合并、部署端口可用性或生产配置兼容证明；Git退出0和合法JSON本身不能代替业务不变量检查。",
+    "answer": "```python\nimport json,pathlib\ndef merge(base_path,ours_path,theirs_path):\n    def pairs(items):\n        result={}\n        for key,value in items:\n            if key in result:raise ValueError('duplicate JSON key')\n            result[key]=value\n        return result\n    def load(path):\n        doc=json.loads(pathlib.Path(path).read_text(encoding='utf8'),object_pairs_hook=pairs)\n        if not isinstance(doc,dict) or set(doc)!={'services'} or not isinstance(doc['services'],dict):raise ValueError('closed services schema')\n        values=doc['services']\n        if any(not name or type(port) is not int or not 1<=port<=65535 for name,port in values.items()) or len(set(values.values()))!=len(values):raise ValueError('invalid or duplicate service ports')\n        return values\n    try:base=load(base_path);ours=load(ours_path);theirs=load(theirs_path)\n    except (OSError,ValueError,TypeError):return False\n    absent=object();result={}\n    for key in base.keys()|ours.keys()|theirs.keys():\n        b,o,t=base.get(key,absent),ours.get(key,absent),theirs.get(key,absent)\n        if o==t:value=o\n        elif o==b:value=t\n        elif t==b:value=o\n        else:return False\n        if value is not absent:result[key]=value\n    if len(set(result.values()))!=len(result):return False\n    pathlib.Path(ours_path).write_text(json.dumps({'services':result},ensure_ascii=False,sort_keys=True,indent=2)+'\\n',encoding='utf8')\n    return True\n```\n\n原题知识说明：\n交付driver输入的基线、本方和对方版本语义、输出位置与退出码合同，明确哪些字段可自动合并、哪些跨字段约束必须人工解决。文本可解析不代表合并业务正确，例如删除对象与修改其引用、重复唯一键或两个环境值混合，均应列为语义冲突。验收使用真实三方样例、驱动未安装、版本不同、异常退出和重复执行，要求未解决冲突保持可见，自动结果确定且与项目校验一致。配置应受控分发，但仓库中声明属性不代表每台客户端已安装可信驱动。失败回退普通冲突流程并由开发人工评审，不能统一选择本方或返回成功；已共享的错误合并通过后续受审修正提交处理，保留原始输入与决策记录。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "说明对象、引用或协议的特有边界",
+      "交付正反例验收及来源记录",
+      "定义失败中止和共享历史保护规则"
+    ],
+    "references": [
+      "https://git-scm.com/docs/gitattributes#_defining_a_custom_merge_driver"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-git-011",
+      "original_title": "为结构化配置引入Git自定义merge driver时，怎样交付语义冲突不会被退出0掩盖的验收？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json,pathlib\ndef merge(base_path,ours_path,theirs_path):\n    def pairs(items):\n        result={}\n        for key,value in items:\n            if key in result:raise ValueError('duplicate JSON key')\n            result[key]=value\n        return result\n    def load(path):\n        doc=json.loads(pathlib.Path(path).read_text(encoding='utf8'),object_pairs_hook=pairs)\n        if not isinstance(doc,dict) or set(doc)!={'services'} or not isinstance(doc['services'],dict):raise ValueError('closed services schema')\n        values=doc['services']\n        if any(not name or type(port) is not int or not 1<=port<=65535 for name,port in values.items()) or len(set(values.values()))!=len(values):raise ValueError('invalid or duplicate service ports')\n        return values\n    try:base=load(base_path);ours=load(ours_path);theirs=load(theirs_path)\n    except (OSError,ValueError,TypeError):return False\n    absent=object();result={}\n    for key in base.keys()|ours.keys()|theirs.keys():\n        b,o,t=base.get(key,absent),ours.get(key,absent),theirs.get(key,absent)\n        if o==t:value=o\n        elif o==b:value=t\n        elif t==b:value=o\n        else:return False\n        if value is not absent:result[key]=value\n    if len(set(result.values()))!=len(result):return False\n    pathlib.Path(ours_path).write_text(json.dumps({'services':result},ensure_ascii=False,sort_keys=True,indent=2)+'\\n',encoding='utf8')\n    return True\n"
+    },
+    "negative_files": {
+      "task.py": "import json,pathlib\ndef merge(base_path,ours_path,theirs_path):\n    def pairs(items):\n        result={}\n        for key,value in items:\n            if key in result:raise ValueError('duplicate JSON key')\n            result[key]=value\n        return result\n    def load(path):\n        doc=json.loads(pathlib.Path(path).read_text(encoding='utf8'),object_pairs_hook=pairs)\n        if not isinstance(doc,dict) or set(doc)!={'services'} or not isinstance(doc['services'],dict):raise ValueError('closed services schema')\n        values=doc['services']\n        if any(not name or type(port) is not int or not 1<=port<=65535 for name,port in values.items()) or len(set(values.values()))!=len(values):raise ValueError('invalid or duplicate service ports')\n        return values\n    try:base=load(base_path);ours=load(ours_path);theirs=load(theirs_path)\n    except (OSError,ValueError,TypeError):return False\n    absent=object();result={}\n    for key in base.keys()|ours.keys()|theirs.keys():\n        b,o,t=base.get(key,absent),ours.get(key,absent),theirs.get(key,absent)\n        if o==t:value=o\n        elif o==b:value=t\n        elif t==b:value=o\n        else:return False\n        if value is not absent:result[key]=value\n    pathlib.Path(ours_path).write_text(json.dumps({'services':result},ensure_ascii=False,sort_keys=True,indent=2)+'\\n',encoding='utf8')\n    return True\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现merge(base_path,ours_path,theirs_path)，供实际Git merge driver的%O/%A/%B调用，成功True覆盖ours，冲突False且ours原字节不变。JSON必须仅含services字典，非空服务名→非bool整数端口1..65535，各输入端口不得重复，重复JSON键/非法JSON/额外root字段拒绝。按服务名做三方合并：ours=theirs采用；ours=base采用theirs；theirs=base采用ours；两侧对同键不同更改（含删除对修改）冲突。缺键不同于值；合并后还必须验证全局端口唯一，否则拒绝，即使每侧各自有效且文本改动分离。成功输出UTF8合法JSON。平台在五个临时真实仓库配置driver，检查Git确实调用、成功merge双父，失败HEAD不进且index冲突stage保留；不修改用户/系统Git配置。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Git merge/gitattributes/外部driver，只操作自建临时仓库，没有OpsForge实际Git历史操作、远程推送或默认身份变化。封闭的平面services→port教学schema，不是任意JSON语义合并、部署端口可用性或生产配置兼容证明；Git退出0和合法JSON本身不能代替业务不变量检查。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "git"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,tempfile,pathlib,json,subprocess,shlex,hashlib\nsys.path.insert(0,os.getcwd());import task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nenv={k:v for k,v in os.environ.items() if not k.startswith('GIT_')};env.update(GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_GLOBAL=os.devnull,GIT_TERMINAL_PROMPT='0',GIT_AUTHOR_NAME='Fixture',GIT_AUTHOR_EMAIL='fixture@example.invalid',GIT_COMMITTER_NAME='Fixture',GIT_COMMITTER_EMAIL='fixture@example.invalid')\ndef git(repo,*args,ok=True):\n p=subprocess.run(['git','-c','commit.gpgsign=false','-c','core.hooksPath='+os.devnull,'-c','maintenance.auto=false','-C',str(repo),*args],env=env,capture_output=True,text=True,timeout=5)\n if ok:assert p.returncode==0,p.stderr\n return p\nbase={'api':8000,'worker':9000}\ncases=[({'api':8100,'worker':9000},{'api':8000,'worker':9100},{'api':8100,'worker':9100}),({'api':8100,'worker':9000},{'api':8200,'worker':9000},None),({'api':9001,'worker':9000},{'api':8000,'worker':9001},None),({'worker':9000},{'api':8100,'worker':9000},None),({'api':8000,'worker':9000,'audit':10000},{'api':8000,'worker':9000,'batch':10000},None)]\nwith tempfile.TemporaryDirectory(prefix='of-semantic-merge-') as directory:\n root=pathlib.Path(directory);driver=root/'merge driver.py'\n driver.write_text('import os,sys\\nsys.path.insert(0,'+repr(str(pathlib.Path(task.__file__).parent))+')\\nimport task\\nwith open(os.environ[\"OPSF_DRIVER_LOG\"],\"a\") as out:out.write(\"called\\\\n\")\\nraise SystemExit(0 if task.merge(*sys.argv[1:]) else 1)\\n')\n print('STUDENT_OPERATION_ENTERED:actual_git_custom_driver_semantic_three_way_merge',flush=True)\n for index,(ours,theirs,expected) in enumerate(cases):\n  repo=root/('repo'+str(index));repo.mkdir();git(repo,'init','--object-format=sha1','-b','main');name='config with spaces.json';path=repo/name\n  (repo/'.gitattributes').write_text('\"config with spaces.json\" merge=jsonports\\n')\n  driver_command=shlex.quote(sys.executable)+' -B '+shlex.quote(str(driver))+' \"%O\" \"%A\" \"%B\"'\n  git(repo,'config','merge.jsonports.driver',driver_command)\n  def commit(values,message):\n   path.write_text(json.dumps({'services':values},sort_keys=True,indent=2)+'\\n');git(repo,'add','.');git(repo,'commit','-m',message);return git(repo,'rev-parse','HEAD').stdout.strip()\n  ancestor=commit(base,'fixture ancestor');ours_oid=commit(ours,'fixture ours');ours_bytes=path.read_bytes()\n  git(repo,'checkout','-b','theirs',ancestor);theirs_oid=commit(theirs,'fixture theirs');git(repo,'checkout','main')\n  config=(repo/'.git/config').read_bytes();driver_log=root/('driver-'+str(index)+'.log');env['OPSF_DRIVER_LOG']=str(driver_log)\n  merged=git(repo,'merge','--no-ff','--no-edit',theirs_oid,ok=False)\n  assert driver_log.exists() and 'called' in driver_log.read_text(),'Git custom driver was not actually invoked'\n  if expected is not None:\n   assert merged.returncode==0,merged.stderr\n   assert json.loads(path.read_bytes())=={'services':expected}\n   assert git(repo,'rev-list','--parents','-n','1','HEAD').stdout.split()[1:]==[ours_oid,theirs_oid]\n   assert git(repo,'ls-files','-u','--',name).stdout==''\n  else:\n   assert merged.returncode!=0,'driver exit0 hid text/semantic merge conflict'\n   assert git(repo,'rev-parse','HEAD').stdout.strip()==ours_oid and git(repo,'ls-files','-u','--',name).stdout,'Git did not preserve unresolved conflict stages'\n   assert path.read_bytes()==ours_bytes,'rejected semantic merge partially rewrote ours'\n  assert (repo/'.git/config').read_bytes()==config\n  assert json.loads(git(repo,'show',ancestor+':'+name).stdout)=={'services':base}\n  assert json.loads(git(repo,'show',theirs_oid+':'+name).stdout)=={'services':theirs}\n # Direct boundary files validate duplicate JSON keys/types without touching Git or partial output.\n a=root/'base.json';o=root/'ours.json';t=root/'theirs.json'\n normal=json.dumps({'services':base});a.write_text(normal);o.write_text(normal);t.write_text(normal)\n assert task.merge(a,o,t) is True and json.loads(o.read_text())=={'services':base}\n for invalid in ['{\"services\":{\"api\":8000,\"api\":8100}}','{\"services\":{\"api\":true}}','{\"services\":{\"api\":0}}','{\"services\":{},\"unexpected\":1}','not-json']:\n  o.write_text(normal);t.write_text(invalid);before=o.read_bytes()\n  assert task.merge(a,o,t) is False and o.read_bytes()==before,'invalid candidate accepted or ours lost'\n print('NATIVE_GIT_DRIVER_SAME_KEY_DELETE_MODIFY_AND_CROSS_KEY_PORT_COLLISIONS_STAY_UNMERGED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "git"
+    ]
+  }
+]

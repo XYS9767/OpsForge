@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-istio-expansion-practice-002",
+    "title": "Istio配置实操：严格mTLS与指定工作负载身份授权",
+    "body": "## 操作任务\n只在固定mesh-training素材上提交security.yaml，包含作用于app=reviews的PeerAuthentication及AuthorizationPolicy。严格mTLS，且唯一ALLOW规则仅对cluster.local/ns/mesh-training/sa/client身份的GET /health生效。保留base.yaml，不能使用通配身份、全命名空间选择器、PERMISSIVE或额外放行规则。使用真实istioctl离线分析并核对配置；实际网格流量不在本地验收范围。\n\n## 产物\nsecurity.yaml\n\n## 验收方法\npython3 checks/check.py，真实本地分析后核对批准策略字段。\n\n## 能力边界\n官方istioctl 1.31.3在隔离user/net namespace对固定Service和声明的工作负载执行本地配置分析，并精确核对STRICT、工作负载选择器、来源身份、GET和/health；无运行中sidecar、ztunnel、集群安装或实际允许/拒绝流量，不能据此宣称生产mTLS或授权恢复。无镜像构建、拉取或默认身份变更。",
+    "answer": "提交符合题设的PeerAuthentication和AuthorizationPolicy；真实网格仍需双向TLS及允许/拒绝流量验证。",
+    "explanation": "STRICT控制传输身份验证，AuthorizationPolicy再约束来源与HTTP操作；配置静态分析不能替代运行时流量验收。",
+    "rubric": [
+      "真实本地分析器通过，选择器、STRICT模式、来源身份、方法和路径均符合批准合同。"
+    ],
+    "category": "Istio",
+    "module": "istio",
+    "type": "code",
+    "language": "yaml",
+    "question_format": "practice",
+    "level": 2,
+    "difficulty": "基础",
+    "has_answer": true,
+    "version": 1,
+    "review_status": "reviewed",
+    "source": "OpsForge-verified-gap-expansion",
+    "tags": [
+      "Istio",
+      "服务网格"
+    ],
+    "review_note": "真实Istio实操缺口绑定冻结空名额，原生及页面证据另存，不计旧题改编和原故障。",
+    "references": [
+      "https://istio.io/latest/docs/ops/diagnostic-tools/istioctl-analyze/",
+      "https://istio.io/latest/docs/reference/config/security/peer_authentication/",
+      "https://istio.io/latest/docs/reference/config/security/authorization-policy/"
+    ],
+    "files": {
+      "base.yaml": "{\n  \"apiVersion\": \"v1\",\n  \"kind\": \"Namespace\",\n  \"metadata\": {\n    \"name\": \"mesh-training\",\n    \"labels\": {\n      \"istio-injection\": \"enabled\"\n    }\n  }\n}\n---\n{\n  \"apiVersion\": \"v1\",\n  \"kind\": \"Service\",\n  \"metadata\": {\n    \"name\": \"reviews\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"selector\": {\n      \"app\": \"reviews\"\n    },\n    \"ports\": [\n      {\n        \"name\": \"http\",\n        \"port\": 80,\n        \"targetPort\": 8080\n      }\n    ]\n  }\n}\n---\n{\n  \"apiVersion\": \"apps/v1\",\n  \"kind\": \"Deployment\",\n  \"metadata\": {\n    \"name\": \"reviews-v1\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"replicas\": 0,\n    \"selector\": {\n      \"matchLabels\": {\n        \"app\": \"reviews\",\n        \"version\": \"v1\"\n      }\n    },\n    \"template\": {\n      \"metadata\": {\n        \"labels\": {\n          \"app\": \"reviews\",\n          \"version\": \"v1\"\n        }\n      },\n      \"spec\": {\n        \"containers\": [\n          {\n            \"name\": \"app\",\n            \"image\": \"example.invalid/unused:v1\",\n            \"ports\": [\n              {\n                \"containerPort\": 8080,\n                \"name\": \"http\"\n              }\n            ]\n          }\n        ]\n      }\n    }\n  }\n}\n---\n{\n  \"apiVersion\": \"apps/v1\",\n  \"kind\": \"Deployment\",\n  \"metadata\": {\n    \"name\": \"reviews-v2\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"replicas\": 0,\n    \"selector\": {\n      \"matchLabels\": {\n        \"app\": \"reviews\",\n        \"version\": \"v2\"\n      }\n    },\n    \"template\": {\n      \"metadata\": {\n        \"labels\": {\n          \"app\": \"reviews\",\n          \"version\": \"v2\"\n        }\n      },\n      \"spec\": {\n        \"containers\": [\n          {\n            \"name\": \"app\",\n            \"image\": \"example.invalid/unused:v2\",\n            \"ports\": [\n              {\n                \"containerPort\": 8080,\n                \"name\": \"http\"\n              }\n            ]\n          }\n        ]\n      }\n    }\n  }\n}\n",
+      "security.yaml": "# IMPLEMENT_APPROVED_SECURITY\n"
+    },
+    "solution_files": {
+      "security.yaml": "{\n  \"apiVersion\": \"security.istio.io/v1\",\n  \"kind\": \"PeerAuthentication\",\n  \"metadata\": {\n    \"name\": \"reviews-strict\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"selector\": {\n      \"matchLabels\": {\n        \"app\": \"reviews\"\n      }\n    },\n    \"mtls\": {\n      \"mode\": \"STRICT\"\n    }\n  }\n}\n---\n{\n  \"apiVersion\": \"security.istio.io/v1\",\n  \"kind\": \"AuthorizationPolicy\",\n  \"metadata\": {\n    \"name\": \"reviews-health\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"selector\": {\n      \"matchLabels\": {\n        \"app\": \"reviews\"\n      }\n    },\n    \"action\": \"ALLOW\",\n    \"rules\": [\n      {\n        \"from\": [\n          {\n            \"source\": {\n              \"principals\": [\n                \"cluster.local/ns/mesh-training/sa/client\"\n              ]\n            }\n          }\n        ],\n        \"to\": [\n          {\n            \"operation\": {\n              \"methods\": [\n                \"GET\"\n              ],\n              \"paths\": [\n                \"/health\"\n              ]\n            }\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    },
+    "negative_files": {
+      "security.yaml": "{\n  \"apiVersion\": \"security.istio.io/v1\",\n  \"kind\": \"PeerAuthentication\",\n  \"metadata\": {\n    \"name\": \"reviews-strict\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"selector\": {\n      \"matchLabels\": {\n        \"app\": \"reviews\"\n      }\n    },\n    \"mtls\": {\n      \"mode\": \"PERMISSIVE\"\n    }\n  }\n}\n---\n{\n  \"apiVersion\": \"security.istio.io/v1\",\n  \"kind\": \"AuthorizationPolicy\",\n  \"metadata\": {\n    \"name\": \"reviews-health\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"selector\": {\n      \"matchLabels\": {\n        \"app\": \"reviews\"\n      }\n    },\n    \"action\": \"ALLOW\",\n    \"rules\": [\n      {\n        \"from\": [\n          {\n            \"source\": {\n              \"principals\": [\n                \"cluster.local/ns/mesh-training/sa/client\"\n              ]\n            }\n          }\n        ],\n        \"to\": [\n          {\n            \"operation\": {\n              \"methods\": [\n                \"GET\"\n              ],\n              \"paths\": [\n                \"/health\"\n              ]\n            }\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "既有私有WSL普通student，真实istioctl隔离本地分析",
+      "operation": "提交严格mTLS与指定身份及路径的授权配置。",
+      "deliverables": [
+        "security.yaml"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "官方istioctl 1.31.3在隔离user/net namespace对固定Service和声明的工作负载执行本地配置分析，并精确核对STRICT、工作负载选择器、来源身份、GET和/health；无运行中sidecar、ztunnel、集群安装或实际允许/拒绝流量，不能据此宣称生产mTLS或授权恢复。无镜像构建、拉取或默认身份变更。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "istioctl",
+          "unshare"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import hashlib,json,os,pathlib,subprocess,tempfile,yaml\nassert os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nbase=pathlib.Path('base.yaml');security=pathlib.Path('security.yaml');assert hashlib.sha256(base.read_bytes()).hexdigest()=='174942024b34cb93a54a3b9808416cd695dab7a2d9ab8cfa9d224bba9d2db1f7'\nraw=security.read_text(encoding='utf8')\nif raw.strip()=='# IMPLEMENT_APPROVED_SECURITY':raise NotImplementedError('complete the approved security configuration')\nprint('STUDENT_OPERATION_ENTERED:actual_istioctl_local_security_policy_analysis',flush=True)\nwith tempfile.TemporaryDirectory(prefix='of-istio-security-') as directory:\n root=pathlib.Path(directory);config=root/'kubeconfig.json';config.write_text(json.dumps({'apiVersion':'v1','kind':'Config','clusters':[],'contexts':[],'users':[],'current-context':''}))\n env={**os.environ,'KUBECONFIG':str(config),'ISTIO_CONFIG_DIR':str(root/'config'),'GOMAXPROCS':'2','GOMEMLIMIT':'384MiB'}\n command=['unshare','-Urn','--','istioctl','analyze','--use-kube=false','--kubeconfig',str(config),'--namespace','mesh-training','--failure-threshold','Error',str(base.resolve()),str(security.resolve())]\n result=subprocess.run(command,capture_output=True,text=True,env=env,timeout=20);assert result.returncode==0,result.stdout+result.stderr\ndocs=list(yaml.safe_load_all(raw));assert len(docs)==2 and {d['kind'] for d in docs}=={'PeerAuthentication','AuthorizationPolicy'}\nfor d in docs:assert d['apiVersion']=='security.istio.io/v1' and d['metadata']['namespace']=='mesh-training'\npeer=next(d for d in docs if d['kind']=='PeerAuthentication');policy=next(d for d in docs if d['kind']=='AuthorizationPolicy')\nassert peer['metadata']=={'name':'reviews-strict','namespace':'mesh-training'} and peer['spec']=={'selector':{'matchLabels':{'app':'reviews'}},'mtls':{'mode':'STRICT'}}\nassert policy['metadata']=={'name':'reviews-health','namespace':'mesh-training'}\nassert policy['spec']=={'selector':{'matchLabels':{'app':'reviews'}},'action':'ALLOW','rules':[{'from':[{'source':{'principals':['cluster.local/ns/mesh-training/sa/client']}}],'to':[{'operation':{'methods':['GET'],'paths':['/health']}}]}]}\nprint('NATIVE_ISTIOCTL_STRICT_MTLS_AND_SCOPED_IDENTITY_METHOD_PATH_NO_LIVE_NETWORK_CLAIM',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "istio"
+    ]
+  }
+]

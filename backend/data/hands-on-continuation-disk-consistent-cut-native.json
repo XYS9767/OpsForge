@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-parallel-disk-062",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "level": 3,
+    "topic": "备份迁移与存储恢复",
+    "title": "活动目录备份一致性：等待真实跨文件写事务建立恢复点",
+    "answer": "```python\nimport fcntl,hashlib,json,pathlib,shutil\ndef capture(source,target):\n    source=pathlib.Path(source);target=pathlib.Path(target)\n    if target.exists():raise FileExistsError(target)\n    with (source/'writer.lock').open('rb') as lock:\n        fcntl.flock(lock,fcntl.LOCK_SH)\n        raw=(source/'data.json').read_bytes();index=json.loads((source/'index.json').read_bytes());data=json.loads(raw)\n        if index['generation']!=data['generation'] or index['data_sha256']!=hashlib.sha256(raw).hexdigest():\n            raise ValueError('application files are not one consistent generation')\n        target.mkdir()\n        for name in ('index.json','data.json'):shutil.copy2(source/name,target/name)\n        return {'generation':data['generation'],'data_sha256':hashlib.sha256(raw).hexdigest()}\n```\n\n原题知识说明：\n不同文件在不同时间被读取，结果可能混合多个状态，例如索引引用尚未备份的数据。需要应用静默、应用原生备份或受控一致性快照来建立恢复点。文件复制成功并不证明跨文件关联一致。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "不同文件在不同时间被读取，结果可能混合多个状态，例如索引引用尚未备份的数据。",
+      "需要应用静默、应用原生备份或受控一致性快照来建立恢复点。",
+      "文件复制成功并不证明跨文件关联一致。"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man2/flock.2.html"
+    ],
+    "related_modules": [
+      "disk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-disk-062",
+      "original_title": "备份过程中持续变化的目录为何可能无法恢复到某一真实时间点？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现capture(source,target)。本题应用合同：所有写者在同一稳定writer.lock inode上持LOCK_EX，更新index.json和data.json后释放；备份者必须持同一文件LOCK_SH覆盖完整读取和复制区间。data.json含generation/value，index.json含同generation及data文件SHA256；不一致时ValueError，不能把混合状态当成功快照。target必须全新，不可覆盖已有恢复点；只复制这两个声明文件，保留mode与mtime，返回{generation,data_sha256}。真实独立写进程会停在index已更新而data尚未更新的中间状态，capture必须等待其完成，不能锁另一个文件或只校验后无锁复制。源数据、稳定锁inode和既有恢复点不被修改。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Linux flock、独立写者进程、实际文件复制及业务交叉校验；仅证明遵守同一协作锁的声明两文件应用一致性点。不是通用在线文件系统快照，不覆盖绕锁写者、数据库原生备份、Btrfs/LVM、任意文件类型或掉电持久性。区别于摘要清单完整性及单文件原子replace；不构建镜像。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import fcntl,hashlib,json,pathlib,shutil\ndef capture(source,target):\n    source=pathlib.Path(source);target=pathlib.Path(target)\n    if target.exists():raise FileExistsError(target)\n    with (source/'writer.lock').open('rb') as lock:\n        fcntl.flock(lock,fcntl.LOCK_SH)\n        raw=(source/'data.json').read_bytes();index=json.loads((source/'index.json').read_bytes());data=json.loads(raw)\n        if index['generation']!=data['generation'] or index['data_sha256']!=hashlib.sha256(raw).hexdigest():\n            raise ValueError('application files are not one consistent generation')\n        target.mkdir()\n        for name in ('index.json','data.json'):shutil.copy2(source/name,target/name)\n        return {'generation':data['generation'],'data_sha256':hashlib.sha256(raw).hexdigest()}\n"
+    },
+    "negative_files": {
+      "task.py": "import fcntl,hashlib,json,pathlib,shutil\ndef capture(source,target):\n    source=pathlib.Path(source);target=pathlib.Path(target)\n    if target.exists():raise FileExistsError(target)\n    with (source/'writer.lock').open('rb') as lock:\n        pass\n        raw=(source/'data.json').read_bytes();index=json.loads((source/'index.json').read_bytes());data=json.loads(raw)\n        if index['generation']!=data['generation'] or index['data_sha256']!=hashlib.sha256(raw).hexdigest():\n            raise ValueError('application files are not one consistent generation')\n        target.mkdir()\n        for name in ('index.json','data.json'):shutil.copy2(source/name,target/name)\n        return {'generation':data['generation'],'data_sha256':hashlib.sha256(raw).hexdigest()}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现capture(source,target)。本题应用合同：所有写者在同一稳定writer.lock inode上持LOCK_EX，更新index.json和data.json后释放；备份者必须持同一文件LOCK_SH覆盖完整读取和复制区间。data.json含generation/value，index.json含同generation及data文件SHA256；不一致时ValueError，不能把混合状态当成功快照。target必须全新，不可覆盖已有恢复点；只复制这两个声明文件，保留mode与mtime，返回{generation,data_sha256}。真实独立写进程会停在index已更新而data尚未更新的中间状态，capture必须等待其完成，不能锁另一个文件或只校验后无锁复制。源数据、稳定锁inode和既有恢复点不被修改。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Linux flock、独立写者进程、实际文件复制及业务交叉校验；仅证明遵守同一协作锁的声明两文件应用一致性点。不是通用在线文件系统快照，不覆盖绕锁写者、数据库原生备份、Btrfs/LVM、任意文件类型或掉电持久性。区别于摘要清单完整性及单文件原子replace；不构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/writer.py": "\"\"\"Cooperating two-file writer with deterministic inconsistent intermediate state.\"\"\"\nimport fcntl,hashlib,json,pathlib,sys\nroot=pathlib.Path(sys.argv[1]);value=sys.argv[2];generation=int(sys.argv[3])\nwith (root/'writer.lock').open('rb') as lock:\n fcntl.flock(lock,fcntl.LOCK_EX)\n data=json.dumps(dict(generation=generation,value=value),sort_keys=True).encode()\n index=json.dumps(dict(generation=generation,data_sha256=hashlib.sha256(data).hexdigest()),sort_keys=True).encode()\n (root/'index.json').write_bytes(index)\n print('WRITER_BETWEEN_FILES_WITH_EXCLUSIVE_LOCK',flush=True)\n assert sys.stdin.readline().strip()=='finish'\n (root/'data.json').write_bytes(data)\n fcntl.flock(lock,fcntl.LOCK_UN)\n",
+        "checks/check.py": "import hashlib,json,os,pathlib,secrets,subprocess,sys,tempfile,threading,time\nsys.path.insert(0,os.getcwd());assert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nimport task\nwith tempfile.TemporaryDirectory(dir='/workspace') as directory:\n root=pathlib.Path(directory);source=root/'live';source.mkdir()\n (source/'writer.lock').write_bytes(b'');(source/'unrelated.lock').write_bytes(b'')\n lock_inode=(source/'writer.lock').stat().st_ino\n for generation in (1,2):\n  previous=json.dumps(dict(generation=generation-1,value='previous'),sort_keys=True).encode()\n  (source/'data.json').write_bytes(previous)\n  (source/'index.json').write_text(json.dumps(dict(generation=generation-1,data_sha256=hashlib.sha256(previous).hexdigest())))\n  for name in ('index.json','data.json'):os.chmod(source/name,0o640);os.utime(source/name,ns=(1700000000000000000,1700000000000000000))\n  value=secrets.token_hex(16);target=root/('snapshot-'+str(generation))\n  writer=subprocess.Popen([sys.executable,'-B','checks/writer.py',str(source),value,str(generation)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n  results=[];errors=[]\n  def capture():\n   try:results.append(task.capture(source,target))\n   except BaseException as error:errors.append(repr(error))\n  worker=None\n  try:\n   assert writer.stdout.readline().strip()=='WRITER_BETWEEN_FILES_WITH_EXCLUSIVE_LOCK'\n   assert json.loads((source/'index.json').read_bytes())['generation']!=json.loads((source/'data.json').read_bytes())['generation']\n   print('STUDENT_OPERATION_ENTERED:cooperating_writer_lock_establishes_cross_file_application_cut',flush=True)\n   worker=threading.Thread(target=capture);worker.start();time.sleep(.12)\n   blocked=worker.is_alive() and not target.exists()\n   writer.stdin.write('finish\\n');writer.stdin.flush();writer.stdin.close();writer.wait(timeout=3)\n   assert writer.returncode==0,writer.stderr.read()\n   worker.join(timeout=3)\n   assert blocked,'copy did not wait for the actual writer transaction boundary'\n   assert not worker.is_alive() and not errors and len(results)==1,(errors,results)\n   raw=(target/'data.json').read_bytes();index=json.loads((target/'index.json').read_bytes())\n   assert index['generation']==json.loads(raw)['generation']==results[0]['generation']==generation\n   assert json.loads(raw)['value']==value and index['data_sha256']==hashlib.sha256(raw).hexdigest()==results[0]['data_sha256']\n   assert set(p.name for p in target.iterdir())=={'data.json','index.json'}\n   for name in ('index.json','data.json'):\n    assert (target/name).read_bytes()==(source/name).read_bytes()\n    assert (target/name).stat().st_mode&0o777==0o640 and (target/name).stat().st_mtime_ns==(source/name).stat().st_mtime_ns\n   assert (source/'writer.lock').stat().st_ino==lock_inode\n   try:task.capture(source,target)\n   except FileExistsError:pass\n   else:raise AssertionError('existing recovery point overwritten')\n  finally:\n   if writer.poll() is None:\n    try:writer.stdin.write('finish\\n');writer.stdin.flush()\n    except (BrokenPipeError,ValueError):pass\n    writer.terminate();writer.wait(timeout=3)\n   if worker:worker.join(timeout=3)\n print('NATIVE_TWO_REAL_WRITER_GENERATIONS_CONSISTENT_FILES_AND_METADATA',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "practice"
+  }
+]

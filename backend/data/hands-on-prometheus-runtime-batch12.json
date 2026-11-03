@@ -1,0 +1,92 @@
+[
+  {
+    "id": "curated-parallel-prometheus-067",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 3,
+    "topic": "高可用容量与运行治理",
+    "title": "交付TLS鉴权配置并保持管理与重载接口关闭",
+    "answer": "```yaml\ntls_server_config:\n  cert_file: cert.pem\n  key_file: key.pem\n  min_version: TLS12\nbasic_auth_users:\n  viewer: $2b$04$ceRCVtkVJl0qPGMWe5g/R.MsJ9fMLhHIG4moNevB.Ul78cRmWDHX6\n```\n\n```json\n{\n  \"enable_admin_api\": false,\n  \"enable_lifecycle\": false\n}\n```\nTLS解决传输和服务端身份验证，Basic Auth限制谁能访问已启用的Web端点；关闭admin/lifecycle解决不需要的管理能力。三者不能相互替代。viewer只是用户名，不能从名字推断只读角色。证书验证使用临时CA显式信任，不关闭校验。\n\n原题原理：重载、快照、删除序列等接口可能改变运行或数据，启用能力依启动参数。对外只暴露必要查询能力，管理入口需认证和网络边界。不能为了便捷把所有管理接口无鉴权公开。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "原生TLS及证书身份验证",
+      "匿名/错误/正确认证矩阵",
+      "认证不等于管理能力开放",
+      "无真实证书或生产身份修改"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/https/",
+      "https://prometheus.io/docs/prometheus/latest/command-line/prometheus/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "web.yaml": "tls_server_config:\n  cert_file: cert.pem\n  key_file: key.pem\n  min_version: TLS12\nbasic_auth_users:\n  viewer: $2b$04$ceRCVtkVJl0qPGMWe5g/R.MsJ9fMLhHIG4moNevB.Ul78cRmWDHX6\n",
+      "flags.json": "{\n  \"enable_admin_api\": true,\n  \"enable_lifecycle\": true\n}\n",
+      "fixture-credentials.json": "{\n  \"username\": \"viewer\",\n  \"password\": \"fixture-only-pass\",\n  \"bcrypt\": \"$2b$04$ceRCVtkVJl0qPGMWe5g/R.MsJ9fMLhHIG4moNevB.Ul78cRmWDHX6\",\n  \"purpose\": \"Only dummy local test identity; never reuse for deployment\"\n}\n"
+    },
+    "solution_files": {
+      "web.yaml": "tls_server_config:\n  cert_file: cert.pem\n  key_file: key.pem\n  min_version: TLS12\nbasic_auth_users:\n  viewer: $2b$04$ceRCVtkVJl0qPGMWe5g/R.MsJ9fMLhHIG4moNevB.Ul78cRmWDHX6\n",
+      "flags.json": "{\n  \"enable_admin_api\": false,\n  \"enable_lifecycle\": false\n}\n"
+    },
+    "negative_files": {
+      "web.yaml": "tls_server_config:\n  cert_file: cert.pem\n  key_file: key.pem\n  min_version: TLS12\nbasic_auth_users: {}\n",
+      "flags.json": "{\n  \"enable_admin_api\": false,\n  \"enable_lifecycle\": false\n}\n"
+    },
+    "body": "## 环境与初始材料\n平台提供Prometheus、promtool、OpenSSL以及隔离临时目录，自动生成仅本次测试使用的自签名EC证书（localhost和127.0.0.1 SAN），不读取或改动系统证书库。fixture-credentials.json给出dummy用户viewer和密码/低成本bcrypt测试hash，禁止复用到部署。平台控制127.0.0.1随机端口。\n\n## 操作任务\n提交web.yaml与flags.json。web.yaml恰有tls_server_config和basic_auth_users；TLS配置引用平台生成的cert.pem/key.pem，min_version为TLS12。仅允许viewer测试用户，用给定bcrypt哈希配置Basic Auth，不使用明文密码字段或空用户表。flags.json恰含两个布尔值enable_admin_api和enable_lifecycle，均须关闭。读取/查询需要鉴权；即使密码正确，也不应因为能看指标就自动开放TSDB管理或配置重载。不要将用户名字viewer误认为系统已经实现只读角色——Prometheus Basic Auth本身并不提供细分角色，本题依靠管理API禁用与环回绑定限制能力。\n\n## 产物\n提交web.yaml和flags.json。平台用这两个布尔值映射原生命令行启用开关，不接受任意启动命令；证书、密钥、端口和数据路径均由隔离验收器管理。\n\n## 验收方法\n执行python3 checks/check.py。OpenSSL真实生成证书，promtool check web-config原生检查配置；客户端明确信任该临时证书并校验主机名，实际以TLS1.2连入。匿名及错误密码访问ready/metrics/query均应401；正确密码查询vector(7)应200并返回7。正确密码POST重载应403；POST snapshot应500且errorType=unavailable、error=admin APIs disabled（这是当前原生API的禁用响应，并非服务崩溃），因为对应管理能力未启用。明文HTTP请求不能变成合法HTTPS访问。参考通过，初始开放管理能力、空鉴权表分别失败；所有子进程限资源且finally回收。\n\n## 边界\n未做公网安全组、反向代理、多租户角色或浏览器证书部署；不声称验证老TLS客户端兼容性或公网安全等级。TLS12字段经原生配置解析且TLS1.2握手实际成功；未把客户端自身拒绝旧协议当作服务端证据。测试hash成本仅为加速隔离验收，不是生产密码策略。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-web-security",
+      "deliverables": [
+        "web.yaml",
+        "flags.json"
+      ],
+      "operation": "配置原生TLS及Basic Auth，并关闭管理/生命周期能力",
+      "verification": "真实证书与TLS1.2握手、401/200及管理能力禁用响应矩阵和明文拒绝",
+      "capability_gap": [
+        "不验证公网/浏览器部署/细粒度RBAC或旧TLS兼容"
+      ],
+      "failure_examples": [
+        "开启admin或lifecycle使认证用户获得管理接口",
+        "空basic_auth_users允许匿名访问",
+        "误把viewer名字当权限角色"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus",
+          "promtool",
+          "openssl"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import ssl,base64\nimport pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1m'},'scrape_configs':[]}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error','--web.config.file='+str(root/'web.yaml'),*EXTRA_FLAGS],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='https://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(urllib.request.Request(url,headers={'Authorization':'Basic '+base64.b64encode(b'viewer:fixture-only-pass').decode()}),timeout=2,context=CONTEXT) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\ncandidate=yaml.load(pathlib.Path('web.yaml').read_text(encoding='utf-8'),Loader=Strict)\nflags=yaml.load(pathlib.Path('flags.json').read_text(encoding='utf-8'),Loader=Strict)\nassert isinstance(candidate,dict) and set(candidate)=={'tls_server_config','basic_auth_users'}\nassert candidate['tls_server_config']=={'cert_file':'cert.pem','key_file':'key.pem','min_version':'TLS12'}\nusers=candidate['basic_auth_users'];assert isinstance(users,dict) and set(users)<={'viewer'}\nfor value in users.values():assert isinstance(value,str) and 40<=len(value)<=100\nassert isinstance(flags,dict) and set(flags)=={'enable_admin_api','enable_lifecycle'} and all(type(v) is bool for v in flags.values())\nEXTRA_FLAGS=[]\nif flags['enable_admin_api']:EXTRA_FLAGS.append('--web.enable-admin-api')\nif flags['enable_lifecycle']:EXTRA_FLAGS.append('--web.enable-lifecycle')\ndef request(url,path,auth=None,post=False,context=None):\n headers={}\n if auth is not None:headers['Authorization']='Basic '+base64.b64encode(auth.encode()).decode()\n req=urllib.request.Request(url+path,data=b'' if post else None,headers=headers)\n try:\n  with urllib.request.urlopen(req,timeout=2,context=context) as response:return response.status,response.read()\n except urllib.error.HTTPError as error:return error.code,error.read()\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-web-controls-') as d:\n root=pathlib.Path(d)\n try:\n  run_command(['openssl','req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-keyout',str(root/'key.pem'),'-out',str(root/'cert.pem'),'-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost,IP:127.0.0.1','-days','1'],root)\n  (root/'web.yaml').write_text(yaml.safe_dump(candidate),encoding='utf-8')\n  run_command(['promtool','check','web-config',str(root/'web.yaml')],root)\n  CONTEXT=ssl.create_default_context(cafile=str(root/'cert.pem'))\n  CONTEXT.minimum_version=ssl.TLSVersion.TLSv1_2;CONTEXT.maximum_version=ssl.TLSVersion.TLSv1_2\n  with server(root,'source') as (url,api):\n   for path in ['/-/ready','/metrics','/api/v1/query?query=vector%287%29']:\n    code,_=request(url,path,context=CONTEXT);assert code==401,'anonymous access must not be accepted'\n    code,_=request(url,path,'viewer:wrong',context=CONTEXT);assert code==401,'bad password must not be accepted'\n   code,body=request(url,'/api/v1/query?query=vector%287%29','viewer:fixture-only-pass',context=CONTEXT)\n   assert code==200 and json.loads(body)['data']['result'][0]['value'][1]=='7'\n   for path in ['/-/reload','/api/v1/admin/tsdb/snapshot']:\n    code,body=request(url,path,'viewer:fixture-only-pass',post=True,context=CONTEXT)\n    if path=='/-/reload':assert code==403,(path,code,body.decode(errors='replace'))\n    else:\n     result=json.loads(body);assert code==500 and result.get('errorType')=='unavailable' and result.get('error')=='admin APIs disabled',(code,result)\n   # Native TLS certificate is trusted only by an explicit fixture CA; no verification bypass.\n   assert CONTEXT.verify_mode==ssl.CERT_REQUIRED and CONTEXT.check_hostname\n   code,_=request(url.replace('https://','http://'),'/-/ready')\n   assert code==400,'plain HTTP must not be accepted as authenticated TLS'\n finally:print('native lifecycle:',json.dumps(STATS))\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_web_tls_authentication_separate_from_admin_lifecycle_capability_flags",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-067",
+      "original_type": "interview",
+      "original_title": "为什么管理API和生命周期接口应单独控制访问？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

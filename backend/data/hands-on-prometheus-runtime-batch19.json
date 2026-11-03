@@ -1,0 +1,90 @@
+[
+  {
+    "id": "curated-parallel-prometheus-001",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 0,
+    "topic": "指标模型与监控架构",
+    "title": "编写OpenMetrics材料并以真实TSDB验证序列身份",
+    "answer": "```text\n# TYPE queue_depth gauge\nqueue_depth{env=\"prod\",service=\"checkout\"} 3 0\nqueue_depth{env=\"prod\",service=\"checkout\"} 7 60\nqueue_depth{env=\"prod\",service=\"checkout\",zone=\"east\"} 11 0\nqueue_depth{env=\"prod\",service=\"checkout\",zone=\"east\"} 13 60\nqueue_depth{env=\"stage\",service=\"checkout\"} 5 0\nqueue_depth{env=\"stage\",service=\"checkout\"} 9 60\n# EOF\n```\nprod无zone的3变7仍是同一序列的两个样本；zone=east形成另一个标签集合；stage标签值改变又形成另一条序列。把观测值塞进标签会让每次变化都创建身份，破坏正常时序。标签顺序不改变身份。\n\n原题原理：指标名与完整标签集合共同定义一条序列，任一标签值改变通常产生新序列。时间戳和值是样本内容，不是静态序列身份。标签设计应稳定且有界。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "指标名与完整标签集合共同定义一条序列，任一标签值改变通常产生新序列。",
+      "时间戳和值是样本内容，不是静态序列身份。",
+      "标签设计应稳定且有界。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/concepts/data_model/",
+      "https://prometheus.io/docs/prometheus/latest/command-line/promtool/#promtool-tsdb-create-blocks-from-openmetrics"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "text",
+    "files": {
+      "metrics.om": "# TYPE queue_depth gauge\nqueue_depth{env=\"prod\",service=\"checkout\"} 3 0\nqueue_depth{env=\"prod\",service=\"checkout\"} 7 60\nqueue_depth{env=\"prod\",service=\"checkout\",zone=\"east\"} 11 0\nqueue_depth{env=\"prod\",service=\"checkout\",zone=\"east\"} 13 60\nqueue_depth{env=\"prod\",service=\"checkout\"} 5 0\nqueue_depth{env=\"prod\",service=\"checkout\"} 9 60\n# EOF\n",
+      "events.json": "[\n  {\n    \"labels\": {\n      \"env\": \"prod\",\n      \"service\": \"checkout\"\n    },\n    \"samples\": [\n      [\n        0,\n        3\n      ],\n      [\n        60,\n        7\n      ]\n    ]\n  },\n  {\n    \"labels\": {\n      \"env\": \"prod\",\n      \"service\": \"checkout\",\n      \"zone\": \"east\"\n    },\n    \"samples\": [\n      [\n        0,\n        11\n      ],\n      [\n        60,\n        13\n      ]\n    ]\n  },\n  {\n    \"labels\": {\n      \"env\": \"stage\",\n      \"service\": \"checkout\"\n    },\n    \"samples\": [\n      [\n        0,\n        5\n      ],\n      [\n        60,\n        9\n      ]\n    ]\n  }\n]\n"
+    },
+    "solution_files": {
+      "metrics.om": "# TYPE queue_depth gauge\nqueue_depth{env=\"prod\",service=\"checkout\"} 3 0\nqueue_depth{env=\"prod\",service=\"checkout\"} 7 60\nqueue_depth{env=\"prod\",service=\"checkout\",zone=\"east\"} 11 0\nqueue_depth{env=\"prod\",service=\"checkout\",zone=\"east\"} 13 60\nqueue_depth{env=\"stage\",service=\"checkout\"} 5 0\nqueue_depth{env=\"stage\",service=\"checkout\"} 9 60\n# EOF\n"
+    },
+    "negative_files": {
+      "metrics.om": "# TYPE queue_depth gauge\nqueue_depth{env=\"prod\",service=\"checkout\",sample_id=\"1\"} 3 0\nqueue_depth{env=\"prod\",service=\"checkout\",sample_id=\"2\"} 7 60\nqueue_depth{env=\"prod\",service=\"checkout\",zone=\"east\",sample_id=\"3\"} 11 0\nqueue_depth{env=\"prod\",service=\"checkout\",zone=\"east\",sample_id=\"4\"} 13 60\nqueue_depth{env=\"stage\",service=\"checkout\",sample_id=\"5\"} 5 0\nqueue_depth{env=\"stage\",service=\"checkout\",sample_id=\"6\"} 9 60\n# EOF\n"
+    },
+    "body": "## 环境与初始材料\nevents.json给出三组队列测量；metrics.om是有错误的OpenMetrics文件。所有数值都是queue_depth这个gauge；第一组prod/checkout无zone，在Unix秒0与60的值是3、7；第二组同环境服务但zone=east，值11、13；第三组stage/checkout无zone，值5、9。平台提供promtool与Prometheus 3.5，不需要部署exporter。\n\n## 操作任务\n编辑metrics.om，完整保留六个时间点、值和标签，使它们形成恰好三条时间序列。指标名和完整标签集合共同决定身份；同一组的值变化不是新序列，不要把值、时间或sample_id做成额外身份标签。保留stage与prod区别，也不能把有zone与无zone两组混到一起。标签书写顺序可以改变。\n\n## 产物\n提交完整OpenMetrics文件metrics.om：声明# TYPE queue_depth gauge，每行给出样本值与Unix秒时间，末尾# EOF。只用事件材料里的env/service及可选zone，不额外编造身份维度；无需编写程序。\n\n## 验收方法\n执行python3 checks/check.py。原生promtool从文件创建实际TSDB块，再用原生查询API读取Unix秒60处的两分钟范围向量，完整核对三条序列、全部标签及每条两个时间值；分别在0秒和60秒做instant query也必须各有三条正确测量。初始把stage错写prod导致身份冲突；典型错误加sample_id导致六条身份，均不通过。题用Unix零点帮助直接读时间，不改系统时钟；临时Server专用100y保留配置仅防止清理这些教学历史样本，退出后不留服务。\n\n## 边界\n实际执行的是OpenMetrics导入与TSDB查询，不是单纯文本匹配；不代表真实exporter性能、生产保留策略或标签基数压测。100y仅属于本题隔离素材的读取设置，不是生产推荐。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-openmetrics-import",
+      "deliverables": [
+        "metrics.om"
+      ],
+      "operation": "交付正确指标样本与标签身份的OpenMetrics数据文件",
+      "verification": "原生TSDB导入、范围向量与两个时刻instant query精确核对",
+      "capability_gap": [
+        "非真实exporter/生产保留策略/基数压测"
+      ],
+      "failure_examples": [
+        "不同环境误写相同身份",
+        "将每次观测做成sample_id新身份",
+        "遗漏zone将两组拼成冲突序列"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus",
+          "promtool"
+        ],
+        "features": [
+          "prometheus:v3.5",
+          "promtool:v3.5"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1m'},'scrape_configs':[]}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error','--storage.tsdb.retention.time=100y'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\nraw=pathlib.Path('metrics.om').read_bytes();assert len(raw)<=20000\ntext=raw.decode('utf-8');assert '# TYPE queue_depth gauge' in text.splitlines() and text.rstrip().endswith('# EOF')\nexpected={('prod','checkout',''):[(0,3),(60,7)],('prod','checkout','east'):[(0,11),(60,13)],('stage','checkout',''):[(0,5),(60,9)]}\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-series-identity-') as d:\n root=pathlib.Path(d);(root/'metrics.om').write_bytes(raw.replace(b'\\r\\n',b'\\n'))\n try:\n  run_command(['promtool','tsdb','create-blocks-from','openmetrics',str(root/'metrics.om'),str(root/'source')],root)\n  metas=[json.loads(p.read_text()) for p in (root/'source').glob('*/meta.json')]\n  assert metas and sum(m['stats']['numSamples'] for m in metas)==6,'stored artifact must contain exactly the six requested samples, including outside queried families/times'\n  with server(root,'source') as (url,api):\n   all_series=api('/api/v1/series',{'match[]':'{__name__!=\"\"}'})['data'];assert len(all_series)==3\n   result=api('/api/v1/query',{'query':'queue_depth[2m]','time':60})['data'];assert result['resultType']=='matrix'\n   actual={}\n   for row in result['result']:\n    m=row['metric'];assert set(m)<={'__name__','env','service','zone'} and m['__name__']=='queue_depth'\n    key=(m.get('env',''),m.get('service',''),m.get('zone',''));assert key not in actual\n    actual[key]=[(int(t),float(v)) for t,v in row['values']]\n   assert actual==expected,'metric name plus full label set defines exactly three series; values and time are samples, not identity labels'\n   for at,wanted in [(0,[3,11,5]),(60,[7,13,9])]:\n    rows=vector(api,'queue_depth',at);assert len(rows)==3 and sorted(float(r['value'][1]) for r in rows)==sorted(wanted)\n finally:print('native lifecycle:',json.dumps(STATS))\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_openmetrics_metric_labelset_identity_vs_multiple_samples",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-001",
+      "original_type": "interview",
+      "original_title": "Prometheus如何区分两条不同的时间序列？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

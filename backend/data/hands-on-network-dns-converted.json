@@ -1,0 +1,151 @@
+[
+  {
+    "id": "curated-network-completion-005",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 2,
+    "topic": "修复区域顶点CNAME冲突并交付有效zone",
+    "title": "修复区域顶点CNAME冲突并交付有效zone",
+    "answer": "### example.zone\n```dns\n$ORIGIN example.test.\n$TTL 300\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102302 3600 600 86400 300)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\n@ IN A 203.0.113.10\n@ IN MX 10 mail.example.test.\nmail IN A 192.0.2.25\nwww IN CNAME example.test.\n```\n\n原理补充：\nCNAME 所在名称通常不能同时有其他普通记录，而区域顶点必须有 SOA/NS，因此发生约束冲突。某些提供商的 ALIAS/ANAME 或扁平化是额外产品能力，不能当作标准 CNAME 无条件适用。应验证最终返回记录及目标更新行为。",
+    "type": "code",
+    "source": "OpsForge 原创网络专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\n非root隔离Linux、Python3、BIND named-checkzone。工作区提供待修复的区域文件，地址均为文档保留地址。只在题目目录离线校验区域文件；不启动DNS服务、不更新公网域名、不读写系统DNS配置。\n\n## 操作任务\n修复example.test.顶点CNAME与SOA/NS/MX共存的错误。顶点应A=203.0.113.10；www使用CNAME指向example.test.；保留ns的192.0.2.53、mail的192.0.2.25、顶点MX优先级10以及原SOA/NS，SOA序列号使用2026102302，TTL300。不得删除邮件记录或把zone顶点改名来绕过冲突。验收原生加载通过、顶点无CNAME、全部7条预期记录精确存在且无额外记录。\n\n## 提交产物\nexample.zone。交付BIND能够加载的实际区域文件，保留题目要求的原有记录，不能只写迁移说明。\n\n## 验收方法\npython3 checks/check.py对每个区域执行named-checkzone -D，实际检查CNAME/其他数据冲突与区域语法，再对规范化记录核对任务中的记录集合、委派边界或回退一致性；全部断言通过返回0。工具缺失显示能力待验。这是离线区域工件验收，权威部署、递归缓存传播、DNSSEC及公网解析均不在本题验收范围。\n\n失败示例：只删掉冲突CNAME却顺手删了MX，named-checkzone可能通过，但邮件路由已经损坏。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "text",
+    "files": {
+      "example.zone": "$ORIGIN example.test.\n$TTL 300\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102302 3600 600 86400 300)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\n@ IN CNAME edge.vendor.test.\n@ IN MX 10 mail.example.test.\nmail IN A 192.0.2.25\nwww IN CNAME example.test.\n"
+    },
+    "solution_files": {
+      "example.zone": "$ORIGIN example.test.\n$TTL 300\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102302 3600 600 86400 300)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\n@ IN A 203.0.113.10\n@ IN MX 10 mail.example.test.\nmail IN A 192.0.2.25\nwww IN CNAME example.test.\n"
+    },
+    "negative_files": {
+      "example.zone": "$ORIGIN example.test.\n$TTL 300\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102302 3600 600 86400 300)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\n@ IN A 203.0.113.10\nmail IN A 192.0.2.25\nwww IN CNAME example.test.\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "修复example.test.顶点CNAME与SOA/NS/MX共存的错误。顶点应A=203.0.113.10；www使用CNAME指向example.test.；保留ns的192.0.2.53、mail的192.0.2.25、顶点MX优先级10以及原SOA/NS，SOA序列号使用2026102302，TTL300。不得删除邮件记录或把zone顶点改名来绕过冲突。验收原生加载通过、顶点无CNAME、全部7条预期记录精确存在且无额外记录。",
+      "deliverables": [
+        "example.zone"
+      ],
+      "verification": "原生named-checkzone加载区域并导出规范记录；按任务断言配置语义",
+      "failure_examples": [
+        "只删掉冲突CNAME却顺手删了MX，named-checkzone可能通过，但邮件路由已经损坏。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess\ndef records(origin,filename):\n    output=filename+'.canonical'\n    result=subprocess.run(['named-checkzone','-D','-o',output,origin,filename],capture_output=True,text=True,timeout=3)\n    assert result.returncode==0,result.stdout+result.stderr\n    rows=[]\n    for line in pathlib.Path(output).read_text().splitlines():\n        if not line.strip() or line.startswith(';'):continue\n        fields=line.split()\n        if len(fields)>=5:rows.append((fields[0].lower(),fields[3].upper(),' '.join(fields[4:]).lower()))\n    return rows\n\nrows=records('example.test','example.zone')\nexpected=[('example.test.','SOA','ns.example.test. hostmaster.example.test. 2026102302 3600 600 86400 300'),('example.test.','NS','ns.example.test.'),('ns.example.test.','A','192.0.2.53'),('example.test.','A','203.0.113.10'),('example.test.','MX','10 mail.example.test.'),('mail.example.test.','A','192.0.2.25'),('www.example.test.','CNAME','example.test.')]\nassert sorted(rows)==sorted(expected),(rows,expected)\ncanonical=pathlib.Path('example.zone.canonical').read_text().splitlines()\nassert all(line.split()[1]=='300' for line in canonical if line and not line.startswith(';'))\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "named-checkzone"
+        ]
+      }
+    },
+    "case_signature": "network-native-zone|curated-network-completion-005|修复区域顶点CNAME冲突并交付有效zone",
+    "conversion": {
+      "original_id": "curated-network-completion-005",
+      "original_title": "为什么传统 DNS 区域顶点通常不能直接设置普通 CNAME？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-advanced-network-009",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 4,
+    "topic": "交付子域委派、必要胶水与可回退的区域工件",
+    "title": "交付子域委派、必要胶水与可回退的区域工件",
+    "answer": "### parent.zone\n```dns\n$ORIGIN example.test.\n$TTL 300\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102302 3600 600 86400 300)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\ncontrol IN A 192.0.2.80\napp IN NS ns1.app.example.test.\nns1.app IN A 192.0.2.54\n```\n\n### child.zone\n```dns\n$ORIGIN app.example.test.\n$TTL 300\n@ IN SOA ns1.app.example.test. hostmaster.example.test. (2026102301 3600 600 86400 300)\n@ IN NS ns1.app.example.test.\nns1 IN A 192.0.2.54\n@ IN A 203.0.113.10\nwww IN A 203.0.113.11\n```\n\n### rollback.zone\n```dns\n$ORIGIN example.test.\n$TTL 300\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102303 3600 600 86400 300)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\ncontrol IN A 192.0.2.80\napp IN A 203.0.113.10\nwww.app IN A 203.0.113.11\n```\n\n原理补充：\n交付区数据清单、NS委派、必要胶水和权威可达矩阵。先让新服务器完整提供正确区数据并对外可达，再更新父区委派，名称位于被委派区内时核对胶水需求；递归缓存与权威数据分别验证。验收UDP/TCP、IPv4/IPv6及多递归解析器的权威链，含不存在名称和超时。旧权威保留覆盖缓存窗口，切换期间避免两侧数据漂移。若新委派有故障，恢复父区信息并继续服务旧区，但缓存不会立即失效；不能删除旧服务器后才观察外部是否已收敛。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "给出题设要求的具体交付物与关键机制",
+      "用可观察结果验证约束和失败分支",
+      "明确停止条件及回退或恢复边界"
+    ],
+    "references": [],
+    "body": "## 环境与初始材料\n非root隔离Linux、Python3、BIND named-checkzone。工作区提供待修复的区域文件，地址均为文档保留地址。只在题目目录离线校验区域文件；不启动DNS服务、不更新公网域名、不读写系统DNS配置。\n\n## 操作任务\n把原由example.test父区持有的app及www.app地址迁到app.example.test子区。提交parent.zone：父区序列号2026102302，app委派到ns1.app.example.test，保留该NS的胶水192.0.2.54；删除父区原app/www.app的业务A记录，保留control及父区NS/A。提交child.zone：子区顶点A203.0.113.10、www A203.0.113.11、NS及ns1 A192.0.2.54、子区SOA序列号2026102301。提交rollback.zone：恢复迁移前的父区记录集合，仅把SOA序列号推进为2026102303，不能回退序列号。三个区域TTL300；不额外保留委派下的业务记录。验收分别原生加载三份区域、核对父子NS与胶水一致、地址无丢失、委派边界干净及回退记录一致。\n\n## 提交产物\nparent.zone, child.zone, rollback.zone。交付BIND能够加载的实际区域文件，保留题目要求的原有记录，不能只写迁移说明。\n\n## 验收方法\npython3 checks/check.py对每个区域执行named-checkzone -D，实际检查CNAME/其他数据冲突与区域语法，再对规范化记录核对任务中的记录集合、委派边界或回退一致性；全部断言通过返回0。工具缺失显示能力待验。这是离线区域工件验收，权威部署、递归缓存传播、DNSSEC及公网解析均不在本题验收范围。\n\n失败示例：委派NS位于被委派子域内部，却遗漏父区胶水，会造成引导依赖闭环；只验证子区自身语法不能发现整个交付缺口。",
+    "related_modules": [
+      "network"
+    ],
+    "language": "text",
+    "files": {
+      "parent-before.zone": "$ORIGIN example.test.\n$TTL 300\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102301 3600 600 86400 300)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\ncontrol IN A 192.0.2.80\napp IN A 203.0.113.10\nwww.app IN A 203.0.113.11\n",
+      "parent.zone": "$ORIGIN example.test.\n$TTL 300\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102301 3600 600 86400 300)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\ncontrol IN A 192.0.2.80\napp IN A 203.0.113.10\nwww.app IN A 203.0.113.11\n",
+      "child.zone": "# TODO: child zone\n",
+      "rollback.zone": "# TODO: rollback zone\n"
+    },
+    "solution_files": {
+      "parent.zone": "$ORIGIN example.test.\n$TTL 300\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102302 3600 600 86400 300)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\ncontrol IN A 192.0.2.80\napp IN NS ns1.app.example.test.\nns1.app IN A 192.0.2.54\n",
+      "child.zone": "$ORIGIN app.example.test.\n$TTL 300\n@ IN SOA ns1.app.example.test. hostmaster.example.test. (2026102301 3600 600 86400 300)\n@ IN NS ns1.app.example.test.\nns1 IN A 192.0.2.54\n@ IN A 203.0.113.10\nwww IN A 203.0.113.11\n",
+      "rollback.zone": "$ORIGIN example.test.\n$TTL 300\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102303 3600 600 86400 300)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\ncontrol IN A 192.0.2.80\napp IN A 203.0.113.10\nwww.app IN A 203.0.113.11\n"
+    },
+    "negative_files": {
+      "parent.zone": "$ORIGIN example.test.\n$TTL 300\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102302 3600 600 86400 300)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\ncontrol IN A 192.0.2.80\napp IN NS ns1.app.example.test.\n",
+      "child.zone": "$ORIGIN app.example.test.\n$TTL 300\n@ IN SOA ns1.app.example.test. hostmaster.example.test. (2026102301 3600 600 86400 300)\n@ IN NS ns1.app.example.test.\nns1 IN A 192.0.2.54\n@ IN A 203.0.113.10\nwww IN A 203.0.113.11\n",
+      "rollback.zone": "$ORIGIN example.test.\n$TTL 300\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102303 3600 600 86400 300)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\ncontrol IN A 192.0.2.80\napp IN A 203.0.113.10\nwww.app IN A 203.0.113.11\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "把原由example.test父区持有的app及www.app地址迁到app.example.test子区。提交parent.zone：父区序列号2026102302，app委派到ns1.app.example.test，保留该NS的胶水192.0.2.54；删除父区原app/www.app的业务A记录，保留control及父区NS/A。提交child.zone：子区顶点A203.0.113.10、www A203.0.113.11、NS及ns1 A192.0.2.54、子区SOA序列号2026102301。提交rollback.zone：恢复迁移前的父区记录集合，仅把SOA序列号推进为2026102303，不能回退序列号。三个区域TTL300；不额外保留委派下的业务记录。验收分别原生加载三份区域、核对父子NS与胶水一致、地址无丢失、委派边界干净及回退记录一致。",
+      "deliverables": [
+        "parent.zone",
+        "child.zone",
+        "rollback.zone"
+      ],
+      "verification": "原生named-checkzone加载区域并导出规范记录；按任务断言配置语义",
+      "failure_examples": [
+        "委派NS位于被委派子域内部，却遗漏父区胶水，会造成引导依赖闭环；只验证子区自身语法不能发现整个交付缺口。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess\ndef records(origin,filename):\n    output=filename+'.canonical'\n    result=subprocess.run(['named-checkzone','-D','-o',output,origin,filename],capture_output=True,text=True,timeout=3)\n    assert result.returncode==0,result.stdout+result.stderr\n    rows=[]\n    for line in pathlib.Path(output).read_text().splitlines():\n        if not line.strip() or line.startswith(';'):continue\n        fields=line.split()\n        if len(fields)>=5:rows.append((fields[0].lower(),fields[3].upper(),' '.join(fields[4:]).lower()))\n    return rows\n\nparent=records('example.test','parent.zone');child=records('app.example.test','child.zone');rollback=records('example.test','rollback.zone')\nassert sorted(parent)==sorted([('example.test.','SOA','ns.example.test. hostmaster.example.test. 2026102302 3600 600 86400 300'),('example.test.','NS','ns.example.test.'),('ns.example.test.','A','192.0.2.53'),('control.example.test.','A','192.0.2.80'),('app.example.test.','NS','ns1.app.example.test.'),('ns1.app.example.test.','A','192.0.2.54')])\nassert sorted(child)==sorted([('app.example.test.','SOA','ns1.app.example.test. hostmaster.example.test. 2026102301 3600 600 86400 300'),('app.example.test.','NS','ns1.app.example.test.'),('ns1.app.example.test.','A','192.0.2.54'),('app.example.test.','A','203.0.113.10'),('www.app.example.test.','A','203.0.113.11')])\nassert sorted(rollback)==sorted([('example.test.','SOA','ns.example.test. hostmaster.example.test. 2026102303 3600 600 86400 300'),('example.test.','NS','ns.example.test.'),('ns.example.test.','A','192.0.2.53'),('control.example.test.','A','192.0.2.80'),('app.example.test.','A','203.0.113.10'),('www.app.example.test.','A','203.0.113.11')])\nfor name in ['parent.zone','child.zone','rollback.zone']:\n    lines=pathlib.Path(name+'.canonical').read_text().splitlines()\n    assert all(line.split()[1]=='300' for line in lines if line and not line.startswith(';'))\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "named-checkzone"
+        ]
+      }
+    },
+    "case_signature": "network-native-zone|curated-advanced-network-009|交付子域委派、必要胶水与可回退的区域工件",
+    "conversion": {
+      "original_id": "curated-advanced-network-009",
+      "original_title": "交付一个子域从父区直接管理迁移到独立权威服务器的方案，要求委派、胶水与回退路径都可验证。",
+      "original_type": "practice",
+      "preserve_history": true
+    }
+  }
+]

@@ -1,0 +1,75 @@
+[
+  {
+    "id": "curated-parallel-go-092",
+    "module": "go",
+    "category": "Go 运维开发",
+    "level": 4,
+    "topic": "文件数据与时间",
+    "title": "Go压缩日志独立预算：压缩输入、展开字节、行长、记录数及取消缺一不可",
+    "answer": "```go\npackage exercise\nimport(\"io\";\"context\";\"compress/gzip\";\"bufio\";\"errors\";\"fmt\")\nvar ErrLimit=errors.New(\"resource limit exceeded\")\ntype budgetReader struct{reader io.Reader;ctx context.Context;used,limit int64;label string}\nfunc(b *budgetReader)Read(p []byte)(int,error){\n if err:=b.ctx.Err();err!=nil{return 0,err}\n remaining:=b.limit-b.used\n if int64(len(p))>remaining+1{p=p[:int(remaining+1)]}\n n,err:=b.reader.Read(p);b.used+=int64(n)\n if b.used>b.limit{return 0,fmt.Errorf(\"%w: %s\",ErrLimit,b.label)}\n return n,err\n}\nfunc ParseGzip(ctx context.Context,src io.Reader,maxCompressed,maxExpanded int64,maxRecord,maxRecords int)([][]byte,error){\n if ctx==nil||src==nil||maxCompressed<1||maxCompressed>1048576||maxExpanded<1||maxExpanded>4194304||maxRecord<1||maxRecord>1048576||maxRecords<1||maxRecords>10000{return nil,errors.New(\"invalid bounded input\")}\n if err:=ctx.Err();err!=nil{return nil,err}\n compressed:=&budgetReader{reader:src,ctx:ctx,limit:maxCompressed,label:\"compressed bytes\"}\n archive,err:=gzip.NewReader(compressed);if err!=nil{return nil,err};defer archive.Close()\n expanded:=&budgetReader{reader:archive,ctx:ctx,limit:maxExpanded,label:\"expanded bytes\"}\n scanner:=bufio.NewScanner(expanded);capacity:=maxRecord+3;if capacity>4096{capacity=4096}\n scanner.Buffer(make([]byte,0,capacity),maxRecord+3)\n var result [][]byte\n for scanner.Scan(){\n  if err:=ctx.Err();err!=nil{return nil,err}\n  if len(scanner.Bytes())>maxRecord||len(result)>=maxRecords{return nil,fmt.Errorf(\"%w: record budget\",ErrLimit)}\n  row:=make([]byte,len(scanner.Bytes()));copy(row,scanner.Bytes());result=append(result,row)\n }\n if err:=scanner.Err();err!=nil{if errors.Is(err,bufio.ErrTooLong){return nil,fmt.Errorf(\"%w: record bytes\",ErrLimit)};return nil,err}\n if err:=ctx.Err();err!=nil{return nil,err}\n return result,nil\n}\n```\n\n原题知识说明：\n分别限制上传字节、解压后字节、记录长度、记录数和处理时间，逐条流式解析并支持取消。仅限制压缩输入不能阻止解压炸弹，单次ReadAll会放大内存风险。超限必须明确失败并避免发布部分完整假象。",
+    "type": "code",
+    "source": "独立编审：Go语言、标准库与运行诊断",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明Go机制和限制",
+      "给出与本题风险对应的验证或设计约束"
+    ],
+    "references": [
+      "https://pkg.go.dev/compress/gzip#Reader",
+      "https://pkg.go.dev/bufio#Scanner.Buffer",
+      "https://pkg.go.dev/context"
+    ],
+    "language": "go",
+    "conversion": {
+      "original_id": "curated-parallel-go-092",
+      "original_title": "Go日志解析服务面对压缩文件时如何同时限制压缩前后资源？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现ErrLimit及ParseGzip(ctx context.Context,src io.Reader,maxCompressed,maxExpanded int64,maxRecord,maxRecords int)([][]byte,error)。用真实gzip流逐条ScanLines处理，独立限制压缩总字节、展开总字节（含换行）、单记录字节（去行尾）及记录数，恰好等于预算可成功，超出errors.Is(err,ErrLimit)。压缩预算1..1MiB、展开1..4MiB、记录1..1MiB、数量1..10000，nil依赖或无效预算拒绝。任何失败均返回nil结果，不把部分报告当完整成功；CRC损坏、截断、底层读取错误保留错误链；支持拼接gzip成员且预算累计，流结束须验证完整性。每次底层读及循环处理检查context，已取消不可读取源；记录独立复制，最后无换行可接受。合同约定io.Reader本身有界返回，取消不能强行打断任意阻塞Reader，也不要求统计解压器内部CPU指令预算。仅限制小上传不够，夹具真实压缩200KiB为小于1KiB并验证展开上限。\n\n## 提交产物\ntask.go\n\n## 验收方法\ngo test -race执行真实压缩/解压、CRC损坏和取消用例，go vet -copylocks；不构建镜像。\n\n## 能力边界\n真实Go gzip/CRC和标准库流式读取、独立资源上限、错误与取消。不是生产上传服务器或任意阻塞I/O强制中断；不验证内存RSS和CPU时间SLO。",
+    "files": {
+      "task.go": "package exercise\nimport(\"context\";\"io\";\"errors\")\nvar ErrLimit=errors.New(\"limit\")\nfunc ParseGzip(context.Context,io.Reader,int64,int64,int,int)([][]byte,error){panic(\"NotImplementedError\")}\n"
+    },
+    "solution_files": {
+      "task.go": "package exercise\nimport(\"io\";\"context\";\"compress/gzip\";\"bufio\";\"errors\";\"fmt\")\nvar ErrLimit=errors.New(\"resource limit exceeded\")\ntype budgetReader struct{reader io.Reader;ctx context.Context;used,limit int64;label string}\nfunc(b *budgetReader)Read(p []byte)(int,error){\n if err:=b.ctx.Err();err!=nil{return 0,err}\n remaining:=b.limit-b.used\n if int64(len(p))>remaining+1{p=p[:int(remaining+1)]}\n n,err:=b.reader.Read(p);b.used+=int64(n)\n if b.used>b.limit{return 0,fmt.Errorf(\"%w: %s\",ErrLimit,b.label)}\n return n,err\n}\nfunc ParseGzip(ctx context.Context,src io.Reader,maxCompressed,maxExpanded int64,maxRecord,maxRecords int)([][]byte,error){\n if ctx==nil||src==nil||maxCompressed<1||maxCompressed>1048576||maxExpanded<1||maxExpanded>4194304||maxRecord<1||maxRecord>1048576||maxRecords<1||maxRecords>10000{return nil,errors.New(\"invalid bounded input\")}\n if err:=ctx.Err();err!=nil{return nil,err}\n compressed:=&budgetReader{reader:src,ctx:ctx,limit:maxCompressed,label:\"compressed bytes\"}\n archive,err:=gzip.NewReader(compressed);if err!=nil{return nil,err};defer archive.Close()\n expanded:=&budgetReader{reader:archive,ctx:ctx,limit:maxExpanded,label:\"expanded bytes\"}\n scanner:=bufio.NewScanner(expanded);capacity:=maxRecord+3;if capacity>4096{capacity=4096}\n scanner.Buffer(make([]byte,0,capacity),maxRecord+3)\n var result [][]byte\n for scanner.Scan(){\n  if err:=ctx.Err();err!=nil{return nil,err}\n  if len(scanner.Bytes())>maxRecord||len(result)>=maxRecords{return nil,fmt.Errorf(\"%w: record budget\",ErrLimit)}\n  row:=make([]byte,len(scanner.Bytes()));copy(row,scanner.Bytes());result=append(result,row)\n }\n if err:=scanner.Err();err!=nil{if errors.Is(err,bufio.ErrTooLong){return nil,fmt.Errorf(\"%w: record bytes\",ErrLimit)};return nil,err}\n if err:=ctx.Err();err!=nil{return nil,err}\n return result,nil\n}\n"
+    },
+    "negative_files": {
+      "task.go": "package exercise\nimport(\"io\";\"context\";\"compress/gzip\";\"bufio\";\"errors\";\"fmt\")\nvar ErrLimit=errors.New(\"resource limit exceeded\")\ntype budgetReader struct{reader io.Reader;ctx context.Context;used,limit int64;label string}\nfunc(b *budgetReader)Read(p []byte)(int,error){\n if err:=b.ctx.Err();err!=nil{return 0,err}\n remaining:=b.limit-b.used\n if int64(len(p))>remaining+1{p=p[:int(remaining+1)]}\n n,err:=b.reader.Read(p);b.used+=int64(n)\n if b.used>b.limit{return 0,fmt.Errorf(\"%w: %s\",ErrLimit,b.label)}\n return n,err\n}\nfunc ParseGzip(ctx context.Context,src io.Reader,maxCompressed,maxExpanded int64,maxRecord,maxRecords int)([][]byte,error){\n if ctx==nil||src==nil||maxCompressed<1||maxCompressed>1048576||maxExpanded<1||maxExpanded>4194304||maxRecord<1||maxRecord>1048576||maxRecords<1||maxRecords>10000{return nil,errors.New(\"invalid bounded input\")}\n if err:=ctx.Err();err!=nil{return nil,err}\n compressed:=&budgetReader{reader:src,ctx:ctx,limit:maxCompressed,label:\"compressed bytes\"}\n archive,err:=gzip.NewReader(compressed);if err!=nil{return nil,err};defer archive.Close()\n expanded:=&budgetReader{reader:archive,ctx:ctx,limit:4194304,label:\"expanded bytes\"}\n scanner:=bufio.NewScanner(expanded);capacity:=maxRecord+3;if capacity>4096{capacity=4096}\n scanner.Buffer(make([]byte,0,capacity),maxRecord+3)\n var result [][]byte\n for scanner.Scan(){\n  if err:=ctx.Err();err!=nil{return nil,err}\n  if len(scanner.Bytes())>maxRecord||len(result)>=maxRecords{return nil,fmt.Errorf(\"%w: record budget\",ErrLimit)}\n  row:=make([]byte,len(scanner.Bytes()));copy(row,scanner.Bytes());result=append(result,row)\n }\n if err:=scanner.Err();err!=nil{if errors.Is(err,bufio.ErrTooLong){return nil,fmt.Errorf(\"%w: record bytes\",ErrLimit)};return nil,err}\n if err:=ctx.Err();err!=nil{return nil,err}\n return result,nil\n}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现ErrLimit及ParseGzip(ctx context.Context,src io.Reader,maxCompressed,maxExpanded int64,maxRecord,maxRecords int)([][]byte,error)。用真实gzip流逐条ScanLines处理，独立限制压缩总字节、展开总字节（含换行）、单记录字节（去行尾）及记录数，恰好等于预算可成功，超出errors.Is(err,ErrLimit)。压缩预算1..1MiB、展开1..4MiB、记录1..1MiB、数量1..10000，nil依赖或无效预算拒绝。任何失败均返回nil结果，不把部分报告当完整成功；CRC损坏、截断、底层读取错误保留错误链；支持拼接gzip成员且预算累计，流结束须验证完整性。每次底层读及循环处理检查context，已取消不可读取源；记录独立复制，最后无换行可接受。合同约定io.Reader本身有界返回，取消不能强行打断任意阻塞Reader，也不要求统计解压器内部CPU指令预算。仅限制小上传不够，夹具真实压缩200KiB为小于1KiB并验证展开上限。",
+      "deliverables": [
+        "task.go"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Go gzip/CRC和标准库流式读取、独立资源上限、错误与取消。不是生产上传服务器或任意阻塞I/O强制中断；不验证内存RSS和CPU时间SLO。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "go"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/task_test.go": "package exercise\nimport(\"testing\";\"bytes\";\"compress/gzip\";\"context\";\"errors\";\"io\";\"reflect\";\"strings\")\nfunc packed(raw string)[]byte{var output bytes.Buffer;w:=gzip.NewWriter(&output);_,_ =w.Write([]byte(raw));_ =w.Close();return output.Bytes()}\nfunc TestIndependentBudgets(t *testing.T){\n raw:=\"alpha\\nbeta\\nlast\";data:=packed(raw);ctx:=context.Background()\n rows,err:=ParseGzip(ctx,bytes.NewReader(data),int64(len(data)),int64(len(raw)),5,3)\n if err!=nil||!reflect.DeepEqual(rows,[][]byte{[]byte(\"alpha\"),[]byte(\"beta\"),[]byte(\"last\")}){t.Fatal(\"exact budgets\",rows,err)}\n limits:=[]struct{compressed,expanded int64;record,count int}{\n  {int64(len(data)-1),int64(len(raw)),5,3}, {int64(len(data)),int64(len(raw)-1),5,3},\n  {int64(len(data)),int64(len(raw)),4,3},{int64(len(data)),int64(len(raw)),5,2},\n }\n for _,limit:=range limits{rows,err:=ParseGzip(ctx,bytes.NewReader(data),limit.compressed,limit.expanded,limit.record,limit.count);if !errors.Is(err,ErrLimit)||rows!=nil{t.Fatal(\"budget bypass or partial success\",limit,rows,err)}}\n highRatio:=packed(strings.Repeat(\"x\",200*1024)+\"\\n\");if len(highRatio)>1024{t.Fatal(\"fixture ratio\")}\n rows,err=ParseGzip(ctx,bytes.NewReader(highRatio),1024,1024,300000,10);if !errors.Is(err,ErrLimit)||rows!=nil{t.Fatal(\"small upload expanded without limit\",err)}\n}\ntype faultReader struct{failure error}\nfunc(r faultReader)Read([]byte)(int,error){return 0,r.failure}\ntype cancelReader struct{reader io.Reader;cancel context.CancelFunc;calls int}\nfunc(r *cancelReader)Read(p []byte)(int,error){r.calls++;if r.calls==2{r.cancel()};if len(p)>1{p=p[:1]};return r.reader.Read(p)}\nfunc TestIntegrityCancellationAndInputFailure(t *testing.T){\n good:=packed(\"first\\nsecond\\n\");bad:=append([]byte(nil),good...);bad[len(bad)-8]^=0xff\n for _,data:=range [][]byte{bad,good[:len(good)-3]}{rows,err:=ParseGzip(context.Background(),bytes.NewReader(data),1000,1000,100,10);if err==nil||rows!=nil{t.Fatal(\"corrupt archive published partial results\",err)}}\n sentinel:=errors.New(\"upload read failed\");if rows,err:=ParseGzip(context.Background(),faultReader{sentinel},1000,1000,100,10);rows!=nil||!errors.Is(err,sentinel){t.Fatal(\"source error lost\",err)}\n ctx,cancel:=context.WithCancel(context.Background());cancel();source:=&cancelReader{reader:bytes.NewReader(good),cancel:func(){}}\n if rows,err:=ParseGzip(ctx,source,1000,1000,100,10);rows!=nil||!errors.Is(err,context.Canceled)||source.calls!=0{t.Fatal(\"pre-cancel still read input\",err,source.calls)}\n ctx,cancel=context.WithCancel(context.Background());defer cancel();source=&cancelReader{reader:bytes.NewReader(good),cancel:cancel}\n if rows,err:=ParseGzip(ctx,source,1000,1000,100,10);rows!=nil||!errors.Is(err,context.Canceled){t.Fatal(\"mid-read cancellation lost\",err)}\n}\nfunc TestInvalidLimitsAndMultistream(t *testing.T){\n ctx:=context.Background();good:=packed(\"one\\n\");second:=packed(\"two\");combined:=append(append([]byte(nil),good...),second...)\n rows,err:=ParseGzip(ctx,bytes.NewReader(combined),int64(len(combined)),7,3,2);if err!=nil||len(rows)!=2||string(rows[1])!=\"two\"{t.Fatal(\"multistream integrity\",rows,err)}\n if _,err:=ParseGzip(ctx,bytes.NewReader(combined),int64(len(good)),100,100,10);!errors.Is(err,ErrLimit){t.Fatal(\"second member escaped compressed budget\",err)}\n for _,maximum:=range []int64{0,-1,1048577}{if _,err:=ParseGzip(ctx,bytes.NewReader(good),maximum,100,10,10);err==nil{t.Fatal(\"invalid maximum\")}}\n if _,err:=ParseGzip(nil,bytes.NewReader(good),100,100,10,10);err==nil{t.Fatal(\"missing context\")}\n if _,err:=ParseGzip(ctx,nil,100,100,10,10);err==nil{t.Fatal(\"missing input\")}\n}\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,subprocess\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED: compile and execute submitted Go module',flush=True)\nenv={**os.environ,'GOCACHE':'/tmp/opsforge-go-cache','GOMODCACHE':'/tmp/opsforge-go-modcache','GOTOOLCHAIN':'local','GOPROXY':'off','GOSUMDB':'off','CGO_ENABLED':'1','GOMAXPROCS':'2'}\ndef run(root,args,timeout=100):\n p=subprocess.run(['go',*args],cwd=root,env=env,capture_output=True,text=True,timeout=timeout)\n detail=p.stdout+p.stderr\n if len(detail)>5000:detail=detail[:4000]+'\\n[diagnostic shortened; original process exit preserved]\\n'+detail[-1000:]\n assert p.returncode==0, 'Go validation failed: '+detail\n return p.stdout+p.stderr\nwith tempfile.TemporaryDirectory(prefix='opsforge-go-') as directory:\n root=pathlib.Path(directory)\n (root/'go.mod').write_text('module opsforge.local/exercise\\n\\ngo 1.23\\n',encoding='utf8')\n (root/'task.go').write_bytes(pathlib.Path('task.go').read_bytes())\n (root/'task_test.go').write_bytes(pathlib.Path('checks/task_test.go').read_bytes())\n run(root,['test','-race','-vet=off','-count=1','-timeout=10s','./...'])\n run(root,['vet','-copylocks','./...'])\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "go"
+    ]
+  }
+]

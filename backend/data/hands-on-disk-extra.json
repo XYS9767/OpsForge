@@ -1,0 +1,452 @@
+[
+  {
+    "id": "curated-disk-004",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "topic": "映射文件范围修复",
+    "level": 3,
+    "type": "code",
+    "title": "用 mmap 修改文件范围且保持其他字节",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11。素材：data.bin。仅操作本题隔离目录内的普通文件或镜像文件，不访问宿主块设备，不挂载文件系统，不修改真实磁盘分区。\n\n## 操作任务\n实现patch(path,offset,payload)，payload为bytes，offset非负int非bool且范围不得超出当前文件。校验后以mmap写入并flush、close；文件大小与范围外字节保持，空payload允许且不创建空映射。这里只修改工作区普通文件。\n\n## 提交产物\ntask.py；执行产物：data.bin。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：用wb重写整个文件，丢失补丁范围外数据。",
+    "files": {
+      "data.bin": "abcdefghijklmnop",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport mmap,os\ndef patch(path,offset,payload):\n    if type(offset)is not int or offset<0 or type(payload)is not bytes:raise ValueError('arguments')\n    with open(path,'r+b')as f:\n        size=os.fstat(f.fileno()).st_size\n        if offset+len(payload)>size:raise ValueError('range')\n        if not payload:return\n        with mmap.mmap(f.fileno(),0,access=mmap.ACCESS_WRITE)as view:\n            view[offset:offset+len(payload)]=payload;view.flush()\n```\n\n实现patch(path,offset,payload)，payload为bytes，offset非负int非bool且范围不得超出当前文件。校验后以mmap写入并flush、close；文件大小与范围外字节保持，空payload允许且不创建空映射。这里只修改工作区普通文件。",
+    "solution_files": {
+      "task.py": "import mmap,os\ndef patch(path,offset,payload):\n    if type(offset)is not int or offset<0 or type(payload)is not bytes:raise ValueError('arguments')\n    with open(path,'r+b')as f:\n        size=os.fstat(f.fileno()).st_size\n        if offset+len(payload)>size:raise ValueError('range')\n        if not payload:return\n        with mmap.mmap(f.fileno(),0,access=mmap.ACCESS_WRITE)as view:\n            view[offset:offset+len(payload)]=payload;view.flush()\n"
+    },
+    "negative_files": {
+      "task.py": "def patch(path,offset,payload):\n     with open(path,'wb')as f:f.write(payload)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现patch(path,offset,payload)，payload为bytes，offset非负int非bool且范围不得超出当前文件。校验后以mmap写入并flush、close；文件大小与范围外字节保持，空payload允许且不创建空映射。这里只修改工作区普通文件。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "data.bin"
+      ],
+      "required_tools": [
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "用wb重写整个文件，丢失补丁范围外数据。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\np=pathlib.Path('data.bin');before=p.read_bytes()\ntask.patch(p,3,b'XYZ');assert p.read_bytes()==before[:3]+b'XYZ'+before[6:]\nsaved=p.read_bytes()\nfor offset,payload in [(-1,b'x'),(16,b'x'),(True,b'x'),(0,'x')]:\n    try:task.patch(p,offset,payload)\n    except ValueError:pass\n    else:raise AssertionError('range')\n    assert p.read_bytes()==saved\ntask.patch(p,16,b'');assert p.read_bytes()==saved\nwith p.open('ab')as f:f.write(b'!') # mapping must have been closed\nassert p.stat().st_size==17\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "disk|映射文件范围修复|用 mmap 修改文件范围且保持其他字节",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创磁盘工件实操"
+  },
+  {
+    "id": "curated-disk-005",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "topic": "重叠区间复制",
+    "level": 4,
+    "type": "code",
+    "title": "在同一文件内移动重叠字节区间",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11。素材：data.bin。仅操作本题隔离目录内的普通文件或镜像文件，不访问宿主块设备，不挂载文件系统，不修改真实磁盘分区。\n\n## 操作任务\n实现move(path,src,dst,length,chunk=4096)，参数非负int非bool，chunk正int，源目标范围都在现有文件内；支持重叠，语义如先快照原范围再复制，但每次read最多chunk。向后重叠应倒序复制，其他正序；文件长度不变。\n\n## 提交产物\ntask.py；执行产物：data.bin。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：总是从前往后复制，向后重叠时覆盖尚未读取的源字节。",
+    "files": {
+      "data.bin": "0123456789abcdef",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os\ndef move(path,src,dst,length,chunk=4096):\n    if any(type(v)is not int or v<0 for v in(src,dst,length))or type(chunk)is not int or chunk<=0:raise ValueError('arguments')\n    with open(path,'r+b')as f:\n        size=os.fstat(f.fileno()).st_size\n        if src+length>size or dst+length>size:raise ValueError('range')\n        if src<dst<src+length:\n            remaining=length\n            while remaining:\n                n=min(chunk,remaining);start=remaining-n\n                f.seek(src+start);data=f.read(n);f.seek(dst+start);f.write(data);remaining-=n\n        else:\n            pos=0\n            while pos<length:\n                n=min(chunk,length-pos);f.seek(src+pos);data=f.read(n);f.seek(dst+pos);f.write(data);pos+=n\n```\n\n实现move(path,src,dst,length,chunk=4096)，参数非负int非bool，chunk正int，源目标范围都在现有文件内；支持重叠，语义如先快照原范围再复制，但每次read最多chunk。向后重叠应倒序复制，其他正序；文件长度不变。",
+    "solution_files": {
+      "task.py": "import os\ndef move(path,src,dst,length,chunk=4096):\n    if any(type(v)is not int or v<0 for v in(src,dst,length))or type(chunk)is not int or chunk<=0:raise ValueError('arguments')\n    with open(path,'r+b')as f:\n        size=os.fstat(f.fileno()).st_size\n        if src+length>size or dst+length>size:raise ValueError('range')\n        if src<dst<src+length:\n            remaining=length\n            while remaining:\n                n=min(chunk,remaining);start=remaining-n\n                f.seek(src+start);data=f.read(n);f.seek(dst+start);f.write(data);remaining-=n\n        else:\n            pos=0\n            while pos<length:\n                n=min(chunk,length-pos);f.seek(src+pos);data=f.read(n);f.seek(dst+pos);f.write(data);pos+=n\n"
+    },
+    "negative_files": {
+      "task.py": "def move(path,src,dst,length,chunk=4096):\n    with open(path,'r+b')as f:\n        for pos in range(length):\n            f.seek(src+pos);data=f.read(1);f.seek(dst+pos);f.write(data)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现move(path,src,dst,length,chunk=4096)，参数非负int非bool，chunk正int，源目标范围都在现有文件内；支持重叠，语义如先快照原范围再复制，但每次read最多chunk。向后重叠应倒序复制，其他正序；文件长度不变。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "data.bin"
+      ],
+      "required_tools": [
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "总是从前往后复制，向后重叠时覆盖尚未读取的源字节。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\np=pathlib.Path('data.bin');original=bytes(range(64))\nfor src,dst,length in [(0,2,20),(2,0,20),(5,5,10),(0,32,20),(64,64,0)]:\n    p.write_bytes(original);expected=bytearray(original);expected[dst:dst+length]=original[src:src+length]\n    task.move(p,src,dst,length,chunk=3);assert p.read_bytes()==expected\np.write_bytes(original)\ntry:task.move(p,0,60,8)\nexcept ValueError:pass\nelse:raise AssertionError('out of file')\nassert p.read_bytes()==original\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "disk|重叠区间复制|在同一文件内移动重叠字节区间",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创磁盘工件实操"
+  },
+  {
+    "id": "curated-disk-006",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "topic": "原位截断与文件身份",
+    "level": 3,
+    "type": "code",
+    "title": "原位截短普通日志而保持已打开描述符",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11。素材：service.log。仅操作本题隔离目录内的普通文件或镜像文件，不访问宿主块设备，不挂载文件系统，不修改真实磁盘分区。\n\n## 操作任务\n实现truncate_in_place(path,length)，只允许0..当前大小的int非bool长度，用r+b truncate，不unlink重建。截断后保留前缀、文件身份与其他进程已打开的同一文件对象；长度非法不改内容。\n\n## 提交产物\ntask.py；执行产物：service.log。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：删除再创建同名文件会改变文件身份，已打开句柄不再指向新的日志。",
+    "files": {
+      "service.log": "0123456789",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os\ndef truncate_in_place(path,length):\n    if type(length)is not int or length<0:raise ValueError('length')\n    with open(path,'r+b')as f:\n        if length>os.fstat(f.fileno()).st_size:raise ValueError('growth forbidden')\n        f.truncate(length)\n```\n\n实现truncate_in_place(path,length)，只允许0..当前大小的int非bool长度，用r+b truncate，不unlink重建。截断后保留前缀、文件身份与其他进程已打开的同一文件对象；长度非法不改内容。",
+    "solution_files": {
+      "task.py": "import os\ndef truncate_in_place(path,length):\n    if type(length)is not int or length<0:raise ValueError('length')\n    with open(path,'r+b')as f:\n        if length>os.fstat(f.fileno()).st_size:raise ValueError('growth forbidden')\n        f.truncate(length)\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib\ndef truncate_in_place(path,length):\n    p=pathlib.Path(path);data=p.read_bytes()[:length];p.unlink();p.write_bytes(data)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现truncate_in_place(path,length)，只允许0..当前大小的int非bool长度，用r+b truncate，不unlink重建。截断后保留前缀、文件身份与其他进程已打开的同一文件对象；长度非法不改内容。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "service.log"
+      ],
+      "required_tools": [
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "删除再创建同名文件会改变文件身份，已打开句柄不再指向新的日志。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\np=pathlib.Path('service.log');before=p.stat()\nwith p.open('rb')as existing:\n    task.truncate_in_place(p,4)\n    assert existing.read()==b'0123'\nassert p.stat().st_ino==before.st_ino and p.read_bytes()==b'0123'\nfor n in [-1,5,True]:\n    try:task.truncate_in_place(p,n)\n    except ValueError:pass\n    else:raise AssertionError('length')\nassert p.read_bytes()==b'0123'\ntask.truncate_in_place(p,0);assert p.read_bytes()==b''\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "disk|原位截断与文件身份|原位截短普通日志而保持已打开描述符",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创磁盘工件实操"
+  },
+  {
+    "id": "curated-disk-007",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "topic": "文件对齐补零",
+    "level": 1,
+    "type": "code",
+    "title": "按对齐边界补零且不多追加完整块",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11。素材：image.bin。仅操作本题隔离目录内的普通文件或镜像文件，不访问宿主块设备，不挂载文件系统，不修改真实磁盘分区。\n\n## 操作任务\n实现pad(path,alignment)，alignment正int非bool。只向末尾追加最少的零字节，使文件大小为alignment倍数；已经对齐或空文件不追加。返回最终字节数，原前缀不变。\n\n## 提交产物\ntask.py；执行产物：image.bin。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：余数为0时仍追加一个完整块，重复执行不断增大文件。",
+    "files": {
+      "image.bin": "abc",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os\ndef pad(path,alignment):\n    if type(alignment)is not int or alignment<=0:raise ValueError('alignment')\n    with open(path,'ab')as f:\n        size=os.fstat(f.fileno()).st_size;extra=(-size)%alignment\n        while extra:\n            n=min(extra,4096);f.write(b'\\0'*n);extra-=n\n    return os.path.getsize(path)\n```\n\n实现pad(path,alignment)，alignment正int非bool。只向末尾追加最少的零字节，使文件大小为alignment倍数；已经对齐或空文件不追加。返回最终字节数，原前缀不变。",
+    "solution_files": {
+      "task.py": "import os\ndef pad(path,alignment):\n    if type(alignment)is not int or alignment<=0:raise ValueError('alignment')\n    with open(path,'ab')as f:\n        size=os.fstat(f.fileno()).st_size;extra=(-size)%alignment\n        while extra:\n            n=min(extra,4096);f.write(b'\\0'*n);extra-=n\n    return os.path.getsize(path)\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib\ndef pad(path,alignment):\n    p=pathlib.Path(path);data=p.read_bytes();data+=b'\\0'*(alignment-len(data)%alignment);p.write_bytes(data);return len(data)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现pad(path,alignment)，alignment正int非bool。只向末尾追加最少的零字节，使文件大小为alignment倍数；已经对齐或空文件不追加。返回最终字节数，原前缀不变。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "image.bin"
+      ],
+      "required_tools": [
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "余数为0时仍追加一个完整块，重复执行不断增大文件。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\np=pathlib.Path('image.bin')\nassert task.pad(p,4)==4 and p.read_bytes()==b'abc\\0'\nassert task.pad(p,4)==4 and p.read_bytes()==b'abc\\0'\np.write_bytes(b'');assert task.pad(p,4096)==0\nfor n in [0,-1,True]:\n    try:task.pad(p,n)\n    except ValueError:pass\n    else:raise AssertionError('alignment')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "disk|文件对齐补零|按对齐边界补零且不多追加完整块",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创磁盘工件实操"
+  },
+  {
+    "id": "curated-disk-008",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "topic": "固定记录定位",
+    "level": 3,
+    "type": "code",
+    "title": "按固定记录宽度随机读取磁盘文件",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11。素材：records.bin。仅操作本题隔离目录内的普通文件或镜像文件，不访问宿主块设备，不挂载文件系统，不修改真实磁盘分区。\n\n## 操作任务\n实现read_record(path,width,index)，width正int、index非负int，均拒绝bool。文件大小必须是width整数倍，超出记录数IndexError，损坏尾部ValueError；用seek到index*width，只读取该条bytes，不能按换行读取。\n\n## 提交产物\ntask.py；执行产物：records.bin。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：把固定宽度二进制记录当按行日志读取，定位结果错误。",
+    "files": {
+      "records.bin": "AAAABBBBCCCC",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os\ndef read_record(path,width,index):\n    if type(width)is not int or width<=0 or type(index)is not int or index<0:raise ValueError('arguments')\n    with open(path,'rb')as f:\n        size=os.fstat(f.fileno()).st_size\n        if size%width:raise ValueError('partial record')\n        if index>=size//width:raise IndexError(index)\n        f.seek(index*width);return f.read(width)\n```\n\n实现read_record(path,width,index)，width正int、index非负int，均拒绝bool。文件大小必须是width整数倍，超出记录数IndexError，损坏尾部ValueError；用seek到index*width，只读取该条bytes，不能按换行读取。",
+    "solution_files": {
+      "task.py": "import os\ndef read_record(path,width,index):\n    if type(width)is not int or width<=0 or type(index)is not int or index<0:raise ValueError('arguments')\n    with open(path,'rb')as f:\n        size=os.fstat(f.fileno()).st_size\n        if size%width:raise ValueError('partial record')\n        if index>=size//width:raise IndexError(index)\n        f.seek(index*width);return f.read(width)\n"
+    },
+    "negative_files": {
+      "task.py": "def read_record(path,width,index):\n     with open(path,'rb')as f:return f.readlines()[index]\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现read_record(path,width,index)，width正int、index非负int，均拒绝bool。文件大小必须是width整数倍，超出记录数IndexError，损坏尾部ValueError；用seek到index*width，只读取该条bytes，不能按换行读取。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "records.bin"
+      ],
+      "required_tools": [
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "把固定宽度二进制记录当按行日志读取，定位结果错误。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.read_record('records.bin',4,0)==b'AAAA'\nassert task.read_record('records.bin',4,2)==b'CCCC'\ntry:task.read_record('records.bin',4,3)\nexcept IndexError:pass\nelse:raise AssertionError('index')\npathlib.Path('records.bin').write_bytes(b'AAAAx')\ntry:task.read_record('records.bin',4,0)\nexcept ValueError:pass\nelse:raise AssertionError('corrupt tail')\nfor width,index in [(0,0),(True,0),(4,True)]:\n    try:task.read_record('records.bin',width,index)\n    except ValueError:pass\n    else:raise AssertionError('arguments')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "disk|固定记录定位|按固定记录宽度随机读取磁盘文件",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创磁盘工件实操"
+  },
+  {
+    "id": "curated-disk-009",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "topic": "复制时间戳",
+    "level": 3,
+    "type": "code",
+    "title": "复制工件保留修改时间且不移动源文件",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11。素材：source.bin, dest.bin。仅操作本题隔离目录内的普通文件或镜像文件，不访问宿主块设备，不挂载文件系统，不修改真实磁盘分区。\n\n## 操作任务\n实现copy_with_mtime(src,dst)，复制完整bytes，保持源原路径和内容，目的mtime_ns等于复制前源mtime_ns。拒绝resolve相同路径；只处理普通文件，不承诺POSIX权限或ACL复制。\n\n## 提交产物\ntask.py；执行产物：dest.bin。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：使用move把备份源文件搬走，或只复制内容遗漏mtime。",
+    "files": {
+      "source.bin": "immutable-source",
+      "dest.bin": "old",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport pathlib,shutil,os\ndef copy_with_mtime(src,dst):\n    src,dst=pathlib.Path(src),pathlib.Path(dst)\n    if src.resolve()==dst.resolve():raise ValueError('same path')\n    stat=src.stat();shutil.copyfile(src,dst)\n    os.utime(dst,ns=(stat.st_atime_ns,stat.st_mtime_ns))\n```\n\n实现copy_with_mtime(src,dst)，复制完整bytes，保持源原路径和内容，目的mtime_ns等于复制前源mtime_ns。拒绝resolve相同路径；只处理普通文件，不承诺POSIX权限或ACL复制。",
+    "solution_files": {
+      "task.py": "import pathlib,shutil,os\ndef copy_with_mtime(src,dst):\n    src,dst=pathlib.Path(src),pathlib.Path(dst)\n    if src.resolve()==dst.resolve():raise ValueError('same path')\n    stat=src.stat();shutil.copyfile(src,dst)\n    os.utime(dst,ns=(stat.st_atime_ns,stat.st_mtime_ns))\n"
+    },
+    "negative_files": {
+      "task.py": "import shutil\ndef copy_with_mtime(src,dst):shutil.move(src,dst)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现copy_with_mtime(src,dst)，复制完整bytes，保持源原路径和内容，目的mtime_ns等于复制前源mtime_ns。拒绝resolve相同路径；只处理普通文件，不承诺POSIX权限或ACL复制。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "dest.bin"
+      ],
+      "required_tools": [
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "使用move把备份源文件搬走，或只复制内容遗漏mtime。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\np=pathlib.Path('source.bin');os.utime(p,ns=(1600000000000000000,1600000000123456700));before=p.stat()\ntask.copy_with_mtime(p,'dest.bin')\nassert p.read_bytes()==pathlib.Path('dest.bin').read_bytes()==b'immutable-source'\nassert pathlib.Path('dest.bin').stat().st_mtime_ns==before.st_mtime_ns\ntry:task.copy_with_mtime(p,p)\nexcept ValueError:pass\nelse:raise AssertionError('same')\nassert p.read_bytes()==b'immutable-source'\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "disk|复制时间戳|复制工件保留修改时间且不移动源文件",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创磁盘工件实操"
+  },
+  {
+    "id": "curated-disk-010",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "topic": "空目录回收",
+    "level": 3,
+    "type": "code",
+    "title": "自底向上清理空目录并保留根目录",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11。素材：tree/keep/data.txt, tree/empty/.placeholder。仅操作本题隔离目录内的普通文件或镜像文件，不访问宿主块设备，不挂载文件系统，不修改真实磁盘分区。\n\n## 操作任务\n实现prune_empty(root)，只删除root下空子目录，自底向上处理，不删除root、非空目录或符号链接；返回已删除相对路径按字典序。并发使目录非空时忽略ENOTEMPTY/EEXIST，其他错误传播。\n\n## 提交产物\ntask.py；执行产物：tree/keep/data.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：先尝试父目录导致它仍非空，删完子目录后不回头，空父目录残留。",
+    "files": {
+      "tree/keep/data.txt": "keep",
+      "tree/empty/.placeholder": "remove before exercise",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport pathlib,errno\ndef prune_empty(root):\n    root=pathlib.Path(root);removed=[]\n    dirs=sorted((p for p in root.rglob('*')if p.is_dir()and not p.is_symlink()),key=lambda p:len(p.parts),reverse=True)\n    for path in dirs:\n        try:path.rmdir()\n        except OSError as e:\n            if e.errno not in(errno.ENOTEMPTY,errno.EEXIST):raise\n        else:removed.append(path.relative_to(root).as_posix())\n    return sorted(removed)\n```\n\n实现prune_empty(root)，只删除root下空子目录，自底向上处理，不删除root、非空目录或符号链接；返回已删除相对路径按字典序。并发使目录非空时忽略ENOTEMPTY/EEXIST，其他错误传播。",
+    "solution_files": {
+      "task.py": "import pathlib,errno\ndef prune_empty(root):\n    root=pathlib.Path(root);removed=[]\n    dirs=sorted((p for p in root.rglob('*')if p.is_dir()and not p.is_symlink()),key=lambda p:len(p.parts),reverse=True)\n    for path in dirs:\n        try:path.rmdir()\n        except OSError as e:\n            if e.errno not in(errno.ENOTEMPTY,errno.EEXIST):raise\n        else:removed.append(path.relative_to(root).as_posix())\n    return sorted(removed)\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib\ndef prune_empty(root):\n    removed=[]\n    for p in pathlib.Path(root).rglob('*'):\n        if p.is_dir():\n            try:p.rmdir()\n            except OSError:continue\n            removed.append(p.relative_to(root).as_posix())\n    return sorted(removed)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现prune_empty(root)，只删除root下空子目录，自底向上处理，不删除root、非空目录或符号链接；返回已删除相对路径按字典序。并发使目录非空时忽略ENOTEMPTY/EEXIST，其他错误传播。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "tree/keep/data.txt"
+      ],
+      "required_tools": [
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "先尝试父目录导致它仍非空，删完子目录后不回头，空父目录残留。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\npathlib.Path('tree/empty/.placeholder').unlink()\npathlib.Path('tree/empty/deep').mkdir()\npathlib.Path('tree/another').mkdir()\nassert task.prune_empty('tree')==['another','empty','empty/deep']\nassert pathlib.Path('tree').is_dir()and pathlib.Path('tree/keep/data.txt').read_text()=='keep'\nassert task.prune_empty('tree')==[]\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "disk|空目录回收|自底向上清理空目录并保留根目录",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创磁盘工件实操"
+  },
+  {
+    "id": "curated-disk-011",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "topic": "尾部读取预算",
+    "level": 4,
+    "type": "code",
+    "title": "分段读取文件尾部而不是一次加载整个日志",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11。素材：events.log。仅操作本题隔离目录内的普通文件或镜像文件，不访问宿主块设备，不挂载文件系统，不修改真实磁盘分区。\n\n## 操作任务\n实现tail_lines(path,count,chunk=4096)返回最后count条UTF8逻辑行列表，末尾LF不产生额外空行，保留真实空行。count非负int非bool，chunk正int。从尾部分块seek/read直到已有足够换行或到文件头；count=0不得读取内容。只接受LF日志，非法UTF8严格报错。\n\n## 提交产物\ntask.py；执行产物：events.log。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：为了读取最后一行而read整个大日志，超出读取预算，count=0也错误返回全文件。",
+    "files": {
+      "events.log": "one\ntwo\nthree\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\ndef tail_lines(path,count,chunk=4096):\n    if type(count)is not int or count<0 or type(chunk)is not int or chunk<=0:raise ValueError('arguments')\n    if count==0:return []\n    with open(path,'rb')as f:\n        f.seek(0,2);position=f.tell();parts=[];newlines=0\n        while position and newlines<=count:\n            n=min(chunk,position);position-=n;f.seek(position);block=f.read(n);parts.append(block);newlines+=block.count(b'\\n')\n    raw=b''.join(reversed(parts))\n    rows=raw.split(b'\\n')\n    if raw.endswith(b'\\n'):rows.pop()\n    if not raw:return []\n    return [line.decode('utf-8')for line in rows[-count:]]\n```\n\n实现tail_lines(path,count,chunk=4096)返回最后count条UTF8逻辑行列表，末尾LF不产生额外空行，保留真实空行。count非负int非bool，chunk正int。从尾部分块seek/read直到已有足够换行或到文件头；count=0不得读取内容。只接受LF日志，非法UTF8严格报错。",
+    "solution_files": {
+      "task.py": "def tail_lines(path,count,chunk=4096):\n    if type(count)is not int or count<0 or type(chunk)is not int or chunk<=0:raise ValueError('arguments')\n    if count==0:return []\n    with open(path,'rb')as f:\n        f.seek(0,2);position=f.tell();parts=[];newlines=0\n        while position and newlines<=count:\n            n=min(chunk,position);position-=n;f.seek(position);block=f.read(n);parts.append(block);newlines+=block.count(b'\\n')\n    raw=b''.join(reversed(parts))\n    rows=raw.split(b'\\n')\n    if raw.endswith(b'\\n'):rows.pop()\n    if not raw:return []\n    return [line.decode('utf-8')for line in rows[-count:]]\n"
+    },
+    "negative_files": {
+      "task.py": "def tail_lines(path,count,chunk=4096):\n    with open(path,encoding='utf-8')as f:return f.read().splitlines()[-count:]\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现tail_lines(path,count,chunk=4096)返回最后count条UTF8逻辑行列表，末尾LF不产生额外空行，保留真实空行。count非负int非bool，chunk正int。从尾部分块seek/read直到已有足够换行或到文件头；count=0不得读取内容。只接受LF日志，非法UTF8严格报错。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "events.log"
+      ],
+      "required_tools": [
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "为了读取最后一行而read整个大日志，超出读取预算，count=0也错误返回全文件。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\np=pathlib.Path('events.log')\nfor raw,n,expected in [(b'',3,[]),(b'a\\nb\\n',1,['b']),(b'a\\n\\n',1,['']),(b'a\\nb',5,['a','b']),('中\\n文\\n'.encode(),1,['文'])]:\n    p.write_bytes(raw);assert task.tail_lines(p,n,chunk=1)==expected\np.write_bytes(b'x\\n'*10000+b'last\\n')\nfrom unittest.mock import patch\nreal=open;reads=[]\nclass Observed:\n    def __init__(self,f):self.f=f\n    def __enter__(self):return self\n    def __exit__(self,*args):self.f.close()\n    def seek(self,*a):return self.f.seek(*a)\n    def tell(self):return self.f.tell()\n    def read(self,n=-1):assert 0<=n<=32;reads.append(n);return self.f.read(n)\nwith patch('builtins.open',side_effect=lambda *a,**kw:Observed(real(*a,**kw))):\n    assert task.tail_lines(p,1,chunk=32)==['last']\nassert sum(reads)<=64\nassert task.tail_lines('does-not-exist',0)==[]\np.write_bytes(b'\\xff\\n')\ntry:task.tail_lines(p,1)\nexcept UnicodeDecodeError:pass\nelse:raise AssertionError('encoding')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "disk|尾部读取预算|分段读取文件尾部而不是一次加载整个日志",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创磁盘工件实操"
+  }
+]

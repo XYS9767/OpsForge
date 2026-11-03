@@ -1,0 +1,71 @@
+[
+  {
+    "id": "curated-parallel-linux-100",
+    "module": "linux",
+    "category": "Linux 基础",
+    "level": 3,
+    "topic": "内存与系统性能",
+    "title": "只读采集IRQ/softirq CPU时间与事件增量，避免将次数当耗时",
+    "answer": "```python\nimport copy,math,pathlib,time,os\ndef snapshot():\n    return dict(boot_id=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(),monotonic=time.monotonic(),stat=pathlib.Path('/proc/stat').read_text(),softirqs=pathlib.Path('/proc/softirqs').read_text(),hz=os.sysconf('SC_CLK_TCK'))\ndef _parse(sample):\n    rows=[line.split() for line in sample['stat'].splitlines() if line.split() and (line.split()[0]=='cpu' or line.split()[0][3:].isdigit() and line.startswith('cpu'))]\n    aggregate=[r for r in rows if r[0]=='cpu']\n    if len(aggregate)!=1 or len(aggregate[0])!=11:raise ValueError('ten aggregate CPU counters required')\n    counters=list(map(int,aggregate[0][1:]))\n    if any(n<0 for n in counters):raise ValueError('unsigned cumulative counters required')\n    cpus={r[0] for r in rows if r[0]!='cpu'}\n    lines=sample['softirqs'].splitlines();header=lines[0].split()\n    if len(header)!=len(set(header)) or {s.lower() for s in header}!=cpus:raise ValueError('CPU topology differs across non-atomic files')\n    vectors={}\n    for line in lines[1:]:\n        if not line.strip():continue\n        name,values=line.split(':',1);name=name.strip();counts=list(map(int,values.split()))\n        if name in vectors or len(counts)!=len(header) or any(n<0 for n in counts):raise ValueError('invalid softirq vector')\n        vectors[name]=sum(counts)\n    return counters,cpus,vectors\ndef compare(before,after):\n    elapsed=after['monotonic']-before['monotonic']\n    if not isinstance(elapsed,(int,float)) or not math.isfinite(elapsed) or elapsed<=0:raise ValueError('positive finite monotonic interval required')\n    if not before['boot_id'] or before['boot_id']!=after['boot_id'] or before['hz']!=after['hz'] or before['hz']<=0:raise ValueError('new boot or clock unit')\n    a,cpus,av=_parse(before);b,nextcpus,bv=_parse(after)\n    if cpus!=nextcpus or av.keys()!=bv.keys():raise ValueError('topology changed; resample')\n    delta=[y-x for x,y in zip(a,b)]\n    if any(v<0 for i,v in enumerate(delta) if i!=4) or any(bv[k]<av[k] for k in av):raise ValueError('counter reset; resample')\n    warnings=[]\n    if delta[4]<0:delta[4]=0;warnings.append('iowait_decreased_clamped')\n    total=sum(delta[:8])\n    if total<=0:raise ValueError('no CPU time interval')\n    return dict(irq_seconds=delta[5]/before['hz'],softirq_seconds=delta[6]/before['hz'],irq_ratio=delta[5]/total,softirq_ratio=delta[6]/total,softirq_events_per_second={k:(bv[k]-av[k])/elapsed for k in av},warnings=warnings)\n```\n\n原题知识说明：\n部分中断工作发生在中断上下文，不全部记在普通业务进程上；softirq负载也可能由ksoftirqd执行。结合/proc/interrupts、/proc/softirqs增量、CPU的irq/softirq分项与网络或存储吞吐定位，不以单个累计总数归因，也不要直接终止内核工作线程。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021-supplement",
+    "hints": [],
+    "rubric": [
+      "部分中断工作发生在中断上下文，不全部记在普通业务进程上；softirq负载也可能由ksoftirqd执行",
+      "结合/proc/interrupts、/proc/softirqs增量、CPU的irq/softirq分项与网络或存储吞吐定位，不以单个累计总数归因，也不要直接终止内核工作线程"
+    ],
+    "references": [
+      "https://www.kernel.org/doc/html/v6.12/filesystems/proc.html",
+      "https://man7.org/linux/man-pages/man5/proc_stat.5.html"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-linux-100",
+      "original_title": "硬中断与 softirq 都会消耗内核时间，为什么只看进程CPU排行可能漏掉它们？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现snapshot()只读采集/proc/stat、/proc/softirqs、boot_id、time.monotonic()和SC_CLK_TCK，返回stat/softirqs原文及boot_id/monotonic/hz。compare(before,after)按前8项CPU计数增量计算irq/softirq秒数及占总CPU时间比例；guest/guest_nice已包含在user/nice中不得重复加总。各softirq向量按所有CPU计数增量/monotonic秒数计算事件速率，它不是CPU耗时。返回irq_seconds、softirq_seconds、irq_ratio、softirq_ratio、softirq_events_per_second、warnings。要求十项aggregate字段，CPU拓扑在两文件及两次采样间一致。重启、拓扑变化、非正/非有限间隔、hz变化、非iowait计数或事件回退、零总CPU时间均ValueError；仅iowait回退时该增量取0并warnings=[\"iowait_decreased_clamped\"]。输入不变。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实非root只读/proc采样与可控counter边界；观察的是宿主内核提供的全机统计，不是容器CPU配额使用率。多文件读取不是原子快照，拓扑变化应重采样；本题不制造中断风暴，不调整IRQ亲和性、不终止内核线程，不凭NET_RX次数推断CPU占比或业务根因。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy,math,pathlib,time,os\ndef snapshot():\n    return dict(boot_id=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(),monotonic=time.monotonic(),stat=pathlib.Path('/proc/stat').read_text(),softirqs=pathlib.Path('/proc/softirqs').read_text(),hz=os.sysconf('SC_CLK_TCK'))\ndef _parse(sample):\n    rows=[line.split() for line in sample['stat'].splitlines() if line.split() and (line.split()[0]=='cpu' or line.split()[0][3:].isdigit() and line.startswith('cpu'))]\n    aggregate=[r for r in rows if r[0]=='cpu']\n    if len(aggregate)!=1 or len(aggregate[0])!=11:raise ValueError('ten aggregate CPU counters required')\n    counters=list(map(int,aggregate[0][1:]))\n    if any(n<0 for n in counters):raise ValueError('unsigned cumulative counters required')\n    cpus={r[0] for r in rows if r[0]!='cpu'}\n    lines=sample['softirqs'].splitlines();header=lines[0].split()\n    if len(header)!=len(set(header)) or {s.lower() for s in header}!=cpus:raise ValueError('CPU topology differs across non-atomic files')\n    vectors={}\n    for line in lines[1:]:\n        if not line.strip():continue\n        name,values=line.split(':',1);name=name.strip();counts=list(map(int,values.split()))\n        if name in vectors or len(counts)!=len(header) or any(n<0 for n in counts):raise ValueError('invalid softirq vector')\n        vectors[name]=sum(counts)\n    return counters,cpus,vectors\ndef compare(before,after):\n    elapsed=after['monotonic']-before['monotonic']\n    if not isinstance(elapsed,(int,float)) or not math.isfinite(elapsed) or elapsed<=0:raise ValueError('positive finite monotonic interval required')\n    if not before['boot_id'] or before['boot_id']!=after['boot_id'] or before['hz']!=after['hz'] or before['hz']<=0:raise ValueError('new boot or clock unit')\n    a,cpus,av=_parse(before);b,nextcpus,bv=_parse(after)\n    if cpus!=nextcpus or av.keys()!=bv.keys():raise ValueError('topology changed; resample')\n    delta=[y-x for x,y in zip(a,b)]\n    if any(v<0 for i,v in enumerate(delta) if i!=4) or any(bv[k]<av[k] for k in av):raise ValueError('counter reset; resample')\n    warnings=[]\n    if delta[4]<0:delta[4]=0;warnings.append('iowait_decreased_clamped')\n    total=sum(delta[:8])\n    if total<=0:raise ValueError('no CPU time interval')\n    return dict(irq_seconds=delta[5]/before['hz'],softirq_seconds=delta[6]/before['hz'],irq_ratio=delta[5]/total,softirq_ratio=delta[6]/total,softirq_events_per_second={k:(bv[k]-av[k])/elapsed for k in av},warnings=warnings)\n"
+    },
+    "negative_files": {
+      "task.py": "import copy,math,pathlib,time,os\ndef snapshot():\n    return dict(boot_id=pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip(),monotonic=time.monotonic(),stat=pathlib.Path('/proc/stat').read_text(),softirqs=pathlib.Path('/proc/softirqs').read_text(),hz=os.sysconf('SC_CLK_TCK'))\ndef _parse(sample):\n    rows=[line.split() for line in sample['stat'].splitlines() if line.split() and (line.split()[0]=='cpu' or line.split()[0][3:].isdigit() and line.startswith('cpu'))]\n    aggregate=[r for r in rows if r[0]=='cpu']\n    if len(aggregate)!=1 or len(aggregate[0])!=11:raise ValueError('ten aggregate CPU counters required')\n    counters=list(map(int,aggregate[0][1:]))\n    if any(n<0 for n in counters):raise ValueError('unsigned cumulative counters required')\n    cpus={r[0] for r in rows if r[0]!='cpu'}\n    lines=sample['softirqs'].splitlines();header=lines[0].split()\n    if len(header)!=len(set(header)) or {s.lower() for s in header}!=cpus:raise ValueError('CPU topology differs across non-atomic files')\n    vectors={}\n    for line in lines[1:]:\n        if not line.strip():continue\n        name,values=line.split(':',1);name=name.strip();counts=list(map(int,values.split()))\n        if name in vectors or len(counts)!=len(header) or any(n<0 for n in counts):raise ValueError('invalid softirq vector')\n        vectors[name]=sum(counts)\n    return counters,cpus,vectors\ndef compare(before,after):\n    elapsed=after['monotonic']-before['monotonic']\n    if not isinstance(elapsed,(int,float)) or not math.isfinite(elapsed) or elapsed<=0:raise ValueError('positive finite monotonic interval required')\n    if not before['boot_id'] or before['boot_id']!=after['boot_id'] or before['hz']!=after['hz'] or before['hz']<=0:raise ValueError('new boot or clock unit')\n    a,cpus,av=_parse(before);b,nextcpus,bv=_parse(after)\n    if cpus!=nextcpus or av.keys()!=bv.keys():raise ValueError('topology changed; resample')\n    delta=[y-x for x,y in zip(a,b)]\n    if any(v<0 for i,v in enumerate(delta) if i!=4) or any(bv[k]<av[k] for k in av):raise ValueError('counter reset; resample')\n    warnings=[]\n    if delta[4]<0:delta[4]=0;warnings.append('iowait_decreased_clamped')\n    total=sum(delta)\n    if total<=0:raise ValueError('no CPU time interval')\n    return dict(irq_seconds=delta[5]/before['hz'],softirq_seconds=delta[6]/before['hz'],irq_ratio=delta[5]/total,softirq_ratio=delta[6]/total,softirq_events_per_second={k:(bv[k]-av[k])/elapsed for k in av},warnings=warnings)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现snapshot()只读采集/proc/stat、/proc/softirqs、boot_id、time.monotonic()和SC_CLK_TCK，返回stat/softirqs原文及boot_id/monotonic/hz。compare(before,after)按前8项CPU计数增量计算irq/softirq秒数及占总CPU时间比例；guest/guest_nice已包含在user/nice中不得重复加总。各softirq向量按所有CPU计数增量/monotonic秒数计算事件速率，它不是CPU耗时。返回irq_seconds、softirq_seconds、irq_ratio、softirq_ratio、softirq_events_per_second、warnings。要求十项aggregate字段，CPU拓扑在两文件及两次采样间一致。重启、拓扑变化、非正/非有限间隔、hz变化、非iowait计数或事件回退、零总CPU时间均ValueError；仅iowait回退时该增量取0并warnings=[\"iowait_decreased_clamped\"]。输入不变。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实非root只读/proc采样与可控counter边界；观察的是宿主内核提供的全机统计，不是容器CPU配额使用率。多文件读取不是原子快照，拓扑变化应重采样；本题不制造中断风暴，不调整IRQ亲和性、不终止内核线程，不凭NET_RX次数推断CPU占比或业务根因。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 20,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,time,copy,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED:snapshot_and_compare_irq',flush=True)\ndef sample(counters,events=(100,200),stamp=10,boot='approved-boot',cpus=('cpu0','cpu1')):\n return dict(boot_id=boot,monotonic=stamp,hz=100,stat='cpu '+' '.join(map(str,counters))+'\\n'+''.join(cpu+' 0 0 0 0 0 0 0 0 0 0\\n' for cpu in cpus),softirqs=' '.join(cpu.upper() for cpu in cpus)+'\\nNET_RX: '+' '.join(map(str,events))+'\\nTIMER: '+' '.join('10' for cpu in cpus)+'\\n')\na=sample([100,20,30,400,50,7,11,0,10,2]);b=sample([140,30,50,420,55,12,21,0,30,7],events=(120,240),stamp=12)\nsaved=copy.deepcopy((a,b));r=task.compare(a,b)\nassert math.isclose(r['irq_seconds'],.05) and math.isclose(r['softirq_seconds'],.10),r\nassert math.isclose(r['irq_ratio'],5/110) and math.isclose(r['softirq_ratio'],10/110),r\nassert r['softirq_events_per_second']=={'NET_RX':30.,'TIMER':0.} and r['warnings']==[],r\nassert (a,b)==saved\nfall=copy.deepcopy(b);fall['stat']=fall['stat'].replace('420 55','420 45');r=task.compare(a,fall)\nassert r['warnings']==['iowait_decreased_clamped'] and math.isclose(r['softirq_ratio'],10/105),r\ndef rejects(x,y):\n try:task.compare(x,y)\n except ValueError:return\n raise AssertionError('invalid interval accepted')\nfor field,value in [('boot_id','new-boot'),('monotonic',10),('monotonic',float('nan')),('hz',250)]:\n bad=copy.deepcopy(b);bad[field]=value;rejects(a,bad)\nbad=copy.deepcopy(b);bad['stat']=bad['stat'].replace('140 30','99 30');rejects(a,bad)\nbad=copy.deepcopy(b);bad['softirqs']=bad['softirqs'].replace('120 240','90 200');rejects(a,bad)\nbad=sample([140,30,50,420,55,12,21,0,30,7],events=(120,),stamp=12,cpus=('cpu0',));rejects(a,bad)\nrejects(a,dict(a,monotonic=11))\nfirst=task.snapshot();time.sleep(.12);second=task.snapshot()\nassert first['boot_id']==pathlib.Path('/proc/sys/kernel/random/boot_id').read_text().strip()\nassert first['hz']==os.sysconf('SC_CLK_TCK')\nassert len(first['stat'])>100 and 'NET_RX:' in first['softirqs']\nreal=task.compare(first,second)\nassert all(math.isfinite(real[k]) and 0<=real[k]<=1 for k in ('irq_ratio','softirq_ratio')),real\nassert real['irq_seconds']>=0 and real['softirq_seconds']>=0\nprint('NATIVE_PROC_IRQ_TIME_AND_SOFTIRQ_EVENT_COUNTS_SEPARATED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "linux"
+    ]
+  }
+]

@@ -1,0 +1,82 @@
+[
+  {
+    "id": "curated-parallel-basics-087",
+    "module": "basics",
+    "category": "计算机与环境",
+    "level": 3,
+    "topic": "计算机体系结构与资源模型",
+    "title": "真实指令集故障演练：AVX制品在旧CPU模型SIGILL，按哈希回退兼容基线",
+    "answer": "```python\nimport hashlib,os,pathlib,re,tempfile\ndef install_compatible(releases,cpu_features,output):\n    if not isinstance(cpu_features,list) or any(not isinstance(x,str) for x in cpu_features) or len(cpu_features)!=len(set(cpu_features)) or set(cpu_features)-{'sse2','avx'}:raise ValueError('explicit supported CPU feature list required')\n    if not isinstance(releases,list) or not releases:raise ValueError('approved releases required')\n    output=pathlib.Path(output);ids=set();priorities=set();validated=[]\n    if output.is_symlink():raise ValueError('output symlink forbidden')\n    for release in releases:\n        if not isinstance(release,dict) or not {'id','priority','requires','path','sha256'}<=set(release) or not isinstance(release['path'],str) or not release['path']:raise ValueError('complete release metadata required')\n        ident=release['id'];priority=release['priority'];required=release['requires'];path=pathlib.Path(release['path'])\n        if not isinstance(ident,str) or not ident or ident in ids or type(priority) is not int or priority in priorities:raise ValueError('unique release IDs and integer priorities required')\n        if not isinstance(required,list) or any(not isinstance(x,str) for x in required) or len(required)!=len(set(required)) or set(required)-{'sse2','avx'}:raise ValueError('unknown required CPU feature')\n        if path.is_symlink() or not path.is_file() or output.resolve()==path.resolve():raise ValueError('regular artifact and separate output required')\n        data=path.read_bytes();sha=release['sha256']\n        if not isinstance(sha,str) or not re.fullmatch('[a-f0-9]{64}',sha) or hashlib.sha256(data).hexdigest()!=sha:raise ValueError('artifact SHA256 mismatch')\n        ids.add(ident);priorities.add(priority);validated.append((release,data))\n    compatible=[pair for pair in validated if set(pair[0]['requires'])<=set(cpu_features)]\n    if not compatible:raise ValueError('no approved CPU-compatible release')\n    selected,data=max(compatible,key=lambda pair:pair[0]['priority'])\n    fd,name=tempfile.mkstemp(prefix='.release-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'wb') as stream:stream.write(data);stream.flush();os.fsync(stream.fileno())\n        os.chmod(name,0o755);os.replace(name,output)\n    finally:\n        if os.path.exists(name):os.unlink(name)\n    return {'id':selected['id'],'sha256':selected['sha256']}\n```\n\n原题知识说明：\n确认故障地址、二进制哈希和CPU能力，排除制品损坏。回退到支持旧CPU基线的已验证制品或调度到兼容主机；由开发重建并声明最低指令集。验证旧新硬件代表组，不通过强制忽略错误继续运行。 构建可使用比基础架构更高的指令集扩展，旧CPU缺少相关能力时可能触发非法指令。核对构建基线、ELF属性、CPU flags和故障指令。64位架构一致只排除一种兼容性差异。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "确认故障地址、二进制哈希和CPU能力，排除制品损坏。",
+      "回退到支持旧CPU基线的已验证制品或调度到兼容主机；由开发重建并声明最低指令集。",
+      "验证旧新硬件代表组，不通过强制忽略错误继续运行。"
+    ],
+    "references": [
+      "https://www.qemu.org/docs/master/user/main.html",
+      "https://gcc.gnu.org/onlinedocs/gcc/x86-Options.html"
+    ],
+    "incident_signature": "basics-cpu-avx-feature-missing-sigill",
+    "merged_sources": [
+      {
+        "id": "curated-parallel-basics-057",
+        "title": "同为x86-64的二进制为何仍可能不能在旧CPU运行？"
+      }
+    ],
+    "related_modules": [
+      "basics"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-basics-087",
+      "original_title": "新制品在新服务器正常、旧x86-64服务器立即SIGILL，故障指令需要AVX。如何恢复？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现install_compatible(releases,cpu_features,output)。这是已批准教学制品清单，每项含唯一非空id、普通非符号链接path、sha256（小写64位）、requires特性列表及唯一严格整数priority；cpu_features及requires仅允许sse2/avx且不重复。先完整校验每个制品字节与SHA，再从requires为CPU特性子集的候选选priority最高者，复制到同目录私有候选后原子替换output并设0755；返回id/sha256。输出不得是符号链接或与任一源同路径，无可用、哈希不符或非法清单ValueError，失败保留原输出、全部输入及无关文件，清理.release-*。夹具实际GCC生成两套小型教学ELF，并用用户态CPU模型执行同一制品；不能忽略SIGILL、伪造成功或把最高版本等同CPU兼容。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n实际QEMU7.2.22 Linux用户态CPU指令执行：Nehalem CPUID无AVX，SandyBridge CPUID有AVX，同一AVX制品在前者收到SIGILL、后者完成；兼容基线制品在两者都完成相同计算。仅私有教学ELF，非物理旧服务器/固件/内核模块/生产制品验收；不启动VM/KVM、不注册binfmt或更改宿主CPU配置，不编译镜像。制品清单的批准与特性声明由夹具提供，真实发布须开发提供并核验来源。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import hashlib,os,pathlib,re,tempfile\ndef install_compatible(releases,cpu_features,output):\n    if not isinstance(cpu_features,list) or any(not isinstance(x,str) for x in cpu_features) or len(cpu_features)!=len(set(cpu_features)) or set(cpu_features)-{'sse2','avx'}:raise ValueError('explicit supported CPU feature list required')\n    if not isinstance(releases,list) or not releases:raise ValueError('approved releases required')\n    output=pathlib.Path(output);ids=set();priorities=set();validated=[]\n    if output.is_symlink():raise ValueError('output symlink forbidden')\n    for release in releases:\n        if not isinstance(release,dict) or not {'id','priority','requires','path','sha256'}<=set(release) or not isinstance(release['path'],str) or not release['path']:raise ValueError('complete release metadata required')\n        ident=release['id'];priority=release['priority'];required=release['requires'];path=pathlib.Path(release['path'])\n        if not isinstance(ident,str) or not ident or ident in ids or type(priority) is not int or priority in priorities:raise ValueError('unique release IDs and integer priorities required')\n        if not isinstance(required,list) or any(not isinstance(x,str) for x in required) or len(required)!=len(set(required)) or set(required)-{'sse2','avx'}:raise ValueError('unknown required CPU feature')\n        if path.is_symlink() or not path.is_file() or output.resolve()==path.resolve():raise ValueError('regular artifact and separate output required')\n        data=path.read_bytes();sha=release['sha256']\n        if not isinstance(sha,str) or not re.fullmatch('[a-f0-9]{64}',sha) or hashlib.sha256(data).hexdigest()!=sha:raise ValueError('artifact SHA256 mismatch')\n        ids.add(ident);priorities.add(priority);validated.append((release,data))\n    compatible=[pair for pair in validated if set(pair[0]['requires'])<=set(cpu_features)]\n    if not compatible:raise ValueError('no approved CPU-compatible release')\n    selected,data=max(compatible,key=lambda pair:pair[0]['priority'])\n    fd,name=tempfile.mkstemp(prefix='.release-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'wb') as stream:stream.write(data);stream.flush();os.fsync(stream.fileno())\n        os.chmod(name,0o755);os.replace(name,output)\n    finally:\n        if os.path.exists(name):os.unlink(name)\n    return {'id':selected['id'],'sha256':selected['sha256']}\n"
+    },
+    "negative_files": {
+      "task.py": "import hashlib,os,pathlib,re,tempfile\ndef install_compatible(releases,cpu_features,output):\n    if not isinstance(cpu_features,list) or any(not isinstance(x,str) for x in cpu_features) or len(cpu_features)!=len(set(cpu_features)) or set(cpu_features)-{'sse2','avx'}:raise ValueError('explicit supported CPU feature list required')\n    if not isinstance(releases,list) or not releases:raise ValueError('approved releases required')\n    output=pathlib.Path(output);ids=set();priorities=set();validated=[]\n    if output.is_symlink():raise ValueError('output symlink forbidden')\n    for release in releases:\n        if not isinstance(release,dict) or not {'id','priority','requires','path','sha256'}<=set(release) or not isinstance(release['path'],str) or not release['path']:raise ValueError('complete release metadata required')\n        ident=release['id'];priority=release['priority'];required=release['requires'];path=pathlib.Path(release['path'])\n        if not isinstance(ident,str) or not ident or ident in ids or type(priority) is not int or priority in priorities:raise ValueError('unique release IDs and integer priorities required')\n        if not isinstance(required,list) or any(not isinstance(x,str) for x in required) or len(required)!=len(set(required)) or set(required)-{'sse2','avx'}:raise ValueError('unknown required CPU feature')\n        if path.is_symlink() or not path.is_file() or output.resolve()==path.resolve():raise ValueError('regular artifact and separate output required')\n        data=path.read_bytes();sha=release['sha256']\n        if not isinstance(sha,str) or not re.fullmatch('[a-f0-9]{64}',sha) or hashlib.sha256(data).hexdigest()!=sha:raise ValueError('artifact SHA256 mismatch')\n        ids.add(ident);priorities.add(priority);validated.append((release,data))\n    compatible=validated\n    if not compatible:raise ValueError('no approved CPU-compatible release')\n    selected,data=max(compatible,key=lambda pair:pair[0]['priority'])\n    fd,name=tempfile.mkstemp(prefix='.release-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'wb') as stream:stream.write(data);stream.flush();os.fsync(stream.fileno())\n        os.chmod(name,0o755);os.replace(name,output)\n    finally:\n        if os.path.exists(name):os.unlink(name)\n    return {'id':selected['id'],'sha256':selected['sha256']}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现install_compatible(releases,cpu_features,output)。这是已批准教学制品清单，每项含唯一非空id、普通非符号链接path、sha256（小写64位）、requires特性列表及唯一严格整数priority；cpu_features及requires仅允许sse2/avx且不重复。先完整校验每个制品字节与SHA，再从requires为CPU特性子集的候选选priority最高者，复制到同目录私有候选后原子替换output并设0755；返回id/sha256。输出不得是符号链接或与任一源同路径，无可用、哈希不符或非法清单ValueError，失败保留原输出、全部输入及无关文件，清理.release-*。夹具实际GCC生成两套小型教学ELF，并用用户态CPU模型执行同一制品；不能忽略SIGILL、伪造成功或把最高版本等同CPU兼容。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "实际QEMU7.2.22 Linux用户态CPU指令执行：Nehalem CPUID无AVX，SandyBridge CPUID有AVX，同一AVX制品在前者收到SIGILL、后者完成；兼容基线制品在两者都完成相同计算。仅私有教学ELF，非物理旧服务器/固件/内核模块/生产制品验收；不启动VM/KVM、不注册binfmt或更改宿主CPU配置，不编译镜像。制品清单的批准与特性声明由夹具提供，真实发布须开发提供并核验来源。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 90,
+      "requires": {
+        "commands": [
+          "gcc",
+          "qemu-x86_64"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import copy,hashlib,json,os,pathlib,resource,secrets,stat,subprocess,sys\nsys.path.insert(0,os.getcwd())\nassert sys.platform=='linux' and os.geteuid()!=0\nresource.setrlimit(resource.RLIMIT_CORE,(0,0))\nprint('NATIVE_LINUX_READY',flush=True)\nimport task\nmodern='#include <immintrin.h>\\n#include <stdio.h>\\n#include <stdlib.h>\\nint main(int argc,char**argv){float x=strtof(argv[1],0);__m256 a=_mm256_set1_ps(x);__m256 b=_mm256_add_ps(a,_mm256_set1_ps(1));float out[8];_mm256_storeu_ps(out,b);printf(\"%.0f\\\\n\",out[0]);return 0;}\\n'\nportable='#include <stdio.h>\\n#include <stdlib.h>\\nint main(int argc,char**argv){long x=strtol(argv[1],0,10);printf(\"%ld\\\\n\",x+1);return 0;}\\n'\nfeatures='#include <cpuid.h>\\n#include <stdio.h>\\nint main(void){unsigned a,b,c,d;__get_cpuid(1,&a,&b,&c,&d);printf(\"%d %d\\\\n\",!!(d&(1u<<26)),!!(c&(1u<<28)));return 0;}\\n'\nfor name,source,flags in [('modern',modern,['-mavx']),('portable',portable,['-march=x86-64','-mno-avx']),('features',features,['-march=x86-64','-mno-avx'])]:\n pathlib.Path(name+'.c').write_text(source)\n p=subprocess.run(['gcc','-O1',*flags,name+'.c','-o',name],capture_output=True,text=True,timeout=8);assert p.returncode==0,p.stderr\nOLD='Nehalem';NEW='SandyBridge,-x2apic,-tsc-deadline'\ndef execute(cpu,name,value=None):\n args=['qemu-x86_64','-cpu',cpu,str(pathlib.Path(name).resolve())]\n if value is not None:args.append(str(value))\n return subprocess.run(args,capture_output=True,text=True,timeout=4)\nold=execute(OLD,'features');new=execute(NEW,'features')\nassert old.returncode==new.returncode==0 and old.stdout=='1 0\\n' and new.stdout=='1 1\\n',(old.stdout,new.stdout)\nnumber=secrets.randbelow(100000)+50;artifact_sha=hashlib.sha256(pathlib.Path('modern').read_bytes()).hexdigest()\nbad=execute(OLD,'modern',number);good=execute(NEW,'modern',number)\nassert bad.returncode in (-4,132) and 'Illegal instruction' in bad.stderr and good.returncode==0 and good.stdout==str(number+1)+'\\n'\nassert hashlib.sha256(pathlib.Path('modern').read_bytes()).hexdigest()==artifact_sha\nassert not list(pathlib.Path('.').glob('core*'))\nreleases=[{'id':'portable','path':'portable','sha256':hashlib.sha256(pathlib.Path('portable').read_bytes()).hexdigest(),'requires':['sse2'],'priority':10},{'id':'modern','path':'modern','sha256':artifact_sha,'requires':['sse2','avx'],'priority':20}]\nbefore=copy.deepcopy(releases);input_bytes={name:pathlib.Path(name).read_bytes() for name in ('portable','modern')}\npathlib.Path('current').write_bytes(b'PREVIOUS APPROVED OUTPUT');pathlib.Path('protected').write_bytes(b'KEEP')\nprint('NATIVE_SAME_AVX_ELF_SIGILL_ON_NEHALEM_CPUID_NO_AVX_PASSES_SANDYBRIDGE_CPUID_AVX',flush=True)\nprint('STUDENT_OPERATION_ENTERED:select_verified_cpu_compatible_release_and_publish_owned_elf',flush=True)\ntry:result=task.install_compatible(releases,['sse2'],'current')\nexcept Exception as error:raise AssertionError('CPU-compatible artifact recovery failed') from error\nfor cpu in (OLD,NEW):\n p=execute(cpu,'current',number);assert p.returncode==0 and p.stdout==str(number+1)+'\\n',('recovered binary still fails on target CPU',cpu,p.returncode,p.stderr)\nassert result=={'id':'portable','sha256':releases[0]['sha256']} and hashlib.sha256(pathlib.Path('current').read_bytes()).hexdigest()==releases[0]['sha256']\nassert stat.S_IMODE(pathlib.Path('current').stat().st_mode)==0o755\nsecond=task.install_compatible(releases,['sse2','avx'],'new-target');assert second=={'id':'modern','sha256':artifact_sha}\np=execute(NEW,'new-target',number);assert p.returncode==0 and p.stdout==str(number+1)+'\\n'\nstable=pathlib.Path('current').read_bytes()\nfor candidate,features in [([{**releases[0],'sha256':'0'*64}],['sse2']),(releases,[]),(releases,['unknown']),(releases+[dict(releases[0])],['sse2']),([{'id':'incomplete'}],['sse2']),([{**releases[0],'requires':[[]]}],['sse2'])]:\n try:task.install_compatible(candidate,features,'current')\n except ValueError:pass\n else:raise AssertionError('tampered/unapproved artifact or unsupported CPU compatibility accepted')\n assert pathlib.Path('current').read_bytes()==stable\ntry:task.install_compatible(releases,['sse2'],'portable')\nexcept ValueError:pass\nelse:raise AssertionError('source artifact overwrite accepted')\nassert releases==before and all(pathlib.Path(name).read_bytes()==data for name,data in input_bytes.items())\nassert pathlib.Path('protected').read_bytes()==b'KEEP' and not list(pathlib.Path('.').glob('.release-*'))\nprint('NATIVE_APPROVED_BASELINE_ELF_RECOVERS_BOTH_CPU_MODELS_AVX_ELF_ONLY_ON_COMPATIBLE_CPU_TAMPER_OUTPUT_PRESERVED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

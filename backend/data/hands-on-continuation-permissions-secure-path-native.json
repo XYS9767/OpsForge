@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-permissions-completion-044",
+    "module": "permissions",
+    "category": "用户、权限与安全",
+    "level": 4,
+    "topic": "文件访问控制",
+    "title": "修复sudo命令搜索：只追加可信目录，原secure_path顺序和命令授权保持",
+    "answer": "```python\nimport pathlib,re\ndef extend_secure_path(existing,directory,inspect):\n    def valid(value):\n        return isinstance(value,str) and len(value)<=512 and bool(re.fullmatch(r\"/[A-Za-z0-9_./-]*\",value)) and str(pathlib.PurePosixPath(value))==value and \"..\" not in pathlib.PurePosixPath(value).parts\n    if not isinstance(existing,str) or not existing or len(existing)>4096 or any(not valid(part) for part in existing.split(\":\")):raise ValueError(\"invalid existing secure_path\")\n    if not valid(directory) or directory==\"/\":raise ValueError(\"approved absolute tool directory required\")\n    path=pathlib.PurePosixPath(directory)\n    for parent in [path,*path.parents]:\n        info=inspect(str(parent))\n        if not info[\"is_dir\"] or info[\"symlink\"] or info[\"uid\"]!=0 or info[\"mode\"]&0o022:raise PermissionError(\"directory or ancestor not trusted\")\n    if directory in existing.split(\":\"):return existing\n    return existing+\":\"+directory\n```\n\n原题知识说明：\n比较提权前后的解析路径与有效 sudo 规则，确认工具的可信绝对路径和属主，再用明确路径或最小范围受管 PATH 调整。不要保留全部用户环境或把用户可写目录加入提权搜索路径。验证预期命令成功，同时测试同名恶意替换不能被执行。",
+    "type": "code",
+    "source": "OpsForge 原创权限与安全专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "permissions-completion-20261021",
+    "body": "## 操作任务\n实现extend_secure_path(existing,directory,inspect)，返回新secure_path字符串。existing是原配置，保持全部目录、顺序和既有重复项；directory是本次批准新增工具目录，若已存在则原样返回，否则仅追加。所有路径必须是规范绝对POSIX路径，禁止空路径项、..、双斜线、末尾斜线、冒号、空白或配置注入；新目录不能是根目录。对新增目录及每一级祖先调用inspect(path)，返回is_dir/symlink/uid/mode；每一级均须为真实目录、非符号链接、root拥有、组及其他用户不可写，否则PermissionError；不存在原异常传播。非法字符串ValueError。不得用个人PATH替换secure_path，不改sudoers命令授权或默认身份，不自动chmod/chown待批准目录。独立可信补充实际比较普通UID1000手动运行、sudo完整路径、sudo短命令失败与仅追加后恢复。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n基础学生判分仅计算配置变更，非root，无sudo能力。可信独立补充使用已有sudo只读工具及自有临时容器：容器root掌管私有sudo入口，受控子进程ruid=1000/euid=0模拟sudo策略入口，不安装setuid文件；实际普通UID1000运行和实际sudo按原白名单执行。仅SETUID/SETGID供内部身份协议，其余cap丢弃、no-new-privileges，无宿主可写挂载/网络/privileged容器。私有PAM permit用于排除认证混淆，保留前后同一私有命令白名单与原secure_path；不修改宿主PAM/sudoers/身份或授权任意命令。审计netlink能力未授予，真实sudo审计提示须保留，不声称内核审计或生产PAM验收。不构建镜像。",
+    "rubric": [
+      "身份与授权区分准确",
+      "不扩大权限掩盖根因",
+      "验证合法访问与禁止访问"
+    ],
+    "hints": [],
+    "references": [
+      "https://www.sudo.ws/docs/man/sudoers.man/"
+    ],
+    "incident_signature": "permissions-sudo-secure-path-excludes-approved-tool",
+    "exercise_mode": "tabletop",
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-permissions-completion-044",
+      "original_title": "普通用户手工运行巡检成功，sudo 执行报命令不存在，sudo secure_path 不含工具目录。如何恢复？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import pathlib,re\ndef extend_secure_path(existing,directory,inspect):\n    def valid(value):\n        return isinstance(value,str) and len(value)<=512 and bool(re.fullmatch(r\"/[A-Za-z0-9_./-]*\",value)) and str(pathlib.PurePosixPath(value))==value and \"..\" not in pathlib.PurePosixPath(value).parts\n    if not isinstance(existing,str) or not existing or len(existing)>4096 or any(not valid(part) for part in existing.split(\":\")):raise ValueError(\"invalid existing secure_path\")\n    if not valid(directory) or directory==\"/\":raise ValueError(\"approved absolute tool directory required\")\n    path=pathlib.PurePosixPath(directory)\n    for parent in [path,*path.parents]:\n        info=inspect(str(parent))\n        if not info[\"is_dir\"] or info[\"symlink\"] or info[\"uid\"]!=0 or info[\"mode\"]&0o022:raise PermissionError(\"directory or ancestor not trusted\")\n    if directory in existing.split(\":\"):return existing\n    return existing+\":\"+directory\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib,re\ndef extend_secure_path(existing,directory,inspect):\n    def valid(value):\n        return isinstance(value,str) and len(value)<=512 and bool(re.fullmatch(r\"/[A-Za-z0-9_./-]*\",value)) and str(pathlib.PurePosixPath(value))==value and \"..\" not in pathlib.PurePosixPath(value).parts\n    if not isinstance(existing,str) or not existing or len(existing)>4096 or any(not valid(part) for part in existing.split(\":\")):raise ValueError(\"invalid existing secure_path\")\n    if not valid(directory) or directory==\"/\":raise ValueError(\"approved absolute tool directory required\")\n    path=pathlib.PurePosixPath(directory)\n    for parent in [path,*path.parents]:\n        info=inspect(str(parent))\n        if not info[\"is_dir\"] or info[\"symlink\"] or info[\"uid\"]!=0 or info[\"mode\"]&0o022:raise PermissionError(\"directory or ancestor not trusted\")\n    if directory in existing.split(\":\"):return existing\n    return directory\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现extend_secure_path(existing,directory,inspect)，返回新secure_path字符串。existing是原配置，保持全部目录、顺序和既有重复项；directory是本次批准新增工具目录，若已存在则原样返回，否则仅追加。所有路径必须是规范绝对POSIX路径，禁止空路径项、..、双斜线、末尾斜线、冒号、空白或配置注入；新目录不能是根目录。对新增目录及每一级祖先调用inspect(path)，返回is_dir/symlink/uid/mode；每一级均须为真实目录、非符号链接、root拥有、组及其他用户不可写，否则PermissionError；不存在原异常传播。非法字符串ValueError。不得用个人PATH替换secure_path，不改sudoers命令授权或默认身份，不自动chmod/chown待批准目录。独立可信补充实际比较普通UID1000手动运行、sudo完整路径、sudo短命令失败与仅追加后恢复。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "基础学生判分仅计算配置变更，非root，无sudo能力。可信独立补充使用已有sudo只读工具及自有临时容器：容器root掌管私有sudo入口，受控子进程ruid=1000/euid=0模拟sudo策略入口，不安装setuid文件；实际普通UID1000运行和实际sudo按原白名单执行。仅SETUID/SETGID供内部身份协议，其余cap丢弃、no-new-privileges，无宿主可写挂载/网络/privileged容器。私有PAM permit用于排除认证混淆，保留前后同一私有命令白名单与原secure_path；不修改宿主PAM/sudoers/身份或授权任意命令。审计netlink能力未授予，真实sudo审计提示须保留，不声称内核审计或生产PAM验收。不构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import copy\nprint(\"NATIVE_LINUX_READY\",flush=True)\nimport task\nprint(\"STUDENT_OPERATION_ENTERED: secure_path addition preserves original command search and grants\",flush=True)\nbase=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"\ndirectory=\"/opt/approved/tools\";good=dict(is_dir=True,symlink=False,uid=0,mode=0o755)\ncalls=[]\ndef inspect(path):calls.append(path);return copy.deepcopy(good)\nassert task.extend_secure_path(base,directory,inspect)==base+\":\"+directory\nassert set(calls)=={\"/opt/approved/tools\",\"/opt/approved\",\"/opt\",\"/\"}\nunchanged=base+\":\"+directory\nassert task.extend_secure_path(unchanged,directory,inspect)==unchanged\nduplicates=\"/usr/bin:/bin:/usr/bin\";assert task.extend_secure_path(duplicates,directory,inspect)==duplicates+\":\"+directory\ndef invalid(existing,directory,kind=ValueError,probe=inspect):\n try:task.extend_secure_path(existing,directory,probe)\n except kind:return\n raise AssertionError(\"unsafe secure_path accepted\")\nfor bad in [\"\",\"relative\",\"/usr/bin::/bin\",\":/bin\",\"/bin:\",\"/bin\\nDefaults bad\",\"/bin:/a/../b\"]:\n invalid(bad,directory)\nfor bad in [\"\",\"relative\",\"/\",\"/opt/../tools\",\"/opt//tools\",\"/opt/tools/\",\"/opt/tools:new\",\"/opt/tools\\nroot ALL=ALL\",\"/opt/a b\"]:\n invalid(base,bad)\nfor field,value in [(\"is_dir\",False),(\"symlink\",True),(\"uid\",1000),(\"mode\",0o775),(\"mode\",0o777)]:\n for unsafe in [\"/opt/approved/tools\",\"/opt/approved\",\"/opt\",\"/\"]:\n  def probe(path,field=field,value=value,unsafe=unsafe):\n   return {**good,**({field:value} if path==unsafe else {})}\n  invalid(base,directory,PermissionError,probe)\ndef missing(path):raise FileNotFoundError(\"approved path missing\")\ninvalid(base,directory,FileNotFoundError,missing)\nprint(\"NATIVE_SECURE_PATH_ORIGINAL_ORDER_AND_DUPLICATES_RETAINED_ALL_ANCESTORS_TRUSTED_CONFLICTS_FAIL_CLOSED\",flush=True)\nprint(\"NATIVE_SEMANTIC_ASSERTIONS_PASSED\",flush=True)\n"
+      }
+    },
+    "question_format": "case"
+  }
+]

@@ -1,0 +1,86 @@
+[
+  {
+    "id": "curated-parallel-prometheus-014",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 1,
+    "topic": "PromQL查询与计算",
+    "title": "保留采样计数器增量中的外推小数与重置语义",
+    "answer": "```yaml\ngroups:\n- name: fractional-counter-increase\n  interval: 1m\n  rules:\n  - record: instance:requests:increase3m\n    expr: increase(requests_total[3m])\n```\n\n3分钟窗口不等于直接相减3分钟前样本。第3分钟normal窗口采样在1/2/3分钟，差值3发生在120秒，Prometheus外推到180秒得到4.5。reset第4分钟窗口为1/3/5，采样差4；从首个值1反推零点仅30秒，float counter外推不能越过零点，所以覆盖150秒得到5，而非机械乘1.5得到6。idle为真实零增长；只有一个采样的实例不满足速率计算条件。补零、取整和直接首尾减法分别破坏缺失、估计和重置语义。\n\n### 原题原理\n它基于counter变化并对窗口边界外推，因此即使底层是整数事件也可能得到小数。适用于区间估算，不是精确逐事件审计。缺样和窗口选择影响结果。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "保留实际外推小数",
+      "按counter重置及零点约束计算",
+      "区分真实零增长与单点不可计算"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/",
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: fractional-counter-increase\n  interval: 1m\n  rules:\n  - record: instance:requests:increase3m\n    expr: requests_total - requests_total offset 3m\n",
+      "fixtures.yaml": "rule_files:\n- rules.yaml\nevaluation_interval: 1m\nfuzzy_compare: true\ntests:\n- interval: 1m\n  input_series:\n  - series: requests_total{instance=\"normal\"}\n    values: 100 101 102 104 107 108\n  - series: requests_total{instance=\"reset\"}\n    values: 100 102 1 3 5 6\n  - series: requests_total{instance=\"idle\"}\n    values: 0+0x5\n  - series: requests_total{instance=\"one-point\"}\n    values: _ _ _ 10 _ _\n  promql_expr_test:\n  - expr: instance:requests:increase3m\n    eval_time: 3m\n    exp_samples:\n    - labels: instance:requests:increase3m{instance=\"normal\"}\n      value: 4.5\n    - labels: instance:requests:increase3m{instance=\"reset\"}\n      value: 4.5\n    - labels: instance:requests:increase3m{instance=\"idle\"}\n      value: 0\n  - expr: instance:requests:increase3m\n    eval_time: 4m\n    exp_samples:\n    - labels: instance:requests:increase3m{instance=\"normal\"}\n      value: 7.5\n    - labels: instance:requests:increase3m{instance=\"reset\"}\n      value: 5\n    - labels: instance:requests:increase3m{instance=\"idle\"}\n      value: 0\n  - expr: instance:requests:increase3m\n    eval_time: 5m\n    exp_samples:\n    - labels: instance:requests:increase3m{instance=\"normal\"}\n      value: 6\n    - labels: instance:requests:increase3m{instance=\"reset\"}\n      value: 4.5\n    - labels: instance:requests:increase3m{instance=\"idle\"}\n      value: 0\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: fractional-counter-increase\n  interval: 1m\n  rules:\n  - record: instance:requests:increase3m\n    expr: increase(requests_total[3m])\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: fractional-counter-increase\n  interval: 1m\n  rules:\n  - record: instance:requests:increase3m\n    expr: round(increase(requests_total[3m]))\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供promtool 3.5和Python/PyYAML。编辑rules.yaml，fixtures.yaml提供固定Prometheus规则测试输入；无需学员自建Prometheus，也不连接生产。\n\n## 操作任务\n为每个instance交付最近3分钟的Prometheus counter增量估计instance:requests:increase3m，保留原instance；不得四舍五入、向上取整或将counter重置当负增长。normal在第3/4/5分钟应分别为4.5、7.5、6；reset应为4.5、5、4.5；idle始终0。one-point只有一个采样，无法形成窗口增量，应不输出，而不是补0冒充正常。参考窗口遵循promtool 3.5左开右闭语义。这里验收的是采样counter的外推估计，不代表审计账本里的精确事件条数；不要把小数当错误强行修成整数。\n\n## 产物\n提交rules.yaml，保留题定记录规则和告警的名称、标签合同。\n\n## 验收方法\n执行python3 checks/check.py：官方promtool check rules检查规则，再由promtool test rules真实计算样本、告警pending/firing/恢复。可信fixtures由验收器独立加载，不接受删改测试来通过；允许等价PromQL表达式，不做公式字符串匹配。参考解、原配置、典型错误及重复键四路验证。\n\n## 原理复习\nincrease为什么可能返回非整数？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-promtool",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "为每个instance交付最近3分钟的Prometheus counter增量估计instance:requests:increase3m，保留原instance；不得四舍五入、向上取整或将counter重置当负增长。normal在第3/4/5分钟应分别为4.5、7.5、6；reset应为4.5、5、4.5；idle始终0。one-point只有一个采样，无法形成窗口增量，应不输出，而不是补0冒充正常。参考窗口遵循promtool 3.5左开右闭语义。这里验收的是采样counter的外推估计，不代表审计账本里的精确事件条数；不要把小数当错误强行修成整数。",
+      "verification": "官方promtool真实离线执行PromQL与告警时间状态；带独立边界样本。",
+      "capability_gap": [
+        "不运行抓取、服务发现、Alertmanager通知，不将离线规则执行冒充线上链路通过。"
+      ],
+      "failure_examples": [
+        "negative_files对应题目中容易产生误报或错误数值的配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "promtool"
+        ],
+        "features": [
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nEXPECTED={'groups': [{'name': 'fractional-counter-increase', 'interval': '1m', 'rules': [{'record': 'instance:requests:increase3m', 'expr': 'increase(requests_total[3m])'}]}]}\nFIXTURE={'rule_files': ['rules.yaml'], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'requests_total{instance=\"normal\"}', 'values': '100 101 102 104 107 108'}, {'series': 'requests_total{instance=\"reset\"}', 'values': '100 102 1 3 5 6'}, {'series': 'requests_total{instance=\"idle\"}', 'values': '0+0x5'}, {'series': 'requests_total{instance=\"one-point\"}', 'values': '_ _ _ 10 _ _'}], 'promql_expr_test': [{'expr': 'instance:requests:increase3m', 'eval_time': '3m', 'exp_samples': [{'labels': 'instance:requests:increase3m{instance=\"normal\"}', 'value': 4.5}, {'labels': 'instance:requests:increase3m{instance=\"reset\"}', 'value': 4.5}, {'labels': 'instance:requests:increase3m{instance=\"idle\"}', 'value': 0}]}, {'expr': 'instance:requests:increase3m', 'eval_time': '4m', 'exp_samples': [{'labels': 'instance:requests:increase3m{instance=\"normal\"}', 'value': 7.5}, {'labels': 'instance:requests:increase3m{instance=\"reset\"}', 'value': 5}, {'labels': 'instance:requests:increase3m{instance=\"idle\"}', 'value': 0}]}, {'expr': 'instance:requests:increase3m', 'eval_time': '5m', 'exp_samples': [{'labels': 'instance:requests:increase3m{instance=\"normal\"}', 'value': 6}, {'labels': 'instance:requests:increase3m{instance=\"reset\"}', 'value': 4.5}, {'labels': 'instance:requests:increase3m{instance=\"idle\"}', 'value': 0}]}]}]}\nr=load('rules.yaml')\nassert set(r)=={'groups'} and len(r['groups'])==1\ng=r['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']==EXPECTED['groups'][0]['name'] and g['interval']=='1m'\nassert len(g['rules'])==len(EXPECTED['groups'][0]['rules'])\nfor actual,expected in zip(g['rules'],EXPECTED['groups'][0]['rules']):\n assert set(actual)==set(expected)\n assert {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in expected.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\n\nassert shutil.which('promtool'),'platform must supply native promtool'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-rules-') as tmp:\n fixture=copy.deepcopy(FIXTURE);fixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\n path=pathlib.Path(tmp)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf-8')\n for args in [['promtool','check','rules','rules.yaml'],['promtool','test','rules',str(path)]]:\n  p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n  print(p.stdout);print(p.stderr);assert p.returncode==0,'native rule execution failed'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-014",
+      "original_type": "interview",
+      "original_title": "increase为什么可能返回非整数？",
+      "original_version": 1,
+      "theory_retained": true
+    },
+    "semantic_root": "counter_increase_fractional_extrapolation_zero_boundary_and_single_sample"
+  }
+]

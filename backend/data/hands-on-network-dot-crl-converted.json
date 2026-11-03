@@ -1,0 +1,142 @@
+[
+  {
+    "id": "curated-network-completion-008",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 3,
+    "topic": "通过真实DoT连接验证DNS加密传输与服务器身份",
+    "title": "通过真实DoT连接验证DNS加密传输与服务器身份",
+    "answer": "```python\nimport socket,ssl,struct,time,ipaddress\ndef execute(host,port,tls_name,ca_file,query):\n    if not ipaddress.ip_address(host).is_loopback:raise ValueError('numeric loopback only')\n    if type(port) is not int or not 1024<=port<=65535:raise ValueError('high port required')\n    if not isinstance(query,bytes) or not 12<=len(query)<=65535 or query[2]&0x80:raise ValueError('DNS query bytes required')\n    context=ssl.create_default_context(cafile=ca_file)\n    deadline=time.monotonic()+1\n    def remaining():\n        left=deadline-time.monotonic()\n        if left<=0:raise TimeoutError('DoT total deadline')\n        return left\n    with socket.create_connection((host,port),timeout=remaining()) as raw:\n        raw.settimeout(remaining())\n        with context.wrap_socket(raw,server_hostname=tls_name) as conn:\n            conn.settimeout(remaining());conn.sendall(struct.pack('!H',len(query))+query)\n            def read(size):\n                result=b''\n                while len(result)<size:\n                    conn.settimeout(remaining());chunk=conn.recv(size-len(result))\n                    if not chunk:raise EOFError('truncated DoT frame')\n                    result+=chunk\n                return result\n            size=struct.unpack('!H',read(2))[0]\n            if size<12:raise ValueError('short DNS message')\n            response=read(size)\n            if response[:2]!=query[:2] or not response[2]&0x80 or response[2]&2:raise ValueError('DNS ID/QR/TC mismatch')\n            remaining();return response\n```\n\n实现execute(host,port,tls_name,ca_file,query)，host仅数字回环地址，port为1024～65535整数。使用提供CA验证TLS证书与tls_name，不跳过主机名验证；query为12～65535字节DNS查询（QR=0）。经TLS发送两字节网络序长度和原始查询，精确读取分片的响应长度与响应体，检查事务ID、QR=1、TC=0，返回原始DNS响应。建连、握手、发送和读取共享1秒总截止时间；错误证书必须在发送DNS查询前失败，短帧/错误ID/错误标志拒绝，全部连接关闭。这只证明DNS over TLS链路与身份验证，不能据此宣称DNSSEC签名有效，也不是DoH。\n\n原理说明（保留原题）：\nDNSSEC 主要验证签名链下数据的真实性与完整性，不加密查询；DoT/DoH 对客户端到解析器的传输加密，但不自动证明所有上游权威数据已签名。应分别设计信任链、解析器身份、网络策略和日志可见性。",
+    "type": "code",
+    "source": "OpsForge 原创网络专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\n非root隔离Linux、Python3和OpenSSL标准工具。提供task.py骨架；可信验收生成临时CA、证书和工作区素材，只使用本题文件和回环高端口，不修改系统信任库或公网。\n\n## 操作任务\n实现execute(host,port,tls_name,ca_file,query)，host仅数字回环地址，port为1024～65535整数。使用提供CA验证TLS证书与tls_name，不跳过主机名验证；query为12～65535字节DNS查询（QR=0）。经TLS发送两字节网络序长度和原始查询，精确读取分片的响应长度与响应体，检查事务ID、QR=1、TC=0，返回原始DNS响应。建连、握手、发送和读取共享1秒总截止时间；错误证书必须在发送DNS查询前失败，短帧/错误ID/错误标志拒绝，全部连接关闭。这只证明DNS over TLS链路与身份验证，不能据此宣称DNSSEC签名有效，也不是DoH。\n\n## 提交产物\ntask.py完整实现及任务约定的运行产物。\n\n## 验收方法\npython3 checks/check.py启动真实回环TLS服务，核对长度帧/随机ID、响应拆包、错域名/未知CA不泄露查询、短帧/标志错误和持续分片总期限。 全部断言通过退出0；初始骨架及典型错误必须失败，工具未就绪属于环境待验。\n\n失败示例：把TLS改为不验证证书后，加密连接仍会向冒名解析器发送查询；真实错误域名和未知CA反例必须失败。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "def execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,ssl,struct,time,ipaddress\ndef execute(host,port,tls_name,ca_file,query):\n    if not ipaddress.ip_address(host).is_loopback:raise ValueError('numeric loopback only')\n    if type(port) is not int or not 1024<=port<=65535:raise ValueError('high port required')\n    if not isinstance(query,bytes) or not 12<=len(query)<=65535 or query[2]&0x80:raise ValueError('DNS query bytes required')\n    context=ssl.create_default_context(cafile=ca_file)\n    deadline=time.monotonic()+1\n    def remaining():\n        left=deadline-time.monotonic()\n        if left<=0:raise TimeoutError('DoT total deadline')\n        return left\n    with socket.create_connection((host,port),timeout=remaining()) as raw:\n        raw.settimeout(remaining())\n        with context.wrap_socket(raw,server_hostname=tls_name) as conn:\n            conn.settimeout(remaining());conn.sendall(struct.pack('!H',len(query))+query)\n            def read(size):\n                result=b''\n                while len(result)<size:\n                    conn.settimeout(remaining());chunk=conn.recv(size-len(result))\n                    if not chunk:raise EOFError('truncated DoT frame')\n                    result+=chunk\n                return result\n            size=struct.unpack('!H',read(2))[0]\n            if size<12:raise ValueError('short DNS message')\n            response=read(size)\n            if response[:2]!=query[:2] or not response[2]&0x80 or response[2]&2:raise ValueError('DNS ID/QR/TC mismatch')\n            remaining();return response\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,ssl,struct,time,ipaddress\ndef execute(host,port,tls_name,ca_file,query):\n    if not ipaddress.ip_address(host).is_loopback:raise ValueError('numeric loopback only')\n    if type(port) is not int or not 1024<=port<=65535:raise ValueError('high port required')\n    if not isinstance(query,bytes) or not 12<=len(query)<=65535 or query[2]&0x80:raise ValueError('DNS query bytes required')\n    context=ssl._create_unverified_context()\n    deadline=time.monotonic()+1\n    def remaining():\n        left=deadline-time.monotonic()\n        if left<=0:raise TimeoutError('DoT total deadline')\n        return left\n    with socket.create_connection((host,port),timeout=remaining()) as raw:\n        raw.settimeout(remaining())\n        with context.wrap_socket(raw,server_hostname=tls_name) as conn:\n            conn.settimeout(remaining());conn.sendall(struct.pack('!H',len(query))+query)\n            def read(size):\n                result=b''\n                while len(result)<size:\n                    conn.settimeout(remaining());chunk=conn.recv(size-len(result))\n                    if not chunk:raise EOFError('truncated DoT frame')\n                    result+=chunk\n                return result\n            size=struct.unpack('!H',read(2))[0]\n            if size<12:raise ValueError('short DNS message')\n            response=read(size)\n            if response[:2]!=query[:2] or not response[2]&0x80 or response[2]&2:raise ValueError('DNS ID/QR/TC mismatch')\n            remaining();return response\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "openssl"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,subprocess,socket,ssl,threading,contextlib,time,struct,secrets\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef cmd(*args):return subprocess.run(['openssl',*args],capture_output=True,check=True,timeout=5)\ncmd('req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-keyout','ca.key','-out','ca.crt','-days','1','-subj','/CN=DoT Test Root')\ncmd('req','-new','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-keyout','server.key','-out','server.csr','-subj','/CN=dns.lab.test')\npathlib.Path('leaf.ext').write_text('subjectAltName=DNS:dns.lab.test\\nbasicConstraints=CA:FALSE\\nextendedKeyUsage=serverAuth\\n')\ncmd('x509','-req','-in','server.csr','-CA','ca.crt','-CAkey','ca.key','-CAcreateserial','-out','server.crt','-days','1','-extfile','leaf.ext')\ncmd('req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-keyout','rogue.key','-out','rogue.crt','-days','1','-subj','/CN=Untrusted Root')\ncontext=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain('server.crt','server.key')\ndef read(c,n):\n    data=b''\n    while len(data)<n:\n        part=c.recv(n-len(data))\n        if not part:raise EOFError('client closed early')\n        data+=part\n    return data\n@contextlib.contextmanager\ndef server(query,response,mode='normal',untrusted=False):\n    listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(1);listener.settimeout(2)\n    stop=threading.Event();errors=[];received=[];connections=[]\n    def worker():\n        try:\n            raw,_=listener.accept();connections.append(raw);raw.settimeout(2)\n            with raw:\n                try:secure=context.wrap_socket(raw,server_side=True)\n                except ssl.SSLError:\n                    if untrusted:return\n                    raise\n                connections.append(secure)\n                with secure:\n                    count=struct.unpack('!H',read(secure,2))[0];payload=read(secure,count);received.append(payload);assert payload==query\n                    wire=struct.pack('!H',len(response))+response\n                    if mode=='short':wire=wire[:-1]\n                    chunks=[wire[:1],wire[1:3],wire[3:]] if mode!='slow' else [wire[i:i+2] for i in range(0,len(wire),2)]\n                    for part in chunks:\n                        if stop.wait(.21 if mode=='slow' else .01):break\n                        try:secure.sendall(part)\n                        except (BrokenPipeError,ConnectionResetError,ssl.SSLError):break\n        except OSError as exc:\n            if not stop.is_set():errors.append(repr(exc))\n        except Exception as exc:errors.append(repr(exc))\n        finally:listener.close()\n    thread=threading.Thread(target=worker);thread.start()\n    try:yield listener.getsockname()[1],received\n    finally:\n        stop.set();listener.close()\n        for c in connections:\n            try:c.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3);assert not thread.is_alive();assert not errors,errors\ndef query():return secrets.token_bytes(2)+b'\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x03www\\x03lab\\x04test\\x00\\x00\\x01\\x00\\x01'\nfor _ in range(3):\n    q=query();answer=q[:2]+b'\\x81\\x80'+q[4:]\n    with server(q,answer) as (port,seen):assert task.execute('127.0.0.1',port,'dns.lab.test','ca.crt',q)==answer\n    assert seen==[q]\nfor name,ca in [('wrong.lab.test','ca.crt'),('dns.lab.test','rogue.crt')]:\n    q=query();answer=q[:2]+b'\\x81\\x80'+q[4:]\n    with server(q,answer,untrusted=True) as (port,seen):\n        try:task.execute('127.0.0.1',port,name,ca,q)\n        except ssl.SSLCertVerificationError:pass\n        else:raise AssertionError('TLS identity validation bypassed')\n    assert not seen,'DNS query disclosed before certificate validation'\nfor mode,mutation in [('normal','id'),('normal','qr'),('normal','tc'),('normal','small'),('short',None),('slow',None)]:\n    q=query();answer=q[:2]+b'\\x81\\x80'+q[4:]\n    if mutation=='id':answer=bytes([q[0]^255])+answer[1:]\n    if mutation=='qr':answer=answer[:2]+b'\\x01'+answer[3:]\n    if mutation=='tc':answer=answer[:2]+b'\\x83'+answer[3:]\n    if mutation=='small':answer=b'bad'\n    with server(q,answer,mode) as (port,_):\n        started=time.monotonic()\n        try:task.execute('127.0.0.1',port,'dns.lab.test','ca.crt',q)\n        except (ValueError,EOFError,TimeoutError):pass\n        else:raise AssertionError(('bad frame accepted',mode,mutation))\n        if mode=='slow':assert time.monotonic()-started<1.5,'total deadline reset by partial data'\nfor bad in [b'',b'x'*11,b'\\x00\\x00\\x80'+b'x'*9]:\n    try:task.execute('127.0.0.1',40000,'dns.lab.test','ca.crt',bad)\n    except ValueError:pass\n    else:raise AssertionError('invalid query')\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,tls_name,ca_file,query)，host仅数字回环地址，port为1024～65535整数。使用提供CA验证TLS证书与tls_name，不跳过主机名验证；query为12～65535字节DNS查询（QR=0）。经TLS发送两字节网络序长度和原始查询，精确读取分片的响应长度与响应体，检查事务ID、QR=1、TC=0，返回原始DNS响应。建连、握手、发送和读取共享1秒总截止时间；错误证书必须在发送DNS查询前失败，短帧/错误ID/错误标志拒绝，全部连接关闭。这只证明DNS over TLS链路与身份验证，不能据此宣称DNSSEC签名有效，也不是DoH。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py启动真实回环TLS服务，核对长度帧/随机ID、响应拆包、错域名/未知CA不泄露查询、短帧/标志错误和持续分片总期限。",
+      "failure_examples": [
+        "把TLS改为不验证证书后，加密连接仍会向冒名解析器发送查询；真实错误域名和未知CA反例必须失败。"
+      ]
+    },
+    "case_signature": "curated-network-completion-008|通过真实DoT连接验证DNS加密传输与服务器身份",
+    "conversion": {
+      "original_id": "curated-network-completion-008",
+      "original_title": "DNSSEC、DoT 和 DoH 解决的是同一个问题吗？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-network-completion-017",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 3,
+    "topic": "生成并验证CRL撤销工件，区分过期与证书撤销",
+    "title": "生成并验证CRL撤销工件，区分过期与证书撤销",
+    "answer": "```python\nimport pathlib,tempfile,shutil,subprocess,json,hashlib,os\ndef execute(ca_dir,revoked_cert,outdir):\n    root=pathlib.Path.cwd().resolve();ca=pathlib.Path(ca_dir).resolve();cert=pathlib.Path(revoked_cert).resolve();out=pathlib.Path(outdir).resolve()\n    if not all(p.is_relative_to(root) for p in (ca,cert,out)) or out.is_relative_to(ca) or out==root:raise ValueError('isolated workspace paths required')\n    if out.exists():raise FileExistsError(out)\n    def run(*args):return subprocess.run(['openssl',*map(str,args)],capture_output=True,check=True,timeout=5).stdout\n    run('verify','-CAfile',ca/'ca.crt','-purpose','sslserver',cert)\n    serial=run('x509','-in',cert,'-noout','-serial').decode().strip().split('=',1)[1].upper()\n    matches=[line.split('\\t') for line in (ca/'index.txt').read_text().splitlines() if len(line.split('\\t'))==6 and int(line.split('\\t')[3],16)==int(serial,16)]\n    if len(matches)!=1 or matches[0][0]!='V':raise ValueError('one issued valid index entry required')\n    stage=pathlib.Path(tempfile.mkdtemp(prefix='.revoke-',dir=out.parent))\n    try:\n        working=stage/'authority';shutil.copytree(ca,working)\n        config=stage/'openssl.cnf'\n        config.write_text('[ca]\\ndefault_ca=authority\\n[authority]\\ndatabase='+str(working/'index.txt')+'\\nprivate_key='+str(working/'ca.key')+'\\ncertificate='+str(working/'ca.crt')+'\\ncrlnumber='+str(working/'crlnumber')+'\\ndefault_md=sha256\\ndefault_crl_days=1\\n')\n        run('ca','-batch','-config',config,'-revoke',cert,'-crl_reason','keyCompromise')\n        bundle=stage/'bundle';bundle.mkdir();crl=bundle/'revocations.pem'\n        run('ca','-batch','-config',config,'-gencrl','-out',crl)\n        run('crl','-in',crl,'-CAfile',ca/'ca.crt','-verify','-noout')\n        report={'revoked_serial':serial,'reason':'keyCompromise','crl_sha256':hashlib.sha256(crl.read_bytes()).hexdigest()}\n        (bundle/'report.json').write_text(json.dumps(report,sort_keys=True)+'\\n')\n        os.replace(bundle,out);return report\n    finally:shutil.rmtree(stage)\n```\n\n实现execute(ca_dir,revoked_cert,outdir)。ca_dir提供ca.crt/ca.key/index.txt/crlnumber等本题测试CA素材，revoked_cert为其已登记且状态V的服务器证书。用原生OpenSSL验证发行链与服务器用途，复制CA状态到临时区，仅在副本撤销目标证书，原因为keyCompromise；生成并验证CA签名CRL。交付新目录只含revocations.pem、report.json，报告revoked_serial为证书十六进制序列号大写、reason和CRL文件SHA256；返回同一报告。原CA目录字节不变，不交付私钥或内部数据库；输出必须在工作区且不能位于CA目录内，已有输出拒绝且保留。证书未登记、状态非V或原生签名失败不得发布半成品，清理临时目录。验证时两张证书均在有效期内且域名相同，只有被撤销证书被crl_check拒绝。这里只生成离线撤销发布工件，不证明公网客户端已下载CRL，也不更改生产CA。\n\n原理说明（保留原题）：\n还可能是颁发链不受信任、缺少中间证书、用途/策略不符、客户端时钟异常、撤销策略或协商参数不兼容。应读具体错误并分别检查链、SAN、信任库和运行时。不能以浏览器绿色图标推断所有 Java、容器和代理都使用相同信任库。",
+    "type": "code",
+    "source": "OpsForge 原创网络专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\n非root隔离Linux、Python3和OpenSSL标准工具。提供task.py骨架；可信验收生成临时CA、证书和工作区素材，只使用本题文件和回环高端口，不修改系统信任库或公网。\n\n## 操作任务\n实现execute(ca_dir,revoked_cert,outdir)。ca_dir提供ca.crt/ca.key/index.txt/crlnumber等本题测试CA素材，revoked_cert为其已登记且状态V的服务器证书。用原生OpenSSL验证发行链与服务器用途，复制CA状态到临时区，仅在副本撤销目标证书，原因为keyCompromise；生成并验证CA签名CRL。交付新目录只含revocations.pem、report.json，报告revoked_serial为证书十六进制序列号大写、reason和CRL文件SHA256；返回同一报告。原CA目录字节不变，不交付私钥或内部数据库；输出必须在工作区且不能位于CA目录内，已有输出拒绝且保留。证书未登记、状态非V或原生签名失败不得发布半成品，清理临时目录。验证时两张证书均在有效期内且域名相同，只有被撤销证书被crl_check拒绝。这里只生成离线撤销发布工件，不证明公网客户端已下载CRL，也不更改生产CA。\n\n## 提交产物\ntask.py完整实现及任务约定的运行产物。\n\n## 验收方法\npython3 checks/check.py通过原生OpenSSL签发两张有效服务器证书，核对CRL签名、目标撤销错误与健康证书通过；验证原因码、报告摘要、原CA不变、拒绝已存在/不安全输出及签名失败清理。 全部断言通过退出0；初始骨架及典型错误必须失败，工具未就绪属于环境待验。\n\n失败示例：仅生成空CRL也有有效CA签名，却不会撤销泄露证书；验收必须用真实openssl verify -crl_check区分目标与健康证书。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "def execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import pathlib,tempfile,shutil,subprocess,json,hashlib,os\ndef execute(ca_dir,revoked_cert,outdir):\n    root=pathlib.Path.cwd().resolve();ca=pathlib.Path(ca_dir).resolve();cert=pathlib.Path(revoked_cert).resolve();out=pathlib.Path(outdir).resolve()\n    if not all(p.is_relative_to(root) for p in (ca,cert,out)) or out.is_relative_to(ca) or out==root:raise ValueError('isolated workspace paths required')\n    if out.exists():raise FileExistsError(out)\n    def run(*args):return subprocess.run(['openssl',*map(str,args)],capture_output=True,check=True,timeout=5).stdout\n    run('verify','-CAfile',ca/'ca.crt','-purpose','sslserver',cert)\n    serial=run('x509','-in',cert,'-noout','-serial').decode().strip().split('=',1)[1].upper()\n    matches=[line.split('\\t') for line in (ca/'index.txt').read_text().splitlines() if len(line.split('\\t'))==6 and int(line.split('\\t')[3],16)==int(serial,16)]\n    if len(matches)!=1 or matches[0][0]!='V':raise ValueError('one issued valid index entry required')\n    stage=pathlib.Path(tempfile.mkdtemp(prefix='.revoke-',dir=out.parent))\n    try:\n        working=stage/'authority';shutil.copytree(ca,working)\n        config=stage/'openssl.cnf'\n        config.write_text('[ca]\\ndefault_ca=authority\\n[authority]\\ndatabase='+str(working/'index.txt')+'\\nprivate_key='+str(working/'ca.key')+'\\ncertificate='+str(working/'ca.crt')+'\\ncrlnumber='+str(working/'crlnumber')+'\\ndefault_md=sha256\\ndefault_crl_days=1\\n')\n        run('ca','-batch','-config',config,'-revoke',cert,'-crl_reason','keyCompromise')\n        bundle=stage/'bundle';bundle.mkdir();crl=bundle/'revocations.pem'\n        run('ca','-batch','-config',config,'-gencrl','-out',crl)\n        run('crl','-in',crl,'-CAfile',ca/'ca.crt','-verify','-noout')\n        report={'revoked_serial':serial,'reason':'keyCompromise','crl_sha256':hashlib.sha256(crl.read_bytes()).hexdigest()}\n        (bundle/'report.json').write_text(json.dumps(report,sort_keys=True)+'\\n')\n        os.replace(bundle,out);return report\n    finally:shutil.rmtree(stage)\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib,tempfile,shutil,subprocess,json,hashlib,os\ndef execute(ca_dir,revoked_cert,outdir):\n    root=pathlib.Path.cwd().resolve();ca=pathlib.Path(ca_dir).resolve();cert=pathlib.Path(revoked_cert).resolve();out=pathlib.Path(outdir).resolve()\n    if not all(p.is_relative_to(root) for p in (ca,cert,out)) or out.is_relative_to(ca) or out==root:raise ValueError('isolated workspace paths required')\n    if out.exists():raise FileExistsError(out)\n    def run(*args):return subprocess.run(['openssl',*map(str,args)],capture_output=True,check=True,timeout=5).stdout\n    run('verify','-CAfile',ca/'ca.crt','-purpose','sslserver',cert)\n    serial=run('x509','-in',cert,'-noout','-serial').decode().strip().split('=',1)[1].upper()\n    matches=[line.split('\\t') for line in (ca/'index.txt').read_text().splitlines() if len(line.split('\\t'))==6 and int(line.split('\\t')[3],16)==int(serial,16)]\n    if len(matches)!=1 or matches[0][0]!='V':raise ValueError('one issued valid index entry required')\n    stage=pathlib.Path(tempfile.mkdtemp(prefix='.revoke-',dir=out.parent))\n    try:\n        working=stage/'authority';shutil.copytree(ca,working)\n        config=stage/'openssl.cnf'\n        config.write_text('[ca]\\ndefault_ca=authority\\n[authority]\\ndatabase='+str(working/'index.txt')+'\\nprivate_key='+str(working/'ca.key')+'\\ncertificate='+str(working/'ca.crt')+'\\ncrlnumber='+str(working/'crlnumber')+'\\ndefault_md=sha256\\ndefault_crl_days=1\\n')\n        # Wrong: generate an empty CRL without revoking the compromised certificate.\n        bundle=stage/'bundle';bundle.mkdir();crl=bundle/'revocations.pem'\n        run('ca','-batch','-config',config,'-gencrl','-out',crl)\n        run('crl','-in',crl,'-CAfile',ca/'ca.crt','-verify','-noout')\n        report={'revoked_serial':serial,'reason':'keyCompromise','crl_sha256':hashlib.sha256(crl.read_bytes()).hexdigest()}\n        (bundle/'report.json').write_text(json.dumps(report,sort_keys=True)+'\\n')\n        os.replace(bundle,out);return report\n    finally:shutil.rmtree(stage)\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "openssl"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,sys,json,hashlib,shutil,os,secrets\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nROOT=pathlib.Path.cwd();ca=ROOT/'authority';ca.mkdir();(ca/'newcerts').mkdir()\n(ca/'index.txt').write_text('');(ca/'serial').write_text('10'+secrets.token_hex(7)+'\\n');(ca/'crlnumber').write_text('2000\\n')\ndef command(*args,check=True):return subprocess.run(['openssl',*map(str,args)],capture_output=True,check=check,timeout=5)\ncommand('req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-keyout',ca/'ca.key','-out',ca/'ca.crt','-days','1','-subj','/CN=Revocation Test CA')\nconfig=ROOT/'ca.cnf';config.write_text('[ca]\\ndefault_ca=authority\\n[authority]\\ndatabase='+str(ca/'index.txt')+'\\nnew_certs_dir='+str(ca/'newcerts')+'\\nserial='+str(ca/'serial')+'\\nprivate_key='+str(ca/'ca.key')+'\\ncertificate='+str(ca/'ca.crt')+'\\ndefault_md=sha256\\ndefault_days=1\\npolicy=names\\nx509_extensions=leaf\\n[names]\\ncommonName=supplied\\n[leaf]\\nbasicConstraints=CA:FALSE\\nkeyUsage=digitalSignature\\nextendedKeyUsage=serverAuth\\nsubjectAltName=DNS:lab.test\\n')\nfor name in ['compromised','healthy']:\n    command('req','-new','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-keyout',name+'.key','-out',name+'.csr','-subj','/CN='+name)\n    command('ca','-batch','-config',config,'-in',name+'.csr','-out',name+'.crt','-notext')\ndef snapshot(directory):return {str(p.relative_to(directory)):p.read_bytes() for p in directory.rglob('*') if p.is_file()}\nbefore=snapshot(ca)\nfor cert in ['compromised.crt','healthy.crt']:\n    command('verify','-CAfile',ca/'ca.crt','-verify_hostname','lab.test',cert)\n    command('x509','-in',cert,'-checkend','60','-noout')\nresult=task.execute(ca,'compromised.crt','revocation-bundle');out=ROOT/'revocation-bundle'\nassert set(p.name for p in out.iterdir())=={'revocations.pem','report.json'},'do not publish private CA key or staging database'\nserial=command('x509','-in','compromised.crt','-noout','-serial').stdout.decode().strip().split('=',1)[1].upper()\nassert result==json.loads((out/'report.json').read_text())=={'revoked_serial':serial,'reason':'keyCompromise','crl_sha256':hashlib.sha256((out/'revocations.pem').read_bytes()).hexdigest()}\ncommand('crl','-in',out/'revocations.pem','-CAfile',ca/'ca.crt','-verify','-noout')\nbad=command('verify','-CAfile',ca/'ca.crt','-CRLfile',out/'revocations.pem','-crl_check','compromised.crt',check=False)\nassert bad.returncode!=0 and b'certificate revoked' in bad.stderr,(bad.returncode,bad.stderr)\ncommand('verify','-CAfile',ca/'ca.crt','-CRLfile',out/'revocations.pem','-crl_check','healthy.crt')\ntext=command('crl','-in',out/'revocations.pem','-text','-noout').stdout\nassert b'Key Compromise' in text\nassert snapshot(ca)==before,'original CA state mutated'\nassert not list(ROOT.glob('.revoke-*'))\nsaved=snapshot(out)\ntry:task.execute(ca,'healthy.crt',out)\nexcept FileExistsError:pass\nelse:raise AssertionError('existing output overwritten')\nassert snapshot(out)==saved\n# A signed certificate absent from the issuance index must not be silently added.\ncommand('x509','-req','-in','healthy.csr','-CA',ca/'ca.crt','-CAkey',ca/'ca.key','-set_serial','0xABCD','-days','1','-out','unregistered.crt')\ntry:task.execute(ca,'unregistered.crt','unregistered-output')\nexcept (ValueError,subprocess.CalledProcessError):pass\nelse:raise AssertionError('unregistered certificate accepted')\nassert not pathlib.Path('unregistered-output').exists() and snapshot(ca)==before\ninactive=ROOT/'inactive-authority';shutil.copytree(ca,inactive)\n(inactive/'index.txt').write_text((inactive/'index.txt').read_text().replace('V\\t','E\\t'))\ntry:task.execute(inactive,'healthy.crt','inactive-output')\nexcept ValueError:pass\nelse:raise AssertionError('non-valid index entry accepted')\nassert not pathlib.Path('inactive-output').exists() and snapshot(ca)==before\nfor target in [ca/'forbidden',ROOT.parent/'outside-revocation']:\n    try:task.execute(ca,'healthy.crt',target)\n    except ValueError:pass\n    else:raise AssertionError('unsafe output path accepted')\n    assert not target.exists()\n# Native signing failure must remove staged material and never publish a partial bundle.\nbroken=ROOT/'broken-authority';shutil.copytree(ca,broken);(broken/'ca.key').write_text('not a private key')\ntry:task.execute(broken,'healthy.crt','failed-output')\nexcept subprocess.CalledProcessError:pass\nelse:raise AssertionError('signing failure ignored')\nassert not pathlib.Path('failed-output').exists() and not list(ROOT.glob('.revoke-*'))\nassert snapshot(ca)==before\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(ca_dir,revoked_cert,outdir)。ca_dir提供ca.crt/ca.key/index.txt/crlnumber等本题测试CA素材，revoked_cert为其已登记且状态V的服务器证书。用原生OpenSSL验证发行链与服务器用途，复制CA状态到临时区，仅在副本撤销目标证书，原因为keyCompromise；生成并验证CA签名CRL。交付新目录只含revocations.pem、report.json，报告revoked_serial为证书十六进制序列号大写、reason和CRL文件SHA256；返回同一报告。原CA目录字节不变，不交付私钥或内部数据库；输出必须在工作区且不能位于CA目录内，已有输出拒绝且保留。证书未登记、状态非V或原生签名失败不得发布半成品，清理临时目录。验证时两张证书均在有效期内且域名相同，只有被撤销证书被crl_check拒绝。这里只生成离线撤销发布工件，不证明公网客户端已下载CRL，也不更改生产CA。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py通过原生OpenSSL签发两张有效服务器证书，核对CRL签名、目标撤销错误与健康证书通过；验证原因码、报告摘要、原CA不变、拒绝已存在/不安全输出及签名失败清理。",
+      "failure_examples": [
+        "仅生成空CRL也有有效CA签名，却不会撤销泄露证书；验收必须用真实openssl verify -crl_check区分目标与健康证书。"
+      ]
+    },
+    "case_signature": "curated-network-completion-017|生成并验证CRL撤销工件，区分过期与证书撤销",
+    "conversion": {
+      "original_id": "curated-network-completion-017",
+      "original_title": "证书日期有效且域名匹配，为什么 TLS 校验仍可能失败？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

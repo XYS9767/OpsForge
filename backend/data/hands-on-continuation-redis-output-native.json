@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-parallel-redis-049",
+    "module": "redis",
+    "category": "Redis",
+    "level": 2,
+    "topic": "性能与访问治理",
+    "title": "真实慢订阅输出积压：只收紧PubSub缓冲，保留正常与复制客户端预算",
+    "answer": "```python\ndef limit_pubsub(command,hard,soft,seconds):\n    if any(not isinstance(n,int) or isinstance(n,bool) for n in (hard,soft,seconds)) or not 65536<=hard<=1048576 or not 0<=soft<=hard or not 1<=seconds<=60:raise ValueError('bounded byte/time budgets required')\n    fields=command('CONFIG','GET','client-output-buffer-limit')[1].split()\n    if len(fields)%4 or fields[::4].count('pubsub')!=1:raise ValueError('one pubsub class required')\n    index=fields.index('pubsub');fields[index+1:index+4]=list(map(str,(hard,soft,seconds)))\n    command('CONFIG','SET','client-output-buffer-limit',' '.join(fields))\n    result=command('CONFIG','GET','client-output-buffer-limit')[1].split();at=result.index('pubsub')\n    return tuple(map(int,result[at+1:at+4]))\n```\n\n原题知识说明：\n服务器产生响应或订阅消息速度超过客户端读取速度，积压在输出缓冲。按客户端类型检查输出缓冲限制和断连日志，控制发送量或加快读取；验收客户端内存、断连与数据重放策略。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现limit_pubsub(command,hard,soft,seconds)。三项为非bool整数，65536<=hard<=1048576、0<=soft<=hard、1<=seconds<=60，否则ValueError且不写配置。读取CONFIG GET client-output-buffer-limit，仅替换pubsub类别三项，逐字保留其余normal/复制类别；不存在唯一pubsub项则ValueError。CONFIG SET后重新读取，返回pubsub实际三项int的tuple。验收先让私有订阅者停止读取，实际观察CLIENT LIST omem/oll积压，再设置262144字节hardlimit，确认有限发送后只有慢订阅被服务端断开、日志记录原因，正常请求及及时消费的新订阅仍可用。不得杀客户端、清空业务数据或改其他配置以伪造限制生效。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Redis7.2、私有Unix socket与少量有界PubSub消息；只验证hardlimit实际断连和soft参数读回，不宣称验证soft持续时间或吞吐基准。PubSub断连会丢消息，本题不将重连当持久重放；与既有Stream补偿题分开，不更改系统网络或生产预算。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/develop/reference/clients/"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-049",
+      "original_title": "慢消费者如何导致Redis客户端输出缓冲增长？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def limit_pubsub(command,hard,soft,seconds):\n    if any(not isinstance(n,int) or isinstance(n,bool) for n in (hard,soft,seconds)) or not 65536<=hard<=1048576 or not 0<=soft<=hard or not 1<=seconds<=60:raise ValueError('bounded byte/time budgets required')\n    fields=command('CONFIG','GET','client-output-buffer-limit')[1].split()\n    if len(fields)%4 or fields[::4].count('pubsub')!=1:raise ValueError('one pubsub class required')\n    index=fields.index('pubsub');fields[index+1:index+4]=list(map(str,(hard,soft,seconds)))\n    command('CONFIG','SET','client-output-buffer-limit',' '.join(fields))\n    result=command('CONFIG','GET','client-output-buffer-limit')[1].split();at=result.index('pubsub')\n    return tuple(map(int,result[at+1:at+4]))\n"
+    },
+    "negative_files": {
+      "task.py": "def limit_pubsub(command,hard,soft,seconds):\n    if any(not isinstance(n,int) or isinstance(n,bool) for n in (hard,soft,seconds)) or not 65536<=hard<=1048576 or not 0<=soft<=hard or not 1<=seconds<=60:raise ValueError('bounded byte/time budgets required')\n    fields=command('CONFIG','GET','client-output-buffer-limit')[1].split()\n    if len(fields)%4 or fields[::4].count('pubsub')!=1:raise ValueError('one pubsub class required')\n    index=fields.index('normal');fields[index+1:index+4]=list(map(str,(hard,soft,seconds)))\n    command('CONFIG','SET','client-output-buffer-limit',' '.join(fields))\n    result=command('CONFIG','GET','client-output-buffer-limit')[1].split();at=result.index('pubsub')\n    return tuple(map(int,result[at+1:at+4]))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现limit_pubsub(command,hard,soft,seconds)。三项为非bool整数，65536<=hard<=1048576、0<=soft<=hard、1<=seconds<=60，否则ValueError且不写配置。读取CONFIG GET client-output-buffer-limit，仅替换pubsub类别三项，逐字保留其余normal/复制类别；不存在唯一pubsub项则ValueError。CONFIG SET后重新读取，返回pubsub实际三项int的tuple。验收先让私有订阅者停止读取，实际观察CLIENT LIST omem/oll积压，再设置262144字节hardlimit，确认有限发送后只有慢订阅被服务端断开、日志记录原因，正常请求及及时消费的新订阅仍可用。不得杀客户端、清空业务数据或改其他配置以伪造限制生效。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Redis7.2、私有Unix socket与少量有界PubSub消息；只验证hardlimit实际断连和soft参数读回，不宣称验证soft持续时间或吞吐基准。PubSub断连会丢消息，本题不将重连当持久重放；与既有Stream补偿题分开，不更改系统网络或生产预算。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import sys,os,pathlib,time,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,student,token\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith NativeRedis() as server,contextlib.ExitStack() as resources:\n command=server.command;channel=token('private-channel')\n original=command('CONFIG','GET','client-output-buffer-limit')[1].split()\n first=original.index('pubsub');original[first+1:first+4]=['0','0','0']\n command('CONFIG','SET','client-output-buffer-limit',' '.join(original))\n slow=server.client();resources.callback(slow.close);slowid=str(slow.command('CLIENT','ID'))\n assert slow.command('SUBSCRIBE',channel)==['subscribe',channel,1]\n payload='x'*65536\n for index in range(24):assert command('PUBLISH',channel,payload)==1\n def clients():return {r['id']:r for line in command('CLIENT','LIST').splitlines() if (r:=dict(pair.split('=',1) for pair in line.split()))}\n backlog=clients()[slowid]\n assert int(backlog['omem'])>262144 and int(backlog['oll'])>0,backlog\n print('NATIVE_REDIS_UNREAD_PUBSUB_OUTPUT_BACKLOG_OBSERVED',flush=True)\n limits=student(task.limit_pubsub,command,262144,131072,2)\n assert limits==(262144,131072,2),limits\n fixed=command('CONFIG','GET','client-output-buffer-limit')[1].split()\n assert fixed[:first]==original[:first] and fixed[first+4:]==original[first+4:],'unrelated client class changed'\n for _ in range(8):\n  command('PUBLISH',channel,payload)\n  if slowid not in clients():break\n  time.sleep(.01)\n assert slowid not in clients(),'slow client was not disconnected within bounded publish budget'\n log=(server.root/'redis.log').read_text(errors='replace')\n assert 'output buffer limits' in log and ('id='+slowid) in log,log[-1200:]\n print('NATIVE_REDIS_ONLY_SLOW_PUBSUB_CLIENT_CLOSED_BY_OUTPUT_HARD_LIMIT',flush=True)\n fast=server.client();resources.callback(fast.close);fastid=str(fast.command('CLIENT','ID'))\n assert fast.command('SUBSCRIBE',channel)==['subscribe',channel,1]\n for i in range(12):\n  message='bounded-live-'+str(i)\n  assert command('PUBLISH',channel,message)==1\n  assert fast.read()==['message',channel,message]\n assert fastid in clients() and command('PING')=='PONG'\n approved=command('CONFIG','GET','client-output-buffer-limit')\n for args in [(True,0,1),(65535,0,1),(1048577,0,1),(65536,65537,1),(65536,0,0)]:\n  try:task.limit_pubsub(command,*args)\n  except ValueError:pass\n  else:raise AssertionError('invalid buffer budget accepted')\n assert command('CONFIG','GET','client-output-buffer-limit')==approved\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "redis"
+    ]
+  }
+]

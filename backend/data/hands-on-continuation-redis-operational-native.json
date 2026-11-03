@@ -1,0 +1,316 @@
+[
+  {
+    "id": "curated-parallel-redis-027",
+    "module": "redis",
+    "category": "Redis",
+    "level": 1,
+    "topic": "性能与访问治理",
+    "title": "真实MONITOR有限采样：仅保留命令名，成功失败均关闭诊断连接",
+    "answer": "```python\nimport shlex\n\ndef diagnose(connect,trigger,count):\n    if type(count) is not int or not 1<=count<=10:raise ValueError('bounded capture required')\n    client=connect()\n    try:\n        client.command('MONITOR');trigger();commands=[]\n        for _ in range(count):\n            line=client.read();parts=shlex.split(line.split('] ',1)[1]);commands.append(parts[0].upper())\n        return {'commands':commands,'captured':len(commands)}\n    finally:client.close()\n```\n\n原题知识说明：\n它输出服务器处理的命令流，可能增加开销并暴露参数内容。短时经授权诊断也需限时和脱敏，优先使用统计与慢日志；验收包括诊断结束及性能恢复。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现diagnose(connect,trigger,count)。先校验count为非bool整数1..10，否则ValueError且不建连接。connect()返回真实私有Redis RESP2 Client（3秒socket超时），command、read、close均实际I/O。启用MONITOR后trigger()依序发送恰好count条合成命令；read恰好count行，从\"] \"后用shlex.split取命令名大写，返回{commands:命令名列表,captured:条数}，不返回原行/键/值/参数。无论成功或trigger抛异常，都finally关闭专用连接；异常原样传播。不得修改业务键。只验证受控合成命令和连接清理，不在生产采样。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Redis7.2 Unix socket的MONITOR命令流和客户端连接关闭，3条批准合成操作；仅排除输出参数，不证明完整日志脱敏或生产吞吐恢复，不在宿主或外部Redis启用MONITOR。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/commands/monitor/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-027",
+      "original_title": "为什么不应在业务高峰长期打开Redis MONITOR？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import shlex\n\ndef diagnose(connect,trigger,count):\n    if type(count) is not int or not 1<=count<=10:raise ValueError('bounded capture required')\n    client=connect()\n    try:\n        client.command('MONITOR');trigger();commands=[]\n        for _ in range(count):\n            line=client.read();parts=shlex.split(line.split('] ',1)[1]);commands.append(parts[0].upper())\n        return {'commands':commands,'captured':len(commands)}\n    finally:client.close()\n"
+    },
+    "negative_files": {
+      "task.py": "import shlex\n\ndef diagnose(connect,trigger,count):\n    if type(count) is not int or not 1<=count<=10:raise ValueError('bounded capture required')\n    client=connect()\n    try:\n        client.command('MONITOR');trigger();commands=[]\n        for _ in range(count):\n            line=client.read();parts=shlex.split(line.split('] ',1)[1]);commands.append(parts[0].upper())\n        return {'commands':commands,'captured':len(commands)}\n    finally:pass\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现diagnose(connect,trigger,count)。先校验count为非bool整数1..10，否则ValueError且不建连接。connect()返回真实私有Redis RESP2 Client（3秒socket超时），command、read、close均实际I/O。启用MONITOR后trigger()依序发送恰好count条合成命令；read恰好count行，从\"] \"后用shlex.split取命令名大写，返回{commands:命令名列表,captured:条数}，不返回原行/键/值/参数。无论成功或trigger抛异常，都finally关闭专用连接；异常原样传播。不得修改业务键。只验证受控合成命令和连接清理，不在生产采样。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Redis7.2 Unix socket的MONITOR命令流和客户端连接关闭，3条批准合成操作；仅排除输出参数，不证明完整日志脱敏或生产吞吐恢复，不在宿主或外部Redis启用MONITOR。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import os,sys,pathlib,time,json,copy,queue,sqlite3\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nwith NativeRedis() as server:\n clients=[];secret=token('do-not-disclose');key=token('private-key')\n def connect():\n  client=server.client();clients.append(client);return client\n def trigger():server.command('SET',key,secret);server.command('GET',key);server.command('INCR',key+':counter')\n before=server.command('CLIENT','LIST')\n result=student(task.diagnose,connect,trigger,3)\n assert result=={'commands':['SET','GET','INCR'],'captured':3},'capture must preserve command identities without raw arguments'\n assert clients and all(client.closed for client in clients),'MONITOR diagnostic connection leaked'\n assert secret not in json.dumps(result) and key not in json.dumps(result),'raw command arguments disclosed'\n assert not any('O' in field[6:] for line in server.command('CLIENT','LIST').splitlines() for field in line.split() if field.startswith('flags=')),'server still has a MONITOR client'\n def failed_trigger():raise RuntimeError('explicit diagnostic source failure')\n print('STUDENT_OPERATION_ENTERED:close_actual_monitor_connection_even_when_trigger_fails',flush=True)\n try:task.diagnose(connect,failed_trigger,1)\n except RuntimeError:pass\n else:raise AssertionError('diagnostic failure swallowed')\n assert all(client.closed for client in clients),'failure left MONITOR enabled'\n count=len(clients)\n for bad in (True,0,11,'3'):\n  try:task.diagnose(connect,trigger,bad)\n  except ValueError:pass\n  else:raise AssertionError('unbounded monitor capture accepted')\n assert len(clients)==count and server.command('GET',key)==secret and server.command('GET',key+':counter')=='1'\n print('NATIVE_MONITOR_THREE_REAL_COMMANDS_ARGUMENTS_EXCLUDED_CONNECTION_CLOSED_SUCCESS_AND_FAILURE_NO_PERFORMANCE_CLAIM',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-redis-037",
+    "module": "redis",
+    "category": "Redis",
+    "level": 2,
+    "topic": "事务脚本与协调",
+    "title": "真实Redis租约过期后的旧工作者：外部SQLite按fencing token原子拒绝覆盖",
+    "answer": "```python\ndef write_fenced(connection,token,value):\n    if type(token) is not int or not 1<=token<=2**63-1 or not isinstance(value,str):raise ValueError('positive bounded fencing token and text required')\n    with connection:\n        cursor=connection.execute('UPDATE resource SET fence=?,value=? WHERE id=1 AND fence<?',(token,value,token))\n        return cursor.rowcount==1\n```\n\n原题知识说明：\n锁服务无法自动停止旧进程，需外部资源验证单调fencing token或等价版本条件，拒绝过期持有者。由开发实现并测试暂停恢复、超时和乱序请求，单纯续租不足以证明安全。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现write_fenced(connection,token,value)：token必须非bool正整数且<=2**63-1，value为str，否则ValueError零写。外部SQLite resource单行(id=1,fence,value)，使用参数化单条UPDATE resource SET fence=?,value=? WHERE id=1 AND fence<?，with connection提交，返回rowcount==1的bool。只有严格递增token可写，旧token、同token和乱序请求不修改。实际Redis INCR产生本轮单调token，旧租约实际到期后新工作者写入，恢复运行的旧工作者仍须被外部资源拒绝；不修改Redis租约或序列。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Redis7.2租约/INCR与独立SQLite文件资源的条件写。旧工作者暂停恢复用受控顺序表示，租约通过批准PEXPIREAT实际过期；不证明Redis跨重启/故障转移后token永久单调，也不声称所有外部系统自动支持fencing。区别锁释放的所有权检查。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+        "block_ids": [
+          "Z78sdHOZsoCvcHxDFObclLiqnpf",
+          "U4wUdN4HHongEQx0ekGcVjALn4g"
+        ]
+      }
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-037",
+      "original_title": "分布式锁过期后旧工作者仍运行，如何保护外部数据库写入？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def write_fenced(connection,token,value):\n    if type(token) is not int or not 1<=token<=2**63-1 or not isinstance(value,str):raise ValueError('positive bounded fencing token and text required')\n    with connection:\n        cursor=connection.execute('UPDATE resource SET fence=?,value=? WHERE id=1 AND fence<?',(token,value,token))\n        return cursor.rowcount==1\n"
+    },
+    "negative_files": {
+      "task.py": "def write_fenced(connection,token,value):\n    if type(token) is not int or not 1<=token<=2**63-1 or not isinstance(value,str):raise ValueError('positive bounded fencing token and text required')\n    with connection:\n        cursor=connection.execute('UPDATE resource SET fence=?,value=? WHERE id=1 AND fence<=?',(token,value,token))\n        return cursor.rowcount==1\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现write_fenced(connection,token,value)：token必须非bool正整数且<=2**63-1，value为str，否则ValueError零写。外部SQLite resource单行(id=1,fence,value)，使用参数化单条UPDATE resource SET fence=?,value=? WHERE id=1 AND fence<?，with connection提交，返回rowcount==1的bool。只有严格递增token可写，旧token、同token和乱序请求不修改。实际Redis INCR产生本轮单调token，旧租约实际到期后新工作者写入，恢复运行的旧工作者仍须被外部资源拒绝；不修改Redis租约或序列。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Redis7.2租约/INCR与独立SQLite文件资源的条件写。旧工作者暂停恢复用受控顺序表示，租约通过批准PEXPIREAT实际过期；不证明Redis跨重启/故障转移后token永久单调，也不声称所有外部系统自动支持fencing。区别锁释放的所有权检查。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import os,sys,pathlib,time,json,copy,queue,sqlite3\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nwith NativeRedis() as server:\n sequence=token('fencing-sequence');lease=token('owned-lease')\n path=server.root/'external-resource.sqlite';db=sqlite3.connect(path)\n try:\n  db.execute('CREATE TABLE resource(id INTEGER PRIMARY KEY,fence INTEGER NOT NULL,value TEXT NOT NULL)');db.execute(\"INSERT INTO resource VALUES(1,0,'initial')\");db.commit()\n  first=server.command('INCR',sequence);assert server.command('SET',lease,'old-worker','NX','PX',60000)=='OK'\n  assert student(task.write_fenced,db,first,'old-before-pause') is True\n  server.command('PEXPIREAT',lease,1);assert server.command('GET',lease) is None\n  second=server.command('INCR',sequence);assert second>first and server.command('SET',lease,'new-worker','NX','PX',60000)=='OK'\n  assert student(task.write_fenced,db,second,'new-accepted') is True\n  assert student(task.write_fenced,db,first,'stale-overwrite') is False,'expired old worker overwrote external resource'\n  assert student(task.write_fenced,db,second,'same-token-different-value') is False,'replayed token accepted as a later owner'\n  third=server.command('INCR',sequence);fourth=server.command('INCR',sequence)\n  assert task.write_fenced(db,fourth,'latest') is True and task.write_fenced(db,third,'reordered') is False\n  assert db.execute('SELECT fence,value FROM resource WHERE id=1').fetchone()==(fourth,'latest') and not db.in_transaction\n  for bad in (True,0,-1,2**63,'1'):\n   try:task.write_fenced(db,bad,'invalid')\n   except ValueError:pass\n   else:raise AssertionError('invalid token accepted')\n  assert db.execute('SELECT fence,value FROM resource WHERE id=1').fetchone()==(fourth,'latest')\n  assert server.command('GET',lease)=='new-worker' and int(server.command('GET',sequence))==fourth\n  with sqlite3.connect(path) as observer:assert observer.execute('SELECT fence,value FROM resource').fetchone()==(fourth,'latest')\n  print('NATIVE_REDIS_LEASE_EXPIRED_OLD_WORKER_SQLITE_ATOMIC_FENCING_REJECTS_STALE_EQUAL_REORDERED_TOKENS',flush=True)\n finally:db.close()\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-redis-038",
+    "module": "redis",
+    "category": "Redis",
+    "level": 2,
+    "topic": "缓存与过期策略",
+    "title": "真实INFO内存口径：maxmemory淘汰预算不等于进程RSS硬上限",
+    "answer": "```python\ndef memory_report(command):\n    raw=command('INFO','memory')\n    fields=dict(line.split(':',1) for line in raw.splitlines() if ':' in line and not line.startswith('#'))\n    used=int(fields['used_memory']);excluded=int(fields['mem_not_counted_for_evict'])\n    return {'maxmemory_bytes':int(fields['maxmemory']),'process_rss_bytes':int(fields['used_memory_rss']),'eviction_accounted_bytes':max(0,used-excluded),'rss_hard_limit_claimed':False}\n```\n\n原题知识说明：\n分配器碎片、复制或持久化缓冲等占用与用于淘汰判定的内存统计不同。查看INFO MEMORY、mem_not_counted_for_evict及RSS，预留系统和fork写时复制空间。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现memory_report(command)。恰好调用一次INFO memory，解析实际冒号字段；返回maxmemory_bytes=int(maxmemory)、process_rss_bytes=int(used_memory_rss)、eviction_accounted_bytes=max(0,used_memory-mem_not_counted_for_evict)、rss_hard_limit_claimed=false。只查询，不改配置/键。真实私有进程先设1024字节淘汰预算，其RSS仍明显大于预算，再测maxmemory=0语义为未配置淘汰容量上限，不能把RSS改算成maxmemory、0或将其作为RSS硬限制。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Redis7.2 INFO memory的实际一份样本及私有maxmemory反例；不是模拟数据，不测生产fork/COW峰值，不称为精确容器RSS/cgroup预算预测，不将MEMORY USAGE单键样本重复计量。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/develop/reference/eviction/"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "RXC1dFBI8oyvuxxI8FxclCdZnlh",
+          "DFamdqahwojjG7xmS5JcKIkqnGb",
+          "N4jYdNkAJo0JRfxmmiacbZDAnod",
+          "J8d3d3h0Xo9QM2xdQZTcKMcSnWf",
+          "JzABdldh9o6KNTxpDnwcKzvDnNd",
+          "RYCWdJbsqoHgPXxpUfZcPhHLnRb",
+          "NDbrdB6l9oYIMQxl0Q7cKojInfQ",
+          "XfpOdSaMWof9KsxeSHxcoHpbnEa",
+          "Z2BQdptHDoBxf5x12gjcLNqZn0d",
+          "TrubdVSqpo6hoQxj9E9cwOh0nQr",
+          "P2eSdIIS6oqlSLxYIjJc7GkFnTg",
+          "AT05da6MOo8X1Hx6iIBck5ydnWK",
+          "VEOpdfBgZoQMEQxK03rcSFbwngg",
+          "MnEWd9Q9MoYBpTxXQh3clzPmnph"
+        ]
+      }
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-038",
+      "original_title": "maxmemory不等于Redis进程RSS硬上限的原因是什么？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def memory_report(command):\n    raw=command('INFO','memory')\n    fields=dict(line.split(':',1) for line in raw.splitlines() if ':' in line and not line.startswith('#'))\n    used=int(fields['used_memory']);excluded=int(fields['mem_not_counted_for_evict'])\n    return {'maxmemory_bytes':int(fields['maxmemory']),'process_rss_bytes':int(fields['used_memory_rss']),'eviction_accounted_bytes':max(0,used-excluded),'rss_hard_limit_claimed':False}\n"
+    },
+    "negative_files": {
+      "task.py": "def memory_report(command):\n    raw=command('INFO','memory')\n    fields=dict(line.split(':',1) for line in raw.splitlines() if ':' in line and not line.startswith('#'))\n    used=int(fields['used_memory']);excluded=int(fields['mem_not_counted_for_evict'])\n    return {'maxmemory_bytes':int(fields['maxmemory']),'process_rss_bytes':int(fields['maxmemory']),'eviction_accounted_bytes':max(0,used-excluded),'rss_hard_limit_claimed':False}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现memory_report(command)。恰好调用一次INFO memory，解析实际冒号字段；返回maxmemory_bytes=int(maxmemory)、process_rss_bytes=int(used_memory_rss)、eviction_accounted_bytes=max(0,used_memory-mem_not_counted_for_evict)、rss_hard_limit_claimed=false。只查询，不改配置/键。真实私有进程先设1024字节淘汰预算，其RSS仍明显大于预算，再测maxmemory=0语义为未配置淘汰容量上限，不能把RSS改算成maxmemory、0或将其作为RSS硬限制。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Redis7.2 INFO memory的实际一份样本及私有maxmemory反例；不是模拟数据，不测生产fork/COW峰值，不称为精确容器RSS/cgroup预算预测，不将MEMORY USAGE单键样本重复计量。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import os,sys,pathlib,time,json,copy,queue,sqlite3\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nwith NativeRedis() as server:\n key=token('keep');server.command('SET',key,'original');original=server.command('CONFIG','GET','maxmemory')[1]\n def fields(raw):return dict(line.split(':',1) for line in raw.splitlines() if ':' in line and not line.startswith('#'))\n deadline=time.monotonic()+2\n while int(fields(server.command('INFO','memory'))['used_memory_rss'])<=1024:\n  assert time.monotonic()<deadline;time.sleep(.01)\n for limit in (1024,0):\n  server.command('CONFIG','SET','maxmemory',limit);samples=[]\n  def command(*parts):\n   assert parts==('INFO','memory'),'report must not change configuration or keys'\n   raw=server.command(*parts);samples.append(raw);return raw\n  actual=student(task.memory_report,command);assert len(samples)==1\n  values=fields(samples[0]);expected={'maxmemory_bytes':limit,'process_rss_bytes':int(values['used_memory_rss']),'eviction_accounted_bytes':max(0,int(values['used_memory'])-int(values['mem_not_counted_for_evict'])),'rss_hard_limit_claimed':False}\n  assert actual==expected,'RSS, eviction budget and accounted allocation confused'\n  if limit:assert actual['process_rss_bytes']>limit,'native fixture did not demonstrate RSS exceeding configured eviction budget'\n  assert server.command('GET',key)=='original' and server.command('CONFIG','GET','maxmemory')[1]==str(limit)\n server.command('CONFIG','SET','maxmemory',original)\n print('NATIVE_REDIS_REAL_RSS_EXCEEDS_SMALL_MAXMEMORY_INFO_ACCOUNTING_AND_ZERO_UNLIMITED_PRESERVED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-redis-048",
+    "module": "redis",
+    "category": "Redis",
+    "level": 2,
+    "topic": "性能与访问治理",
+    "title": "真实连接池耗尽与服务端可响应分离：有限等待，命令异常也归还连接",
+    "answer": "```python\ndef run(pool,parts,timeout):\n    if type(timeout) not in (int,float) or not 0<timeout<=0.2:raise ValueError('bounded pool wait required')\n    connection=pool.get(timeout=timeout)\n    try:return connection.command(*parts)\n    finally:pool.put_nowait(connection)\n```\n\n原题知识说明：\n检查池上限、借出连接未归还、阻塞命令占用及网络超时，区分排队与服务器执行时间。用池等待、活跃连接及命令耗时关联，扩大池前验证总连接预算。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现run(pool,parts,timeout)。pool为装有真实Redis连接的queue.Queue，timeout必须非bool int/float且0<timeout<=0.2，否则ValueError。get(timeout=timeout)有限借出后command(*parts)，finally put_nowait原连接；队列Empty或真实命令错误原样传播，不吞异常、不另建连接绕过预算。验收成功、实际WRONGTYPE后连接仍可借用、唯一连接被占用时按50ms预算失败而独立控制连接PING成功，释放后恢复。不要据此宣称已经测量服务端低CPU或生产池性能。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实私有Redis7.2连接与Python有界队列构成最小连接池；证明连接占用、异常归还和等待预算，不代表某生产驱动实现，不测CPU/网络瓶颈或高并发吞吐。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/develop/clients/pools-and-multiplexing/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-048",
+      "original_title": "客户端连接池等待高但Redis服务端CPU低，应检查什么？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def run(pool,parts,timeout):\n    if type(timeout) not in (int,float) or not 0<timeout<=0.2:raise ValueError('bounded pool wait required')\n    connection=pool.get(timeout=timeout)\n    try:return connection.command(*parts)\n    finally:pool.put_nowait(connection)\n"
+    },
+    "negative_files": {
+      "task.py": "def run(pool,parts,timeout):\n    if type(timeout) not in (int,float) or not 0<timeout<=0.2:raise ValueError('bounded pool wait required')\n    connection=pool.get(timeout=timeout)\n    try:return connection.command(*parts)\n    finally:pass\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现run(pool,parts,timeout)。pool为装有真实Redis连接的queue.Queue，timeout必须非bool int/float且0<timeout<=0.2，否则ValueError。get(timeout=timeout)有限借出后command(*parts)，finally put_nowait原连接；队列Empty或真实命令错误原样传播，不吞异常、不另建连接绕过预算。验收成功、实际WRONGTYPE后连接仍可借用、唯一连接被占用时按50ms预算失败而独立控制连接PING成功，释放后恢复。不要据此宣称已经测量服务端低CPU或生产池性能。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实私有Redis7.2连接与Python有界队列构成最小连接池；证明连接占用、异常归还和等待预算，不代表某生产驱动实现，不测CPU/网络瓶颈或高并发吞吐。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import os,sys,pathlib,time,json,copy,queue,sqlite3\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nwith NativeRedis() as server:\n pool=queue.Queue(maxsize=1);connection=server.client();pool.put(connection);key=token('pool-value');server.command('SET',key,'unchanged')\n try:\n  assert student(task.run,pool,('GET',key),.05)=='unchanged' and pool.qsize()==1\n  print('STUDENT_OPERATION_ENTERED:return_actual_connection_after_native_wrongtype_error',flush=True)\n  try:task.run(pool,('LPUSH',key,'bad'),.05)\n  except RedisError as error:assert str(error).startswith('WRONGTYPE')\n  else:raise AssertionError('actual Redis operation failure swallowed')\n  assert pool.qsize()==1,'native command failure leaked only pooled connection'\n  assert task.run(pool,('GET',key),.05)=='unchanged'\n  held=pool.get_nowait();started=time.monotonic()\n  print('STUDENT_OPERATION_ENTERED:bounded_pool_wait_with_held_connection_while_independent_server_ping_succeeds',flush=True)\n  try:\n   try:task.run(pool,('PING',),.05)\n   except queue.Empty:pass\n   else:raise AssertionError('exhausted pool invented a reply')\n   elapsed=time.monotonic()-started;assert .03<=elapsed<1.0,'pool acquisition did not respect explicit bounded wait'\n   assert server.command('PING')=='PONG','server independent control connection not responsive'\n  finally:pool.put_nowait(held)\n  assert pool.qsize()==1 and task.run(pool,('PING',),.05)=='PONG'\n  for bad in (True,0,-1,1,'0.05'):\n   try:task.run(pool,('PING',),bad)\n   except ValueError:pass\n   else:raise AssertionError('unbounded or invalid acquisition budget accepted')\n  assert pool.qsize()==1 and server.command('GET',key)=='unchanged'\n  print('NATIVE_POOL_EXHAUSTION_DISTINCT_FROM_SERVER_PING_SUCCESS_CONNECTION_RETURNED_SUCCESS_AND_COMMAND_ERROR_BOUNDED_WAIT',flush=True)\n finally:connection.close()\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

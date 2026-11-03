@@ -1,0 +1,81 @@
+[
+  {
+    "id": "curated-parallel-prometheus-092",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 4,
+    "topic": "TSDB存储与远端传输",
+    "title": "核对远写历史缺口：队列归零不证明完整，按真实WAL窗口区分不可补发与待核对样本",
+    "answer": "```python\nimport math\ndef diagnose(expected,received,queue_pending,wal_cutoff_ms,backfill):\n    if type(queue_pending) is not int or queue_pending<0 or type(wal_cutoff_ms) is not int or wal_cutoff_ms<0:raise ValueError(\"invalid queue or WAL evidence\")\n    def parse(rows):\n        if not isinstance(rows,list):raise ValueError(\"sample list required\")\n        out={}\n        for row in rows:\n            if not isinstance(row,(list,tuple)) or len(row)!=2:raise ValueError(\"timestamp/value pair required\")\n            stamp,value=row\n            if type(stamp) is not int or stamp<=0 or type(value) not in (int,float) or not math.isfinite(value) or stamp in out:raise ValueError(\"invalid or duplicate sample\")\n            out[stamp]=value\n        return out\n    source=parse(expected);remote=parse(received)\n    if not source:raise ValueError(\"empty source evidence is not completeness proof\")\n    if any(stamp in remote and remote[stamp]!=value for stamp,value in source.items()):raise ValueError(\"received values conflict with source evidence\")\n    if not isinstance(backfill,dict) or set(backfill)!={\"complete_verified_copy\",\"supported_import\"} or any(type(v) is not bool for v in backfill.values()):raise ValueError(\"explicit backfill evidence required\")\n    missing=sorted(set(source)-set(remote))\n    beyond=[stamp for stamp in missing if stamp<wal_cutoff_ms]\n    retained=[stamp for stamp in missing if stamp>=wal_cutoff_ms]\n    return dict(missing_sample_times=missing,beyond_wal_window=beyond,awaiting_or_unverified=retained,\n        history_complete=not missing,queue_pending=queue_pending,\n        new_sample_observed=any(stamp>max(source) for stamp in remote),\n        gap_bounds_ms=[min(beyond),max(beyond)] if beyond else None,\n        backfill_authorized=bool(beyond) and all(backfill.values()),fill_values=None)\n```\n\n原题知识说明：\n对齐中断时段、WAL可用范围、发送进度和远端样本，确认部分未发送数据已越过可补发窗口。明确缺失区间，仅在有合法完整副本及支持回填方式时补齐。调整缓冲/可用性与延迟告警，不能以队列为0宣称无数据损失。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 4,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "对齐中断时段、WAL可用范围、发送进度和远端样本，确认部分未发送数据已越过可补发窗口。",
+      "明确缺失区间，仅在有合法完整副本及支持回填方式时补齐。",
+      "调整缓冲/可用性与延迟告警，不能以队列为0宣称无数据损失。"
+    ],
+    "references": [
+      "https://github.com/prometheus/prometheus/blob/v3.5.0/tsdb/agent/db.go",
+      "https://github.com/prometheus/prometheus/blob/v3.5.0/cmd/prometheus/main.go",
+      "https://prometheus.io/docs/practices/remote_write/"
+    ],
+    "incident_signature": "prometheus-remote-write-wal-window-gap",
+    "merged_sources": [
+      {
+        "id": "curated-parallel-zabbix-101",
+        "title": "远端Proxy断链6小时后恢复，只有最近2小时数据回传，早期数据去了哪里？"
+      }
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-092",
+      "original_title": "远端写入中断过久后恢复，队列已清空但远端历史仍缺一段。如何解释与处理？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现diagnose(expected,received,queue_pending,wal_cutoff_ms,backfill)。前两项为同一明确序列的[Unix毫秒时间戳,数值]列表，expected来自本题可信采集审计，received来自原生接收端原始范围向量；不要用带lookback的补点曲线当原样本。时间戳正整数且单列表不重复，值为非bool有限数值；交集上的值不一致须ValueError。queue_pending非负整数，wal_cutoff_ms非负整数，是实际checkpoint及保留证据给出的判读界限。返回missing_sample_times排序缺样本时间；其中<cutoff为beyond_wal_window，其余awaiting_or_unverified；history_complete仅无缺样本时True；queue_pending原值；new_sample_observed表示接收端有晚于expected末点的新样本；gap_bounds_ms为越窗缺口首尾或None；fill_values固定None，禁止补0或改时间。backfill必须恰有complete_verified_copy/supported_import两个布尔字段，只有存在越窗缺口且两项均True才backfill_authorized。空expected、坏输入或冲突ValueError。实际补充复用原072 Agent配置和独立接收端，通过真实WAL截断、队列归零、原样本时间对账验证诊断，并验证更宽但有限的保留/截断预算对第二次中断有效；旧缺口仍须明确保留。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n普通非root五路判分验证取证判读，独立可信补充真正启动固定Prometheus3.5 Agent、原生远写receiver和受控HTTP503门。复用未改原072配置，1500条合成序列制造超过原队列的积压；本题只精确对账stream=0。训练将实际保留/截断预算缩为秒级，使用真实时间，不改宿主时钟；修正需一起核对最小/最大窗口及checkpoint周期，不把某个秒数建议推广到生产。为读到队列0，仅在新样本已真实恢复后暂歇业务样本，up仍正常抓取。旧缺失样本没有合法完整备份，不执行回填，不以未来恢复宣称历史已恢复。单Agent/单receiver，不证明生产远端兼容性、Server默认2小时窗口或跨副本容灾；全部自有只读镜像普通容器，不构建/拉取镜像或部署外部系统。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import math\ndef diagnose(expected,received,queue_pending,wal_cutoff_ms,backfill):\n    if type(queue_pending) is not int or queue_pending<0 or type(wal_cutoff_ms) is not int or wal_cutoff_ms<0:raise ValueError(\"invalid queue or WAL evidence\")\n    def parse(rows):\n        if not isinstance(rows,list):raise ValueError(\"sample list required\")\n        out={}\n        for row in rows:\n            if not isinstance(row,(list,tuple)) or len(row)!=2:raise ValueError(\"timestamp/value pair required\")\n            stamp,value=row\n            if type(stamp) is not int or stamp<=0 or type(value) not in (int,float) or not math.isfinite(value) or stamp in out:raise ValueError(\"invalid or duplicate sample\")\n            out[stamp]=value\n        return out\n    source=parse(expected);remote=parse(received)\n    if not source:raise ValueError(\"empty source evidence is not completeness proof\")\n    if any(stamp in remote and remote[stamp]!=value for stamp,value in source.items()):raise ValueError(\"received values conflict with source evidence\")\n    if not isinstance(backfill,dict) or set(backfill)!={\"complete_verified_copy\",\"supported_import\"} or any(type(v) is not bool for v in backfill.values()):raise ValueError(\"explicit backfill evidence required\")\n    missing=sorted(set(source)-set(remote))\n    beyond=[stamp for stamp in missing if stamp<wal_cutoff_ms]\n    retained=[stamp for stamp in missing if stamp>=wal_cutoff_ms]\n    return dict(missing_sample_times=missing,beyond_wal_window=beyond,awaiting_or_unverified=retained,\n        history_complete=not missing,queue_pending=queue_pending,\n        new_sample_observed=any(stamp>max(source) for stamp in remote),\n        gap_bounds_ms=[min(beyond),max(beyond)] if beyond else None,\n        backfill_authorized=bool(beyond) and all(backfill.values()),fill_values=None)\n"
+    },
+    "negative_files": {
+      "task.py": "import math\ndef diagnose(expected,received,queue_pending,wal_cutoff_ms,backfill):\n    if type(queue_pending) is not int or queue_pending<0 or type(wal_cutoff_ms) is not int or wal_cutoff_ms<0:raise ValueError(\"invalid queue or WAL evidence\")\n    def parse(rows):\n        if not isinstance(rows,list):raise ValueError(\"sample list required\")\n        out={}\n        for row in rows:\n            if not isinstance(row,(list,tuple)) or len(row)!=2:raise ValueError(\"timestamp/value pair required\")\n            stamp,value=row\n            if type(stamp) is not int or stamp<=0 or type(value) not in (int,float) or not math.isfinite(value) or stamp in out:raise ValueError(\"invalid or duplicate sample\")\n            out[stamp]=value\n        return out\n    source=parse(expected);remote=parse(received)\n    if not source:raise ValueError(\"empty source evidence is not completeness proof\")\n    if any(stamp in remote and remote[stamp]!=value for stamp,value in source.items()):raise ValueError(\"received values conflict with source evidence\")\n    if not isinstance(backfill,dict) or set(backfill)!={\"complete_verified_copy\",\"supported_import\"} or any(type(v) is not bool for v in backfill.values()):raise ValueError(\"explicit backfill evidence required\")\n    missing=sorted(set(source)-set(remote))\n    beyond=[stamp for stamp in missing if stamp<wal_cutoff_ms]\n    retained=[stamp for stamp in missing if stamp>=wal_cutoff_ms]\n    return dict(missing_sample_times=missing,beyond_wal_window=beyond,awaiting_or_unverified=retained,\n        history_complete=queue_pending==0,queue_pending=queue_pending,\n        new_sample_observed=any(stamp>max(source) for stamp in remote),\n        gap_bounds_ms=[min(beyond),max(beyond)] if beyond else None,\n        backfill_authorized=bool(beyond) and all(backfill.values()),fill_values=None)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现diagnose(expected,received,queue_pending,wal_cutoff_ms,backfill)。前两项为同一明确序列的[Unix毫秒时间戳,数值]列表，expected来自本题可信采集审计，received来自原生接收端原始范围向量；不要用带lookback的补点曲线当原样本。时间戳正整数且单列表不重复，值为非bool有限数值；交集上的值不一致须ValueError。queue_pending非负整数，wal_cutoff_ms非负整数，是实际checkpoint及保留证据给出的判读界限。返回missing_sample_times排序缺样本时间；其中<cutoff为beyond_wal_window，其余awaiting_or_unverified；history_complete仅无缺样本时True；queue_pending原值；new_sample_observed表示接收端有晚于expected末点的新样本；gap_bounds_ms为越窗缺口首尾或None；fill_values固定None，禁止补0或改时间。backfill必须恰有complete_verified_copy/supported_import两个布尔字段，只有存在越窗缺口且两项均True才backfill_authorized。空expected、坏输入或冲突ValueError。实际补充复用原072 Agent配置和独立接收端，通过真实WAL截断、队列归零、原样本时间对账验证诊断，并验证更宽但有限的保留/截断预算对第二次中断有效；旧缺口仍须明确保留。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "普通非root五路判分验证取证判读，独立可信补充真正启动固定Prometheus3.5 Agent、原生远写receiver和受控HTTP503门。复用未改原072配置，1500条合成序列制造超过原队列的积压；本题只精确对账stream=0。训练将实际保留/截断预算缩为秒级，使用真实时间，不改宿主时钟；修正需一起核对最小/最大窗口及checkpoint周期，不把某个秒数建议推广到生产。为读到队列0，仅在新样本已真实恢复后暂歇业务样本，up仍正常抓取。旧缺失样本没有合法完整备份，不执行回填，不以未来恢复宣称历史已恢复。单Agent/单receiver，不证明生产远端兼容性、Server默认2小时窗口或跨副本容灾；全部自有只读镜像普通容器，不构建/拉取镜像或部署外部系统。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import copy\nprint(\"NATIVE_LINUX_READY\",flush=True)\nimport task\nprint(\"STUDENT_OPERATION_ENTERED: compare exact source/receiver samples, not the queue gauge\",flush=True)\nsource=[[1000,7],[2000,8],[3000,9],[4000,10]];remote=[[1000,7],[4000,10],[5000,11]]\nbackfill=dict(complete_verified_copy=False,supported_import=False)\nbefore=copy.deepcopy([source,remote,backfill])\nresult=task.diagnose(source,remote,0,3500,backfill)\nassert result==dict(missing_sample_times=[2000,3000],beyond_wal_window=[2000,3000],awaiting_or_unverified=[],\n history_complete=False,queue_pending=0,new_sample_observed=True,gap_bounds_ms=[2000,3000],backfill_authorized=False,fill_values=None)\nassert [source,remote,backfill]==before\nretained=task.diagnose(source,remote,3,2500,backfill)\nassert retained[\"beyond_wal_window\"]==[2000] and retained[\"awaiting_or_unverified\"]==[3000] and retained[\"queue_pending\"]==3\ncomplete=task.diagnose(source,source,0,5000,backfill)\nassert complete[\"history_complete\"] and not complete[\"missing_sample_times\"] and complete[\"gap_bounds_ms\"] is None and not complete[\"new_sample_observed\"]\nfor copy_ok,import_ok in [(True,False),(False,True),(True,True)]:\n value=task.diagnose(source,remote,0,3500,dict(complete_verified_copy=copy_ok,supported_import=import_ok))\n assert value[\"backfill_authorized\"]==(copy_ok and import_ok)\nfor expected,received,pending,cutoff,backup in [\n ([],[],0,0,backfill),(source,[[1000,99]],0,3500,backfill),(source,[[1000,7],[1000,7]],0,3500,backfill),\n ([[True,7]],[],0,0,backfill),([[1000,float(\"nan\")]],[],0,0,backfill),(source,[],True,3500,backfill),\n (source,[],-1,3500,backfill),(source,[],0,-1,backfill),(source,[],0,3500,{\"complete_verified_copy\":True}),\n (source,[],0,3500,dict(complete_verified_copy=\"yes\",supported_import=True))]:\n try:task.diagnose(expected,received,pending,cutoff,backup)\n except ValueError:pass\n else:raise AssertionError(\"invalid evidence or unsupported backfill accepted\")\nprint(\"NATIVE_WAL_GAP_QUEUE_ZERO_NOT_COMPLETENESS_EXACT_TIMESTAMPS_VALUES_AND_DUAL_BACKFILL_GATES\",flush=True)\nprint(\"NATIVE_SEMANTIC_ASSERTIONS_PASSED\",flush=True)\n"
+      }
+    },
+    "question_format": "case"
+  }
+]

@@ -1,0 +1,805 @@
+[
+  {
+    "id": "src-0948da1b6a051e88",
+    "title": "修复users输出，按map键排序生成每人的姓名与年龄",
+    "answer": "### main.tf\n```hcl\nvariable \"users\" {\n type = map(object({ name = string, age = number }))\n nullable = false\n}\noutput \"sentences\" { value = [for key, user in var.users : \"我的名字是 ${user.name}，我的年龄是 ${user.age}\"] }\n```\n\n对象推导中值为user；map按键字典序遍历。列表推导保留对应顺序。原题中的users结构不清，本题明确为以稳定键索引的用户对象映射。",
+    "category": "Terraform",
+    "difficulty": "入门",
+    "section": "地图",
+    "type": "case",
+    "has_answer": true,
+    "source": "topics/terraform/README.md",
+    "sources": [
+      "topics/terraform/README.md"
+    ],
+    "question_format": "case",
+    "module": "terraform",
+    "level": 1,
+    "body": "## 操作环境\n平台隔离Linux、Terraform 1.13.5、Python3。所有命令仅作用于本题临时目录；无云账号、无远程服务。\n\n## 操作任务\n给定users为map(object({name=string, age=number}))，按map键的字典顺序输出列表sentences，每项精确为“我的名字是 {name}，我的年龄是 {age}”。诊断初始实现为何只返回键。支持空映射、中文姓名与小数年龄；不能固定样例或按姓名重排。\n\n## 产物\n- main.tf\n仅修改上述交付文件，保留其余材料；不得添加远程模块、云provider或provisioner。\n\n## 验收方法\n平台实际运行Terraform init/validate/plan/show；涉及state的题额外实际执行apply/import/state。输入变化与重复执行分别验收。此合同只验证明确的本地Terraform语义，不代表云端部署或原生产故障复现。",
+    "files": {
+      "main.tf": "variable \"users\" {\n type = map(object({ name = string, age = number }))\n nullable = false\n}\noutput \"sentences\" { value = keys(var.users) }\n"
+    },
+    "solution_files": {
+      "main.tf": "variable \"users\" {\n type = map(object({ name = string, age = number }))\n nullable = false\n}\noutput \"sentences\" { value = [for key, user in var.users : \"我的名字是 ${user.name}，我的年龄是 ${user.age}\"] }\n"
+    },
+    "negative_files": {
+      "main.tf": "variable \"users\" {\n type = map(object({ name = string, age = number }))\n nullable = false\n}\noutput \"sentences\" { value = [for key,user in var.users : \"我的名字是 ${key}，我的年龄是 ${user.age}\"] }\n"
+    },
+    "exercise": {
+      "environment": "隔离普通用户Linux / Terraform1.13.5，无云API",
+      "deliverables": [
+        "main.tf"
+      ],
+      "verification": "真实原生命令、多输入与错误路径；原始结果保留于会话04证据"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "terraform"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import contextlib,hashlib,json,os,pathlib,subprocess,tempfile\nBASE=pathlib.Path.cwd()\nFILES=['main.tf']\nFIXED={}\nfor name,digest in FIXED.items():\n assert hashlib.sha256((BASE/name).read_bytes()).hexdigest()==digest, 'readonly material changed'\nactual={p.relative_to(BASE).as_posix() for p in BASE.rglob('*') if p.is_file() and p.name.endswith(('.tf','.tf.json')) and not p.relative_to(BASE).as_posix().startswith('checks/')}\nassert actual=={n for n in FILES if n.endswith(('.tf','.tf.json'))}, 'unexpected configuration file'\n@contextlib.contextmanager\ndef work(values=None):\n with tempfile.TemporaryDirectory(prefix='opsforge-session04-tf-') as name:\n  root=pathlib.Path(name)/'root';root.mkdir();mirror=pathlib.Path(name)/'empty';mirror.mkdir()\n  for n in FILES:\n   p=root/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes((BASE/n).read_bytes())\n  rc=pathlib.Path(name)/'terraform.rc';rc.write_text('disable_checkpoint = true\\nprovider_installation { filesystem_mirror { path = '+json.dumps(str(mirror))+' } }\\n')\n  env={k:v for k,v in os.environ.items() if not k.startswith('TF_')}\n  env.update(TF_CLI_CONFIG_FILE=str(rc),TF_IN_AUTOMATION='1',TF_INPUT='0',CHECKPOINT_DISABLE='1')\n  def run(args,good=True):\n   p=subprocess.run(['terraform',*args],cwd=root,env=env,capture_output=True,text=True,timeout=20)\n   with (BASE/'native-cli-trace.jsonl').open('a') as trace:\n    trace.write(json.dumps({'command':['terraform',*args],'cwd':str(root),'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr},ensure_ascii=True)+'\\n')\n   if good: assert p.returncode==0,p.stdout+p.stderr\n   return p\n  run(['init','-backend=false','-input=false','-no-color'])\n  assert json.loads(run(['validate','-json']).stdout)['valid']\n  if values is not None: (root/'case.auto.tfvars.json').write_text(json.dumps(values))\n  yield root,run\ndef plan(values):\n with work(values) as (root,run):\n  run(['plan','-input=false','-lock=false','-no-color','-out=plan.bin'])\n  d=json.loads(run(['show','-json','plan.bin']).stdout)\n  assert not d.get('resource_changes'),'pure expression exercise must not create resources'\n  def inspect(m):\n   assert not m.get('resources'),'resource configuration is outside scope'\n   for call in m.get('module_calls',{}).values():\n    assert call['source'].startswith('./modules/'),'remote module outside scope'\n    inspect(call['module'])\n  module=d.get('configuration',{}).get('root_module',{})\n  inspect(module)\n  pass\n  return {k:v['value'] for k,v in d.get('planned_values',{}).get('outputs',{}).items()}\nfor users in [{},{'z':{'name':'张三','age':21},'a':{'name':'Alice','age':30}},{'first':{'name':'', 'age':0},'last':{'name':'Beta','age':1.5}}]:\n expected=['我的名字是 '+users[k]['name']+'，我的年龄是 '+str(users[k]['age']) for k in sorted(users)]\n assert plan({'users':users})=={'sentences':expected}\n\nprint(\"Session04 native Terraform contract complete\")\n"
+      },
+      "validation_scope": "Native Terraform1.13.5 offline only; no cloud provider/API/runtime evidence"
+    },
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "version": 2,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；独立复核未执行，未发布、未登记完成量。",
+    "pack": "session04-terraform-native-20261029",
+    "rubric": [
+      "参考产物的实际原生命令结果符合题意",
+      "多输入、幂等及不同错误路径被覆盖",
+      "解释原题概念与本地验证的边界"
+    ],
+    "hints": [],
+    "references": [
+      "https://developer.hashicorp.com/terraform/language/expressions/for",
+      "https://developer.hashicorp.com/terraform/language/expressions/strings"
+    ],
+    "conversion": {
+      "original_id": "src-0948da1b6a051e88",
+      "original_title": "您有一个名为“users”的映射变量，其中键为“name”和“age”。使用以下内容定义输出列表变量“我的名字是 {name}，我的年龄是 {age}”",
+      "original_type": "source",
+      "original_sha256": "638850ce042df3fd1da8934db879bf64db2ddeefa0e06f59e8219b6f92c6bf12",
+      "mode": "same_id_substantive_artifact_conversion"
+    }
+  },
+  {
+    "id": "src-0c060deb18a2cc4a",
+    "title": "交付保留顺序和重复项的Terraform列表循环",
+    "answer": "### main.tf\n```hcl\nvariable \"numbers\" {\n type = list(number)\n nullable = false\n}\noutput \"doubled\" { value = [for n in var.numbers : n * 2] }\n```\n\nfor表达式是值转换。for_each/count针对资源或模块实例，实例身份与列表顺序不同；本题无需任何资源。",
+    "category": "Terraform",
+    "difficulty": "入门",
+    "section": "循环",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/terraform/README.md",
+    "sources": [
+      "topics/terraform/README.md"
+    ],
+    "question_format": "project",
+    "module": "terraform",
+    "level": 1,
+    "body": "## 操作环境\n平台隔离Linux、Terraform 1.13.5、Python3。所有命令仅作用于本题临时目录；无云账号、无远程服务。\n\n## 操作任务\n建立一个最小可执行Terraform项目：输入numbers为非null数字列表，输出doubled将每项乘2，必须保留顺序、重复项、负数和小数。不要把列表转成set。说明for表达式变换值与resource for_each创建实例的区别。\n\n## 产物\n- main.tf\n仅修改上述交付文件，保留其余材料；不得添加远程模块、云provider或provisioner。\n\n## 验收方法\n平台实际运行Terraform init/validate/plan/show；涉及state的题额外实际执行apply/import/state。输入变化与重复执行分别验收。此合同只验证明确的本地Terraform语义，不代表云端部署或原生产故障复现。",
+    "files": {
+      "main.tf": "variable \"numbers\" {\n type = list(number)\n nullable = false\n}\noutput \"doubled\" { value = var.numbers }\n"
+    },
+    "solution_files": {
+      "main.tf": "variable \"numbers\" {\n type = list(number)\n nullable = false\n}\noutput \"doubled\" { value = [for n in var.numbers : n * 2] }\n"
+    },
+    "negative_files": {
+      "main.tf": "variable \"numbers\" {\n type = list(number)\n nullable = false\n}\noutput \"doubled\" { value = [for n in toset(var.numbers) : n * 2] }\n"
+    },
+    "exercise": {
+      "environment": "隔离普通用户Linux / Terraform1.13.5，无云API",
+      "deliverables": [
+        "main.tf"
+      ],
+      "verification": "真实原生命令、多输入与错误路径；原始结果保留于会话04证据"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "terraform"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import contextlib,hashlib,json,os,pathlib,subprocess,tempfile\nBASE=pathlib.Path.cwd()\nFILES=['main.tf']\nFIXED={}\nfor name,digest in FIXED.items():\n assert hashlib.sha256((BASE/name).read_bytes()).hexdigest()==digest, 'readonly material changed'\nactual={p.relative_to(BASE).as_posix() for p in BASE.rglob('*') if p.is_file() and p.name.endswith(('.tf','.tf.json')) and not p.relative_to(BASE).as_posix().startswith('checks/')}\nassert actual=={n for n in FILES if n.endswith(('.tf','.tf.json'))}, 'unexpected configuration file'\n@contextlib.contextmanager\ndef work(values=None):\n with tempfile.TemporaryDirectory(prefix='opsforge-session04-tf-') as name:\n  root=pathlib.Path(name)/'root';root.mkdir();mirror=pathlib.Path(name)/'empty';mirror.mkdir()\n  for n in FILES:\n   p=root/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes((BASE/n).read_bytes())\n  rc=pathlib.Path(name)/'terraform.rc';rc.write_text('disable_checkpoint = true\\nprovider_installation { filesystem_mirror { path = '+json.dumps(str(mirror))+' } }\\n')\n  env={k:v for k,v in os.environ.items() if not k.startswith('TF_')}\n  env.update(TF_CLI_CONFIG_FILE=str(rc),TF_IN_AUTOMATION='1',TF_INPUT='0',CHECKPOINT_DISABLE='1')\n  def run(args,good=True):\n   p=subprocess.run(['terraform',*args],cwd=root,env=env,capture_output=True,text=True,timeout=20)\n   with (BASE/'native-cli-trace.jsonl').open('a') as trace:\n    trace.write(json.dumps({'command':['terraform',*args],'cwd':str(root),'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr},ensure_ascii=True)+'\\n')\n   if good: assert p.returncode==0,p.stdout+p.stderr\n   return p\n  run(['init','-backend=false','-input=false','-no-color'])\n  assert json.loads(run(['validate','-json']).stdout)['valid']\n  if values is not None: (root/'case.auto.tfvars.json').write_text(json.dumps(values))\n  yield root,run\ndef plan(values):\n with work(values) as (root,run):\n  run(['plan','-input=false','-lock=false','-no-color','-out=plan.bin'])\n  d=json.loads(run(['show','-json','plan.bin']).stdout)\n  assert not d.get('resource_changes'),'pure expression exercise must not create resources'\n  def inspect(m):\n   assert not m.get('resources'),'resource configuration is outside scope'\n   for call in m.get('module_calls',{}).values():\n    assert call['source'].startswith('./modules/'),'remote module outside scope'\n    inspect(call['module'])\n  module=d.get('configuration',{}).get('root_module',{})\n  inspect(module)\n  pass\n  return {k:v['value'] for k,v in d.get('planned_values',{}).get('outputs',{}).items()}\nfor numbers in [[],[1,2,1],[-2,0,0.25,3.75],[4,3,2,1]]:\n assert plan({'numbers':numbers})=={'doubled':[n*2 for n in numbers]}\n\nprint(\"Session04 native Terraform contract complete\")\n"
+      },
+      "validation_scope": "Native Terraform1.13.5 offline only; no cloud provider/API/runtime evidence"
+    },
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "version": 2,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；独立复核未执行，未发布、未登记完成量。",
+    "pack": "session04-terraform-native-20261029",
+    "rubric": [
+      "参考产物的实际原生命令结果符合题意",
+      "多输入、幂等及不同错误路径被覆盖",
+      "解释原题概念与本地验证的边界"
+    ],
+    "hints": [],
+    "references": [
+      "https://developer.hashicorp.com/terraform/language/expressions/for",
+      "https://developer.hashicorp.com/terraform/language/meta-arguments/for_each"
+    ],
+    "conversion": {
+      "original_id": "src-0c060deb18a2cc4a",
+      "original_title": "演示如何定义简单的 Terraform 循环",
+      "original_type": "source",
+      "original_sha256": "f5b55b6a5f09cef0d0fb718ace0efc71af61d0cd730468788986ca7ae75f96f1",
+      "mode": "same_id_substantive_artifact_conversion"
+    }
+  },
+  {
+    "id": "src-037b20af14952101",
+    "title": "修复模块间依赖：把上游output传入下游input",
+    "answer": "### main.tf\n```hcl\nvariable \"label\" {\n type = string\n nullable = false\n}\nmodule \"producer\" {\n source = \"./modules/producer\"\n label = var.label\n}\nmodule \"consumer\" {\n source = \"./modules/consumer\"\n upstream = module.producer.name\n}\noutput \"result\" { value = module.consumer.name }\n```\n\n子模块output通过module.<名称>.<输出>传给另一模块input，表达式同时建立依赖边。depends_on控制顺序，不传递数据。",
+    "category": "Terraform",
+    "difficulty": "入门",
+    "section": "配置器",
+    "type": "case",
+    "has_answer": true,
+    "source": "topics/terraform/README.md",
+    "sources": [
+      "topics/terraform/README.md"
+    ],
+    "question_format": "case",
+    "module": "terraform",
+    "level": 1,
+    "body": "## 操作环境\n平台隔离Linux、Terraform 1.13.5、Python3。所有命令仅作用于本题临时目录；无云账号、无远程服务。\n\n## 操作任务\nproducer的name输出必须通过模块引用传入consumer.upstream，根输出result读取consumer.name。初始实现硬编码旧环境。禁止修改两个子模块。证明改变label会传递到下游，无需把值复制进tfvars，也不能用depends_on代替传值。\n\n## 产物\n- main.tf\n仅修改上述交付文件，保留其余材料；不得添加远程模块、云provider或provisioner。\n\n## 验收方法\n平台实际运行Terraform init/validate/plan/show；涉及state的题额外实际执行apply/import/state。输入变化与重复执行分别验收。此合同只验证明确的本地Terraform语义，不代表云端部署或原生产故障复现。",
+    "files": {
+      "modules/producer/main.tf": "variable \"label\" {\n type = string\n}\noutput \"name\" { value = \"prod-${var.label}\" }\n",
+      "modules/consumer/main.tf": "variable \"upstream\" {\n type = string\n}\noutput \"name\" { value = \"consume:${var.upstream}\" }\n",
+      "main.tf": "variable \"label\" {\n type = string\n nullable = false\n}\nmodule \"producer\" {\n source = \"./modules/producer\"\n label = var.label\n}\nmodule \"consumer\" {\n source = \"./modules/consumer\"\n upstream = \"prod-stale\"\n}\noutput \"result\" { value = module.consumer.name }\n"
+    },
+    "solution_files": {
+      "main.tf": "variable \"label\" {\n type = string\n nullable = false\n}\nmodule \"producer\" {\n source = \"./modules/producer\"\n label = var.label\n}\nmodule \"consumer\" {\n source = \"./modules/consumer\"\n upstream = module.producer.name\n}\noutput \"result\" { value = module.consumer.name }\n"
+    },
+    "negative_files": {
+      "main.tf": "variable \"label\" {\n type = string\n nullable = false\n}\nmodule \"producer\" {\n source = \"./modules/producer\"\n label = var.label\n}\nmodule \"consumer\" {\n source = \"./modules/consumer\"\n upstream = var.label\n}\noutput \"result\" { value = module.consumer.name }\n"
+    },
+    "exercise": {
+      "environment": "隔离普通用户Linux / Terraform1.13.5，无云API",
+      "deliverables": [
+        "main.tf"
+      ],
+      "verification": "真实原生命令、多输入与错误路径；原始结果保留于会话04证据"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "terraform"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import contextlib,hashlib,json,os,pathlib,subprocess,tempfile\nBASE=pathlib.Path.cwd()\nFILES=['modules/producer/main.tf', 'modules/consumer/main.tf', 'main.tf']\nFIXED={'modules/producer/main.tf': '6b18ef0061eea347abefd77c3ba9535ff8343c832fa91f5bce685df549ef7e72', 'modules/consumer/main.tf': 'c17b6dd3a1ea12b216d05a718f046f316dd6eb27e362eb97eadd68a5cbdb013d'}\nfor name,digest in FIXED.items():\n assert hashlib.sha256((BASE/name).read_bytes()).hexdigest()==digest, 'readonly material changed'\nactual={p.relative_to(BASE).as_posix() for p in BASE.rglob('*') if p.is_file() and p.name.endswith(('.tf','.tf.json')) and not p.relative_to(BASE).as_posix().startswith('checks/')}\nassert actual=={n for n in FILES if n.endswith(('.tf','.tf.json'))}, 'unexpected configuration file'\n@contextlib.contextmanager\ndef work(values=None,overrides=None):\n with tempfile.TemporaryDirectory(prefix='opsforge-session04-tf-') as name:\n  root=pathlib.Path(name)/'root';root.mkdir();mirror=pathlib.Path(name)/'empty';mirror.mkdir()\n  for n in FILES:\n   p=root/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes((overrides or {}).get(n,(BASE/n).read_text()).encode())\n  rc=pathlib.Path(name)/'terraform.rc';rc.write_text('disable_checkpoint = true\\nprovider_installation { filesystem_mirror { path = '+json.dumps(str(mirror))+' } }\\n')\n  env={k:v for k,v in os.environ.items() if not k.startswith('TF_')}\n  env.update(TF_CLI_CONFIG_FILE=str(rc),TF_IN_AUTOMATION='1',TF_INPUT='0',CHECKPOINT_DISABLE='1')\n  def run(args,good=True):\n   p=subprocess.run(['terraform',*args],cwd=root,env=env,capture_output=True,text=True,timeout=20)\n   with (BASE/'native-cli-trace.jsonl').open('a') as trace:\n    trace.write(json.dumps({'command':['terraform',*args],'cwd':str(root),'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr},ensure_ascii=True)+'\\n')\n   if good: assert p.returncode==0,p.stdout+p.stderr\n   return p\n  run(['init','-backend=false','-input=false','-no-color'])\n  assert json.loads(run(['validate','-json']).stdout)['valid']\n  if values is not None: (root/'case.auto.tfvars.json').write_text(json.dumps(values))\n  yield root,run\ndef plan(values,overrides=None):\n with work(values,overrides) as (root,run):\n  run(['plan','-input=false','-lock=false','-no-color','-out=plan.bin'])\n  d=json.loads(run(['show','-json','plan.bin']).stdout)\n  assert not d.get('resource_changes'),'pure expression exercise must not create resources'\n  def inspect(m):\n   assert not m.get('resources'),'resource configuration is outside scope'\n   for call in m.get('module_calls',{}).values():\n    assert call['source'].startswith('./modules/'),'remote module outside scope'\n    inspect(call['module'])\n  module=d.get('configuration',{}).get('root_module',{})\n  inspect(module)\n  calls=module.get('module_calls',{});assert set(calls)=={'producer','consumer'};assert calls['producer']['source']=='./modules/producer';assert calls['consumer']['source']=='./modules/consumer'\n  return {k:v['value'] for k,v in d.get('planned_values',{}).get('outputs',{}).items()}\nfor label in ['dev','prod','', '团队-7']:\n assert plan({'label':label})=={'result':'consume:prod-'+label}\n\nprint(\"Session04 native Terraform contract complete\")\n\nimport secrets\nsentinel='review-producer-'+secrets.token_hex(8)+'-'\nconsumer='review-consumer-'+secrets.token_hex(8)+':'\nproducer_source=(BASE/'modules/producer/main.tf').read_text().replace('prod-',sentinel)\nconsumer_source=(BASE/'modules/consumer/main.tf').read_text().replace('consume:',consumer)\nfor label in ['a','团队','']:\n assert plan({'label':label},{'modules/producer/main.tf':producer_source,'modules/consumer/main.tf':consumer_source})=={'result':consumer+sentinel+label},'module data flow was bypassed'\n"
+      },
+      "validation_scope": "Native Terraform1.13.5 offline only; no cloud provider/API/runtime evidence"
+    },
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "version": 2,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；独立复核未执行，未发布、未登记完成量。",
+    "pack": "session04-terraform-native-20261029",
+    "rubric": [
+      "参考产物的实际原生命令结果符合题意",
+      "多输入、幂等及不同错误路径被覆盖",
+      "解释原题概念与本地验证的边界"
+    ],
+    "hints": [],
+    "references": [
+      "https://developer.hashicorp.com/terraform/language/modules/configuration",
+      "https://developer.hashicorp.com/terraform/language/values/outputs"
+    ],
+    "conversion": {
+      "original_id": "src-037b20af14952101",
+      "original_title": "除了 `.tfvars` 文件或 CLI 参数之外，如何从其他模块注入依赖项？",
+      "original_type": "source",
+      "original_sha256": "b6c692ebc07a09d1927661305ac442211deea8ae4f25b77f601721253f890822",
+      "mode": "same_id_substantive_artifact_conversion"
+    }
+  },
+  {
+    "id": "src-0bd7a0501a1c48c4",
+    "title": "把重复配置收敛为可复用的本地模块项目",
+    "answer": "### main.tf\n```hcl\nvariable \"names\" {\n type = map(string)\n nullable = false\n}\nmodule \"profiles\" {\n source = \"./modules/profile\"\n for_each = var.names\n name = each.value\n}\noutput \"labels\" { value = {for key,m in module.profiles : key => m.label} }\n```\n\n复用模块接口，把环境差异作为输入，固定模块版本/来源并保留评审。验证的是本地模块复用，未下载远程模块。",
+    "category": "Terraform",
+    "difficulty": "入门",
+    "section": "生产",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/terraform/README.md",
+    "sources": [
+      "topics/terraform/README.md"
+    ],
+    "question_format": "project",
+    "module": "terraform",
+    "level": 1,
+    "body": "## 操作环境\n平台隔离Linux、Terraform 1.13.5、Python3。所有命令仅作用于本题临时目录；无云账号、无远程服务。\n\n## 操作任务\n用给定modules/profile复用共同逻辑，按names映射为每个稳定键创建模块实例profiles，参数取映射值，根输出labels保留键并读取子模块label。不能把子模块表达式复制回根目录。验证新增环境与改名不需要复制模块源码。\n\n## 产物\n- main.tf\n仅修改上述交付文件，保留其余材料；不得添加远程模块、云provider或provisioner。\n\n## 验收方法\n平台实际运行Terraform init/validate/plan/show；涉及state的题额外实际执行apply/import/state。输入变化与重复执行分别验收。此合同只验证明确的本地Terraform语义，不代表云端部署或原生产故障复现。",
+    "files": {
+      "modules/profile/main.tf": "variable \"name\" {\n type = string\n}\noutput \"label\" { value = \"app-${var.name}\" }\n",
+      "main.tf": "variable \"names\" {\n type = map(string)\n nullable = false\n}\noutput \"labels\" { value = {} }\n"
+    },
+    "solution_files": {
+      "main.tf": "variable \"names\" {\n type = map(string)\n nullable = false\n}\nmodule \"profiles\" {\n source = \"./modules/profile\"\n for_each = var.names\n name = each.value\n}\noutput \"labels\" { value = {for key,m in module.profiles : key => m.label} }\n"
+    },
+    "negative_files": {
+      "main.tf": "variable \"names\" {\n type = map(string)\n nullable = false\n}\nmodule \"profiles\" {\n source = \"./modules/profile\"\n for_each = var.names\n name = each.key\n}\noutput \"labels\" { value = {for key,m in module.profiles : key => m.label} }\n"
+    },
+    "exercise": {
+      "environment": "隔离普通用户Linux / Terraform1.13.5，无云API",
+      "deliverables": [
+        "main.tf"
+      ],
+      "verification": "真实原生命令、多输入与错误路径；原始结果保留于会话04证据"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "terraform"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import contextlib,hashlib,json,os,pathlib,subprocess,tempfile\nBASE=pathlib.Path.cwd()\nFILES=['modules/profile/main.tf', 'main.tf']\nFIXED={'modules/profile/main.tf': 'b6c0676f8fab65b03c1b3e028549b658103772a41026d73009fe6f5a2098264c'}\nfor name,digest in FIXED.items():\n assert hashlib.sha256((BASE/name).read_bytes()).hexdigest()==digest, 'readonly material changed'\nactual={p.relative_to(BASE).as_posix() for p in BASE.rglob('*') if p.is_file() and p.name.endswith(('.tf','.tf.json')) and not p.relative_to(BASE).as_posix().startswith('checks/')}\nassert actual=={n for n in FILES if n.endswith(('.tf','.tf.json'))}, 'unexpected configuration file'\n@contextlib.contextmanager\ndef work(values=None,overrides=None):\n with tempfile.TemporaryDirectory(prefix='opsforge-session04-tf-') as name:\n  root=pathlib.Path(name)/'root';root.mkdir();mirror=pathlib.Path(name)/'empty';mirror.mkdir()\n  for n in FILES:\n   p=root/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes((overrides or {}).get(n,(BASE/n).read_text()).encode())\n  rc=pathlib.Path(name)/'terraform.rc';rc.write_text('disable_checkpoint = true\\nprovider_installation { filesystem_mirror { path = '+json.dumps(str(mirror))+' } }\\n')\n  env={k:v for k,v in os.environ.items() if not k.startswith('TF_')}\n  env.update(TF_CLI_CONFIG_FILE=str(rc),TF_IN_AUTOMATION='1',TF_INPUT='0',CHECKPOINT_DISABLE='1')\n  def run(args,good=True):\n   p=subprocess.run(['terraform',*args],cwd=root,env=env,capture_output=True,text=True,timeout=20)\n   with (BASE/'native-cli-trace.jsonl').open('a') as trace:\n    trace.write(json.dumps({'command':['terraform',*args],'cwd':str(root),'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr},ensure_ascii=True)+'\\n')\n   if good: assert p.returncode==0,p.stdout+p.stderr\n   return p\n  run(['init','-backend=false','-input=false','-no-color'])\n  assert json.loads(run(['validate','-json']).stdout)['valid']\n  if values is not None: (root/'case.auto.tfvars.json').write_text(json.dumps(values))\n  yield root,run\ndef plan(values,overrides=None):\n with work(values,overrides) as (root,run):\n  run(['plan','-input=false','-lock=false','-no-color','-out=plan.bin'])\n  d=json.loads(run(['show','-json','plan.bin']).stdout)\n  assert not d.get('resource_changes'),'pure expression exercise must not create resources'\n  def inspect(m):\n   assert not m.get('resources'),'resource configuration is outside scope'\n   for call in m.get('module_calls',{}).values():\n    assert call['source'].startswith('./modules/'),'remote module outside scope'\n    inspect(call['module'])\n  module=d.get('configuration',{}).get('root_module',{})\n  inspect(module)\n  calls=module.get('module_calls',{});assert set(calls)=={'profiles'};assert calls['profiles']['source']=='./modules/profile'\n  return {k:v['value'] for k,v in d.get('planned_values',{}).get('outputs',{}).items()}\nfor names in [{},{'dev':'web','prod':'api'},{'x':'same','y':'same','z':'团队'}]:\n assert plan({'names':names})=={'labels':{k:'app-'+v for k,v in names.items()}}\n\nprint(\"Session04 native Terraform contract complete\")\n\nimport secrets\nsentinel='review-profile-'+secrets.token_hex(8)+'-'\nmodule_source=(BASE/'modules/profile/main.tf').read_text().replace('app-',sentinel)\nnames={'first':'a','second':'团队','third':'a'}\nassert plan({'names':names},{'modules/profile/main.tf':module_source})=={'labels':{k:sentinel+v for k,v in names.items()}},'module output map was bypassed'\n"
+      },
+      "validation_scope": "Native Terraform1.13.5 offline only; no cloud provider/API/runtime evidence"
+    },
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "version": 2,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；独立复核未执行，未发布、未登记完成量。",
+    "pack": "session04-terraform-native-20261029",
+    "rubric": [
+      "参考产物的实际原生命令结果符合题意",
+      "多输入、幂等及不同错误路径被覆盖",
+      "解释原题概念与本地验证的边界"
+    ],
+    "hints": [],
+    "references": [
+      "https://developer.hashicorp.com/terraform/language/modules/develop",
+      "https://developer.hashicorp.com/terraform/language/meta-arguments/for_each"
+    ],
+    "conversion": {
+      "original_id": "src-0bd7a0501a1c48c4",
+      "original_title": "您注意到许多 Terraform 代码/配置在存储库之间以及不同目录之间的同一存储库中都是重复的。您可以采用哪一种方法来帮助解决这个问题？",
+      "original_type": "source",
+      "original_sha256": "8c12f7244f55a7ac0cd5c295d8ac696d8d6017f104dcb142522808492c7dfec1",
+      "mode": "same_id_substantive_artifact_conversion"
+    }
+  },
+  {
+    "id": "src-049cb328b666c7aa",
+    "title": "诊断模块来源选择并验证实际加载目录",
+    "answer": "### main.tf\n```hcl\nvariable \"name\" {\n type = string\n nullable = false\n}\nmodule \"chosen\" {\n source = \"./modules/reviewed\"\n name = var.name\n}\noutput \"chosen\" { value = module.chosen.name }\n```\n\n模块可来自本地目录、公共/私有Registry及受支持的VCS/HTTP等来源。Registry模块用version约束；Git来源用?ref=固定提交或标签。init安装模块，不能只凭目录名称确认实际来源。本题只实际验本地路径。",
+    "category": "Terraform",
+    "difficulty": "入门",
+    "section": "模块",
+    "type": "case",
+    "has_answer": true,
+    "source": "topics/terraform/README.md",
+    "sources": [
+      "topics/terraform/README.md"
+    ],
+    "question_format": "case",
+    "module": "terraform",
+    "level": 1,
+    "body": "## 操作环境\n平台隔离Linux、Terraform 1.13.5、Python3。所有命令仅作用于本题临时目录；无云账号、无远程服务。\n\n## 操作任务\n评审批准的模块位于modules/reviewed，初始配置误指向obsolete。修复根配置的模块来源并保留输出引用；验证输入更改仍加载正确实现。在答案中区分本地路径、公共/私有Registry、Git/HTTP归档来源，说明Registry用version、Git用ref的固定方式。本地验证不冒充远程下载或供应链验签。\n\n## 产物\n- main.tf\n仅修改上述交付文件，保留其余材料；不得添加远程模块、云provider或provisioner。\n\n## 验收方法\n平台实际运行Terraform init/validate/plan/show；涉及state的题额外实际执行apply/import/state。输入变化与重复执行分别验收。此合同只验证明确的本地Terraform语义，不代表云端部署或原生产故障复现。",
+    "files": {
+      "modules/reviewed/main.tf": "variable \"name\" {\n type = string\n}\noutput \"name\" { value = \"reviewed:${var.name}\" }\n",
+      "modules/obsolete/main.tf": "variable \"name\" {\n type = string\n}\noutput \"name\" { value = \"obsolete:${var.name}\" }\n",
+      "main.tf": "variable \"name\" {\n type = string\n nullable = false\n}\nmodule \"chosen\" {\n source = \"./modules/obsolete\"\n name = var.name\n}\noutput \"chosen\" { value = module.chosen.name }\n"
+    },
+    "solution_files": {
+      "main.tf": "variable \"name\" {\n type = string\n nullable = false\n}\nmodule \"chosen\" {\n source = \"./modules/reviewed\"\n name = var.name\n}\noutput \"chosen\" { value = module.chosen.name }\n"
+    },
+    "negative_files": {
+      "main.tf": "variable \"name\" {\n type = string\n nullable = false\n}\nmodule \"chosen\" {\n source = \"./modules/reviewed\"\n name = var.name\n}\noutput \"chosen\" { value = \"reviewed:fixed\" }\n"
+    },
+    "exercise": {
+      "environment": "隔离普通用户Linux / Terraform1.13.5，无云API",
+      "deliverables": [
+        "main.tf"
+      ],
+      "verification": "真实原生命令、多输入与错误路径；原始结果保留于会话04证据"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "terraform"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import contextlib,hashlib,json,os,pathlib,subprocess,tempfile\nBASE=pathlib.Path.cwd()\nFILES=['modules/reviewed/main.tf', 'modules/obsolete/main.tf', 'main.tf']\nFIXED={'modules/reviewed/main.tf': '9ab1fea3c3035de8a4aae184915b996bdbe4ba64cca82fcc2ba25d764eba39eb', 'modules/obsolete/main.tf': '2184b95ad52edddc49120746aaa47f15fbde1fa3efd614ceb75d72ec82414a7f'}\nfor name,digest in FIXED.items():\n assert hashlib.sha256((BASE/name).read_bytes()).hexdigest()==digest, 'readonly material changed'\nactual={p.relative_to(BASE).as_posix() for p in BASE.rglob('*') if p.is_file() and p.name.endswith(('.tf','.tf.json')) and not p.relative_to(BASE).as_posix().startswith('checks/')}\nassert actual=={n for n in FILES if n.endswith(('.tf','.tf.json'))}, 'unexpected configuration file'\n@contextlib.contextmanager\ndef work(values=None,overrides=None):\n with tempfile.TemporaryDirectory(prefix='opsforge-session04-tf-') as name:\n  root=pathlib.Path(name)/'root';root.mkdir();mirror=pathlib.Path(name)/'empty';mirror.mkdir()\n  for n in FILES:\n   p=root/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes((overrides or {}).get(n,(BASE/n).read_text()).encode())\n  rc=pathlib.Path(name)/'terraform.rc';rc.write_text('disable_checkpoint = true\\nprovider_installation { filesystem_mirror { path = '+json.dumps(str(mirror))+' } }\\n')\n  env={k:v for k,v in os.environ.items() if not k.startswith('TF_')}\n  env.update(TF_CLI_CONFIG_FILE=str(rc),TF_IN_AUTOMATION='1',TF_INPUT='0',CHECKPOINT_DISABLE='1')\n  def run(args,good=True):\n   p=subprocess.run(['terraform',*args],cwd=root,env=env,capture_output=True,text=True,timeout=20)\n   with (BASE/'native-cli-trace.jsonl').open('a') as trace:\n    trace.write(json.dumps({'command':['terraform',*args],'cwd':str(root),'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr},ensure_ascii=True)+'\\n')\n   if good: assert p.returncode==0,p.stdout+p.stderr\n   return p\n  run(['init','-backend=false','-input=false','-no-color'])\n  assert json.loads(run(['validate','-json']).stdout)['valid']\n  if values is not None: (root/'case.auto.tfvars.json').write_text(json.dumps(values))\n  yield root,run\ndef plan(values,overrides=None):\n with work(values,overrides) as (root,run):\n  run(['plan','-input=false','-lock=false','-no-color','-out=plan.bin'])\n  d=json.loads(run(['show','-json','plan.bin']).stdout)\n  assert not d.get('resource_changes'),'pure expression exercise must not create resources'\n  def inspect(m):\n   assert not m.get('resources'),'resource configuration is outside scope'\n   for call in m.get('module_calls',{}).values():\n    assert call['source'].startswith('./modules/'),'remote module outside scope'\n    inspect(call['module'])\n  module=d.get('configuration',{}).get('root_module',{})\n  inspect(module)\n  calls=module.get('module_calls',{});assert set(calls)=={'chosen'};assert calls['chosen']['source']=='./modules/reviewed'\n  return {k:v['value'] for k,v in d.get('planned_values',{}).get('outputs',{}).items()}\nfor name in ['dev','prod','']:\n assert plan({'name':name})=={'chosen':'reviewed:'+name}\n\nprint(\"Session04 native Terraform contract complete\")\n\nimport secrets\nsentinel='review-selected-'+secrets.token_hex(8)+':'\nmodule_source=(BASE/'modules/reviewed/main.tf').read_text().replace('reviewed:',sentinel)\nfor name in ['a','团队','']:\n assert plan({'name':name},{'modules/reviewed/main.tf':module_source})=={'chosen':sentinel+name},'selected module data flow was bypassed'\n"
+      },
+      "validation_scope": "Native Terraform1.13.5 offline only; no cloud provider/API/runtime evidence"
+    },
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "version": 2,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；独立复核未执行，未发布、未登记完成量。",
+    "pack": "session04-terraform-native-20261029",
+    "rubric": [
+      "参考产物的实际原生命令结果符合题意",
+      "多输入、幂等及不同错误路径被覆盖",
+      "解释原题概念与本地验证的边界"
+    ],
+    "hints": [],
+    "references": [
+      "https://developer.hashicorp.com/terraform/language/modules/sources"
+    ],
+    "conversion": {
+      "original_id": "src-049cb328b666c7aa",
+      "original_title": "从哪里可以获得 Terraform 模块？",
+      "original_type": "source",
+      "original_sha256": "352854c08239cf02c1e4b942ac99eb7d28ca663c72d2018156de3180913c3a0c",
+      "mode": "same_id_substantive_artifact_conversion"
+    }
+  },
+  {
+    "id": "src-0c1f49eae5d957a2",
+    "title": "用真实本地Terraform工程验证配置、计划和状态闭环",
+    "answer": "### main.tf\n```hcl\nvariable \"label\" {\n type = string\n default = \"first\"\n}\nresource \"terraform_data\" \"record\" { input = var.label }\noutput \"label\" { value = terraform_data.record.output }\n```\n\nTerraform以声明配置描述目标，provider管理对象，state关联资源地址与对象身份，plan给出拟变更。实际执行批准的计划后应复查state和后续plan。本工程只管理Terraform内置本地对象。",
+    "category": "Terraform",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "question_format": "project",
+    "module": "terraform",
+    "level": 1,
+    "body": "## 操作环境\n平台隔离Linux、Terraform 1.13.5、Python3。所有命令仅作用于本题临时目录；无云账号、无远程服务。\n\n## 操作任务\n使用内置terraform_data.record记录var.label，根输出label读取record.output。完成init、validate、plan、apply、state pull、无变化plan、变更输入后plan以及destroy。解释配置、provider、state和plan各自的作用；这是Terraform内置资源，不是云资源替身。\n\n## 产物\n- main.tf\n仅修改上述交付文件，保留其余材料；不得添加远程模块、云provider或provisioner。\n\n## 验收方法\n平台实际运行Terraform init/validate/plan/show；涉及state的题额外实际执行apply/import/state。输入变化与重复执行分别验收。此合同只验证明确的本地Terraform语义，不代表云端部署或原生产故障复现。",
+    "files": {
+      "main.tf": "variable \"label\" {\n type = string\n default = \"first\"\n}\noutput \"label\" { value = var.label }\n"
+    },
+    "solution_files": {
+      "main.tf": "variable \"label\" {\n type = string\n default = \"first\"\n}\nresource \"terraform_data\" \"record\" { input = var.label }\noutput \"label\" { value = terraform_data.record.output }\n"
+    },
+    "negative_files": {
+      "main.tf": "variable \"label\" {\n type = string\n default = \"first\"\n}\nresource \"terraform_data\" \"record\" { input = \"first\" }\noutput \"label\" { value = terraform_data.record.output }\n"
+    },
+    "exercise": {
+      "environment": "隔离普通用户Linux / Terraform1.13.5，无云API",
+      "deliverables": [
+        "main.tf"
+      ],
+      "verification": "真实原生命令、多输入与错误路径；原始结果保留于会话04证据"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "terraform"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import contextlib,hashlib,json,os,pathlib,subprocess,tempfile\nBASE=pathlib.Path.cwd()\nFILES=['main.tf']\nFIXED={}\nfor name,digest in FIXED.items():\n assert hashlib.sha256((BASE/name).read_bytes()).hexdigest()==digest, 'readonly material changed'\nactual={p.relative_to(BASE).as_posix() for p in BASE.rglob('*') if p.is_file() and p.name.endswith(('.tf','.tf.json')) and not p.relative_to(BASE).as_posix().startswith('checks/')}\nassert actual=={n for n in FILES if n.endswith(('.tf','.tf.json'))}, 'unexpected configuration file'\n@contextlib.contextmanager\ndef work(values=None):\n with tempfile.TemporaryDirectory(prefix='opsforge-session04-tf-') as name:\n  root=pathlib.Path(name)/'root';root.mkdir();mirror=pathlib.Path(name)/'empty';mirror.mkdir()\n  for n in FILES:\n   p=root/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes((BASE/n).read_bytes())\n  rc=pathlib.Path(name)/'terraform.rc';rc.write_text('disable_checkpoint = true\\nprovider_installation { filesystem_mirror { path = '+json.dumps(str(mirror))+' } }\\n')\n  env={k:v for k,v in os.environ.items() if not k.startswith('TF_')}\n  env.update(TF_CLI_CONFIG_FILE=str(rc),TF_IN_AUTOMATION='1',TF_INPUT='0',CHECKPOINT_DISABLE='1')\n  def run(args,good=True):\n   p=subprocess.run(['terraform',*args],cwd=root,env=env,capture_output=True,text=True,timeout=20)\n   with (BASE/'native-cli-trace.jsonl').open('a') as trace:\n    trace.write(json.dumps({'command':['terraform',*args],'cwd':str(root),'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr},ensure_ascii=True)+'\\n')\n   if good: assert p.returncode==0,p.stdout+p.stderr\n   return p\n  run(['init','-backend=false','-input=false','-no-color'])\n  assert json.loads(run(['validate','-json']).stdout)['valid']\n  if values is not None: (root/'case.auto.tfvars.json').write_text(json.dumps(values))\n  yield root,run\ndef plan(values):\n with work(values) as (root,run):\n  run(['plan','-input=false','-lock=false','-no-color','-out=plan.bin'])\n  d=json.loads(run(['show','-json','plan.bin']).stdout)\n  assert not d.get('resource_changes'),'pure expression exercise must not create resources'\n  def inspect(m):\n   assert not m.get('resources'),'resource configuration is outside scope'\n   for call in m.get('module_calls',{}).values():\n    assert call['source'].startswith('./modules/'),'remote module outside scope'\n    inspect(call['module'])\n  module=d.get('configuration',{}).get('root_module',{})\n  inspect(module)\n  pass\n  return {k:v['value'] for k,v in d.get('planned_values',{}).get('outputs',{}).items()}\nwith work({'label':'first'}) as (root,run):\n run(['apply','-auto-approve','-input=false','-no-color'])\n assert json.loads(run(['output','-json']).stdout)['label']['value']=='first'\n state=json.loads(run(['state','pull']).stdout)\n record=next((r for r in state['resources'] if r['type']=='terraform_data' and r['name']=='record'),None)\n assert record is not None,'required resource missing'\n assert record['instances'][0]['attributes']['input']['value']=='first' and record['instances'][0]['attributes']['output']['value']=='first','record did not receive and persist the input'\n assert run(['plan','-detailed-exitcode','-input=false','-no-color'],False).returncode==0\n (root/'case.auto.tfvars.json').write_text(json.dumps({'label':'second'}))\n assert run(['plan','-detailed-exitcode','-input=false','-no-color'],False).returncode==2\n run(['apply','-auto-approve','-input=false','-no-color'])\n assert json.loads(run(['output','-json']).stdout)['label']['value']=='second'\n assert run(['plan','-detailed-exitcode','-input=false','-no-color'],False).returncode==0\n state=json.loads(run(['state','pull']).stdout)\n record=next(r for r in state['resources'] if r['type']=='terraform_data' and r['name']=='record')\n assert record['instances'][0]['attributes']['input']['value']=='second' and record['instances'][0]['attributes']['output']['value']=='second','record input/output did not follow changed input'\n import secrets\n sentinel='review-output-'+secrets.token_hex(12)\n record['instances'][0]['attributes']['output']['value']=sentinel\n state['serial']+=1\n (root/'review-sentinel.tfstate').write_text(json.dumps(state))\n run(['state','push','review-sentinel.tfstate'])\n run(['plan','-refresh=false','-input=false','-no-color','-out=sentinel.plan'])\n planned=json.loads(run(['show','-json','sentinel.plan']).stdout)\n assert planned['planned_values']['outputs']['label']['value']==sentinel,'root output bypasses resource output'\n run(['destroy','-auto-approve','-input=false','-no-color'])\n assert run(['state','list']).stdout.strip()==''\n\nprint(\"Session04 native Terraform contract complete\")\n"
+      },
+      "validation_scope": "Native Terraform1.13.5 offline only; no cloud provider/API/runtime evidence"
+    },
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "version": 2,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；独立复核未执行，未发布、未登记完成量。",
+    "pack": "session04-terraform-native-20261029",
+    "rubric": [
+      "参考产物的实际原生命令结果符合题意",
+      "多输入、幂等及不同错误路径被覆盖",
+      "解释原题概念与本地验证的边界"
+    ],
+    "hints": [],
+    "references": [
+      "https://developer.hashicorp.com/terraform/intro/core-workflow",
+      "https://developer.hashicorp.com/terraform/language/resources/terraform-data"
+    ],
+    "conversion": {
+      "original_id": "src-0c1f49eae5d957a2",
+      "original_title": "你能解释一下什么是Terraform? 它是怎么工作的?",
+      "original_type": "source",
+      "original_sha256": "cd889e772ef1281a3127b20680f849d18aeda940b1061c6ab919df0f5ab85420",
+      "mode": "same_id_substantive_artifact_conversion"
+    }
+  },
+  {
+    "id": "src-0df3b42b5cc617cf",
+    "title": "实际执行原生import并验证资源地址与状态身份",
+    "answer": "### main.tf\n```hcl\nresource \"terraform_data\" \"adopted\" {}\noutput \"id\" { value = terraform_data.adopted.id }\n```\n\nimport把ID绑定到配置地址。导入后必须检查配置与已知对象状态，plan可能提出更新/替换；不要以导入命令成功代替无破坏计划验收。本题不调用真实云API。",
+    "category": "Terraform",
+    "difficulty": "入门",
+    "section": "进口",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/terraform/README.md",
+    "sources": [
+      "topics/terraform/README.md"
+    ],
+    "question_format": "project",
+    "module": "terraform",
+    "level": 1,
+    "body": "## 操作环境\n平台隔离Linux、Terraform 1.13.5、Python3。所有命令仅作用于本题临时目录；无云账号、无远程服务。\n\n## 操作任务\n交付terraform_data.adopted资源声明以及读取其id的输出。可信验收向该地址导入随机ID，核对state show、后续plan、重复import拒绝和destroy。说明import关联既有对象与资源地址，不等于按完整业务意图生成配置；云对象的存在性与导入规则依其provider。本题只验证内置terraform_data的真实import支持。\n\n## 产物\n- main.tf\n仅修改上述交付文件，保留其余材料；不得添加远程模块、云provider或provisioner。\n\n## 验收方法\n平台实际运行Terraform init/validate/plan/show；涉及state的题额外实际执行apply/import/state。输入变化与重复执行分别验收。此合同只验证明确的本地Terraform语义，不代表云端部署或原生产故障复现。",
+    "files": {
+      "main.tf": "output \"id\" { value = \"not-imported\" }\n"
+    },
+    "solution_files": {
+      "main.tf": "resource \"terraform_data\" \"adopted\" {}\noutput \"id\" { value = terraform_data.adopted.id }\n"
+    },
+    "negative_files": {
+      "main.tf": "resource \"terraform_data\" \"adopted\" {}\noutput \"id\" { value = \"fixed-id\" }\n"
+    },
+    "exercise": {
+      "environment": "隔离普通用户Linux / Terraform1.13.5，无云API",
+      "deliverables": [
+        "main.tf"
+      ],
+      "verification": "真实原生命令、多输入与错误路径；原始结果保留于会话04证据"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "terraform"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import contextlib,hashlib,json,os,pathlib,subprocess,tempfile\nBASE=pathlib.Path.cwd()\nFILES=['main.tf']\nFIXED={}\nfor name,digest in FIXED.items():\n assert hashlib.sha256((BASE/name).read_bytes()).hexdigest()==digest, 'readonly material changed'\nactual={p.relative_to(BASE).as_posix() for p in BASE.rglob('*') if p.is_file() and p.name.endswith(('.tf','.tf.json')) and not p.relative_to(BASE).as_posix().startswith('checks/')}\nassert actual=={n for n in FILES if n.endswith(('.tf','.tf.json'))}, 'unexpected configuration file'\n@contextlib.contextmanager\ndef work(values=None):\n with tempfile.TemporaryDirectory(prefix='opsforge-session04-tf-') as name:\n  root=pathlib.Path(name)/'root';root.mkdir();mirror=pathlib.Path(name)/'empty';mirror.mkdir()\n  for n in FILES:\n   p=root/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes((BASE/n).read_bytes())\n  rc=pathlib.Path(name)/'terraform.rc';rc.write_text('disable_checkpoint = true\\nprovider_installation { filesystem_mirror { path = '+json.dumps(str(mirror))+' } }\\n')\n  env={k:v for k,v in os.environ.items() if not k.startswith('TF_')}\n  env.update(TF_CLI_CONFIG_FILE=str(rc),TF_IN_AUTOMATION='1',TF_INPUT='0',CHECKPOINT_DISABLE='1')\n  def run(args,good=True):\n   p=subprocess.run(['terraform',*args],cwd=root,env=env,capture_output=True,text=True,timeout=20)\n   with (BASE/'native-cli-trace.jsonl').open('a') as trace:\n    trace.write(json.dumps({'command':['terraform',*args],'cwd':str(root),'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr},ensure_ascii=True)+'\\n')\n   if good: assert p.returncode==0,p.stdout+p.stderr\n   return p\n  run(['init','-backend=false','-input=false','-no-color'])\n  assert json.loads(run(['validate','-json']).stdout)['valid']\n  if values is not None: (root/'case.auto.tfvars.json').write_text(json.dumps(values))\n  yield root,run\ndef plan(values):\n with work(values) as (root,run):\n  run(['plan','-input=false','-lock=false','-no-color','-out=plan.bin'])\n  d=json.loads(run(['show','-json','plan.bin']).stdout)\n  assert not d.get('resource_changes'),'pure expression exercise must not create resources'\n  def inspect(m):\n   assert not m.get('resources'),'resource configuration is outside scope'\n   for call in m.get('module_calls',{}).values():\n    assert call['source'].startswith('./modules/'),'remote module outside scope'\n    inspect(call['module'])\n  module=d.get('configuration',{}).get('root_module',{})\n  inspect(module)\n  pass\n  return {k:v['value'] for k,v in d.get('planned_values',{}).get('outputs',{}).items()}\nimport uuid\nwith work() as (root,run):\n ident='session04-'+uuid.uuid4().hex\n run(['import','-input=false','-no-color','terraform_data.adopted',ident])\n assert run(['state','list']).stdout.strip()=='terraform_data.adopted'\n state=json.loads(run(['show','-json']).stdout)\n assert state['values']['root_module']['resources'][0]['values']['id']==ident\n assert run(['import','-input=false','-no-color','terraform_data.adopted',ident],False).returncode!=0\n run(['plan','-input=false','-no-color','-out=import.plan'])\n d=json.loads(run(['show','-json','import.plan']).stdout)\n assert d['planned_values']['outputs']['id']['value']==ident\n assert all(c['change']['actions']==['no-op'] for c in d.get('resource_changes',[]))\n run(['apply','-input=false','-auto-approve','-no-color'])\n assert run(['plan','-detailed-exitcode','-input=false','-no-color'],False).returncode==0\n run(['destroy','-auto-approve','-input=false','-no-color'])\n assert run(['state','list']).stdout.strip()==''\n\nprint(\"Session04 native Terraform contract complete\")\n"
+      },
+      "validation_scope": "Native Terraform1.13.5 offline only; no cloud provider/API/runtime evidence"
+    },
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "version": 2,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；独立复核未执行，未发布、未登记完成量。",
+    "pack": "session04-terraform-native-20261029",
+    "rubric": [
+      "参考产物的实际原生命令结果符合题意",
+      "多输入、幂等及不同错误路径被覆盖",
+      "解释原题概念与本地验证的边界"
+    ],
+    "hints": [],
+    "references": [
+      "https://developer.hashicorp.com/terraform/cli/commands/import",
+      "https://developer.hashicorp.com/terraform/language/resources/terraform-data"
+    ],
+    "conversion": {
+      "original_id": "src-0df3b42b5cc617cf",
+      "original_title": "解释Terraform的导入功能",
+      "original_type": "source",
+      "original_sha256": "ea03d5926db013f8f85642186d69c0978492bf26259c8e11b0b5f690047a23ec",
+      "mode": "same_id_substantive_artifact_conversion"
+    }
+  },
+  {
+    "id": "src-f7e45ece69b5cd92",
+    "title": "把变量声明放入正确根模块，验证目录与文件加载范围",
+    "answer": "### variables.tf\n```hcl\nvariable \"label\" {\n type = string\n default = \"root-default\"\n}\n\n```\n\n根目录main.tf引用var.label，但根目录尚未声明该输入。只补variables.tf：string类型、默认root-default。examples/variables.tf属于另一个未调用目录，不能作为根模块声明；operator-notes.tf.txt是普通文档，也不应删除或改写成合法HCL。实际执行默认、显式覆盖、空字符串三种plan，并让可信验收改变未调用示例目录的默认值，根结果仍应保持不变。\n\n## 原理与原题解答\nTerraform configuration 是描述资源目标状态、输入变量、provider、数据源和模块的声明式配置，通常使用 HCL。Terraform 结合 state 与 provider 读取的实际状态生成 plan；配置本身不是顺序执行的 shell 脚本。\n\n原题：解释什么是\"Terraform configuration\"",
+    "category": "Terraform",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "case",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "pending",
+    "review_note": "会话04重新执行原生验证；独审待安排，未登记完成。",
+    "original_category": "Terraform",
+    "original_title": "解释什么是\"Terraform configuration\"",
+    "module": "terraform",
+    "topic": "HCL表达式与输入",
+    "level": 0,
+    "body": "## 环境与初始材料\n网页离线 Terraform 配置练习，验收需要平台隔离工作区内的 Terraform 1.13.5 和 Python。缺工具时为待验收；不要求学员搭建云环境。给定材料只使用纯 HCL/JSON 表达式，不接云账号、不申请资源。\n\n## 操作任务\n根目录main.tf引用var.label，但根目录尚未声明该输入。只补variables.tf：string类型、默认root-default。examples/variables.tf属于另一个未调用目录，不能作为根模块声明；operator-notes.tf.txt是普通文档，也不应删除或改写成合法HCL。实际执行默认、显式覆盖、空字符串三种plan，并让可信验收改变未调用示例目录的默认值，根结果仍应保持不变。\n\n## 产物\n- variables.tf：提交完整配置。\n\n仅修改以上文件，保留其他只读输入；禁止增加 provider、资源、远程模块和后端。\n\n## 验收方法\n可信 checks/check.py 在独立临时目录实际执行 terraform init/validate/plan/show，解析计划输出，多输入与错误输入核对。使用空 provider 镜像和禁交互参数，无云 API 验收；此题验证离线表达式，不代表云端部署成功。",
+    "pack": "session04-terraform-native-20261029",
+    "rubric": [
+      "交付可执行 Terraform 配置",
+      "原生多输入与边界验收",
+      "遵守离线只读素材及资源范围"
+    ],
+    "related_modules": [
+      "terraform"
+    ],
+    "files": {
+      "main.tf": "output \"label\" { value = var.label }\n",
+      "variables.tf": "// TODO: declare the variable in this root module.\n",
+      "examples/variables.tf": "variable \"label\" { default = \"nested-example\" }\n",
+      "operator-notes.tf.txt": "This is plain operator documentation, not valid Terraform configuration.\n"
+    },
+    "solution_files": {
+      "variables.tf": "variable \"label\" {\n type = string\n default = \"root-default\"\n}\n"
+    },
+    "negative_files": {
+      "variables.tf": "variable \"label\" {\n type = string\n default = \"nested-example\"\n}\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "平台隔离离线 Terraform1.13.5/Python 工作区；缺依赖时待验收，不需学员自建环境。",
+      "deliverables": [
+        "variables.tf"
+      ],
+      "verification": "原生init/validate/plan默认和显式输入；未调用子目录变化不影响根输出，普通txt不解析。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "FILES=['main.tf', 'variables.tf', 'examples/variables.tf', 'operator-notes.tf.txt']\nimport pathlib,json,tempfile,subprocess,os,hashlib,contextlib\nBASE=pathlib.Path.cwd()\nTF=os.environ.get(\"OPSFORGE_TERRAFORM\",\"terraform\")\ndef equal(a,b):\n if isinstance(a,bool) or isinstance(b,bool):return type(a) is type(b) and a==b\n if isinstance(a,(int,float)) and isinstance(b,(int,float)):return a==b\n if type(a) is not type(b):return False\n if isinstance(a,dict):return a.keys()==b.keys() and all(equal(a[k],b[k]) for k in a)\n if isinstance(a,list):return len(a)==len(b) and all(equal(x,y) for x,y in zip(a,b))\n return a==b\n@contextlib.contextmanager\ndef work(overrides=None,envvars=None):\n with tempfile.TemporaryDirectory(prefix=\"opsforge-tf-\") as tmp:\n  box=pathlib.Path(tmp);root=box/\"root\";root.mkdir();mirror=box/\"empty-provider-mirror\";mirror.mkdir()\n  for name in FILES:\n   dest=root/name;dest.parent.mkdir(parents=True,exist_ok=True);dest.write_text((BASE/name).read_text(encoding=\"utf8\"),encoding=\"utf8\",newline=\"\\n\")\n  for name,value in (overrides or {}).items():\n   assert name in FILES\n   dest=root/name\n   if value is None:dest.unlink(missing_ok=True)\n   else:dest.write_text(value,encoding=\"utf8\",newline=\"\\n\")\n  cli=box/\"terraform.rc\"\n  cli.write_text(\"disable_checkpoint = true\\nprovider_installation {\\n filesystem_mirror {\\n  path = \"+json.dumps(mirror.as_posix())+\"\\n }\\n}\\n\",encoding=\"utf8\")\n  env={k:v for k,v in os.environ.items() if not k.upper().startswith(\"TF_\")}\n  env.update({\"CHECKPOINT_DISABLE\":\"1\",\"TF_IN_AUTOMATION\":\"1\",\"TF_INPUT\":\"0\",\"TF_CLI_CONFIG_FILE\":str(cli),\"TF_DATA_DIR\":str(box/\"data\")})\n  env.update(envvars or {})\n  def run(args,good=True,stdin=None):\n   p=subprocess.run([TF,*args],cwd=root,env=env,input=stdin,capture_output=True,text=True,encoding=\"utf8\",timeout=20)\n   with (BASE/'native-cli-trace.jsonl').open('a') as trace:\n    trace.write(json.dumps({'command':[TF,*args],'cwd':str(root),'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr})+'\\n')\n   if good:assert p.returncode==0,p.stdout+p.stderr\n   return p\n  run.env=env\n  run([\"init\",\"-backend=false\",\"-get=false\",\"-input=false\",\"-no-color\"])\n  val=json.loads(run([\"validate\",\"-json\"]).stdout);assert val[\"valid\"],val\n  yield root,run\ndef plan(inputs=None,overrides=None,flags=None,envvars=None,reject=False):\n with work(overrides,envvars) as (root,run):\n  args=[\"plan\",\"-input=false\",\"-lock=false\",\"-no-color\",\"-out=case.plan\"]\n  if inputs is not None:\n   (root/\"case-input.json\").write_text(json.dumps(inputs,ensure_ascii=False),encoding=\"utf8\")\n   args+=[\"-var-file=case-input.json\"]\n  args+=list(flags or [])\n  p=run(args,good=False)\n  if reject:\n   assert p.returncode!=0,\"invalid/missing input accepted\"\n   return None\n  assert p.returncode==0,p.stdout+p.stderr\n  data=json.loads(run([\"show\",\"-json\",\"case.plan\"]).stdout)\n  module=data.get(\"configuration\",{}).get(\"root_module\",{})\n  assert not module.get(\"resources\") and not module.get(\"module_calls\"),\"this task permits pure expressions only\"\n  assert not data.get(\"resource_changes\"),\"unexpected resource change\"\n  return data\ndef outputs(data):\n return {k:v.get(\"value\") for k,v in data.get(\"planned_values\",{}).get(\"outputs\",{}).items()}\n\nFIXED={'main.tf': '8927b710623134600e833c0c54b5c25e6afc5cc76ceccd9aee3fdf14cbab9b9f', 'examples/variables.tf': '4e79e2c076708516858038905462fa4f65e3156aa7d2cd64eb13ca400451228f', 'operator-notes.tf.txt': '350284711a281336ece168e53968c16fd317f1c6ec1eba1cd547e6b80f049568'}\nfor name,digest in FIXED.items():\n assert hashlib.sha256((BASE/name).read_text(encoding=\"utf8\").encode()).hexdigest()==digest,\"readonly material changed\"\nexpected={x for x in FILES if x.endswith((\".tf\",\".tf.json\"))}\nactual={p.relative_to(BASE).as_posix() for p in BASE.rglob(\"*\") if p.is_file() and p.name.endswith((\".tf\",\".tf.json\")) and not p.relative_to(BASE).as_posix().startswith(\"checks/\")}\nassert actual==expected,\"extra or missing Terraform configuration\"\n\nfor inp,want in [(None,\"root-default\"),({\"label\":\"operator-value\"},\"operator-value\"),({\"label\":\"\"},\"\")]:\n data=plan(inp)\n assert outputs(data)=={\"label\":want}\n# A nested directory is not part of its parent root module. Changing its unused default must not affect the root.\ndata=plan(None,{\"examples/variables.tf\":'variable \"label\" { default = \"different-unused-example\" }\\n'})\nassert outputs(data)=={\"label\":\"root-default\"}\n\nprint(\"Native Terraform offline contract complete; no cloud provider or API\")\n"
+      },
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "terraform"
+        ]
+      },
+      "validation_scope": "Native Terraform root directory loading and input declaration scope; no resource or cloud operations"
+    },
+    "conversion": {
+      "original_id": "src-f7e45ece69b5cd92",
+      "original_title": "解释什么是\"Terraform configuration\"",
+      "original_type": "source",
+      "original_level": 0,
+      "original_sha256": "c882c01335cb68ca920ca143ed1e305fc5acc944c0e5eb4d48fdb84ab093b105",
+      "mode": "same_id_substantive_artifact_conversion"
+    },
+    "question_format": "case"
+  },
+  {
+    "id": "src-09f09bab15f53c35",
+    "title": "实际检查本地state中的敏感值与备份边界",
+    "answer": "### main.tf\n```hcl\nvariable \"secret\" {\n type = string\n sensitive = true\n}\nresource \"terraform_data\" \"record\" { input = var.secret }\noutput \"secret\" {\n value = terraform_data.record.output\n sensitive = true\n}\n```\n\n本地state和备份含对象身份及可能的秘密。sensitive只影响展示，不等于静态加密。团队需要统一状态来源、适合后端的锁、细粒度授权、加密与恢复演练，不把state提交版本库。本题实际验证本地存储，远程锁需另行环境验收。",
+    "category": "Terraform",
+    "difficulty": "入门",
+    "section": "状态",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/terraform/README.md",
+    "sources": [
+      "topics/terraform/README.md"
+    ],
+    "question_format": "project",
+    "module": "terraform",
+    "level": 1,
+    "body": "## 操作环境\n平台隔离Linux、Terraform 1.13.5、Python3。所有命令仅作用于本题临时目录；无云账号、无远程服务。\n\n## 操作任务\n交付只管理内置terraform_data.record的本地项目，输入secret和输出secret均标记sensitive，resource.input接收var.secret。可信验收用随机假秘密实际apply/state pull，证明终端掩码不代表state加密；改变值并检查备份与后续plan。提交答案需说明单机丢失、备份泄露、协作锁和远程后端访问控制的风险。严禁使用真实凭据。本题不宣称已验证远程后端锁。\n\n## 产物\n- main.tf\n仅修改上述交付文件，保留其余材料；不得添加远程模块、云provider或provisioner。\n\n## 验收方法\n平台实际运行Terraform init/validate/plan/show；涉及state的题额外实际执行apply/import/state。输入变化与重复执行分别验收。此合同只验证明确的本地Terraform语义，不代表云端部署或原生产故障复现。",
+    "files": {
+      "main.tf": "variable \"secret\" {\n type = string\n sensitive = true\n}\noutput \"secret\" {\n value = var.secret\n sensitive = true\n}\n"
+    },
+    "solution_files": {
+      "main.tf": "variable \"secret\" {\n type = string\n sensitive = true\n}\nresource \"terraform_data\" \"record\" { input = var.secret }\noutput \"secret\" {\n value = terraform_data.record.output\n sensitive = true\n}\n"
+    },
+    "negative_files": {
+      "main.tf": "variable \"secret\" {\n type = string\n sensitive = true\n}\nresource \"terraform_data\" \"record\" { input = \"fixed\" }\noutput \"secret\" {\n value = terraform_data.record.output\n sensitive = true\n}\n"
+    },
+    "exercise": {
+      "environment": "隔离普通用户Linux / Terraform1.13.5，无云API",
+      "deliverables": [
+        "main.tf"
+      ],
+      "verification": "真实原生命令、多输入与错误路径；原始结果保留于会话04证据"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "terraform"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import contextlib,hashlib,json,os,pathlib,subprocess,tempfile\nBASE=pathlib.Path.cwd()\nFILES=['main.tf']\nFIXED={}\nfor name,digest in FIXED.items():\n assert hashlib.sha256((BASE/name).read_bytes()).hexdigest()==digest, 'readonly material changed'\nactual={p.relative_to(BASE).as_posix() for p in BASE.rglob('*') if p.is_file() and p.name.endswith(('.tf','.tf.json')) and not p.relative_to(BASE).as_posix().startswith('checks/')}\nassert actual=={n for n in FILES if n.endswith(('.tf','.tf.json'))}, 'unexpected configuration file'\n@contextlib.contextmanager\ndef work(values=None):\n with tempfile.TemporaryDirectory(prefix='opsforge-session04-tf-') as name:\n  root=pathlib.Path(name)/'root';root.mkdir();mirror=pathlib.Path(name)/'empty';mirror.mkdir()\n  for n in FILES:\n   p=root/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes((BASE/n).read_bytes())\n  rc=pathlib.Path(name)/'terraform.rc';rc.write_text('disable_checkpoint = true\\nprovider_installation { filesystem_mirror { path = '+json.dumps(str(mirror))+' } }\\n')\n  env={k:v for k,v in os.environ.items() if not k.startswith('TF_')}\n  env.update(TF_CLI_CONFIG_FILE=str(rc),TF_IN_AUTOMATION='1',TF_INPUT='0',CHECKPOINT_DISABLE='1')\n  def run(args,good=True):\n   p=subprocess.run(['terraform',*args],cwd=root,env=env,capture_output=True,text=True,timeout=20)\n   with (BASE/'native-cli-trace.jsonl').open('a') as trace:\n    trace.write(json.dumps({'command':['terraform',*args],'cwd':str(root),'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr},ensure_ascii=True)+'\\n')\n   if good: assert p.returncode==0,p.stdout+p.stderr\n   return p\n  run(['init','-backend=false','-input=false','-no-color'])\n  assert json.loads(run(['validate','-json']).stdout)['valid']\n  if values is not None: (root/'case.auto.tfvars.json').write_text(json.dumps(values))\n  yield root,run\ndef plan(values):\n with work(values) as (root,run):\n  run(['plan','-input=false','-lock=false','-no-color','-out=plan.bin'])\n  d=json.loads(run(['show','-json','plan.bin']).stdout)\n  assert not d.get('resource_changes'),'pure expression exercise must not create resources'\n  def inspect(m):\n   assert not m.get('resources'),'resource configuration is outside scope'\n   for call in m.get('module_calls',{}).values():\n    assert call['source'].startswith('./modules/'),'remote module outside scope'\n    inspect(call['module'])\n  module=d.get('configuration',{}).get('root_module',{})\n  inspect(module)\n  pass\n  return {k:v['value'] for k,v in d.get('planned_values',{}).get('outputs',{}).items()}\nimport uuid\nwith work() as (root,run):\n for index in range(2):\n  secret='fake-session04-'+uuid.uuid4().hex\n  (root/'case.auto.tfvars.json').write_text(json.dumps({'secret':secret}))\n  run(['plan','-input=false','-no-color','-out=secret-input.plan'])\n  configured=json.loads(run(['show','-json','secret-input.plan']).stdout)\n  assert configured['configuration']['root_module']['variables']['secret'].get('sensitive') is True,'secret input must be sensitive'\n  run(['apply','-auto-approve','-input=false','-no-color'])\n  state=json.loads(run(['state','pull']).stdout)\n  records=[r for r in state['resources'] if r['type']=='terraform_data' and r['name']=='record']\n  assert len(records)==1,'required state resource missing'\n  record=records[0]\n  assert record['instances'][0]['attributes']['input']['value']==secret\n  assert state['outputs']['secret']['value']==secret and state['outputs']['secret']['sensitive'] is True\n  assert run(['plan','-detailed-exitcode','-input=false','-no-color'],False).returncode==0\n assert (root/'terraform.tfstate.backup').exists()\n run(['destroy','-auto-approve','-input=false','-no-color'])\n assert run(['state','list']).stdout.strip()==''\n\nprint(\"Session04 native Terraform contract complete\")\n"
+      },
+      "validation_scope": "Native Terraform1.13.5 offline only; no cloud provider/API/runtime evidence"
+    },
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "version": 2,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；独立复核未执行，未发布、未登记完成量。",
+    "pack": "session04-terraform-native-20261029",
+    "rubric": [
+      "参考产物的实际原生命令结果符合题意",
+      "多输入、幂等及不同错误路径被覆盖",
+      "解释原题概念与本地验证的边界"
+    ],
+    "hints": [],
+    "references": [
+      "https://developer.hashicorp.com/terraform/language/state",
+      "https://developer.hashicorp.com/terraform/language/state/remote"
+    ],
+    "conversion": {
+      "original_id": "src-09f09bab15f53c35",
+      "original_title": "为什么在计算机上本地存储状态文件可能会出现问题？",
+      "original_type": "source",
+      "original_sha256": "025ca64d5f9ffd5ab0ba35483f37acac56da56e58c6f27cb82d84f7b4ea8cbda",
+      "mode": "same_id_substantive_artifact_conversion"
+    }
+  },
+  {
+    "id": "src-0bed5acc345b42f7",
+    "title": "实际安装指定provider并验证本地资源与锁文件",
+    "answer": "### main.tf\n```hcl\nterraform {\n required_providers {\n local = {\n source = \"hashicorp/local\"\n version = \"= 2.5.3\"\n }\n }\n}\nvariable \"text\" {\n type = string\n}\nresource \"local_file\" \"record\" {\n filename = \"${path.module}/result.txt\"\n content = var.text\n file_permission = \"0600\"\n}\n```\n\nrequired_providers声明provider来源和版本约束，init安装满足约束的包并生成依赖锁文件。provider块提供该provider的配置。后续运行保留并评审锁文件，升级需有意执行。本题用真实本地provider资源，不涉及云服务。",
+    "category": "Terraform",
+    "difficulty": "入门",
+    "section": "提供商",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/terraform/README.md",
+    "sources": [
+      "topics/terraform/README.md"
+    ],
+    "question_format": "project",
+    "module": "terraform",
+    "level": 1,
+    "body": "## 操作环境\n平台隔离Linux、Terraform 1.13.5、Python3。所有命令仅作用于本题临时目录；无云账号、无远程服务。\n\n## 操作任务\n声明hashicorp/local 2.5.3并创建local_file.record，把var.text写入当前临时模块的result.txt，权限0600。验收使用平台预置只读provider镜像实际init/validate/apply，核对锁文件、provider schema和内容；重复plan必须无变化。解释required_providers/source/version与provider配置的区别。禁止远程下载和写出题目目录。\n\n## 产物\n- main.tf\n仅修改上述交付文件，保留其余材料；不得添加远程模块、云provider或provisioner。\n\n## 验收方法\n平台实际运行Terraform init/validate/plan/show；涉及state的题额外实际执行apply/import/state。输入变化与重复执行分别验收。此合同只验证明确的本地Terraform语义，不代表云端部署或原生产故障复现。",
+    "files": {
+      "main.tf": "variable \"text\" {\n type = string\n}\noutput \"text\" { value = var.text }\n"
+    },
+    "solution_files": {
+      "main.tf": "terraform {\n required_providers {\n local = {\n source = \"hashicorp/local\"\n version = \"= 2.5.3\"\n }\n }\n}\nvariable \"text\" {\n type = string\n}\nresource \"local_file\" \"record\" {\n filename = \"${path.module}/result.txt\"\n content = var.text\n file_permission = \"0600\"\n}\n"
+    },
+    "negative_files": {
+      "main.tf": "terraform {\n required_providers {\n local = {\n source = \"hashicorp/local\"\n version = \"= 2.5.3\"\n }\n }\n}\nvariable \"text\" {\n type = string\n}\nresource \"local_file\" \"record\" {\n filename = \"${path.module}/result.txt\"\n content = \"fixed\"\n file_permission = \"0600\"\n}\n"
+    },
+    "exercise": {
+      "environment": "隔离普通用户Linux / Terraform1.13.5，无云API",
+      "deliverables": [
+        "main.tf"
+      ],
+      "verification": "真实原生命令、多输入与错误路径；原始结果保留于会话04证据"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "terraform"
+        ],
+        "terraform_providers": [
+          "hashicorp/local@2.5.3"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import contextlib,hashlib,json,os,pathlib,subprocess,tempfile\nBASE=pathlib.Path.cwd()\nFILES=['main.tf']\nFIXED={}\nfor name,digest in FIXED.items():\n assert hashlib.sha256((BASE/name).read_bytes()).hexdigest()==digest, 'readonly material changed'\nactual={p.relative_to(BASE).as_posix() for p in BASE.rglob('*') if p.is_file() and p.name.endswith(('.tf','.tf.json')) and not p.relative_to(BASE).as_posix().startswith('checks/')}\nassert actual=={n for n in FILES if n.endswith(('.tf','.tf.json'))}, 'unexpected configuration file'\n@contextlib.contextmanager\ndef work(values=None):\n with tempfile.TemporaryDirectory(prefix='opsforge-session04-tf-') as name:\n  root=pathlib.Path(name)/'root';root.mkdir();mirror=pathlib.Path(name)/'empty';mirror.mkdir()\n  for n in FILES:\n   p=root/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes((BASE/n).read_bytes())\n  rc=pathlib.Path(name)/'terraform.rc';rc.write_text('disable_checkpoint = true\\nprovider_installation { filesystem_mirror { path = '+json.dumps('/opt/terraform-providers')+' } }\\n')\n  env={k:v for k,v in os.environ.items() if not k.startswith('TF_')}\n  env.update(TF_CLI_CONFIG_FILE=str(rc),TF_IN_AUTOMATION='1',TF_INPUT='0',CHECKPOINT_DISABLE='1')\n  def run(args,good=True):\n   p=subprocess.run(['terraform',*args],cwd=root,env=env,capture_output=True,text=True,timeout=20)\n   with (BASE/'native-cli-trace.jsonl').open('a') as trace:\n    trace.write(json.dumps({'command':['terraform',*args],'cwd':str(root),'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr},ensure_ascii=True)+'\\n')\n   if good: assert p.returncode==0,p.stdout+p.stderr\n   return p\n  run(['init','-backend=false','-input=false','-no-color'])\n  assert json.loads(run(['validate','-json']).stdout)['valid']\n  if values is not None: (root/'case.auto.tfvars.json').write_text(json.dumps(values))\n  yield root,run\ndef plan(values):\n with work(values) as (root,run):\n  run(['plan','-input=false','-lock=false','-no-color','-out=plan.bin'])\n  d=json.loads(run(['show','-json','plan.bin']).stdout)\n  assert not d.get('resource_changes'),'pure expression exercise must not create resources'\n  def inspect(m):\n   assert not m.get('resources'),'resource configuration is outside scope'\n   for call in m.get('module_calls',{}).values():\n    assert call['source'].startswith('./modules/'),'remote module outside scope'\n    inspect(call['module'])\n  module=d.get('configuration',{}).get('root_module',{})\n  inspect(module)\n  pass\n  return {k:v['value'] for k,v in d.get('planned_values',{}).get('outputs',{}).items()}\nimport stat\nfor text in ['first','line1\\nline2\\n','团队']:\n with work({'text':text}) as (root,run):\n  assert (root/'.terraform.lock.hcl').exists(),'required dependency lock file missing'\n  lock=(root/'.terraform.lock.hcl').read_text()\n  assert 'registry.terraform.io/hashicorp/local' in lock and '2.5.3' in lock\n  schema=json.loads(run(['providers','schema','-json']).stdout)\n  assert 'local_file' in schema['provider_schemas']['registry.terraform.io/hashicorp/local']['resource_schemas']\n  run(['apply','-auto-approve','-input=false','-no-color'])\n  target=root/'result.txt'\n  assert target.read_text()==text\n  assert stat.S_IMODE(target.stat().st_mode)==0o600\n  assert run(['plan','-detailed-exitcode','-input=false','-no-color'],False).returncode==0\n  run(['destroy','-auto-approve','-input=false','-no-color'])\n  assert not target.exists()\n\nprint(\"Session04 native Terraform contract complete\")\n"
+      },
+      "validation_scope": "Native Terraform provider hashicorp/local2.5.3 via read-only filesystem mirror; no cloud API"
+    },
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "version": 2,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；独立复核未执行，未发布、未登记完成量。",
+    "pack": "session04-terraform-native-20261029",
+    "rubric": [
+      "参考产物的实际原生命令结果符合题意",
+      "多输入、幂等及不同错误路径被覆盖",
+      "解释原题概念与本地验证的边界"
+    ],
+    "hints": [],
+    "references": [
+      "https://developer.hashicorp.com/terraform/language/providers/requirements",
+      "https://developer.hashicorp.com/terraform/language/files/dependency-lock"
+    ],
+    "conversion": {
+      "original_id": "src-0bed5acc345b42f7",
+      "original_title": "如何安装提供程序？",
+      "original_type": "source",
+      "original_sha256": "ad52cd4ca9509661ffd1089e50e96715c1e7db9578aed13cf91128fe92b07fca",
+      "mode": "same_id_substantive_artifact_conversion"
+    }
+  },
+  {
+    "category": "Terraform",
+    "module": "terraform",
+    "source": "OpsForge 原创教学题",
+    "version": 2,
+    "has_answer": true,
+    "tags": [
+      "provider",
+      "resource",
+      "变量",
+      "state",
+      "plan",
+      "模块"
+    ],
+    "id": "case-terraform",
+    "type": "case",
+    "level": 3,
+    "title": "排查资源改名导致的销毁重建计划，保留既有状态身份",
+    "intro": "配置描述期望基础设施，state 记录资源映射，plan 展示预计变更。",
+    "body": "## 操作环境\n平台隔离Linux、Terraform 1.13.5、Python3。所有命令仅作用于本题临时目录；无云账号、无远程服务。\n\n## 操作任务\n真实初始state含terraform_data.old，重命名配置后plan准备删除旧地址并创建record。交付main.tf，通过声明式moved把旧地址迁移到terraform_data.record；保持input=keep-me，根输出id读取record.id。不能删除state、重建资源或把旧ID硬编码为输出。验收须保留同一对象ID，后续plan无变化。所有资源为Terraform内置本地资源。\n\n## 产物\n- main.tf\n仅修改上述交付文件，保留其余材料；不得添加远程模块、云provider或provisioner。\n\n## 验收方法\n平台实际运行Terraform init/validate/plan/show；涉及state的题额外实际执行apply/import/state。输入变化与重复执行分别验收。此合同只验证明确的本地Terraform语义，不代表云端部署或原生产故障复现。",
+    "answer": "### main.tf\n```hcl\nmoved {\n from = terraform_data.old\n to = terraform_data.record\n}\nresource \"terraform_data\" \"record\" { input = \"keep-me\" }\noutput \"id\" { value = terraform_data.record.id }\n```\n\n先保存state与计划并核实地址变化，识别身份迁移与资源属性修改的区别。moved记录旧新地址关系，让Terraform迁移状态绑定；审查plan仍须确认没有更新、替换或销毁动作。不要直接删state消除差异。",
+    "hints": [],
+    "minutes": 45,
+    "rubric": [
+      "参考产物的实际原生命令结果符合题意",
+      "多输入、幂等及不同错误路径被覆盖",
+      "解释原题概念与本地验证的边界"
+    ],
+    "related_modules": [
+      "terraform"
+    ],
+    "review_status": "pending",
+    "review_note": "会话04作者候选；独立复核未执行，未发布、未登记完成量。",
+    "difficulty": "进阶",
+    "quality_withdrawn": true,
+    "question_format": "case",
+    "files": {
+      "main.tf": "resource \"terraform_data\" \"record\" { input = \"keep-me\" }\noutput \"id\" { value = terraform_data.record.id }\n"
+    },
+    "solution_files": {
+      "main.tf": "moved {\n from = terraform_data.old\n to = terraform_data.record\n}\nresource \"terraform_data\" \"record\" { input = \"keep-me\" }\noutput \"id\" { value = terraform_data.record.id }\n"
+    },
+    "negative_files": {
+      "main.tf": "moved {\n from = terraform_data.old\n to = terraform_data.record\n}\nresource \"terraform_data\" \"record\" { input = \"changed\" }\noutput \"id\" { value = terraform_data.record.id }\n"
+    },
+    "exercise": {
+      "environment": "隔离普通用户Linux / Terraform1.13.5，无云API",
+      "deliverables": [
+        "main.tf"
+      ],
+      "verification": "真实原生命令、多输入与错误路径；原始结果保留于会话04证据"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "terraform"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import contextlib,hashlib,json,os,pathlib,subprocess,tempfile\nBASE=pathlib.Path.cwd()\nFILES=['main.tf']\nFIXED={}\nfor name,digest in FIXED.items():\n assert hashlib.sha256((BASE/name).read_bytes()).hexdigest()==digest, 'readonly material changed'\nactual={p.relative_to(BASE).as_posix() for p in BASE.rglob('*') if p.is_file() and p.name.endswith(('.tf','.tf.json')) and not p.relative_to(BASE).as_posix().startswith('checks/')}\nassert actual=={n for n in FILES if n.endswith(('.tf','.tf.json'))}, 'unexpected configuration file'\n@contextlib.contextmanager\ndef work(values=None):\n with tempfile.TemporaryDirectory(prefix='opsforge-session04-tf-') as name:\n  root=pathlib.Path(name)/'root';root.mkdir();mirror=pathlib.Path(name)/'empty';mirror.mkdir()\n  for n in FILES:\n   p=root/n;p.parent.mkdir(parents=True,exist_ok=True);p.write_bytes((BASE/n).read_bytes())\n  rc=pathlib.Path(name)/'terraform.rc';rc.write_text('disable_checkpoint = true\\nprovider_installation { filesystem_mirror { path = '+json.dumps(str(mirror))+' } }\\n')\n  env={k:v for k,v in os.environ.items() if not k.startswith('TF_')}\n  env.update(TF_CLI_CONFIG_FILE=str(rc),TF_IN_AUTOMATION='1',TF_INPUT='0',CHECKPOINT_DISABLE='1')\n  def run(args,good=True):\n   p=subprocess.run(['terraform',*args],cwd=root,env=env,capture_output=True,text=True,timeout=20)\n   with (BASE/'native-cli-trace.jsonl').open('a') as trace:\n    trace.write(json.dumps({'command':['terraform',*args],'cwd':str(root),'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr},ensure_ascii=True)+'\\n')\n   if good: assert p.returncode==0,p.stdout+p.stderr\n   return p\n  run(['init','-backend=false','-input=false','-no-color'])\n  assert json.loads(run(['validate','-json']).stdout)['valid']\n  if values is not None: (root/'case.auto.tfvars.json').write_text(json.dumps(values))\n  yield root,run\ndef plan(values):\n with work(values) as (root,run):\n  run(['plan','-input=false','-lock=false','-no-color','-out=plan.bin'])\n  d=json.loads(run(['show','-json','plan.bin']).stdout)\n  assert not d.get('resource_changes'),'pure expression exercise must not create resources'\n  def inspect(m):\n   assert not m.get('resources'),'resource configuration is outside scope'\n   for call in m.get('module_calls',{}).values():\n    assert call['source'].startswith('./modules/'),'remote module outside scope'\n    inspect(call['module'])\n  module=d.get('configuration',{}).get('root_module',{})\n  inspect(module)\n  pass\n  return {k:v['value'] for k,v in d.get('planned_values',{}).get('outputs',{}).items()}\nwith work() as (root,run):\n submitted=(root/'main.tf').read_text()\n (root/'main.tf').write_text('resource \"terraform_data\" \"old\" { input = \"keep-me\" }\\n')\n run(['apply','-auto-approve','-input=false','-no-color'])\n old=json.loads(run(['show','-json']).stdout)['values']['root_module']['resources'][0]['values']['id']\n (root/'main.tf').write_text(submitted)\n run(['validate','-no-color'])\n run(['plan','-input=false','-no-color','-out=moved.plan'])\n d=json.loads(run(['show','-json','moved.plan']).stdout)\n change=next(c for c in d['resource_changes'] if c['address']=='terraform_data.record')\n assert change.get('previous_address')=='terraform_data.old'\n assert change['change']['actions']==['no-op']\n assert d['planned_values']['outputs']['id']['value']==old\n run(['apply','-input=false','-auto-approve','-no-color'])\n assert run(['state','list']).stdout.strip()=='terraform_data.record'\n assert json.loads(run(['output','-json']).stdout)['id']['value']==old\n assert run(['plan','-detailed-exitcode','-input=false','-no-color'],False).returncode==0\n run(['destroy','-auto-approve','-input=false','-no-color'])\n assert run(['state','list']).stdout.strip()==''\n\nprint(\"Session04 native Terraform contract complete\")\n"
+      },
+      "validation_scope": "Native Terraform1.13.5 offline only; no cloud provider/API/runtime evidence"
+    },
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "pack": "session04-terraform-native-20261029",
+    "references": [
+      "https://developer.hashicorp.com/terraform/language/modules/develop/refactoring",
+      "https://developer.hashicorp.com/terraform/language/block/moved"
+    ],
+    "conversion": {
+      "original_id": "case-terraform",
+      "original_title": "Terraform · 排查思路训练",
+      "original_type": "case",
+      "original_sha256": "baef9cbecb7dea6656776c6f84f1307ff1d5f9342d14be3e511dd5991ba490e6",
+      "mode": "same_id_substantive_artifact_conversion"
+    }
+  }
+]

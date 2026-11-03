@@ -1,0 +1,148 @@
+[
+  {
+    "id": "curated-parallel-envoy-003",
+    "module": "envoy",
+    "category": "Envoy",
+    "level": 0,
+    "topic": "路由、协议与代理",
+    "title": "真实TCP代理与HCM对照：透传非HTTP字节，不把流分段当业务消息",
+    "answer": "```python\nimport copy\ndef configure(base):\n    fixed=copy.deepcopy(base)\n    fixed['static_resources']['listeners'][0]['filter_chains'][0]['filters']=[{\n        'name':'envoy.filters.network.tcp_proxy','typed_config':{\n            '@type':'type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy',\n            'stat_prefix':'opaque_tcp','cluster':'service','idle_timeout':'1s'}}]\n    return fixed\n```\n\n原题知识说明：\nHCM解析HTTP并执行HTTP过滤器和路由等功能，TCP proxy主要转发连接字节流。选择错误层次会缺少需要的协议语义；不能在纯TCP转发链中期待HTTP路径匹配与HTTP状态指标。",
+    "type": "code",
+    "source": "OpsForge Envoy 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 操作任务\n实现configure(base)返回深拷贝，保留原listener地址、admin及service cluster，只把第一个filter chain的网络过滤器改为tcp_proxy，stat_prefix=opaque_tcp、cluster=service、idle_timeout=1秒；不设置短于业务合同的总连接寿命。验收先用HCM实际请求HTTP上游并核对http.ingress.downstream_rq_total，再实际拒绝非HTTP载荷；TCP proxy必须完整回传含NUL/非UTF8字节、看似HTTP的原始字节与跨多次send的大载荷，实际只产生tcp.opaque_tcp连接指标而不产生HCM的HTTP请求指标。两次业务消息间隔0.17秒仍可用。不得按HTTP解析改写数据、将透明TCP字节冒充HTTP请求统计，也不能假定一次recv等于一条消息。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Envoy1.36.13 TCP filter与私有TCP echo；验证透明字节转发及空闲/总时长区别，不解析TLS或应用协议，不验证生产长连接SLO。",
+    "rubric": [
+      "对象和阶段区分准确",
+      "适用条件明确",
+      "结论有可核验证据"
+    ],
+    "hints": [],
+    "references": [
+      "https://www.envoyproxy.io/docs/envoy/v1.36.13/configuration/listeners/network_filters/tcp_proxy_filter",
+      "https://www.envoyproxy.io/docs/envoy/v1.36.13/intro/arch_overview/listeners/network_filters"
+    ],
+    "related_modules": [
+      "envoy"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-envoy-003",
+      "original_title": "HTTP connection manager与TCP proxy分别观察什么信息？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef configure(base):\n    fixed=copy.deepcopy(base)\n    fixed['static_resources']['listeners'][0]['filter_chains'][0]['filters']=[{\n        'name':'envoy.filters.network.tcp_proxy','typed_config':{\n            '@type':'type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy',\n            'stat_prefix':'opaque_tcp','cluster':'service','idle_timeout':'1s'}}]\n    return fixed\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef configure(base):return copy.deepcopy(base)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现configure(base)返回深拷贝，保留原listener地址、admin及service cluster，只把第一个filter chain的网络过滤器改为tcp_proxy，stat_prefix=opaque_tcp、cluster=service、idle_timeout=1秒；不设置短于业务合同的总连接寿命。验收先用HCM实际请求HTTP上游并核对http.ingress.downstream_rq_total，再实际拒绝非HTTP载荷；TCP proxy必须完整回传含NUL/非UTF8字节、看似HTTP的原始字节与跨多次send的大载荷，实际只产生tcp.opaque_tcp连接指标而不产生HCM的HTTP请求指标。两次业务消息间隔0.17秒仍可用。不得按HTTP解析改写数据、将透明TCP字节冒充HTTP请求统计，也不能假定一次recv等于一条消息。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Envoy1.36.13 TCP filter与私有TCP echo；验证透明字节转发及空闲/总时长区别，不解析TLS或应用协议，不验证生产长连接SLO。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "envoy"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/envoy_native.py": "\"\"\"Pinned standalone Envoy and loopback-only HTTP peers, no image or host changes.\"\"\"\nimport copy,http.server,json,os,pathlib,shutil,socket,subprocess,tempfile,threading,time,urllib.error,urllib.request\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\ndef request(base,path,method='GET',body=None,headers=None):\n req=urllib.request.Request(base+path,data=body,method=method,headers=headers or {})\n opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n try:\n  with opener.open(req,timeout=3) as response:return response.status,response.read(),dict(response.headers)\n except urllib.error.HTTPError as response:\n  try:return response.code,response.read(),dict(response.headers)\n  finally:response.close()\n\nclass Upstream:\n def __init__(self,status=200):self.status=status;self.requests=[];self.lock=threading.Lock()\n def __enter__(self):\n  owner=self\n  class Handler(http.server.BaseHTTPRequestHandler):\n   protocol_version='HTTP/1.1'\n   def log_message(self,*args):pass\n   def respond(self):\n    raw=self.rfile.read(int(self.headers.get('Content-Length',0)))\n    with owner.lock:owner.requests.append({'method':self.command,'path':self.path,'body':raw.decode('utf8'),'headers':dict(self.headers)});index=len(owner.requests)\n    status=owner.status(self.command,self.path,index) if callable(owner.status) else owner.status\n    body=json.dumps({'method':self.command,'path':self.path,'attempt':index}).encode()\n    self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers()\n    try:self.wfile.write(body);self.wfile.flush()\n    except (BrokenPipeError,ConnectionResetError):pass\n   do_GET=do_POST=do_PUT=respond\n  self.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);self.port=self.server.server_port\n  self.thread=threading.Thread(target=lambda:self.server.serve_forever(poll_interval=.02),daemon=True);self.thread.start();return self\n def __exit__(self,*args):self.server.shutdown();self.server.server_close();self.thread.join(2)\n\ndef bootstrap(upstream_port):\n return {'node':{'id':'private-probe','cluster':'opsforge'},\n  'admin':{'address':{'socket_address':{'address':'127.0.0.1','port_value':0}}},\n  'static_resources':{'listeners':[{'name':'ingress','address':{'socket_address':{'address':'127.0.0.1','port_value':0}},'filter_chains':[{'filters':[{'name':'envoy.filters.network.http_connection_manager','typed_config':{\n   '@type':'type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager','stat_prefix':'ingress','codec_type':'AUTO',\n   'route_config':{'name':'local','virtual_hosts':[{'name':'service','domains':['*'],'routes':[{'match':{'prefix':'/'},'route':{'cluster':'service','timeout':'1s'}}]}]},\n   'http_filters':[{'name':'envoy.filters.http.router','typed_config':{'@type':'type.googleapis.com/envoy.extensions.filters.http.router.v3.Router'}}]}}]}]}],\n  'clusters':[{'name':'service','connect_timeout':'0.2s','type':'STATIC','lb_policy':'ROUND_ROBIN','load_assignment':{'cluster_name':'service','endpoints':[{'lb_endpoints':[{'endpoint':{'address':{'socket_address':{'address':'127.0.0.1','port_value':upstream_port}}}}]}]}}]}}\n\ndef hcm(config):return config['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\ndef routes(config):return hcm(config)['route_config']['virtual_hosts'][0]['routes']\n\nclass Envoy:\n def __init__(self,config):self.config=copy.deepcopy(config);self.process=None;self.temp=None;self.log=None\n def __enter__(self):\n  binary=shutil.which('envoy')\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: standalone Envoy missing')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '/1.36.13/' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Envoy1.36.13 required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-envoy-');self.root=pathlib.Path(self.temp.name);port=free_port();admin=free_port()\n  while admin==port:admin=free_port()\n  self.config['static_resources']['listeners'][0]['address']['socket_address']['port_value']=port\n  self.config['admin']['address']['socket_address']['port_value']=admin\n  self.base='http://127.0.0.1:'+str(port);self.admin='http://127.0.0.1:'+str(admin)\n  path=self.root/'bootstrap.json';path.write_text(json.dumps(self.config),encoding='utf8');self.log=(self.root/'envoy.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--config-path',str(path),'--disable-hot-restart','--concurrency','1','--log-level','error'],cwd=self.root,stdout=self.log,stderr=self.log)\n   deadline=time.monotonic()+5\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:raise RuntimeError('Envoy startup failed: '+(self.root/'envoy.log').read_text(errors='replace')[-2400:])\n    try:\n     if request(self.admin,'/ready')[0]==200:break\n    except (OSError,urllib.error.URLError):pass\n    time.sleep(.02)\n   else:raise RuntimeError('Envoy private readiness deadline')\n   print('NATIVE_ENVOY_READY:1.36.13',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,method='GET',body=None,headers=None):return request(self.base,path,method,body,headers)\n def stats(self):return {r['name']:r['value'] for r in json.loads(request(self.admin,'/stats?format=json')[1])['stats'] if 'name' in r and 'value' in r}\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student Envoy operation failed: '+type(error).__name__) from error\n",
+        "checks/check.py": "import os,sys,pathlib,copy,json,time,threading,socket,socketserver,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom envoy_native import Envoy,Upstream,bootstrap,hcm,routes,student\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nclass Echo(socketserver.BaseRequestHandler):\n def handle(self):\n  self.request.settimeout(.8)\n  while True:\n   try:raw=self.request.recv(65536)\n   except (TimeoutError,ConnectionResetError):return\n   if not raw:return\n   try:self.request.sendall(raw)\n   except BrokenPipeError:return\nclass Server(socketserver.ThreadingTCPServer):allow_reuse_address=True;daemon_threads=True\ndef read_exact(conn,n):\n out=b''\n try:\n  while len(out)<n:\n   block=conn.recv(n-len(out))\n   if not block:break\n   out+=block\n except (OSError,TimeoutError) as error:raise AssertionError('TCP proxy interrupted opaque stream') from error\n assert len(out)==n,'TCP proxy closed a valid stream early'\n return out\nwith Upstream() as web,Envoy(bootstrap(web.port)) as http_proxy:\n assert http_proxy.request('/observed-http')[0]==200 and web.requests[-1]['path']=='/observed-http'\n assert http_proxy.stats().get('http.ingress.downstream_rq_total',0)==1,'HCM HTTP request accounting missing'\nwith Server(('127.0.0.1',0),Echo) as upstream:\n thread=threading.Thread(target=lambda:upstream.serve_forever(poll_interval=.02),daemon=True);thread.start()\n try:\n  base=bootstrap(upstream.server_address[1]);before=copy.deepcopy(base)\n  with Envoy(base) as old:\n   port=old.config['static_resources']['listeners'][0]['address']['socket_address']['port_value']\n   with socket.create_connection(('127.0.0.1',port),timeout=1) as client:\n    client.sendall(b'\\x00\\xffopaque\\n');assert b'400' in client.recv(512),'HCM baseline did not reject non-HTTP bytes'\n  fixed=student(task.configure,base);assert base==before and fixed['static_resources']['clusters']==base['static_resources']['clusters'] and fixed['admin']==base['admin']\n  with Envoy(fixed) as server:\n   port=server.config['static_resources']['listeners'][0]['address']['socket_address']['port_value']\n   with socket.create_connection(('127.0.0.1',port),timeout=1) as client:\n    first=b'\\x00\\xffopaque\\n';client.sendall(first);assert read_exact(client,len(first))==first\n    time.sleep(.17)\n    second=b'GET /looks-like-http HTTP/1.1\\r\\nHost: untouched\\r\\n\\r\\n';client.sendall(second);assert read_exact(client,len(second))==second,'TCP data was parsed or rewritten as HTTP'\n    large=bytes(range(256))*64\n    for start in range(0,len(large),701):client.sendall(large[start:start+701])\n    assert read_exact(client,len(large))==large,'TCP chunk boundaries were mistaken for message boundaries'\n    observed=server.stats();assert observed.get('tcp.opaque_tcp.downstream_cx_total',0)==1,'native TCP connection accounting missing'\n    assert not any(name.startswith('http.ingress.') for name in observed),'opaque TCP unexpectedly produced parsed HTTP request statistics'\n finally:upstream.shutdown();thread.join(2)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-envoy-025",
+    "module": "envoy",
+    "category": "Envoy",
+    "level": 2,
+    "topic": "配置发现与版本",
+    "title": "真实Envoy健康panic阈值：健康不足半数时仍排除UNHEALTHY，全故障明确503",
+    "answer": "```python\nimport copy\ndef configure(base):\n    fixed=copy.deepcopy(base)\n    fixed['static_resources']['clusters'][0]['common_lb_config']['healthy_panic_threshold']={'value':0}\n    return fixed\n```\n\n原题知识说明：\n端点健康状态、权重、优先级和locality等信息会参与选择。应检查接收到的端点集合与实际可用集合，地址存在不等于可选；错误属性可能让健康机器不接流量或承担过多流量。",
+    "type": "code",
+    "source": "OpsForge Envoy 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 操作任务\n实现configure(base)深拷贝后仅将service cluster的common_lb_config.healthy_panic_threshold设为value=0。原三个端点只有一个HEALTHY，另外两个UNHEALTHY，默认50%健康panic会绕过健康排除；题定严格策略要求宁可拒绝，也不能向明确故障端点分配流量。保留全部load_assignment地址、健康事实与元数据，不得伪造HEALTHY或删除端点。实际比较原panic计数及故障端点收到请求、修复后全部15请求只到原健康端点；再将三个端点均标UNHEALTHY，必须503且业务上游0新增请求，不得以紧急兜底名义暗中恢复故障端点。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Envoy1.36.13的ClusterLoadAssignment健康状态和healthy panic模式；这是题定严格排除策略，不建议对所有生产业务统一禁用panic。不宣称远程EDS传输、主动健康探测或权重比例验收，旧3:1实验与Nginx039重复不计新增。",
+    "rubric": [
+      "对象和阶段区分准确",
+      "适用条件明确",
+      "结论有可核验证据"
+    ],
+    "hints": [],
+    "references": [
+      "https://www.envoyproxy.io/docs/envoy/v1.36.13/api-v3/config/endpoint/v3/endpoint_components.proto",
+      "https://www.envoyproxy.io/docs/envoy/v1.36.13/intro/arch_overview/upstream/load_balancing/load_balancers"
+    ],
+    "related_modules": [
+      "envoy"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-envoy-025",
+      "original_title": "EDS除了IP和端口，还可能影响哪些负载分配行为？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef configure(base):\n    fixed=copy.deepcopy(base)\n    fixed['static_resources']['clusters'][0]['common_lb_config']['healthy_panic_threshold']={'value':0}\n    return fixed\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef configure(base):\n    fixed=copy.deepcopy(base)\n    fixed['static_resources']['clusters'][0]['common_lb_config']['healthy_panic_threshold']={'value':50}\n    return fixed\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现configure(base)深拷贝后仅将service cluster的common_lb_config.healthy_panic_threshold设为value=0。原三个端点只有一个HEALTHY，另外两个UNHEALTHY，默认50%健康panic会绕过健康排除；题定严格策略要求宁可拒绝，也不能向明确故障端点分配流量。保留全部load_assignment地址、健康事实与元数据，不得伪造HEALTHY或删除端点。实际比较原panic计数及故障端点收到请求、修复后全部15请求只到原健康端点；再将三个端点均标UNHEALTHY，必须503且业务上游0新增请求，不得以紧急兜底名义暗中恢复故障端点。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Envoy1.36.13的ClusterLoadAssignment健康状态和healthy panic模式；这是题定严格排除策略，不建议对所有生产业务统一禁用panic。不宣称远程EDS传输、主动健康探测或权重比例验收，旧3:1实验与Nginx039重复不计新增。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "envoy"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/envoy_native.py": "\"\"\"Pinned standalone Envoy and loopback-only HTTP peers, no image or host changes.\"\"\"\nimport copy,http.server,json,os,pathlib,shutil,socket,subprocess,tempfile,threading,time,urllib.error,urllib.request\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\ndef request(base,path,method='GET',body=None,headers=None):\n req=urllib.request.Request(base+path,data=body,method=method,headers=headers or {})\n opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n try:\n  with opener.open(req,timeout=3) as response:return response.status,response.read(),dict(response.headers)\n except urllib.error.HTTPError as response:\n  try:return response.code,response.read(),dict(response.headers)\n  finally:response.close()\n\nclass Upstream:\n def __init__(self,status=200):self.status=status;self.requests=[];self.lock=threading.Lock()\n def __enter__(self):\n  owner=self\n  class Handler(http.server.BaseHTTPRequestHandler):\n   protocol_version='HTTP/1.1'\n   def log_message(self,*args):pass\n   def respond(self):\n    raw=self.rfile.read(int(self.headers.get('Content-Length',0)))\n    with owner.lock:owner.requests.append({'method':self.command,'path':self.path,'body':raw.decode('utf8'),'headers':dict(self.headers)});index=len(owner.requests)\n    status=owner.status(self.command,self.path,index) if callable(owner.status) else owner.status\n    body=json.dumps({'method':self.command,'path':self.path,'attempt':index}).encode()\n    self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers()\n    try:self.wfile.write(body);self.wfile.flush()\n    except (BrokenPipeError,ConnectionResetError):pass\n   do_GET=do_POST=do_PUT=respond\n  self.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);self.port=self.server.server_port\n  self.thread=threading.Thread(target=lambda:self.server.serve_forever(poll_interval=.02),daemon=True);self.thread.start();return self\n def __exit__(self,*args):self.server.shutdown();self.server.server_close();self.thread.join(2)\n\ndef bootstrap(upstream_port):\n return {'node':{'id':'private-probe','cluster':'opsforge'},\n  'admin':{'address':{'socket_address':{'address':'127.0.0.1','port_value':0}}},\n  'static_resources':{'listeners':[{'name':'ingress','address':{'socket_address':{'address':'127.0.0.1','port_value':0}},'filter_chains':[{'filters':[{'name':'envoy.filters.network.http_connection_manager','typed_config':{\n   '@type':'type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager','stat_prefix':'ingress','codec_type':'AUTO',\n   'route_config':{'name':'local','virtual_hosts':[{'name':'service','domains':['*'],'routes':[{'match':{'prefix':'/'},'route':{'cluster':'service','timeout':'1s'}}]}]},\n   'http_filters':[{'name':'envoy.filters.http.router','typed_config':{'@type':'type.googleapis.com/envoy.extensions.filters.http.router.v3.Router'}}]}}]}]}],\n  'clusters':[{'name':'service','connect_timeout':'0.2s','type':'STATIC','lb_policy':'ROUND_ROBIN','load_assignment':{'cluster_name':'service','endpoints':[{'lb_endpoints':[{'endpoint':{'address':{'socket_address':{'address':'127.0.0.1','port_value':upstream_port}}}}]}]}}]}}\n\ndef hcm(config):return config['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\ndef routes(config):return hcm(config)['route_config']['virtual_hosts'][0]['routes']\n\nclass Envoy:\n def __init__(self,config):self.config=copy.deepcopy(config);self.process=None;self.temp=None;self.log=None\n def __enter__(self):\n  binary=shutil.which('envoy')\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: standalone Envoy missing')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '/1.36.13/' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Envoy1.36.13 required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-envoy-');self.root=pathlib.Path(self.temp.name);port=free_port();admin=free_port()\n  while admin==port:admin=free_port()\n  self.config['static_resources']['listeners'][0]['address']['socket_address']['port_value']=port\n  self.config['admin']['address']['socket_address']['port_value']=admin\n  self.base='http://127.0.0.1:'+str(port);self.admin='http://127.0.0.1:'+str(admin)\n  path=self.root/'bootstrap.json';path.write_text(json.dumps(self.config),encoding='utf8');self.log=(self.root/'envoy.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--config-path',str(path),'--disable-hot-restart','--concurrency','1','--log-level','error'],cwd=self.root,stdout=self.log,stderr=self.log)\n   deadline=time.monotonic()+5\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:raise RuntimeError('Envoy startup failed: '+(self.root/'envoy.log').read_text(errors='replace')[-2400:])\n    try:\n     if request(self.admin,'/ready')[0]==200:break\n    except (OSError,urllib.error.URLError):pass\n    time.sleep(.02)\n   else:raise RuntimeError('Envoy private readiness deadline')\n   print('NATIVE_ENVOY_READY:1.36.13',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,method='GET',body=None,headers=None):return request(self.base,path,method,body,headers)\n def stats(self):return {r['name']:r['value'] for r in json.loads(request(self.admin,'/stats?format=json')[1])['stats'] if 'name' in r and 'value' in r}\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student Envoy operation failed: '+type(error).__name__) from error\n",
+        "checks/check.py": "import os,sys,pathlib,copy,json,time,threading,socket,socketserver,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom envoy_native import Envoy,Upstream,bootstrap,hcm,routes,student\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith Upstream() as primary,Upstream() as secondary,Upstream() as maintenance:\n base=bootstrap(primary.port);entries=[]\n for role,server in [('maintenance',maintenance),('secondary',secondary),('primary',primary)]:\n  entries.append({'endpoint':{'address':{'socket_address':{'address':'127.0.0.1','port_value':server.port}}},'health_status':'HEALTHY' if role=='primary' else 'UNHEALTHY','metadata':{'filter_metadata':{'opsforge':{'role':role}}}})\n base['static_resources']['clusters'][0]['load_assignment']['endpoints'][0]['lb_endpoints']=entries\n base['static_resources']['clusters'][0]['common_lb_config']={'healthy_panic_threshold':{'value':50}}\n with Envoy(base) as old:\n  for _ in range(15):assert old.request('/panic')[0]==200\n  assert len(secondary.requests)>0 and len(maintenance.requests)>0 and old.stats().get('cluster.service.lb_healthy_panic',0)>0,'native panic did not route to explicitly unhealthy hosts'\n print('NATIVE_ENVOY_HEALTH_PANIC_REPRODUCED',flush=True)\n before=copy.deepcopy(base);fixed=student(task.configure,base);assert base==before\n with Envoy(fixed) as server:\n  a,b,d=len(primary.requests),len(secondary.requests),len(maintenance.requests)\n  for _ in range(15):assert server.request('/strict-health')[0]==200\n  assert len(primary.requests)-a==15 and len(secondary.requests)==b and len(maintenance.requests)==d,'panic or forged health leaked traffic to an excluded host'\n  stats=server.stats();assert stats.get('cluster.service.membership_total')==3 and stats.get('cluster.service.membership_healthy')==1 and stats.get('cluster.service.lb_healthy_panic',0)==0\n assert fixed['static_resources']['clusters'][0]['load_assignment']==base['static_resources']['clusters'][0]['load_assignment'],'input health or endpoint facts were fabricated'\n all_down=copy.deepcopy(base)\n for entry in all_down['static_resources']['clusters'][0]['load_assignment']['endpoints'][0]['lb_endpoints']:entry['health_status']='UNHEALTHY'\n fixed=task.configure(all_down)\n with Envoy(fixed) as server:\n  before=(len(primary.requests),len(secondary.requests),len(maintenance.requests))\n  assert server.request('/all-down')[0]==503 and before==(len(primary.requests),len(secondary.requests),len(maintenance.requests)),'all-unhealthy endpoints should fail rather than be silently reintroduced'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

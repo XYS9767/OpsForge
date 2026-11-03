@@ -1,0 +1,155 @@
+[
+  {
+    "id": "curated-parallel-node_exporter-060",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 2,
+    "topic": "部署边界与访问控制",
+    "title": "正确选择procfs采集根路径并验证内存单位与缺测",
+    "answer": "```json\n[\n  \"--collector.meminfo\",\n  \"--collector.loadavg\",\n  \"--path.procfs={PROCFS}\"\n]\n```\n\n原理：它们改变collector读取的proc、sys和根文件系统基准路径，作用不是完全相同。容器部署需按官方方式映射并对照实际宿主视图；单改rootfs不会自动让所有网络/进程指标变成宿主值。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它们改变collector读取的proc、sys和根文件系统基准路径，作用不是完全相同。",
+      "容器部署需按官方方式映射并对照实际宿主视图；单改rootfs不会自动让所有网络/进程指标变成宿主值。"
+    ],
+    "references": [
+      "https://github.com/prometheus/node_exporter/blob/v1.9.1/README.md",
+      "https://github.com/prometheus/node_exporter/blob/v1.9.1/collector/diskstats_linux.go"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台提供官方node_exporter 1.9.x和临时procfs/sysfs格式数据目录，以非root身份在环回随机端口启动。原生collector实际读取文件并生成指标；材料是合成内核文件样本，不伪装成真实硬件故障。\n\n## 操作任务\n仅启用meminfo与loadavg，读取{PROCFS}的内存和负载数据。{ROOTFS}另有数值不同的诱饵文件；path.rootfs和path.sysfs不能代替path.procfs。必须使用--path.procfs={PROCFS}；可额外传入正确的rootfs/sysfs映射但不能开启其他collector。验收逐轮更新MemTotal/MemAvailable/三段负载，并有一轮缺MemAvailable：缺失指标不能补0，kB应实际导出为字节。\n\n## 产物\n编辑args.json参数数组，每项是一个完整--flag或--flag=value。{PROCFS}/{SYSFS}/{ROOTFS}是平台替换的本题临时路径，不填写宿主路径或端口。平台固定disable-defaults及监听地址，其余配置由产物提供。\n\n## 验收方法\n运行python3 checks/check.py。平台启动真实collector并以多组数据抓取其HTTP输出，核对标签、数值、单位和采集范围。支持等价参数顺序与表达式。初始及典型错误配置应失败，参考配置应通过；不会写入宿主/proc、/sys或生产配置。",
+    "files": {
+      "args.json": "[\n  \"--collector.meminfo\",\n  \"--collector.loadavg\",\n  \"--path.rootfs={PROCFS}\"\n]\n"
+    },
+    "solution_files": {
+      "args.json": "[\n  \"--collector.meminfo\",\n  \"--collector.loadavg\",\n  \"--path.procfs={PROCFS}\"\n]\n"
+    },
+    "negative_files": {
+      "args.json": "[\n  \"--collector.meminfo\",\n  \"--collector.loadavg\",\n  \"--path.procfs={ROOTFS}\"\n]\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-node-exporter-procfs",
+      "operation": "仅启用meminfo与loadavg，读取{PROCFS}的内存和负载数据。{ROOTFS}另有数值不同的诱饵文件；path.rootfs和path.sysfs不能代替path.procfs。必须使用--path.procfs={PROCFS}；可额外传入正确的rootfs/sysfs映射但不能开启其他collector。验收逐轮更新MemTotal/MemAvailable/三段负载，并有一轮缺MemAvailable：缺失指标不能补0，kB应实际导出为字节。",
+      "deliverables": [
+        "args.json"
+      ],
+      "verification": "真实node_exporter读取可控procfs/sysfs格式样本并通过HTTP验证指标。",
+      "failure_examples": [
+        "选错采集路径、设备范围遗漏或分区被误计。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "node_exporter"
+        ],
+        "features": [
+          "node_exporter:v1.9"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "\"\"\"Native collector fixture; owned non-root loopback process only.\"\"\"\nimport contextlib\nimport json\nimport os\nfrom pathlib import Path\nimport shutil\nimport socket\nimport subprocess\nimport tempfile\nimport threading\nimport time\nimport urllib.request\n\n\n@contextlib.contextmanager\ndef node(directory, flags=(), textfile=True):\n    assert os.name == 'posix' and os.geteuid() != 0, 'isolated non-root Linux required'\n    binary = shutil.which('node_exporter')\n    assert binary, 'node_exporter missing'\n    directory = Path(directory).resolve()\n    with socket.socket() as sock:\n        sock.bind(('127.0.0.1', 0))\n        port = sock.getsockname()[1]\n    stop = threading.Event()\n    failures = []\n    stats = {'peak_rss': 0, 'port': port, 'uid': os.geteuid()}\n    with tempfile.TemporaryDirectory(prefix='opsforge-node-') as temporary:\n        with (Path(temporary)/'node.log').open('wb') as output:\n            collector_flags = ['--collector.textfile', '--collector.textfile.directory='+str(directory)] if textfile else []\n            process = subprocess.Popen([binary, '--web.listen-address=127.0.0.1:'+str(port),\n                '--collector.disable-defaults', *collector_flags, *flags],\n                stdout=output, stderr=output,\n                env={**os.environ, 'GOMAXPROCS':'1', 'GOMEMLIMIT':'64MiB'})\n            deadline = time.monotonic()+30\n            def monitor():\n                while not stop.is_set() and process.poll() is None:\n                    try:\n                        status = Path('/proc',str(process.pid),'status').read_text()\n                        rss = next(int(line.split()[1])*1024 for line in status.splitlines() if line.startswith('VmRSS:'))\n                        stats['peak_rss'] = max(stats['peak_rss'],rss)\n                        if rss > 128*1024**2 or time.monotonic() > deadline:\n                            failures.append('resource guard');process.kill();return\n                    except (FileNotFoundError, ProcessLookupError):\n                        return\n                    stop.wait(.02)\n            guard = threading.Thread(target=monitor, daemon=True)\n            guard.start()\n            base = 'http://127.0.0.1:'+str(port)\n            def scrape(query=''):\n                with urllib.request.urlopen(base+'/metrics'+query, timeout=2) as response:\n                    assert response.status == 200\n                    return response.read().decode()\n            try:\n                ready = time.monotonic()+5\n                while True:\n                    try:\n                        with urllib.request.urlopen(base+'/', timeout=.5):\n                            break\n                    except OSError:\n                        assert process.poll() is None and time.monotonic() < ready, 'native collector startup failed: '+(Path(temporary)/'node.log').read_text(errors='replace')[-2500:]\n                        time.sleep(.03)\n                yield scrape\n                assert not failures, failures\n            finally:\n                stop.set()\n                if process.poll() is None:\n                    process.terminate()\n                try:\n                    process.wait(timeout=3)\n                except subprocess.TimeoutExpired:\n                    process.kill();process.wait(timeout=3)\n                guard.join(timeout=2)\n                stats['terminated'] = process.poll() is not None\n                print('NODE_NATIVE '+json.dumps(stats))\n                assert not failures, failures\n\n\ndef samples(text, name):\n    # Exported label values (for example uname.version) can contain spaces.\n    return {line.rsplit(None,1)[0]:float(line.rsplit(None,1)[1]) for line in text.splitlines()\n            if line.startswith(name+' ') or line.startswith(name+'{')}\n\nimport re,secrets\noptions=json.loads(Path('args.json').read_text())\nassert isinstance(options,list) and len(options)<=12 and all(isinstance(x,str) and x.startswith('--') and len(x)<=300 for x in options)\nkeys=[x.split('=',1)[0] for x in options];assert len(set(keys))==len(keys),'do not repeat options'\nallowed={'--collector.meminfo','--collector.loadavg','--path.procfs','--path.sysfs','--path.rootfs'}\nassert set(keys)<=allowed\nfor option in options:\n if option.startswith('--path.'):\n  key,value=option.split('=',1)\n  assert value=={'--path.procfs':'{PROCFS}','--path.sysfs':'{SYSFS}','--path.rootfs':'{ROOTFS}'}[key],'path placeholder must map to its declared filesystem'\nwith tempfile.TemporaryDirectory(prefix='node-procfs-') as directory:\n root=Path(directory);proc=root/'proc';sysfs=root/'sys';decoy=root/'root'\n for p in (proc,sysfs,decoy):p.mkdir()\n (decoy/'meminfo').write_text('MemTotal: 999 kB\\nMemAvailable: 1 kB\\n');(decoy/'loadavg').write_text('99.0 98.0 97.0 1/10 42\\n')\n substitute=lambda value:value.replace('{PROCFS}',str(proc)).replace('{SYSFS}',str(sysfs)).replace('{ROOTFS}',str(decoy))\n for turn in range(3):\n  total=2048+secrets.randbelow(4096);available=None if turn==2 else 100+secrets.randbelow(1024)\n  loads=(turn+.25,turn+.5,turn+.75)\n  (proc/'meminfo').write_text('MemTotal: '+str(total)+' kB\\n'+('MemAvailable: '+str(available)+' kB\\n' if available is not None else ''))\n  (proc/'loadavg').write_text(' '.join(map(str,loads))+' 1/10 42\\n')\n  with node(directory,[substitute(v) for v in options],textfile=False) as scrape:\n   text=scrape();assert samples(text,'node_scrape_collector_success')=={'node_scrape_collector_success{collector=\"loadavg\"}':1,'node_scrape_collector_success{collector=\"meminfo\"}':1}\n   assert samples(text,'node_memory_MemTotal_bytes')=={'node_memory_MemTotal_bytes':total*1024}\n   assert samples(text,'node_memory_MemAvailable_bytes')==({} if available is None else {'node_memory_MemAvailable_bytes':available*1024})\n   for metric,value in zip(['node_load1','node_load5','node_load15'],loads):assert samples(text,metric)=={metric:value}\n print('native procfs data-source, byte conversion, missing-series and load windows verified')\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "procfs_source_selection_rootfs_is_not_procfs",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-060",
+      "original_title": "path.procfs、path.sysfs与path.rootfs分别影响什么？",
+      "original_type": "interview",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-node_exporter-059",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 2,
+    "topic": "Collector配置与采集性能",
+    "title": "用真实diskstats采集验证整盘过滤并排除分区和虚拟设备",
+    "answer": "```json\n[\n  \"--collector.diskstats\",\n  \"--path.procfs={PROCFS}\",\n  \"--path.sysfs={SYSFS}\",\n  \"--collector.diskstats.device-exclude=\",\n  \"--collector.diskstats.device-include=^(sd[a-z]+|nvme[0-9]+n[0-9]+)$\"\n]\n```\n\n原理：正则语法、锚定和互斥规则依collector实现；表达式看似合理仍可能漏新设备。用现有设备名与预期匹配清单对照，再比较原始metrics。规则更改后缺数据可能被误当负载下降。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "正则语法、锚定和互斥规则依collector实现；表达式看似合理仍可能漏新设备。",
+      "用现有设备名与预期匹配清单对照，再比较原始metrics。",
+      "规则更改后缺数据可能被误当负载下降。"
+    ],
+    "references": [
+      "https://github.com/prometheus/node_exporter/blob/v1.9.1/README.md",
+      "https://github.com/prometheus/node_exporter/blob/v1.9.1/collector/diskstats_linux.go"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台提供官方node_exporter 1.9.x和临时procfs/sysfs格式数据目录，以非root身份在环回随机端口启动。原生collector实际读取文件并生成指标；材料是合成内核文件样本，不伪装成真实硬件故障。\n\n## 操作任务\n仅启用diskstats。设置procfs/sysfs为对应占位路径，使用device-include或device-exclude规则，保留所有sd后接小写字母的整盘，以及nvme数字n数字形式的整盘；排除sd数字分区、NVMe p数字分区、loop、ram和dm设备。使用include时须清空本版本默认device-exclude，两个非空过滤器互斥。测试包含sda、sdaa、nvme0n1、nvme12n34，以及前后缀诱饵和随机设备名；不能只枚举已知示例。数据含读扇区数，导出read_bytes须由原生collector换算为512字节/扇区，即使sysfs声明逻辑块大小4096也不改为4096倍。\n\n## 产物\n编辑args.json参数数组，每项是一个完整--flag或--flag=value。{PROCFS}/{SYSFS}/{ROOTFS}是平台替换的本题临时路径，不填写宿主路径或端口。平台固定disable-defaults及监听地址，其余配置由产物提供。\n\n## 验收方法\n运行python3 checks/check.py。平台启动真实collector并以多组数据抓取其HTTP输出，核对标签、数值、单位和采集范围。支持等价参数顺序与表达式。初始及典型错误配置应失败，参考配置应通过；不会写入宿主/proc、/sys或生产配置。",
+    "files": {
+      "args.json": "[\n  \"--collector.diskstats\",\n  \"--path.procfs={PROCFS}\",\n  \"--path.sysfs={SYSFS}\",\n  \"--collector.diskstats.device-exclude=\",\n  \"--collector.diskstats.device-include=^sd[a-z]+$\"\n]\n"
+    },
+    "solution_files": {
+      "args.json": "[\n  \"--collector.diskstats\",\n  \"--path.procfs={PROCFS}\",\n  \"--path.sysfs={SYSFS}\",\n  \"--collector.diskstats.device-exclude=\",\n  \"--collector.diskstats.device-include=^(sd[a-z]+|nvme[0-9]+n[0-9]+)$\"\n]\n"
+    },
+    "negative_files": {
+      "args.json": "[\n  \"--collector.diskstats\",\n  \"--path.procfs={PROCFS}\",\n  \"--path.sysfs={SYSFS}\",\n  \"--collector.diskstats.device-exclude=\",\n  \"--collector.diskstats.device-include=sd|nvme\"\n]\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-node-exporter-procfs",
+      "operation": "仅启用diskstats。设置procfs/sysfs为对应占位路径，使用device-include或device-exclude规则，保留所有sd后接小写字母的整盘，以及nvme数字n数字形式的整盘；排除sd数字分区、NVMe p数字分区、loop、ram和dm设备。使用include时须清空本版本默认device-exclude，两个非空过滤器互斥。测试包含sda、sdaa、nvme0n1、nvme12n34，以及前后缀诱饵和随机设备名；不能只枚举已知示例。数据含读扇区数，导出read_bytes须由原生collector换算为512字节/扇区，即使sysfs声明逻辑块大小4096也不改为4096倍。",
+      "deliverables": [
+        "args.json"
+      ],
+      "verification": "真实node_exporter读取可控procfs/sysfs格式样本并通过HTTP验证指标。",
+      "failure_examples": [
+        "选错采集路径、设备范围遗漏或分区被误计。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "node_exporter"
+        ],
+        "features": [
+          "node_exporter:v1.9"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "\"\"\"Native collector fixture; owned non-root loopback process only.\"\"\"\nimport contextlib\nimport json\nimport os\nfrom pathlib import Path\nimport shutil\nimport socket\nimport subprocess\nimport tempfile\nimport threading\nimport time\nimport urllib.request\n\n\n@contextlib.contextmanager\ndef node(directory, flags=(), textfile=True):\n    assert os.name == 'posix' and os.geteuid() != 0, 'isolated non-root Linux required'\n    binary = shutil.which('node_exporter')\n    assert binary, 'node_exporter missing'\n    directory = Path(directory).resolve()\n    with socket.socket() as sock:\n        sock.bind(('127.0.0.1', 0))\n        port = sock.getsockname()[1]\n    stop = threading.Event()\n    failures = []\n    stats = {'peak_rss': 0, 'port': port, 'uid': os.geteuid()}\n    with tempfile.TemporaryDirectory(prefix='opsforge-node-') as temporary:\n        with (Path(temporary)/'node.log').open('wb') as output:\n            collector_flags = ['--collector.textfile', '--collector.textfile.directory='+str(directory)] if textfile else []\n            process = subprocess.Popen([binary, '--web.listen-address=127.0.0.1:'+str(port),\n                '--collector.disable-defaults', *collector_flags, *flags],\n                stdout=output, stderr=output,\n                env={**os.environ, 'GOMAXPROCS':'1', 'GOMEMLIMIT':'64MiB'})\n            deadline = time.monotonic()+30\n            def monitor():\n                while not stop.is_set() and process.poll() is None:\n                    try:\n                        status = Path('/proc',str(process.pid),'status').read_text()\n                        rss = next(int(line.split()[1])*1024 for line in status.splitlines() if line.startswith('VmRSS:'))\n                        stats['peak_rss'] = max(stats['peak_rss'],rss)\n                        if rss > 128*1024**2 or time.monotonic() > deadline:\n                            failures.append('resource guard');process.kill();return\n                    except (FileNotFoundError, ProcessLookupError):\n                        return\n                    stop.wait(.02)\n            guard = threading.Thread(target=monitor, daemon=True)\n            guard.start()\n            base = 'http://127.0.0.1:'+str(port)\n            def scrape(query=''):\n                with urllib.request.urlopen(base+'/metrics'+query, timeout=2) as response:\n                    assert response.status == 200\n                    return response.read().decode()\n            try:\n                ready = time.monotonic()+5\n                while True:\n                    try:\n                        with urllib.request.urlopen(base+'/', timeout=.5):\n                            break\n                    except OSError:\n                        assert process.poll() is None and time.monotonic() < ready, 'native collector startup failed: '+(Path(temporary)/'node.log').read_text(errors='replace')[-2500:]\n                        time.sleep(.03)\n                yield scrape\n                assert not failures, failures\n            finally:\n                stop.set()\n                if process.poll() is None:\n                    process.terminate()\n                try:\n                    process.wait(timeout=3)\n                except subprocess.TimeoutExpired:\n                    process.kill();process.wait(timeout=3)\n                guard.join(timeout=2)\n                stats['terminated'] = process.poll() is not None\n                print('NODE_NATIVE '+json.dumps(stats))\n                assert not failures, failures\n\n\ndef samples(text, name):\n    # Exported label values (for example uname.version) can contain spaces.\n    return {line.rsplit(None,1)[0]:float(line.rsplit(None,1)[1]) for line in text.splitlines()\n            if line.startswith(name+' ') or line.startswith(name+'{')}\n\nimport re,secrets\noptions=json.loads(Path('args.json').read_text())\nassert isinstance(options,list) and len(options)<=12 and all(isinstance(x,str) and x.startswith('--') and len(x)<=300 for x in options)\nkeys=[x.split('=',1)[0] for x in options];assert len(set(keys))==len(keys),'do not repeat options'\nallowed={'--collector.diskstats','--path.procfs','--path.sysfs','--collector.diskstats.device-include','--collector.diskstats.device-exclude'}\nassert set(keys)<=allowed\nfor option in options:\n if option.startswith('--path.'):\n  key,value=option.split('=',1);assert value=={'--path.procfs':'{PROCFS}','--path.sysfs':'{SYSFS}'}[key],'wrong filesystem path mapping'\nwith tempfile.TemporaryDirectory(prefix='node-device-') as directory:\n root=Path(directory);proc=root/'proc';sysfs=root/'sys';proc.mkdir();sysfs.mkdir()\n suffix=''.join(secrets.choice('abcdefghijklmnopqrstuvwxyz') for _ in range(7+secrets.randbelow(5)))\n wanted=['sda','sdaa','sdabcdef','sd'+suffix,'nvme0n1','nvme12n34','nvme999n0','nvme00n01','nvme'+str(100+secrets.randbelow(9000))+'n'+str(secrets.randbelow(10000))]\n devices=wanted+['sda1','sdaa99','nvme0n1p1','nvme12n34p10','loop0','ram1','dm-0','sda_backup','xnvme0n1','nvme0n1x','sd','nvmen1']\n substitute=lambda value:value.replace('{PROCFS}',str(proc)).replace('{SYSFS}',str(sysfs))\n for turn in (1,2):\n  lines=[];expected={}\n  for index,device in enumerate(devices):\n   sectors=(index+1)*3*turn;lines.append(f'8 {index} {device} 10 0 {sectors} 20 1 0 3 2 0 22 22')\n   queue=sysfs/'block'/device/'queue';queue.mkdir(parents=True,exist_ok=True);(queue/'logical_block_size').write_text('4096\\n')\n   if device in wanted:expected['node_disk_read_bytes_total{device=\"'+device+'\"}']=sectors*512\n  (proc/'diskstats').write_text('\\n'.join(lines)+'\\n')\n  with node(directory,[substitute(v) for v in options],textfile=False) as scrape:\n   text=scrape();assert samples(text,'node_scrape_collector_success')=={'node_scrape_collector_success{collector=\"diskstats\"}':1}\n   assert samples(text,'node_disk_read_bytes_total')==expected,'disk selection or kernel-sector unit differs'\n print('native diskstats device set, random names, partition exclusion and sector bytes verified')\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "diskstats_device_regex_whole_disk_native_sector_units",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-059",
+      "original_title": "设备include与exclude规则为什么需要实际样本验证？",
+      "original_type": "interview",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

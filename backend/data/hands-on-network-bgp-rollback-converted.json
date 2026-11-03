@@ -1,0 +1,85 @@
+[
+  {
+    "id": "curated-network-completion-032",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 3,
+    "topic": "BIRD配置事务与回退确认",
+    "title": "为BGP出口配置实现未确认自动回退与显式提交",
+    "answer": "stage.sh：\n```bash\n#!/usr/bin/env bash\nset -euo pipefail\nbirdc -s sender.ctl configure check '\"candidate.conf\"'\nbirdc -s sender.ctl configure '\"candidate.conf\"' timeout 3\n```\n\ncommit.sh：\n```bash\n#!/usr/bin/env bash\nset -euo pipefail\nbirdc -s sender.ctl configure confirm\n```\n\n先检查避免坏配置覆盖当前运行；timeout提供失联后自动撤销的后备机制。确认与暂存分开，核对实际下游路由后才提交。BIRD只保存一层undo，不能把它当无限历史备份；真实多设备变更还需分批和持久备份。参考：[BIRD v2.14 configure命令](https://github.com/CZ-NIC/bird/blob/v2.14/doc/bird.sgml)。\n\n原题原理说明：\n保存原策略和可达前缀基线，用目标前缀/邻居限定变更范围，检查策略导入导出、选路和通告结果，再逐批扩展。持续观察路由收敛、黑洞和容量变化；回退应恢复已知配置并验证数据面，不能只确认会话 Established。",
+    "type": "code",
+    "source": "OpsForge 原创网络专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\n非root Linux、BIRD 2和Bash；两个脚本骨架。平台在当前工作区生成sender.conf、receiver.conf、candidate.conf及两个控制socket，只使用回环高端口。无Kernel/Direct/OSPF，不修改宿主路由。\n\n## 操作任务\n补齐stage.sh和commit.sh两个操作脚本。stage.sh先通过sender.ctl执行BIRD configure check检查固定candidate.conf，失败立即非零退出；通过后加载候选并设置3秒未确认自动回退，不自动确认。commit.sh只在同一个sender.ctl上执行configure confirm，由操作者在下游路由核对通过后显式调用。不能覆盖sender.conf/receiver.conf，也不能改另一个实例。命令必须把文件名作为BIRD带引号配置参数传入。\n\n## 提交产物\nstage.sh、commit.sh；平台运行后生成change-observations.json。\n\n## 验收方法\npython3 checks/check.py实际启动两个普通用户BIRD，通过真实BGP UPDATE读取对端前缀：候选新增目标前缀、未确认后回到原前缀、显式确认后超过3秒仍保留新前缀；无关前缀每个稳定阶段存在。语法错误候选应非零失败且已确认状态保留。验证真实控制平面状态而非仅检查脚本文字，所有进程最终回收。 全部断言通过退出0。小规模3秒窗口用于验证机制；真实部署应根据收敛时间和人工确认预算设置窗口。本题不承诺重配置期间零丢包，也不验证公网或真实转发。\n\n失败示例：只做configure check不会应用候选；直接configure而缺少timeout会把未确认变更永久留下；自动confirm会破坏回退窗口。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "bash",
+    "run": "python3 checks/check.py",
+    "files": {
+      "stage.sh": "#!/usr/bin/env bash\nset -euo pipefail\nbirdc -s sender.ctl configure check '\"candidate.conf\"'\n",
+      "commit.sh": "#!/usr/bin/env bash\nexit 1\n"
+    },
+    "solution_files": {
+      "stage.sh": "#!/usr/bin/env bash\nset -euo pipefail\nbirdc -s sender.ctl configure check '\"candidate.conf\"'\nbirdc -s sender.ctl configure '\"candidate.conf\"' timeout 3\n",
+      "commit.sh": "#!/usr/bin/env bash\nset -euo pipefail\nbirdc -s sender.ctl configure confirm\n"
+    },
+    "negative_files": {
+      "stage.sh": "#!/usr/bin/env bash\nset -euo pipefail\nbirdc -s sender.ctl configure check '\"candidate.conf\"'\nbirdc -s sender.ctl configure '\"candidate.conf\"'\n",
+      "commit.sh": "#!/usr/bin/env bash\nset -euo pipefail\nbirdc -s sender.ctl configure confirm\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash",
+          "bird",
+          "birdc",
+          "ip"
+        ],
+        "features": [
+          "bird:v2"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,socket,time,re,json,os,secrets\nassert os.getuid()!=0\nbefore=subprocess.check_output(['ip','-j','route','show','table','all'])\nports=[];reserved=[]\nfor _ in range(2):\n    s=socket.socket();s.bind(('127.0.0.1',0));ports.append(s.getsockname()[1]);reserved.append(s)\nfor s in reserved:s.close()\nk=secrets.randbelow(150)+1\noldprefix=f'198.18.{k}.0/24';newprefix=f'198.19.{k}.0/24';unrelated=f'203.0.113.{secrets.randbelow(250)+1}/32'\ndef sender(selected):\n    return f\"\"\"\nlog stderr all;\nrouter id 192.0.2.1;\nprotocol static seed {{ ipv4; route {oldprefix} blackhole; route {newprefix} blackhole; route {unrelated} blackhole; }}\nprotocol bgp peer {{\n local 127.0.0.1 port {ports[0]} as 65001; neighbor 127.0.0.1 port {ports[1]} as 65002;\n multihop; strict bind on; connect retry time 1; connect delay time 1; error wait time 1,2;\n ipv4 {{ import none; next hop keep; export filter {{ if net ~ [{selected},{unrelated}] then {{ bgp_next_hop=192.0.2.254; accept; }} reject; }}; }};\n}}\n\"\"\"\nreceiver=f\"\"\"\nlog stderr all; router id 192.0.2.2;\nprotocol static igp {{ ipv4; route 192.0.2.254/32 blackhole; }}\nprotocol bgp peer {{\n local 127.0.0.1 port {ports[1]} as 65002; neighbor 127.0.0.1 port {ports[0]} as 65001;\n multihop; passive on; strict bind on; connect retry time 1; connect delay time 1;\n ipv4 {{ import all; export none; }};\n}}\n\"\"\"\npathlib.Path('sender.conf').write_text(sender(oldprefix));pathlib.Path('candidate.conf').write_text(sender(newprefix));pathlib.Path('receiver.conf').write_text(receiver)\nsnapshots={name:pathlib.Path(name).read_bytes() for name in ('sender.conf','receiver.conf')}\nprocesses=[];handles=[]\ndef routes():\n    result=subprocess.run(['birdc','-s','receiver.ctl','show','route','protocol','peer','all'],capture_output=True,text=True,timeout=2)\n    assert result.returncode==0,result.stdout+result.stderr\n    return set(re.findall(r'(?m)^(\\d+\\.\\d+\\.\\d+\\.\\d+/\\d+)\\s',result.stdout)),result.stdout\ndef wait_routes(expected,seconds=5):\n    end=time.monotonic()+seconds;last=None\n    while time.monotonic()<end:\n        assert all(p.poll() is None for p in processes)\n        last=routes()\n        if last[0]==expected:return last[1]\n        time.sleep(.03)\n    raise AssertionError({'expected':sorted(expected),'actual':last})\ndef script(name):\n    return subprocess.run(['bash',name],capture_output=True,text=True,timeout=3)\ntry:\n    for name in ('receiver','sender'):\n        h=open(name+'.log','w');handles.append(h)\n        processes.append(subprocess.Popen(['bird','-f','-c',name+'.conf','-s',name+'.ctl','-P',name+'.pid'],stdout=h,stderr=h))\n    for _ in range(100):\n        if all(pathlib.Path(n+'.ctl').exists() for n in ('sender','receiver')):break\n        assert all(p.poll() is None for p in processes);time.sleep(.01)\n    baseline=wait_routes({oldprefix,unrelated})\n    result=script('stage.sh');assert result.returncode==0,result.stdout+result.stderr\n    staged=wait_routes({newprefix,unrelated},2)\n    rolled_back=wait_routes({oldprefix,unrelated},4)\n    result=script('stage.sh');assert result.returncode==0,result.stdout+result.stderr\n    wait_routes({newprefix,unrelated},2)\n    result=script('commit.sh');assert result.returncode==0,result.stdout+result.stderr\n    # A confirmed change must remain after the 3-second rollback deadline.\n    time.sleep(3.4);confirmed=wait_routes({newprefix,unrelated},1)\n    pathlib.Path('candidate.conf').write_text('this is a broken BIRD config;\\n')\n    result=script('stage.sh');assert result.returncode!=0,'syntax-invalid candidate must fail'\n    preserved=wait_routes({newprefix,unrelated},1)\n    assert all(pathlib.Path(n).read_bytes()==v for n,v in snapshots.items()),'operator scripts must not overwrite baseline or peer configuration'\n    pathlib.Path('change-observations.json').write_text(json.dumps({'baseline':baseline,'staged':staged,'automatic_rollback':rolled_back,'confirmed':confirmed,'invalid_preserved':preserved,'production_convergence_claim':False},indent=2))\nfinally:\n    for p in processes:\n        if p.poll() is None:p.terminate()\n    for p in processes:\n        try:p.wait(timeout=2)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=2)\n    for h in handles:h.close()\n    assert before==subprocess.check_output(['ip','-j','route','show','table','all'])\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "补齐stage.sh和commit.sh两个操作脚本。stage.sh先通过sender.ctl执行BIRD configure check检查固定candidate.conf，失败立即非零退出；通过后加载候选并设置3秒未确认自动回退，不自动确认。commit.sh只在同一个sender.ctl上执行configure confirm，由操作者在下游路由核对通过后显式调用。不能覆盖sender.conf/receiver.conf，也不能改另一个实例。命令必须把文件名作为BIRD带引号配置参数传入。",
+      "deliverables": [
+        "stage.sh",
+        "commit.sh"
+      ],
+      "generated_artifacts": [
+        "change-observations.json"
+      ],
+      "verification": "python3 checks/check.py实际启动两个普通用户BIRD，通过真实BGP UPDATE读取对端前缀：候选新增目标前缀、未确认后回到原前缀、显式确认后超过3秒仍保留新前缀；无关前缀每个稳定阶段存在。语法错误候选应非零失败且已确认状态保留。验证真实控制平面状态而非仅检查脚本文字，所有进程最终回收。",
+      "failure_examples": [
+        "只做configure check不会应用候选；直接configure而缺少timeout会把未确认变更永久留下；自动confirm会破坏回退窗口。"
+      ]
+    },
+    "case_signature": "curated-network-completion-032|native-bird-staged-config-timeout-confirm-rollback",
+    "conversion": {
+      "original_id": "curated-network-completion-032",
+      "original_title": "调整 BGP 出口策略前怎样评估和回退，避免全网同时改动？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

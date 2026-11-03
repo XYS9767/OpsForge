@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-advanced-network-006",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 4,
+    "topic": "TCP 接收背压与全双工推进",
+    "title": "修复双向大流量互相等待：实现有界 TCP 全双工文件交换",
+    "answer": "```python\nimport pathlib,socket,selectors,tempfile,os,time,math\ndef execute(sock,source,output,timeout=3.0):\n    if isinstance(timeout,bool) or not isinstance(timeout,(int,float)) or not math.isfinite(timeout) or not 0<timeout<=10:raise ValueError('timeout must be in (0,10]')\n    source=pathlib.Path(source);output=pathlib.Path(output)\n    if source.resolve()==output.resolve():raise ValueError('input/output must differ')\n    if sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_STREAM:raise ValueError('connected stream socket required')\n    sock.getpeername()\n    previous=sock.gettimeout();temp=None;sent=received=0;deadline=time.monotonic()+timeout\n    try:\n        with source.open('rb') as incoming,selectors.DefaultSelector() as selector:\n            fd,temp=tempfile.mkstemp(prefix='.duplex-',dir=output.parent)\n            with os.fdopen(fd,'wb') as target:\n                sock.setblocking(False);pending=b'';source_eof=False;remote_eof=False;write_closed=False\n                while not (remote_eof and write_closed):\n                    if not pending and not source_eof:\n                        pending=incoming.read(65536)\n                        if not pending:source_eof=True\n                    if source_eof and not pending and not write_closed:\n                        sock.shutdown(socket.SHUT_WR);write_closed=True\n                    if remote_eof and write_closed:break\n                    remaining=deadline-time.monotonic()\n                    if remaining<=0:raise TimeoutError('total transfer deadline exceeded')\n                    mask=(0 if remote_eof else selectors.EVENT_READ)|(selectors.EVENT_WRITE if pending else 0)\n                    try:selector.modify(sock,mask)\n                    except KeyError:selector.register(sock,mask)\n                    events=selector.select(remaining)\n                    if not events:raise TimeoutError('total transfer deadline exceeded')\n                    for _,event in events:\n                        if event & selectors.EVENT_READ:\n                            try:data=sock.recv(65536)\n                            except BlockingIOError:data=None\n                            if data is not None:\n                                if data:target.write(data);received+=len(data)\n                                else:remote_eof=True\n                        if event & selectors.EVENT_WRITE and pending:\n                            try:count=sock.send(pending)\n                            except BlockingIOError:count=None\n                            if count==0:raise ConnectionError('send made no progress')\n                            if count:sent+=count;pending=pending[count:]\n                target.flush();os.fsync(target.fileno())\n            os.replace(temp,output);temp=None\n        return {'sent':sent,'received':received}\n    finally:\n        sock.settimeout(previous)\n        if temp is not None and os.path.exists(temp):os.unlink(temp)\n```\n\n接收端不读取时，增大拥塞窗口不能替应用消费数据。用同一事件循环推进读写，及时释放接收缓冲，并按总截止时间中止；成功计数不是跨断线续传确认。\n\n原理补充：\nZero Window说明接收端当前通告没有可接收空间，常与应用未及时读取、接收缓冲压力或处理阻塞有关，不是发送端拥塞窗口不足。沿接收进程读行为、缓冲占用及下游等待寻找原因，核对窗口探测是否能观察到重新开放。增大发送窗口可能无效并增加资源占用。验收接收应用恢复读取后窗口和吞吐回升，同时控制数据积压。扩大接收缓冲只能吸收有限突发，若处理速率长期不足仍会耗尽；不要把持续窗口关闭归为网络丢包并反复重建连接。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "def execute(sock,source,output,timeout=3.0):\n    raise NotImplementedError\n",
+      "source.txt": "教学上传文件；验收另外生成2MiB双向二进制流。\n"
+    },
+    "solution_files": {
+      "task.py": "import pathlib,socket,selectors,tempfile,os,time,math\ndef execute(sock,source,output,timeout=3.0):\n    if isinstance(timeout,bool) or not isinstance(timeout,(int,float)) or not math.isfinite(timeout) or not 0<timeout<=10:raise ValueError('timeout must be in (0,10]')\n    source=pathlib.Path(source);output=pathlib.Path(output)\n    if source.resolve()==output.resolve():raise ValueError('input/output must differ')\n    if sock.getsockopt(socket.SOL_SOCKET,socket.SO_TYPE)!=socket.SOCK_STREAM:raise ValueError('connected stream socket required')\n    sock.getpeername()\n    previous=sock.gettimeout();temp=None;sent=received=0;deadline=time.monotonic()+timeout\n    try:\n        with source.open('rb') as incoming,selectors.DefaultSelector() as selector:\n            fd,temp=tempfile.mkstemp(prefix='.duplex-',dir=output.parent)\n            with os.fdopen(fd,'wb') as target:\n                sock.setblocking(False);pending=b'';source_eof=False;remote_eof=False;write_closed=False\n                while not (remote_eof and write_closed):\n                    if not pending and not source_eof:\n                        pending=incoming.read(65536)\n                        if not pending:source_eof=True\n                    if source_eof and not pending and not write_closed:\n                        sock.shutdown(socket.SHUT_WR);write_closed=True\n                    if remote_eof and write_closed:break\n                    remaining=deadline-time.monotonic()\n                    if remaining<=0:raise TimeoutError('total transfer deadline exceeded')\n                    mask=(0 if remote_eof else selectors.EVENT_READ)|(selectors.EVENT_WRITE if pending else 0)\n                    try:selector.modify(sock,mask)\n                    except KeyError:selector.register(sock,mask)\n                    events=selector.select(remaining)\n                    if not events:raise TimeoutError('total transfer deadline exceeded')\n                    for _,event in events:\n                        if event & selectors.EVENT_READ:\n                            try:data=sock.recv(65536)\n                            except BlockingIOError:data=None\n                            if data is not None:\n                                if data:target.write(data);received+=len(data)\n                                else:remote_eof=True\n                        if event & selectors.EVENT_WRITE and pending:\n                            try:count=sock.send(pending)\n                            except BlockingIOError:count=None\n                            if count==0:raise ConnectionError('send made no progress')\n                            if count:sent+=count;pending=pending[count:]\n                target.flush();os.fsync(target.fileno())\n            os.replace(temp,output);temp=None\n        return {'sent':sent,'received':received}\n    finally:\n        sock.settimeout(previous)\n        if temp is not None and os.path.exists(temp):os.unlink(temp)\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib,socket\ndef execute(sock,source,output,timeout=3.0):\n    previous=sock.gettimeout();sock.settimeout(timeout)\n    try:\n        payload=pathlib.Path(source).read_bytes()\n        sock.sendall(payload);sock.shutdown(socket.SHUT_WR)\n        result=b''\n        while True:\n            chunk=sock.recv(65536)\n            if not chunk:break\n            result+=chunk\n        pathlib.Path(output).write_bytes(result)\n        return {'sent':len(payload),'received':len(result)}\n    finally:sock.settimeout(previous)\n"
+    },
+    "run": "python3 checks/check.py",
+    "body": "## 环境与初始材料\n普通用户 Linux + Python3 标准库，仅本机临时回环 TCP 端口。提供函数骨架和输入示例，验收创建2MiB双向二进制数据、先写后读的对端、慢速流及空文件。真实 TCP 背压由不及时消费接收队列产生，不修改内核参数、生产连接或网卡。\n\n## 操作任务\n实现 execute(sock,source,output,timeout=3.0)，使用已连接的调用方 TCP socket，同时发送 source 文件并将对端字节流写入 output。对端可能先发送大响应再消费上传；不能先 sendall 整个文件再读响应。发送完后关闭写半边，但持续读取到对端 EOF；双向都完成才原子发布输出，返回 sent/received 字节数。单次读写/待发缓冲不超过64KiB，禁止将整个输入/响应读入内存。timeout 是整个传输的总期限，取有限数字(0,10]且不接受布尔；超时或错误保留既有输出、清理临时文件。调用方 socket 不得关闭且原超时/阻塞模式必须恢复；输出不能覆盖输入，成功文件权限0600。\n\n## 提交产物\ntask.py；成功运行生成完整的二进制 output 文件，失败不得发布部分内容。sent 仅表示已交给本机 TCP 栈的字节，不表示业务已持久化或收到应用确认。\n\n## 验收方法\npython3 checks/check.py 在实际回环 TCP 上验证双向2MiB完整字节、空流/NUL内容、对端RST不发布部分内容、三种原socket模式恢复、对端读到完整上传、总期限不会被持续小数据重置、输入/旧输出保护、0600、socket模式恢复及描述符/临时文件清理。全部断言通过退出0。缓冲上限由参考实现逐段读写和代码审校验证；本题不把内存快照当作证明，不宣称每次测试都观察到抓包中的 Zero Window 报文。\n\n失败示例：客户端先 sendall 2MiB，服务端也先 sendall 2MiB，双方都不读，发送窗口最终耗尽，直到超时。",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(sock,source,output,timeout=3.0)，使用已连接的调用方 TCP socket，同时发送 source 文件并将对端字节流写入 output。对端可能先发送大响应再消费上传；不能先 sendall 整个文件再读响应。发送完后关闭写半边，但持续读取到对端 EOF；双向都完成才原子发布输出，返回 sent/received 字节数。单次读写/待发缓冲不超过64KiB，禁止将整个输入/响应读入内存。timeout 是整个传输的总期限，取有限数字(0,10]且不接受布尔；超时或错误保留既有输出、清理临时文件。调用方 socket 不得关闭且原超时/阻塞模式必须恢复；输出不能覆盖输入，成功文件权限0600。",
+      "deliverables": [
+        "task.py"
+      ],
+      "generated_artifacts": [
+        "完整二进制 output 文件"
+      ],
+      "verification": "真实双向 TCP 大文件与逐字节核验、慢速流总截止时间、异常不覆盖、文件和socket资源清理；缓冲界限另作源码审校",
+      "failure_examples": [
+        "双方均先写完大文件才开始读，互相阻塞至超时"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,socket,threading,time,sys,contextlib,stat,os,struct\nfrom unittest import mock\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\n@contextlib.contextmanager\ndef pair(handler):\n    listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(1);listener.settimeout(5)\n    errors=[];sockets=[];stop=threading.Event()\n    def serve():\n        try:\n            conn,_=listener.accept();sockets.append(conn);conn.settimeout(5)\n            with conn:handler(conn,stop)\n        except (OSError,TimeoutError) as e:\n            if not stop.is_set():errors.append(e)\n        except BaseException as e:errors.append(e)\n    thread=threading.Thread(target=serve);thread.start()\n    client=socket.create_connection(listener.getsockname(),timeout=5)\n    client.setsockopt(socket.SOL_SOCKET,socket.SO_SNDBUF,16384)\n    try:yield client,errors,stop\n    finally:\n        stop.set()\n        for conn in [client,*sockets]:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n            conn.close()\n        listener.close();thread.join(6)\n        assert not thread.is_alive(),'server thread leaked'\ndef receive(conn):\n    chunks=[]\n    while True:\n        part=conn.recv(65536)\n        if not part:return b''.join(chunks)\n        chunks.append(part)\nbaseline=len(os.listdir('/proc/self/fd'))\nfor index,(payload,response) in enumerate([(b'a'*2097152,bytes(range(256))*8192),(b'',b''),(b'hello\\x00world',b'binary\\x00reply')]):\n    pathlib.Path('source.bin').write_bytes(payload);before=pathlib.Path('source.bin').read_bytes()\n    result=[]\n    def server(conn,stop):\n        conn.setsockopt(socket.SOL_SOCKET,socket.SO_SNDBUF,16384)\n        conn.sendall(response) # Deliberately sends before consuming client upload.\n        conn.shutdown(socket.SHUT_WR)\n        result.append(receive(conn))\n    with pair(server) as (client,errors,stop):\n        previous=[4.0,None,0.0][index]\n        client.settimeout(previous)\n        report=task.execute(client,'source.bin','result.bin',3.0)\n        assert report=={'sent':len(payload),'received':len(response)},report\n        assert client.fileno()>=0 and client.gettimeout()==previous,'caller socket closed or timeout changed'\n        assert pathlib.Path('result.bin').read_bytes()==response\n        assert stat.S_IMODE(pathlib.Path('result.bin').stat().st_mode)==0o600\n        limit=time.monotonic()+1\n        while not result and time.monotonic()<limit:time.sleep(.005)\n        assert result==[payload],(len(result[0]) if result else None,len(payload))\n        assert not errors,errors\n    assert pathlib.Path('source.bin').read_bytes()==before\n    assert not list(pathlib.Path('.').glob('.duplex-*'))\n# A slow stream keeps making progress: the deadline must still bound total duration.\npathlib.Path('source.bin').write_bytes(b'upload');pathlib.Path('result.bin').write_bytes(b'KEEP')\ndef trickle(conn,stop):\n    assert receive(conn)==b'upload'\n    while not stop.is_set():\n        conn.sendall(b'x');stop.wait(.025)\nwith pair(trickle) as (client,errors,stop):\n    client.settimeout(.8);started=time.monotonic()\n    try:task.execute(client,'source.bin','result.bin',.18)\n    except TimeoutError:pass\n    else:raise AssertionError('ongoing data bypassed total deadline')\n    assert time.monotonic()-started<.65,'deadline not bounded'\n    assert client.gettimeout()==.8 and client.fileno()>=0\n    assert pathlib.Path('result.bin').read_bytes()==b'KEEP'\nassert not list(pathlib.Path('.').glob('.duplex-*'))\n\n# Reset by peer must not publish the partially received file.\npathlib.Path('result.bin').write_bytes(b'KEEP')\ndef reset_peer(conn,stop):\n    assert conn.recv(1)\n    conn.sendall(b'partial')\n    conn.setsockopt(socket.SOL_SOCKET,socket.SO_LINGER,struct.pack('ii',1,0))\n    conn.close()\nwith pair(reset_peer) as (client,errors,stop):\n    client.setblocking(False)\n    try:task.execute(client,'source.bin','result.bin',.5)\n    except OSError:pass\n    else:raise AssertionError('peer reset falsely reported success')\n    assert client.gettimeout()==0 and client.fileno()>=0\n    assert pathlib.Path('result.bin').read_bytes()==b'KEEP'\nassert not list(pathlib.Path('.').glob('.duplex-*'))\n\n# Validation must not change the caller-owned socket or source data.\ndef quiet(conn,stop):stop.wait(2)\nwith pair(quiet) as (client,errors,stop):\n    for timeout in [0,-1,True,float('nan'),float('inf'),11]:\n        try:task.execute(client,'source.bin','result.bin',timeout)\n        except ValueError:pass\n        else:raise AssertionError('bad timeout accepted')\n    try:task.execute(client,'source.bin','source.bin',.1)\n    except ValueError:pass\n    else:raise AssertionError('input was overwritten')\n    assert pathlib.Path('source.bin').read_bytes()==b'upload'\nassert len(os.listdir('/proc/self/fd'))==baseline,'descriptor leaked'\nprint('PASS: actual TCP full-duplex backpressure, binary artifacts, total deadline and caller ownership')\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": []
+      }
+    },
+    "case_signature": "network-tcp-full-duplex|peer-write-first-backpressure-bounded-stream",
+    "conversion": {
+      "original_id": "curated-advanced-network-006",
+      "original_title": "连接不丢包却持续出现Zero Window和窗口探测，扩大发送拥塞窗口为什么无助于恢复？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

@@ -1,0 +1,75 @@
+[
+  {
+    "id": "curated-advanced-go-001",
+    "module": "go",
+    "category": "Go 运维开发",
+    "level": 5,
+    "topic": "网络数据库与进程",
+    "title": "Go访问日志项目：真实流式Flush与HTTP/1连接接管",
+    "body": "## 操作任务\n提交task.go，实现Wrap(next http.Handler,report func(status,bytes int)) http.Handler。真实转发Header/WriteHeader/Write，记录首次状态、实际写入字节数，隐式写入或Flush对应200，重复WriteHeader不重复转发；handler结束或panic传播时report恰好一次。仅当底层实现Flusher或Hijacker时，包装器分别暴露同一能力，不能伪造能力；支持两者时都需保留。Hijack在未写HTTP响应前成功时报告status=0、bytes=0，由接管方负责原始连接。这里限定Flusher和Hijacker，不承诺Pusher、ReaderFrom或http.ResponseController额外接口。\n\n## 提交产物\ntask.go\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Go HTTP/1回环服务器：handler仍阻塞时客户端已读到Flush后的首个流式分块；另一个真实TCP请求成功Hijack并收到101和接管数据。覆盖四种底层接口组合、短写、隐式200和重复状态；不声称HTTP/2支持Hijack，也不宣称其他可选接口透明或生产链路已验收。普通student、自有端口、离线标准库，无镜像构建。",
+    "answer": "```go\npackage exercise\nimport(\"bufio\";\"net\";\"net/http\")\ntype state struct{http.ResponseWriter;status,bytes int}\nfunc(s *state)WriteHeader(code int){if s.status!=0{return};s.status=code;s.ResponseWriter.WriteHeader(code)}\nfunc(s *state)Write(p []byte)(int,error){if s.status==0{s.WriteHeader(200)};n,e:=s.ResponseWriter.Write(p);s.bytes+=n;return n,e}\ntype flushOnly struct{*state}\nfunc(s flushOnly)Flush(){if s.status==0{s.WriteHeader(200)};s.ResponseWriter.(http.Flusher).Flush()}\ntype hijackOnly struct{*state}\nfunc(s hijackOnly)Hijack()(net.Conn,*bufio.ReadWriter,error){return s.ResponseWriter.(http.Hijacker).Hijack()}\ntype both struct{*state}\nfunc(s both)Flush(){if s.status==0{s.WriteHeader(200)};s.ResponseWriter.(http.Flusher).Flush()}\nfunc(s both)Hijack()(net.Conn,*bufio.ReadWriter,error){return s.ResponseWriter.(http.Hijacker).Hijack()}\nfunc Wrap(next http.Handler,report func(int,int))http.Handler{return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){s:=&state{ResponseWriter:w};defer func(){report(s.status,s.bytes)}();_,f:=w.(http.Flusher);_,h:=w.(http.Hijacker);var out http.ResponseWriter=s;if f&&h{out=both{s}}else if f{out=flushOnly{s}}else if h{out=hijackOnly{s}};next.ServeHTTP(out,r)})}\n```\n\n原题知识说明：\n交付ResponseWriter能力矩阵，分别列出普通响应、Flush、Hijack及目标版本ResponseController所需接口；简单包一层只实现Header、Write、WriteHeader可能隐藏底层能力。设计应明确通过受支持的Unwrap链或接口转发保留能力，同时不能声称HTTP/2也支持HTTP/1连接接管。记录首次最终状态码、累计实际写入字节和写失败，处理未显式WriteHeader的情况。验收覆盖SSE分段刷新、升级连接、零正文、客户端中断和多个中间件叠加，比较有无封装的协议行为。失败时撤回中间件版本并保留必要外围日志，不能为了恢复日志指标把流式接口改成全量缓冲；实现由开发提交后按矩阵验证。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "指出机制特有的兼容或失败边界",
+      "交付可操作的接口合同与验收矩阵",
+      "定义失败处置及回退限制"
+    ],
+    "references": [
+      "https://pkg.go.dev/net/http#Flusher",
+      "https://pkg.go.dev/net/http#Hijacker",
+      "https://pkg.go.dev/net/http#ResponseWriter"
+    ],
+    "related_modules": [
+      "go"
+    ],
+    "language": "go",
+    "conversion": {
+      "original_id": "curated-advanced-go-001",
+      "original_title": "为Go HTTP访问日志中间件交付透明封装验收，如何保留流式响应和连接接管能力？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.go": "package exercise\nimport \"net/http\"\nfunc Wrap(http.Handler,func(int,int))http.Handler{panic(\"NotImplementedError\")}\n"
+    },
+    "solution_files": {
+      "task.go": "package exercise\nimport(\"bufio\";\"net\";\"net/http\")\ntype state struct{http.ResponseWriter;status,bytes int}\nfunc(s *state)WriteHeader(code int){if s.status!=0{return};s.status=code;s.ResponseWriter.WriteHeader(code)}\nfunc(s *state)Write(p []byte)(int,error){if s.status==0{s.WriteHeader(200)};n,e:=s.ResponseWriter.Write(p);s.bytes+=n;return n,e}\ntype flushOnly struct{*state}\nfunc(s flushOnly)Flush(){if s.status==0{s.WriteHeader(200)};s.ResponseWriter.(http.Flusher).Flush()}\ntype hijackOnly struct{*state}\nfunc(s hijackOnly)Hijack()(net.Conn,*bufio.ReadWriter,error){return s.ResponseWriter.(http.Hijacker).Hijack()}\ntype both struct{*state}\nfunc(s both)Flush(){if s.status==0{s.WriteHeader(200)};s.ResponseWriter.(http.Flusher).Flush()}\nfunc(s both)Hijack()(net.Conn,*bufio.ReadWriter,error){return s.ResponseWriter.(http.Hijacker).Hijack()}\nfunc Wrap(next http.Handler,report func(int,int))http.Handler{return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){s:=&state{ResponseWriter:w};defer func(){report(s.status,s.bytes)}();_,f:=w.(http.Flusher);_,h:=w.(http.Hijacker);var out http.ResponseWriter=s;if f&&h{out=both{s}}else if f{out=flushOnly{s}}else if h{out=hijackOnly{s}};next.ServeHTTP(out,r)})}\n"
+    },
+    "negative_files": {
+      "task.go": "package exercise\nimport(\"bufio\";\"net\";\"net/http\")\ntype state struct{http.ResponseWriter;status,bytes int}\nfunc(s *state)WriteHeader(code int){if s.status!=0{return};s.status=code;s.ResponseWriter.WriteHeader(code)}\nfunc(s *state)Write(p []byte)(int,error){if s.status==0{s.WriteHeader(200)};n,e:=s.ResponseWriter.Write(p);s.bytes+=n;return n,e}\ntype flushOnly struct{*state}\nfunc(s flushOnly)Flush(){if s.status==0{s.WriteHeader(200)};s.ResponseWriter.(http.Flusher).Flush()}\ntype hijackOnly struct{*state}\nfunc(s hijackOnly)Hijack()(net.Conn,*bufio.ReadWriter,error){return s.ResponseWriter.(http.Hijacker).Hijack()}\ntype both struct{*state}\nfunc(s both)Flush(){if s.status==0{s.WriteHeader(200)};s.ResponseWriter.(http.Flusher).Flush()}\nfunc(s both)Hijack()(net.Conn,*bufio.ReadWriter,error){return s.ResponseWriter.(http.Hijacker).Hijack()}\nfunc Wrap(next http.Handler,report func(int,int))http.Handler{return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){s:=&state{ResponseWriter:w};defer func(){report(s.status,s.bytes)}();_,f:=w.(http.Flusher);_,h:=w.(http.Hijacker);var out http.ResponseWriter=s;if f{out=flushOnly{s}};next.ServeHTTP(out,r)})}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "提交task.go，实现Wrap(next http.Handler,report func(status,bytes int)) http.Handler。真实转发Header/WriteHeader/Write，记录首次状态、实际写入字节数，隐式写入或Flush对应200，重复WriteHeader不重复转发；handler结束或panic传播时report恰好一次。仅当底层实现Flusher或Hijacker时，包装器分别暴露同一能力，不能伪造能力；支持两者时都需保留。Hijack在未写HTTP响应前成功时报告status=0、bytes=0，由接管方负责原始连接。这里限定Flusher和Hijacker，不承诺Pusher、ReaderFrom或http.ResponseController额外接口。",
+      "deliverables": [
+        "task.go"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Go HTTP/1回环服务器：handler仍阻塞时客户端已读到Flush后的首个流式分块；另一个真实TCP请求成功Hijack并收到101和接管数据。覆盖四种底层接口组合、短写、隐式200和重复状态；不声称HTTP/2支持Hijack，也不宣称其他可选接口透明或生产链路已验收。普通student、自有端口、离线标准库，无镜像构建。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "go"
+        ],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/task_test.go": "package exercise\nimport(\"bufio\";\"context\";\"errors\";\"fmt\";\"io\";\"net\";\"net/http\";\"net/http/httptest\";\"strings\";\"testing\";\"time\")\ntype plain struct{header http.Header;status int;writes int;short bool}\nfunc(p *plain)Header()http.Header{return p.header}\nfunc(p *plain)WriteHeader(code int){p.status=code}\nfunc(p *plain)Write(b []byte)(int,error){p.writes++;if p.short&&len(b)>0{return 1,io.ErrShortWrite};return len(b),nil}\ntype flusher struct{*plain}\nfunc(f *flusher)Flush(){}\ntype hijacker struct{*plain}\nfunc(h *hijacker)Hijack()(net.Conn,*bufio.ReadWriter,error){return nil,nil,errors.New(\"marker\")}\ntype bothWriter struct{*plain}\nfunc(b *bothWriter)Flush(){}\nfunc(b *bothWriter)Hijack()(net.Conn,*bufio.ReadWriter,error){return nil,nil,errors.New(\"marker\")}\nfunc TestCapabilityMatrixAndStatus(t *testing.T){\n for _,row:=range []struct{writer http.ResponseWriter;f,h bool}{{&plain{header:http.Header{}},false,false},{&flusher{&plain{header:http.Header{}}},true,false},{&hijacker{&plain{header:http.Header{}}},false,true},{&bothWriter{&plain{header:http.Header{}}},true,true}}{\n  count,status,bytes:=0,0,0;handler:=Wrap(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){_,f:=w.(http.Flusher);_,h:=w.(http.Hijacker);if f!=row.f||h!=row.h{t.Fatal(\"supported capability changed\",f,h,row.f,row.h)};w.WriteHeader(201);w.WriteHeader(500);w.Write([]byte(\"abc\"))}),func(s,n int){count++;status=s;bytes=n})\n  handler.ServeHTTP(row.writer,httptest.NewRequest(\"GET\",\"/\",nil));if count!=1||status!=201||bytes!=3{t.Fatal(\"status or byte accounting\",count,status,bytes)}\n }\n p:=&plain{header:http.Header{},short:true};status,n:=0,0;Wrap(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){w.Write([]byte(\"abcd\"))}),func(a,b int){status=a;n=b}).ServeHTTP(p,httptest.NewRequest(\"GET\",\"/\",nil));if status!=200||n!=1{t.Fatal(\"actual short write count\",status,n)}\n}\nfunc TestStreamingAndHijackOnRealServer(t *testing.T){\n release:=make(chan struct{});reports:=make(chan string,2)\n server:=httptest.NewServer(Wrap(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){\n  if r.URL.Path==\"/stream\"{fmt.Fprint(w,\"first\\n\");w.(http.Flusher).Flush();<-release;fmt.Fprint(w,\"last\\n\");return}\n  conn,rw,e:=w.(http.Hijacker).Hijack();if e!=nil{return};defer conn.Close();fmt.Fprint(rw,\"HTTP/1.1 101 Switching Protocols\\r\\nConnection: upgrade\\r\\nUpgrade: test\\r\\n\\r\\nowned\");rw.Flush()\n }),func(s,n int){reports<-fmt.Sprintf(\"%d:%d\",s,n)}));defer server.Close()\n ctx,cancel:=context.WithTimeout(context.Background(),3*time.Second);defer cancel();req,_:=http.NewRequestWithContext(ctx,\"GET\",server.URL+\"/stream\",nil);resp,e:=http.DefaultClient.Do(req);if e!=nil{t.Fatal(e)};reader:=bufio.NewReader(resp.Body);line,e:=reader.ReadString('\\n');if e!=nil||line!=\"first\\n\"{t.Fatal(\"first stream chunk not flushed\",line,e)};close(release);rest,e:=io.ReadAll(reader);resp.Body.Close();if e!=nil||string(rest)!=\"last\\n\"{t.Fatal(\"remaining stream\",string(rest),e)}\n addr:=strings.TrimPrefix(server.URL,\"http://\");conn,e:=net.DialTimeout(\"tcp\",addr,time.Second);if e!=nil{t.Fatal(e)};conn.SetDeadline(time.Now().Add(2*time.Second));fmt.Fprint(conn,\"GET /upgrade HTTP/1.1\\r\\nHost: example\\r\\nConnection: upgrade\\r\\nUpgrade: test\\r\\n\\r\\n\");data,e:=io.ReadAll(conn);conn.Close();if e!=nil||!strings.Contains(string(data),\"101 Switching Protocols\")||!strings.HasSuffix(string(data),\"owned\"){t.Fatal(\"actual hijack failed\",string(data),e)}\n got:=map[string]bool{<-reports:true,<-reports:true};if !got[\"200:11\"]||!got[\"0:0\"]{t.Fatal(\"stream or hijack accounting\",got)}\n t.Log(\"NATIVE_GO_HTTP_REAL_FLUSH_BEFORE_HANDLER_RELEASE_AND_HTTP1_HIJACK_SUCCESS\")\n}\nfunc TestPanicPropagatesAndReportsOnce(t *testing.T){\n count,status,bytes:=0,-1,-1;handler:=Wrap(http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){panic(\"original\")}),func(s,n int){count++;status=s;bytes=n})\n func(){defer func(){if recover()!=\"original\"{t.Error(\"panic swallowed or replaced\")}}();handler.ServeHTTP(&plain{header:http.Header{}},httptest.NewRequest(\"GET\",\"/\",nil))}()\n if count!=1||status!=0||bytes!=0{t.Fatal(\"panic report\",count,status,bytes)}\n}\n",
+        "checks/check.py": "import os,pathlib,subprocess,sys,tempfile\nassert os.getuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED:transparent_http_writer_capabilities',flush=True)\nenv={**os.environ,'GOCACHE':'/tmp/opsforge-go-cache','GOMODCACHE':'/tmp/opsforge-go-modcache','GOTOOLCHAIN':'local','GOPROXY':'off','GOSUMDB':'off','CGO_ENABLED':'0','GOMAXPROCS':'2','GOMEMLIMIT':'384MiB'}\nwith tempfile.TemporaryDirectory(prefix='opsforge-go-http-') as name:\n root=pathlib.Path(name);(root/'go.mod').write_text('module opsforge.local/exercise\\n\\ngo 1.23\\n');(root/'task.go').write_bytes(pathlib.Path('task.go').read_bytes());(root/'task_test.go').write_bytes(pathlib.Path('checks/task_test.go').read_bytes())\n p=subprocess.run(['go','test','-vet=off','-v','-count=1','-timeout=8s','./...'],cwd=root,env=env,capture_output=True,text=True,timeout=55);assert p.returncode==0,p.stdout+p.stderr\n assert 'NATIVE_GO_HTTP_REAL_FLUSH_BEFORE_HANDLER_RELEASE_AND_HTTP1_HIJACK_SUCCESS' in p.stdout\n print('NATIVE_GO_HTTP_REAL_FLUSH_BEFORE_HANDLER_RELEASE_AND_HTTP1_HIJACK_SUCCESS',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "project"
+  }
+]

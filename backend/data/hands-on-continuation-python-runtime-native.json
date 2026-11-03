@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-advanced-python-023",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 5,
+    "topic": "对象与程序组织",
+    "title": "真实缓存生命周期：弱所有者每对象LRU，同键冷启动只算一次且不同所有者可并行",
+    "body": "## 操作任务\n实现Memo(max_entries=2).get(owner,key,compute)。owner为题定可弱引用、按对象身份相等/哈希且不会变的对象；key为1..32字符str。每owner独立缓存最多max_entries个已完成结果，max_entries为1..8非bool整数；命中更新LRU。compute无参数返回非bool整数，只缓存成功结果，异常传播且允许下一次重试。缓存不能延长owner生命周期，不保存带owner强引用的结果/闭包；owner当前在get参数中存活是正常的。最多8个调用并发，同owner同key的在途计算只允许一个leader，其他等待共享其成功结果；不同owner计算可并行，不能持全局锁执行compute。异常不得泄漏等待门；等待者可在失败后重新竞争计算，不要求共享同一个异常。递归调用同一owner/key不在合同内。单纯lru_cache线程安全不保证冷启动只算一次，本题同时验收容量和真实对象回收。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实弱引用/GC、LRU淘汰及ThreadPoolExecutor重叠计算；不把弱引用注册表基础再计一题，不宣称分布式去重或跨进程缓存。",
+    "answer": "```python\nimport threading,weakref,collections\nclass Memo:\n    def __init__(self,max_entries=2):\n        if type(max_entries) is not int or not 1<=max_entries<=8:raise ValueError('bounded entries per owner')\n        self.limit=max_entries;self.lock=threading.RLock();self.owners=weakref.WeakKeyDictionary()\n    def get(self,owner,key,compute):\n        if not isinstance(key,str) or not 1<=len(key)<=32:raise ValueError('key')\n        while True:\n            with self.lock:\n                state=self.owners.get(owner)\n                if state is None:state={'values':collections.OrderedDict(),'running':{}};self.owners[owner]=state\n                if key in state['values']:\n                    state['values'].move_to_end(key);return state['values'][key]\n                event=state['running'].get(key)\n                if event is None:event=threading.Event();state['running'][key]=event;leader=True\n                else:leader=False\n            if leader:break\n            event.wait()\n        try:\n            value=compute()\n            if type(value) is not int:raise ValueError('only independent integer results')\n            with self.lock:\n                state['values'][key]=value;state['values'].move_to_end(key)\n                while len(state['values'])>self.limit:state['values'].popitem(last=False)\n            return value\n        finally:\n            with self.lock:state['running'].pop(key,None);event.set()\n```\n\n原题知识说明：\n交付缓存最大条目数、键中是否包含self、结果可变性和失效规则。缓存会持有参数与结果引用，方法缓存可能延长实例生命；条目数有限也不表示内存有界，因为单条结果可很大。并发首次调用可能重复执行底层函数，缓存线程安全不等于每键恰好执行一次，不能直接包裹有副作用操作。验收创建大量短命实例、大结果、关键参数缺失和并发冷启动，观察命中率、实例回收与内存上界，确认不同租户不共用错误结果。失败可按受控入口清空或停用缓存，但要先保护后端容量；不能用定时gc代替失效设计，回退保留正确查询路径并明确冷缓存期间的限流与延迟目标。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "明确语言运行时与业务合同的边界",
+      "给出可区分正确与失败的具体样例",
+      "说明资源或数据恢复限制"
+    ],
+    "references": [
+      "https://docs.python.org/3.11/library/functools.html",
+      "https://docs.python.org/3.11/library/weakref.html",
+      "https://docs.python.org/3.11/library/threading.html"
+    ],
+    "related_modules": [
+      "python"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-python-023",
+      "original_title": "Python方法使用lru_cache后对象长期不释放，怎样交付缓存键、强引用与并发冷启动的容量验收？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import threading,weakref,collections\nclass Memo:\n    def __init__(self,max_entries=2):\n        if type(max_entries) is not int or not 1<=max_entries<=8:raise ValueError('bounded entries per owner')\n        self.limit=max_entries;self.lock=threading.RLock();self.owners=weakref.WeakKeyDictionary()\n    def get(self,owner,key,compute):\n        if not isinstance(key,str) or not 1<=len(key)<=32:raise ValueError('key')\n        while True:\n            with self.lock:\n                state=self.owners.get(owner)\n                if state is None:state={'values':collections.OrderedDict(),'running':{}};self.owners[owner]=state\n                if key in state['values']:\n                    state['values'].move_to_end(key);return state['values'][key]\n                event=state['running'].get(key)\n                if event is None:event=threading.Event();state['running'][key]=event;leader=True\n                else:leader=False\n            if leader:break\n            event.wait()\n        try:\n            value=compute()\n            if type(value) is not int:raise ValueError('only independent integer results')\n            with self.lock:\n                state['values'][key]=value;state['values'].move_to_end(key)\n                while len(state['values'])>self.limit:state['values'].popitem(last=False)\n            return value\n        finally:\n            with self.lock:state['running'].pop(key,None);event.set()\n"
+    },
+    "negative_files": {
+      "task.py": "import threading,weakref,collections\nclass Memo:\n    def __init__(self,max_entries=2):\n        if type(max_entries) is not int or not 1<=max_entries<=8:raise ValueError('bounded entries per owner')\n        self.limit=max_entries;self.lock=threading.RLock();self.owners={}\n    def get(self,owner,key,compute):\n        if not isinstance(key,str) or not 1<=len(key)<=32:raise ValueError('key')\n        while True:\n            with self.lock:\n                state=self.owners.get(owner)\n                if state is None:state={'values':collections.OrderedDict(),'running':{}};self.owners[owner]=state\n                if key in state['values']:\n                    state['values'].move_to_end(key);return state['values'][key]\n                event=state['running'].get(key)\n                if event is None:event=threading.Event();state['running'][key]=event;leader=True\n                else:leader=False\n            if leader:break\n            event.wait()\n        try:\n            value=compute()\n            if type(value) is not int:raise ValueError('only independent integer results')\n            with self.lock:\n                state['values'][key]=value;state['values'].move_to_end(key)\n                while len(state['values'])>self.limit:state['values'].popitem(last=False)\n            return value\n        finally:\n            with self.lock:state['running'].pop(key,None);event.set()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现Memo(max_entries=2).get(owner,key,compute)。owner为题定可弱引用、按对象身份相等/哈希且不会变的对象；key为1..32字符str。每owner独立缓存最多max_entries个已完成结果，max_entries为1..8非bool整数；命中更新LRU。compute无参数返回非bool整数，只缓存成功结果，异常传播且允许下一次重试。缓存不能延长owner生命周期，不保存带owner强引用的结果/闭包；owner当前在get参数中存活是正常的。最多8个调用并发，同owner同key的在途计算只允许一个leader，其他等待共享其成功结果；不同owner计算可并行，不能持全局锁执行compute。异常不得泄漏等待门；等待者可在失败后重新竞争计算，不要求共享同一个异常。递归调用同一owner/key不在合同内。单纯lru_cache线程安全不保证冷启动只算一次，本题同时验收容量和真实对象回收。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实弱引用/GC、LRU淘汰及ThreadPoolExecutor重叠计算；不把弱引用注册表基础再计一题，不宣称分布式去重或跨进程缓存。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,time,threading,gc,weakref,concurrent.futures\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as error:raise AssertionError('submitted native operation failed') from error\nclass Owner:pass\nmemo=task.Memo(2);owner=Owner();calls=[]\ndef calc(value):\n def run():calls.append(value);return value\n return run\nassert student(memo.get,owner,'a',calc(1))==1\nassert memo.get(owner,'b',calc(2))==2 and memo.get(owner,'a',calc(99))==1\nassert memo.get(owner,'c',calc(3))==3 and memo.get(owner,'b',calc(4))==4\nassert calls==[1,2,3,4],'per-owner LRU did not refresh hits or evict least recent entry'\nother=Owner();assert memo.get(other,'a',calc(5))==5,'different owners shared cached identity'\nreference=weakref.ref(owner);del owner;gc.collect();assert reference() is None,'cache retained a dead owner'\nowner=Owner();entered=threading.Event();release=threading.Event();count=[];gate=threading.Lock()\ndef slow():\n with gate:count.append(1)\n entered.set();assert release.wait(2);return 42\nwith concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:\n futures=[pool.submit(student,memo.get,owner,'cold',slow) for _ in range(4)]\n try:assert entered.wait(1);time.sleep(.08)\n finally:release.set()\n assert [future.result(timeout=2) for future in futures]==[42]*4 and len(count)==1,'concurrent cold misses executed the expensive function more than once'\n# Independent owners must not wait behind a global lock held during computation.\nbarrier=threading.Barrier(2);left=Owner();right=Owner()\ndef parallel():barrier.wait(timeout=1);return 7\nwith concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:\n futures=[pool.submit(student,memo.get,x,'parallel',parallel) for x in (left,right)]\n assert [future.result(timeout=2) for future in futures]==[7,7]\ndef failure():raise LookupError('upstream failed')\ntry:memo.get(owner,'retry',failure)\nexcept LookupError:pass\nelse:raise AssertionError('computation failure was swallowed')\nassert memo.get(owner,'retry',lambda:9)==9,'failed result was cached or cold-miss gate leaked'\n# A failing leader must wake a real follower, which can retry successfully.\nfailed_entered=threading.Event();failed_release=threading.Event()\ndef failing_leader():\n failed_entered.set();assert failed_release.wait(1);raise LookupError('leader failed')\nwith concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:\n leader=pool.submit(memo.get,owner,'failure-waiter',failing_leader)\n assert failed_entered.wait(1)\n follower=pool.submit(student,memo.get,owner,'failure-waiter',lambda:11)\n time.sleep(.04);failed_release.set()\n try:leader.result(timeout=1)\n except LookupError:pass\n else:raise AssertionError('leader exception swallowed')\n assert follower.result(timeout=1)==11,'failed leader stranded its waiting follower'\nfor invalid in (0,9,True):\n try:task.Memo(invalid)\n except ValueError:pass\n else:raise AssertionError('unbounded/invalid per-owner capacity')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n\nfor capacity in range(1, 9):\n    bounded = student(task.Memo, capacity)\n    tenant = Owner()\n    computed = []\n    def value_factory(value):\n        def compute():\n            computed.append(value)\n            return value\n        return compute\n    for index in range(capacity):\n        assert student(bounded.get, tenant, 'key-'+str(index),\n                       value_factory(index)) == index\n    for index in range(capacity):\n        before = len(computed)\n        assert student(bounded.get, tenant, 'key-'+str(index),\n                       value_factory(100+index)) == index\n        assert len(computed) == before, 'capacity silently clamped'\n    assert student(bounded.get, tenant, 'new-key', value_factory(999)) == 999\n    assert student(bounded.get, tenant, 'key-0', value_factory(1000)) == 1000, \\\n        'capacity exceeded its declared bound'\nprint('ALL_MEMO_CAPACITIES_ONE_THROUGH_EIGHT_ACTUAL_COMPUTE_LRU', flush=True)\n\n# Distinct live Memo instances retain their own capacity, even with the same owner.\nsmall=student(task.Memo,1);large=student(task.Memo,3);shared_owner=Owner()\nfrom collections import OrderedDict\ncaches=[small,large];limits=[1,3];models=[OrderedDict(),OrderedDict()]\nactual_computes=[]\noperations=[(0,'a'),(1,'a'),(0,'b'),(1,'b'),(1,'c'),(0,'a'),(1,'a'),(1,'d'),(0,'b'),(1,'b')]\nfor step,(which,key)in enumerate(operations,1):\n model=models[which];missing=key not in model;wanted=step if missing else model[key]\n def compute(value=step):actual_computes.append(value);return value\n before=len(actual_computes);actual=student(caches[which].get,shared_owner,key,compute)\n assert actual==wanted and len(actual_computes)-before==int(missing),'Memo capacity/state leaked across simultaneous instances'\n model[key]=wanted;model.move_to_end(key)\n if len(model)>limits[which]:model.popitem(last=False)\nprint('SIMULTANEOUS_MEMO_ONE_THREE_INSTANCE_ISOLATION',flush=True)\n"
+      }
+    }
+  }
+]

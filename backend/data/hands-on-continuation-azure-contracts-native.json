@@ -1,0 +1,142 @@
+[
+  {
+    "id": "curated-advanced-azure-005",
+    "module": "azure",
+    "category": "Azure",
+    "level": 5,
+    "topic": "存储备份与灾备",
+    "title": "离线Blob并发合同：租约所有权与内容ETag同时成立，租约换代不冒充版本更新",
+    "body": "## 操作任务\n实现conditional_put(connection,name,expected_etag,lease_id,body,now)。connection是无未提交事务的私有SQLite模型连接，表blobs(name TEXT PRIMARY KEY,body BLOB,etag INTEGER,lease_id TEXT,lease_until INTEGER)。本适配器只允许有效自有租约写：同一BEGIN IMMEDIATE事务内读取对象，要求lease_id与当前一致、now严格早于lease_until、expected_etag等于当前值，然后写body并将etag加1，commit返回新etag。任何失败完整rollback；缺对象KeyError，前置条件失败ValueError。name/lease非空字符串，etag正整数、now非负整数且拒绝bool，body为最多65536字节bytes。租约换代不改变ETag，旧内容版本不能凭有效租约覆盖，旧租约不能凭新ETag写；并发相同ETag只能一个成功。不得改邻居对象、租约或到期时刻。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n离线Azure云模型，真实SQLite事务与双线程竞争；不连接Azure Blob、不模拟完整租约状态机或云服务错误码。题定适配器始终要求有效租约，不表示Azure所有无租约对象写入都必须有lease。模型证据不计入真实云故障恢复。",
+    "answer": "```python\ndef conditional_put(connection,name,expected_etag,lease_id,body,now):\n    if not isinstance(name,str) or not name or type(expected_etag) is not int or expected_etag<1 or not isinstance(lease_id,str) or not lease_id or not isinstance(body,bytes) or len(body)>65536 or type(now) is not int or now<0:raise ValueError('bounded typed write request')\n    try:\n        connection.execute('BEGIN IMMEDIATE')\n        row=connection.execute('SELECT etag,lease_id,lease_until FROM blobs WHERE name=?',(name,)).fetchone()\n        if row is None:raise KeyError(name)\n        etag,current_lease,until=row\n        if lease_id!=current_lease or until is None or now>=until:raise ValueError('active owned lease required')\n        if etag!=expected_etag:raise ValueError('ETag precondition failed')\n        connection.execute('UPDATE blobs SET body=?,etag=etag+1 WHERE name=?',(body,name));connection.commit()\n        return etag+1\n    except BaseException:\n        connection.rollback()\n        raise\n```\n\n原题知识说明：\n交付每个Blob的写入所有者、租约获取与续租责任、lease ID传递及ETag条件使用方式。lease限制受保护Blob写入，并不自动阻止所有读取，也不把多个Blob更新合成事务；ETag则用于检查自己读到的版本是否仍有效，两者解决不同竞争条件。验收第二写者无lease ID被拒、旧ETag写入失败、租约到期或被break后的陈旧写入，以及客户端写成功但响应丢失的对账。租约拥有者要有有界续租和退出清理，不能在网络不确定时自行假定仍独占。失败停止依赖独占性的操作，读取真实Blob版本和租约状态后恢复；重新获取租约不会撤销另一写者在空窗内完成的更新，回退应基于明确版本与业务冲突规则。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "准确区分服务模式、数据与管理边界",
+      "以真实身份和数据对象对账验收",
+      "列明留存、复制或权限变更不可自动回退之处"
+    ],
+    "references": [
+      "https://learn.microsoft.com/en-us/azure/storage/blobs/concurrency-manage",
+      "https://learn.microsoft.com/en-us/rest/api/storageservices/lease-blob"
+    ],
+    "related_modules": [
+      "azure"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-azure-005",
+      "original_title": "Azure Blob并发写使用lease时，怎样交付租约与ETag条件的组合验收？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def conditional_put(connection,name,expected_etag,lease_id,body,now):\n    if not isinstance(name,str) or not name or type(expected_etag) is not int or expected_etag<1 or not isinstance(lease_id,str) or not lease_id or not isinstance(body,bytes) or len(body)>65536 or type(now) is not int or now<0:raise ValueError('bounded typed write request')\n    try:\n        connection.execute('BEGIN IMMEDIATE')\n        row=connection.execute('SELECT etag,lease_id,lease_until FROM blobs WHERE name=?',(name,)).fetchone()\n        if row is None:raise KeyError(name)\n        etag,current_lease,until=row\n        if lease_id!=current_lease or until is None or now>=until:raise ValueError('active owned lease required')\n        if etag!=expected_etag:raise ValueError('ETag precondition failed')\n        connection.execute('UPDATE blobs SET body=?,etag=etag+1 WHERE name=?',(body,name));connection.commit()\n        return etag+1\n    except BaseException:\n        connection.rollback()\n        raise\n"
+    },
+    "negative_files": {
+      "task.py": "def conditional_put(connection,name,expected_etag,lease_id,body,now):\n    if not isinstance(name,str) or not name or type(expected_etag) is not int or expected_etag<1 or not isinstance(lease_id,str) or not lease_id or not isinstance(body,bytes) or len(body)>65536 or type(now) is not int or now<0:raise ValueError('bounded typed write request')\n    try:\n        connection.execute('BEGIN IMMEDIATE')\n        row=connection.execute('SELECT etag,lease_id,lease_until FROM blobs WHERE name=?',(name,)).fetchone()\n        if row is None:raise KeyError(name)\n        etag,current_lease,until=row\n        if lease_id!=current_lease or until is None or now>=until:raise ValueError('active owned lease required')\n        pass # lease alone cannot detect a stale content version\n        connection.execute('UPDATE blobs SET body=?,etag=etag+1 WHERE name=?',(body,name));connection.commit()\n        return etag+1\n    except BaseException:\n        connection.rollback()\n        raise\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现conditional_put(connection,name,expected_etag,lease_id,body,now)。connection是无未提交事务的私有SQLite模型连接，表blobs(name TEXT PRIMARY KEY,body BLOB,etag INTEGER,lease_id TEXT,lease_until INTEGER)。本适配器只允许有效自有租约写：同一BEGIN IMMEDIATE事务内读取对象，要求lease_id与当前一致、now严格早于lease_until、expected_etag等于当前值，然后写body并将etag加1，commit返回新etag。任何失败完整rollback；缺对象KeyError，前置条件失败ValueError。name/lease非空字符串，etag正整数、now非负整数且拒绝bool，body为最多65536字节bytes。租约换代不改变ETag，旧内容版本不能凭有效租约覆盖，旧租约不能凭新ETag写；并发相同ETag只能一个成功。不得改邻居对象、租约或到期时刻。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "离线Azure云模型，真实SQLite事务与双线程竞争；不连接Azure Blob、不模拟完整租约状态机或云服务错误码。题定适配器始终要求有效租约，不表示Azure所有无租约对象写入都必须有lease。模型证据不计入真实云故障恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,json,sqlite3,tempfile,threading,time,copy,http.server,urllib.request,urllib.error\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as error:raise AssertionError('student offline Azure adapter failed') from error\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'blob-model.sqlite';admin=sqlite3.connect(path,isolation_level=None)\n admin.execute('CREATE TABLE blobs(name TEXT PRIMARY KEY,body BLOB NOT NULL,etag INTEGER NOT NULL,lease_id TEXT,lease_until INTEGER)')\n admin.execute('INSERT INTO blobs VALUES(?,?,?,?,?)',('target',b'original',1,'lease-1',110));admin.execute('INSERT INTO blobs VALUES(?,?,?,?,?)',('neighbor',b'untouched',44,None,None))\n try:\n  assert student(task.conditional_put,admin,'target',1,'lease-1',b'first',100)==2\n  assert admin.execute('SELECT body,etag,lease_id,lease_until FROM blobs WHERE name=\"target\"').fetchone()==(b'first',2,'lease-1',110)\n  def reject(etag,lease,now):\n   before=admin.execute('SELECT * FROM blobs ORDER BY name').fetchall()\n   try:task.conditional_put(admin,'target',etag,lease,b'bad-write',now)\n   except ValueError:pass\n   else:raise AssertionError('stale content or invalid lease was accepted')\n   assert not admin.in_transaction and admin.execute('SELECT * FROM blobs ORDER BY name').fetchall()==before\n  reject(1,'lease-1',101);reject(2,'wrong-lease',101);reject(2,'lease-1',110)\n  # A new lease is a different authority while the content ETag stays unchanged.\n  admin.execute('UPDATE blobs SET lease_id=?,lease_until=? WHERE name=?',('lease-2',130,'target'))\n  assert admin.execute('SELECT etag FROM blobs WHERE name=\"target\"').fetchone()==(2,)\n  reject(2,'lease-1',111)\n  assert task.conditional_put(admin,'target',2,'lease-2',b'new-owner',111)==3\n  start=threading.Barrier(2);results=[];errors=[]\n  def race(value):\n   conn=sqlite3.connect(path,isolation_level=None,timeout=2)\n   try:\n    start.wait(2)\n    try:results.append(task.conditional_put(conn,'target',3,'lease-2',value,112))\n    except ValueError:results.append('stale')\n    assert not conn.in_transaction\n   except BaseException as error:errors.append(repr(error))\n   finally:conn.close()\n  jobs=[threading.Thread(target=race,args=(value,)) for value in (b'writer-a',b'writer-b')]\n  for job in jobs:job.start()\n  for job in jobs:job.join(3)\n  assert not errors and not any(j.is_alive() for j in jobs) and sorted(map(str,results))==['4','stale'],(results,errors)\n  value,etag=admin.execute('SELECT body,etag FROM blobs WHERE name=\"target\"').fetchone();assert etag==4 and value in (b'writer-a',b'writer-b')\n  assert admin.execute('SELECT body,etag,lease_id FROM blobs WHERE name=\"neighbor\"').fetchone()==(b'untouched',44,None)\n finally:admin.close()\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-advanced-azure-008",
+    "module": "azure",
+    "category": "Azure",
+    "level": 5,
+    "topic": "消息事件与函数",
+    "title": "离线Event Grid双schema握手：验证码POST与CloudEvents OPTIONS分别处理",
+    "body": "## 操作任务\n实现handshake(schema,method,headers,body,expected_topic,allowed_origin)，返回(status,响应头字典,bytes正文)。schema由端点配置明确指定eventgrid或cloudevents，不能按请求猜测。Event Grid模式仅接受POST、大小写不敏感头aeg-event-type=SubscriptionValidation，以及单元素JSON数组中的正确eventType、批准topic和1..128字符validationCode；返回200 JSON {validationResponse:code}，不访问validationUrl，其他POST400、非POST405。CloudEvents模式只对OPTIONS且WebHook-Request-Origin与批准域精确一致时返回200、WebHook-Allowed-Origin=批准域、WebHook-Allowed-Rate=120、Allow=POST、空正文；缺失/未批准域403且不含同意头，非OPTIONS405。不得把握手当身份认证或正常业务事件处理，未知schema ValueError。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n离线Azure云模型，真实私有HTTP客户端/服务端验收两种握手；不创建Azure订阅、不验证公网TLS或Event Grid实际投递。批准topic/origin是题定边界，不代替身份认证；仅同步验证，不自动请求不可信validationUrl。模型证据不抵真实云运行故障。",
+    "answer": "```python\nimport json\ndef handshake(schema,method,headers,body,expected_topic,allowed_origin):\n    values={key.lower():value for key,value in headers.items()}\n    if schema=='cloudevents':\n        if method!='OPTIONS':return 405,{},b''\n        origin=values.get('webhook-request-origin')\n        if origin!=allowed_origin:return 403,{},b''\n        return 200,{'WebHook-Allowed-Origin':allowed_origin,'WebHook-Allowed-Rate':'120','Allow':'POST'},b''\n    if schema!='eventgrid':raise ValueError('explicit configured schema required')\n    if method!='POST':return 405,{},b''\n    if values.get('aeg-event-type')!='SubscriptionValidation':return 400,{},b''\n    try:\n        events=json.loads(body)\n        if not isinstance(events,list) or len(events)!=1:raise ValueError('single validation event')\n        event=events[0]\n        if not isinstance(event,dict):raise ValueError('event object required')\n        if event.get('eventType')!='Microsoft.EventGrid.SubscriptionValidationEvent' or event.get('topic')!=expected_topic:raise ValueError('unexpected event or subscription topic')\n        code=event['data']['validationCode']\n        if not isinstance(code,str) or not 1<=len(code)<=128:raise ValueError('validation code')\n    except (ValueError,KeyError,TypeError,UnicodeDecodeError):return 400,{},b''\n    return 200,{'Content-Type':'application/json'},json.dumps({'validationResponse':code}).encode()\n```\n\n原题知识说明：\n交付订阅事件schema、接收端能力、TLS、认证与网关方法放行规则。Event Grid schema订阅通过相应验证事件及响应完成端点所有权确认，CloudEvents使用不同的验证交互，不能用普通业务POST返回200代替所有握手。验收分别检查验证请求到达、正确返回验证结果、未知订阅被拒及代理没有吞掉所需方法或头部；使用平台托管trigger时说明哪些步骤由平台代办。证书不受支持、WAF拒绝与应用未实现握手要分开诊断，不能整体关闭防护。失败保持订阅未启用并修复批准路径，重建订阅前核对现有状态与投递范围；握手成功仅说明可订阅，不证明事件业务处理、幂等或告警链已经验收。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "准确区分服务模式、数据与管理边界",
+      "以真实身份和数据对象对账验收",
+      "列明留存、复制或权限变更不可自动回退之处"
+    ],
+    "references": [
+      "https://learn.microsoft.com/en-us/azure/event-grid/end-point-validation-event-grid-events-schema",
+      "https://learn.microsoft.com/en-us/azure/event-grid/end-point-validation-cloud-events-schema"
+    ],
+    "related_modules": [
+      "azure"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-azure-008",
+      "original_title": "Event Grid webhook订阅怎样交付Event Grid schema与CloudEvents验证握手验收？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json\ndef handshake(schema,method,headers,body,expected_topic,allowed_origin):\n    values={key.lower():value for key,value in headers.items()}\n    if schema=='cloudevents':\n        if method!='OPTIONS':return 405,{},b''\n        origin=values.get('webhook-request-origin')\n        if origin!=allowed_origin:return 403,{},b''\n        return 200,{'WebHook-Allowed-Origin':allowed_origin,'WebHook-Allowed-Rate':'120','Allow':'POST'},b''\n    if schema!='eventgrid':raise ValueError('explicit configured schema required')\n    if method!='POST':return 405,{},b''\n    if values.get('aeg-event-type')!='SubscriptionValidation':return 400,{},b''\n    try:\n        events=json.loads(body)\n        if not isinstance(events,list) or len(events)!=1:raise ValueError('single validation event')\n        event=events[0]\n        if not isinstance(event,dict):raise ValueError('event object required')\n        if event.get('eventType')!='Microsoft.EventGrid.SubscriptionValidationEvent' or event.get('topic')!=expected_topic:raise ValueError('unexpected event or subscription topic')\n        code=event['data']['validationCode']\n        if not isinstance(code,str) or not 1<=len(code)<=128:raise ValueError('validation code')\n    except (ValueError,KeyError,TypeError,UnicodeDecodeError):return 400,{},b''\n    return 200,{'Content-Type':'application/json'},json.dumps({'validationResponse':code}).encode()\n"
+    },
+    "negative_files": {
+      "task.py": "import json\ndef handshake(schema,method,headers,body,expected_topic,allowed_origin):\n    values={key.lower():value for key,value in headers.items()}\n    if schema=='cloudevents':\n        if method!='POST':return 405,{},b''\n        origin=values.get('webhook-request-origin')\n        if origin!=allowed_origin:return 403,{},b''\n        return 200,{'WebHook-Allowed-Origin':allowed_origin,'WebHook-Allowed-Rate':'120','Allow':'POST'},b''\n    if schema!='eventgrid':raise ValueError('explicit configured schema required')\n    if method!='POST':return 405,{},b''\n    if values.get('aeg-event-type')!='SubscriptionValidation':return 400,{},b''\n    try:\n        events=json.loads(body)\n        if not isinstance(events,list) or len(events)!=1:raise ValueError('single validation event')\n        event=events[0]\n        if not isinstance(event,dict):raise ValueError('event object required')\n        if event.get('eventType')!='Microsoft.EventGrid.SubscriptionValidationEvent' or event.get('topic')!=expected_topic:raise ValueError('unexpected event or subscription topic')\n        code=event['data']['validationCode']\n        if not isinstance(code,str) or not 1<=len(code)<=128:raise ValueError('validation code')\n    except (ValueError,KeyError,TypeError,UnicodeDecodeError):return 400,{},b''\n    return 200,{'Content-Type':'application/json'},json.dumps({'validationResponse':code}).encode()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现handshake(schema,method,headers,body,expected_topic,allowed_origin)，返回(status,响应头字典,bytes正文)。schema由端点配置明确指定eventgrid或cloudevents，不能按请求猜测。Event Grid模式仅接受POST、大小写不敏感头aeg-event-type=SubscriptionValidation，以及单元素JSON数组中的正确eventType、批准topic和1..128字符validationCode；返回200 JSON {validationResponse:code}，不访问validationUrl，其他POST400、非POST405。CloudEvents模式只对OPTIONS且WebHook-Request-Origin与批准域精确一致时返回200、WebHook-Allowed-Origin=批准域、WebHook-Allowed-Rate=120、Allow=POST、空正文；缺失/未批准域403且不含同意头，非OPTIONS405。不得把握手当身份认证或正常业务事件处理，未知schema ValueError。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "离线Azure云模型，真实私有HTTP客户端/服务端验收两种握手；不创建Azure订阅、不验证公网TLS或Event Grid实际投递。批准topic/origin是题定边界，不代替身份认证；仅同步验证，不自动请求不可信validationUrl。模型证据不抵真实云运行故障。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,json,sqlite3,tempfile,threading,time,copy,http.server,urllib.request,urllib.error\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as error:raise AssertionError('student offline Azure adapter failed') from error\nexpected='/subscriptions/approved/resourceGroups/training/providers/Microsoft.EventGrid/topics/expected';origin='eventgrid.example.invalid';configured={'schema':'eventgrid'};errors=[];observed_paths=[]\nclass Handler(http.server.BaseHTTPRequestHandler):\n def log_message(self,*args):pass\n def handle_request(self):\n  observed_paths.append(self.path)\n  body=self.rfile.read(int(self.headers.get('Content-Length',0)))\n  try:status,headers,payload=student(task.handshake,configured['schema'],self.command,dict(self.headers),body,expected,origin)\n  except Exception as error:errors.append(repr(error));status,headers,payload=500,{},b''\n  self.send_response(status)\n  for name,value in headers.items():self.send_header(name,value)\n  self.send_header('Content-Length',str(len(payload)));self.end_headers();self.wfile.write(payload)\n do_OPTIONS=do_POST=do_GET=handle_request\ndef call(method,headers=None,payload=None):\n req=urllib.request.Request(base,data=payload,headers=headers or {},method=method)\n try:response=urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req,timeout=2)\n except urllib.error.HTTPError as error:response=error\n with response:return response.status,dict(response.headers),response.read()\nserver=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);base='http://127.0.0.1:'+str(server.server_port)+'/webhook';thread=threading.Thread(target=lambda:server.serve_forever(poll_interval=.02),daemon=True);thread.start()\nevent={'eventType':'Microsoft.EventGrid.SubscriptionValidationEvent','topic':expected,'data':{'validationCode':'random-teaching-code','validationUrl':base+'/must-not-be-fetched'}}\ntry:\n headers={'AeG-EvEnT-TyPe':'SubscriptionValidation','Content-Type':'application/json'};raw=json.dumps([event]).encode();status,out,body=call('POST',headers,raw)\n assert status==200 and json.loads(body)=={'validationResponse':'random-teaching-code'} and observed_paths==['/webhook'],'validation URL was fetched or code was not echoed'\n bad=copy.deepcopy(event);bad['topic']=expected+'-different';assert call('POST',headers,json.dumps([bad]).encode())[0]==400\n assert call('POST',{},raw)[0]==400 and call('POST',headers,b'not-json')[0]==400 and call('OPTIONS',{'WebHook-Request-Origin':origin})[0]==405\n for malformed in [[],[None],[3],[[]],{},[{'data':[]}],[{**event,'data':{'validationCode':''}}]]:\n  assert call('POST',headers,json.dumps(malformed).encode())[0]==400,'malformed validation event was not rejected safely'\n configured['schema']='cloudevents';status,out,body=call('OPTIONS',{'wEbHoOk-ReQuEsT-OrIgIn':origin})\n assert status==200 and out.get('WebHook-Allowed-Origin')==origin and out.get('WebHook-Allowed-Rate')=='120' and out.get('Allow')=='POST' and body==b''\n assert call('POST',headers,raw)[0]==405,'CloudEvents incorrectly used EventGrid validation-code POST'\n status,out,body=call('OPTIONS',{'WebHook-Request-Origin':'unapproved.invalid'});assert status==403 and not any(k.lower().startswith('webhook-allowed') for k in out)\n assert call('OPTIONS')[0]==403 and not errors,errors\nfinally:server.shutdown();server.server_close();thread.join(2)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

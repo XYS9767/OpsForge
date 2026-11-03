@@ -1,0 +1,78 @@
+[
+  {
+    "id": "curated-parallel-grafana-072",
+    "module": "grafana",
+    "category": "Grafana",
+    "level": 2,
+    "topic": "修复Live来源校验但不放开任意Origin",
+    "title": "Grafana 配置实作：修复Live来源校验但不放开任意Origin",
+    "answer": "### grafana-live.ini\n```ini\n[live]\nmax_connections = 20\nallowed_origins = https://ops.example.test,https://training.example.test\n```\n\n### handshake-policy.json\n```json\n{\n  \"root_url\": \"http://127.0.0.1:20550/\",\n  \"same_origin\": \"http://127.0.0.1:20550\",\n  \"allow_extra\": [\n    \"https://ops.example.test\",\n    \"https://training.example.test\"\n  ],\n  \"reject_origins\": [\n    \"https://evil.example.test\",\n    \"http://ops.example.test\",\n    \"https://ops.example.test.evil.invalid\",\n    \"https://child.ops.example.test\"\n  ],\n  \"no_origin_is_not_an_origin_check\": true,\n  \"authentication_still_required\": true,\n  \"max_connections\": 20\n}\n```\n\nLive使用WebSocket，普通HTTP成功不能替代Upgrade和Origin测试。root_url对应来源默认允许，allowed_origins补充受控来源。用*修复虽然让预期入口恢复，也让恶意来源握手成功，属于错误答案。没有Origin的非浏览器请求不会进行来源检查，因此还必须依赖认证；不能把省略Origin当授权修复。\n\n### 原理说明\nLive使用WebSocket等持久连接能力，代理升级头、超时、Origin及子路径可能不同。检查握手状态和服务端日志，验证真实实时更新，不能只测试短HTTP请求。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "Live使用WebSocket等持久连接能力，代理升级头、超时、Origin及子路径可能不同。",
+      "检查握手状态和服务端日志，验证真实实时更新，不能只测试短HTTP请求。"
+    ],
+    "references": [
+      "https://grafana.com/docs/grafana/latest/setup-grafana/set-up-grafana-live/",
+      "https://grafana.com/docs/grafana/latest/setup-grafana/configure-grafana/#allowed_origins"
+    ],
+    "related_modules": [
+      "grafana"
+    ],
+    "language": "configuration",
+    "files": {
+      "grafana-live.ini": "[live]\nmax_connections = 20\nallowed_origins = https://legacy.example.test\n",
+      "handshake-policy.json": "{}\n"
+    },
+    "solution_files": {
+      "handshake-policy.json": "{\n  \"root_url\": \"http://127.0.0.1:20550/\",\n  \"same_origin\": \"http://127.0.0.1:20550\",\n  \"allow_extra\": [\n    \"https://ops.example.test\",\n    \"https://training.example.test\"\n  ],\n  \"reject_origins\": [\n    \"https://evil.example.test\",\n    \"http://ops.example.test\",\n    \"https://ops.example.test.evil.invalid\",\n    \"https://child.ops.example.test\"\n  ],\n  \"no_origin_is_not_an_origin_check\": true,\n  \"authentication_still_required\": true,\n  \"max_connections\": 20\n}\n",
+      "grafana-live.ini": "[live]\nmax_connections = 20\nallowed_origins = https://ops.example.test,https://training.example.test\n"
+    },
+    "negative_files": {
+      "handshake-policy.json": "{\n  \"root_url\": \"http://127.0.0.1:20550/\",\n  \"same_origin\": \"http://127.0.0.1:20550\",\n  \"allow_extra\": [\n    \"https://ops.example.test\",\n    \"https://training.example.test\"\n  ],\n  \"reject_origins\": [\n    \"https://evil.example.test\",\n    \"http://ops.example.test\",\n    \"https://ops.example.test.evil.invalid\",\n    \"https://child.ops.example.test\"\n  ],\n  \"no_origin_is_not_an_origin_check\": true,\n  \"authentication_still_required\": true,\n  \"max_connections\": 20\n}\n",
+      "grafana-live.ini": "[live]\nmax_connections = 20\nallowed_origins = *\n"
+    },
+    "body": "## 环境与初始材料\n平台 JSON 文件编辑器与可信离线配置检查。使用 Grafana 10.4 Classic 模型/Legacy API 载荷，不要求学员自建 Grafana。初始文件：grafana-live.ini 与 handshake-policy.json。\n\n## 操作任务\n普通HTTP页面正常，但从两个受控入口发起的Live WebSocket被Origin校验拒绝。修改grafana-live.ini，只增加https://ops.example.test和https://training.example.test两个完整来源，以逗号分隔（不能用空格冒充分隔），保持max_connections=20，不使用*、子域通配、错误协议或多余路径。root_url已由平台固定为http://127.0.0.1:20550/，同源连接仍应可用；不要修改root_url或认证设置来绕过检查。交付handshake-policy.json记录允许/拒绝样本。缺少Origin不代表通过来源安全检查，认证仍必须存在。本题定位Origin层；不声称已验证反向代理、TLS或订阅消息。\n\n## 产物\n提交 grafana-live.ini 与 handshake-policy.json，修改真实配置或 API 请求产物，不提交判定程序。\n\n## 验收方法\n运行 python3 checks/check.py。检查多个字段之间的关系、跨文件引用、输入材料约束及不变项；拒绝重复 JSON 键，参考解、骨架、典型错误分别验证。仅离线配置合同通过，原生导入、渲染、查询与鉴权效果尚待平台隔离服务验证。\n\n## 原理复习\nGrafana Live在普通页面正常时仍断开，应查什么？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "grafana-live.ini",
+        "handshake-policy.json"
+      ],
+      "operation": "普通HTTP页面正常，但从两个受控入口发起的Live WebSocket被Origin校验拒绝。修改grafana-live.ini，只增加https://ops.example.test和https://training.example.test两个完整来源，以逗号分隔（不能用空格冒充分隔），保持max_connections=20，不使用*、子域通配、错误协议或多余路径。root_url已由平台固定为http://127.0.0.1:20550/，同源连接仍应可用；不要修改root_url或认证设置来绕过检查。交付handshake-policy.json记录允许/拒绝样本。缺少Origin不代表通过来源安全检查，认证仍必须存在。本题定位Origin层；不声称已验证反向代理、TLS或订阅消息。",
+      "verification": "实际配置/API载荷的多项离线语义合同；不以解析通过冒充原生运行效果。",
+      "capability_gap": [
+        "平台自动评分为INI和握手策略合同；原生27次握手由作者本地隔离实例验证，不声称网页已运行Grafana。",
+        "未验证反向代理、TLS终止、Live订阅消息或并发容量。"
+      ],
+      "failure_examples": [
+        "negative_files 中保留了部分看似正确、但违反跨字段关系的产物。",
+        "把allowed_origins写成空格分隔时原生Grafana仍拒绝两个预期入口。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,urllib.parse,math,re\ndef unique(pairs):\n d={}\n for k,v in pairs:\n  if k in d:raise ValueError('duplicate key: '+k)\n  d[k]=v\n return d\ndef load(name):return json.loads(pathlib.Path(name).read_text(encoding='utf-8'),object_pairs_hook=unique)\n\nEXPECTED_POLICY={'root_url': 'http://127.0.0.1:20550/', 'same_origin': 'http://127.0.0.1:20550', 'allow_extra': ['https://ops.example.test', 'https://training.example.test'], 'reject_origins': ['https://evil.example.test', 'http://ops.example.test', 'https://ops.example.test.evil.invalid', 'https://child.ops.example.test'], 'no_origin_is_not_an_origin_check': True, 'authentication_still_required': True, 'max_connections': 20}\n\nBASE={'placeholder': {}}\nimport configparser,urllib.parse\ncfg=configparser.ConfigParser(interpolation=None,strict=True)\ncfg.read_string(pathlib.Path('grafana-live.ini').read_text(encoding='utf-8'))\nassert not cfg.defaults() and cfg.sections()==['live']\nassert set(cfg['live'])=={'max_connections','allowed_origins'}\nassert cfg.getint('live','max_connections')==20\norigins=[v.strip() for v in cfg['live']['allowed_origins'].split(',')]\nassert len(origins)==len(set(origins))==2\nfor origin in origins:\n p=urllib.parse.urlsplit(origin)\n assert p.scheme=='https' and p.path=='' and not p.query and not p.fragment and not p.username and not p.password\n assert p.port is None and '*' not in origin\nassert set(origins)=={'https://ops.example.test','https://training.example.test'}\npolicy=load('handshake-policy.json')\nassert policy==EXPECTED_POLICY\n\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-grafana-072",
+      "original_title": "Grafana Live在普通页面正常时仍断开，应查什么？",
+      "original_type": "interview",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

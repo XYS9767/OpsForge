@@ -1,0 +1,88 @@
+[
+  {
+    "id": "curated-parallel-prometheus-077",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 4,
+    "topic": "高可用容量与运行治理",
+    "title": "限制高样本查询并证明关键记录规则与告警继续评估",
+    "answer": "```json\n{\n  \"max_samples\": 50\n}\n```\n\n```yaml\ngroups:\n- name: critical-health\n  interval: 1s\n  rules:\n  - record: service:critical_queue:sum\n    expr: sum by(service) (critical_queue_depth)\n  - alert: CriticalQueueHigh\n    expr: service:critical_queue:sum > 80\n    for: 2s\n    labels:\n      severity: warning\n    annotations:\n      summary: Critical queue remained high\n```\n50给本题20条业务输入及输出留下余量，但60条诊断输入无法全部进入查询。拒绝发生在原生引擎，不能用最终结果只有一个样本推断成本很低。太低的5同样伤害关键记录规则；验收需同时观察成功路径和拒绝路径。这里只给当前小材料可用的预算，不应照搬到生产。\n\n原题原理：两者共享CPU、内存和存储读取，大查询可拖慢规则与抓取。应限制查询并发/范围，采用记录规则或隔离查询层，并监控评估延迟。只给查询更长timeout可能恶化告警时效。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "两者共享CPU、内存和存储读取，大查询可拖慢规则与抓取。",
+      "应限制查询并发/范围，采用记录规则或隔离查询层，并监控评估延迟。",
+      "只给查询更长timeout可能恶化告警时效。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/command-line/prometheus/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "policy.json": "{\n  \"max_samples\": 5000\n}\n",
+      "rules.yaml": "groups:\n- name: critical-health\n  interval: 1s\n  rules:\n  - record: service:critical_queue:sum\n    expr: sum by(service) (critical_queue_depth)\n  - alert: CriticalQueueHigh\n    expr: service:critical_queue:sum > 80\n    for: 2s\n    labels:\n      severity: warning\n    annotations:\n      summary: Critical queue remained high\n",
+      "materials.json": "{\n  \"critical_queue_depth\": {\n    \"checkout\": {\n      \"workers\": 10,\n      \"value_each\": 10\n    },\n    \"idle\": {\n      \"workers\": 10,\n      \"value_each\": 0\n    }\n  },\n  \"diagnostic_inventory\": {\n    \"series\": 60,\n    \"value_each\": 1\n  },\n  \"target_query\": \"sum(diagnostic_inventory)\",\n  \"critical_record\": \"sum by(service) (critical_queue_depth)\",\n  \"critical_alert\": \"checkout total>80 for2s\"\n}\n"
+    },
+    "solution_files": {
+      "policy.json": "{\n  \"max_samples\": 50\n}\n",
+      "rules.yaml": "groups:\n- name: critical-health\n  interval: 1s\n  rules:\n  - record: service:critical_queue:sum\n    expr: sum by(service) (critical_queue_depth)\n  - alert: CriticalQueueHigh\n    expr: service:critical_queue:sum > 80\n    for: 2s\n    labels:\n      severity: warning\n    annotations:\n      summary: Critical queue remained high\n"
+    },
+    "negative_files": {
+      "policy.json": "{\n  \"max_samples\": 5\n}\n",
+      "rules.yaml": "groups:\n- name: critical-health\n  interval: 1s\n  rules:\n  - record: service:critical_queue:sum\n    expr: sum by(service) (critical_queue_depth)\n  - alert: CriticalQueueHigh\n    expr: service:critical_queue:sum > 80\n    for: 2s\n    labels:\n      severity: warning\n    annotations:\n      summary: Critical queue remained high\n"
+    },
+    "body": "## 环境与初始材料\n平台提供原生Prometheus与受限HTTP指标端。业务队列共20条：checkout的10个worker各10，总100；idle的10个worker各0，总0。诊断指标diagnostic_inventory有60条。没有真实大流量或生产数据。policy.json由平台映射为原生--query.max-samples启动参数；rules.yaml是实际每秒评估的规则组。\n\n## 操作任务\n选择一个能保护关键监控、又能拒绝诊断查询的样本预算。保留service:critical_queue:sum按service汇总的两个输出，以及CriticalQueueHigh在总量严格>80持续2秒后firing的合同；只能checkout触发。原生查询sum(diagnostic_inventory)虽然只有一个最终结果，但执行需读取60个输入，必须因样本预算被拒绝。连续8次此类请求被拒绝期间，关键规则必须继续评估、无失败计数、告警保持firing，抓取up仍1。不能通过关规则、过滤诊断原始数据、只改返回结果或让所有查询都报错来达标。\n\n## 产物\n提交policy.json与rules.yaml。max_samples为1..10000整数；可选择满足实际合同的预算，不强制答案数字完全相同。保留组名、记录/告警名、1秒组间隔、2秒持续时间、标签和摘要，PromQL允许等价表达式；数据源与采集配置由平台固定。\n\n## 验收方法\n执行python3 checks/check.py。真实HTTP抓取与原生规则引擎先形成checkout=100/idle=0和唯一firing告警，然后原生查询API执行8次诊断聚合，每次必须返回execution类too many samples错误；之后再次核对记录值、告警身份、lastEvaluation已推进、prometheus_rule_evaluation_failures_total仍0与up=1。初始5000放过诊断查询而失败，错误5使关键规则也无法工作而失败。每个进程限制CPU并发/Go内存目标/RSS/时间，finally退出。\n\n## 边界\n这是小规模真实执行的样本预算机制验收，不是生产压力测试或P99性能承诺。query.max-samples限制单次查询处理样本，不等同进程硬内存、QPS、并发数或公平调度；规则查询也受引擎预算影响，所以必须验证关键规则而不能一味调低。没有调整任何线上服务资源。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-query-budget",
+      "deliverables": [
+        "policy.json",
+        "rules.yaml"
+      ],
+      "operation": "交付原生查询样本预算，保留关键记录和告警执行",
+      "verification": "8次原生query错误、真实记录/告警/规则推进/失败计数/up同时核对",
+      "capability_gap": [
+        "非生产压力/延迟/QPS/并发公平性验收"
+      ],
+      "failure_examples": [
+        "过高预算放过诊断查询",
+        "过低预算也破坏关键规则",
+        "误把最终输出行数当执行样本成本"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config=copy.deepcopy(CONFIG);config['rule_files']=[str(root/'candidate-rules.yaml')]\n (root/'candidate-rules.yaml').write_text(yaml.safe_dump(RULES),encoding='utf-8')\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error','--query.max-samples='+str(POLICY['max_samples'])],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\nEXPECTED={'groups': [{'name': 'critical-health', 'interval': '1s', 'rules': [{'record': 'service:critical_queue:sum', 'expr': 'sum by(service) (critical_queue_depth)'}, {'alert': 'CriticalQueueHigh', 'expr': 'service:critical_queue:sum > 80', 'for': '2s', 'labels': {'severity': 'warning'}, 'annotations': {'summary': 'Critical queue remained high'}}]}]}\n\nPOLICY=json.loads(pathlib.Path('policy.json').read_text(encoding='utf-8'))\nassert isinstance(POLICY,dict) and set(POLICY)=={'max_samples'} and type(POLICY['max_samples']) is int and 1<=POLICY['max_samples']<=10000\nRULES=yaml.load(pathlib.Path('rules.yaml').read_text(encoding='utf-8'),Loader=Strict)\nassert isinstance(RULES,dict) and set(RULES)=={'groups'} and len(RULES['groups'])==1\ngroup=RULES['groups'][0];expected=EXPECTED['groups'][0]\nassert set(group)==set(expected) and group['name']==expected['name'] and group['interval']==expected['interval'] and len(group['rules'])==len(expected['rules'])\nfor actual,wanted in zip(group['rules'],expected['rules']):\n assert set(actual)==set(wanted) and {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in wanted.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\nlines=['# TYPE critical_queue_depth gauge']\nfor service in ['checkout','idle']:\n for i in range(10):lines.append('critical_queue_depth{service=\"'+service+'\",worker=\"'+str(i)+'\"} '+('10' if service=='checkout' else '0'))\nlines+=['# TYPE diagnostic_inventory gauge']\nfor i in range(60):lines.append('diagnostic_inventory{item=\"'+str(i)+'\"} 1')\nBODY=('\\n'.join(lines)+'\\n').encode()\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  if self.path!='/metrics':self.send_error(404);return\n  self.send_response(200);self.send_header('Content-Type','text/plain; version=0.0.4');self.send_header('Content-Length',str(len(BODY)));self.end_headers();self.wfile.write(BODY)\n def log_message(self,*args):pass\nhttpd=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()\nCONFIG={'global':{'scrape_interval':'1s','evaluation_interval':'1s'},'scrape_configs':[{'job_name':'controlled-fixture','scrape_interval':'1s','scrape_timeout':'500ms','static_configs':[{'targets':['127.0.0.1:'+str(httpd.server_port)]}]}]}\ndef status(api):\n groups=api('/api/v1/rules')['data']['groups'];assert len(groups)==1\n rs=groups[0]['rules']\n if len(rs)!=2 or any(r['health']!='ok' or r.get('lastError') for r in rs):return None\n if rs[1]['state']!='firing':return None\n alerts=rs[1]['alerts']\n if len(alerts)!=1 or alerts[0]['labels']!={'alertname':'CriticalQueueHigh','service':'checkout','severity':'warning'}:return None\n result=vector(api,'service:critical_queue:sum')\n if len(result)!=2:return None\n if any(set(r['metric'])!={'__name__','service'} or r['metric']['__name__']!='service:critical_queue:sum' for r in result):return None\n values={r['metric']['service']:float(r['value'][1]) for r in result}\n if values!={'checkout':100,'idle':0}:return None\n return rs[0]['lastEvaluation']\ndef wait(fn):\n end=time.monotonic()+12\n while time.monotonic()<end:\n  result=fn()\n  if result:return result\n  time.sleep(.15)\n raise AssertionError('critical rule output and firing state were not preserved under the requested sample budget')\ntry:\n with tempfile.TemporaryDirectory(prefix='trusted-prom-query-budget-') as d:\n  try:\n   with server(pathlib.Path(d),'source') as (url,api):\n    first=wait(lambda:status(api))\n    assert len(vector(api,'up'))==1\n    rejected=0\n    for _ in range(8):\n     try:api('/api/v1/query',{'query':'sum(diagnostic_inventory)'})\n     except urllib.error.HTTPError as exc:\n      body=json.loads(exc.read());assert body.get('status')=='error' and body.get('errorType')=='execution' and 'too many samples' in body.get('error','').lower(),(exc.code,body)\n      rejected+=1\n     else:raise AssertionError('query budget failed to reject the 60-input diagnostic aggregation')\n     time.sleep(.3)\n    assert rejected==8\n    last=wait(lambda:status(api));assert last!=first,'critical rules must continue evaluating during rejected dashboard requests'\n    failures=[float(line.rsplit(' ',1)[1]) for line in api('/metrics').decode().splitlines() if line.startswith('prometheus_rule_evaluation_failures_total{') or line.startswith('prometheus_rule_evaluation_failures_total ')];assert failures and all(v==0 for v in failures),'sample budget must not sacrifice critical rule evaluations'\n    up=vector(api,'up');assert len(up)==1 and float(up[0]['value'][1])==1\n    print('bounded query requests:',rejected,'rule evaluation advanced:',first,last)\n  finally:print('native lifecycle:',json.dumps(STATS))\nfinally:\n httpd.shutdown();httpd.server_close();thread.join(timeout=2)\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_query_sample_budget_rejection_preserves_live_critical_rule_evaluations",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-077",
+      "original_type": "interview",
+      "original_title": "同一Prometheus承载仪表盘大查询和告警评估有什么竞争风险？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

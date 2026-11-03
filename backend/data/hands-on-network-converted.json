@@ -1,0 +1,921 @@
+[
+  {
+    "id": "src-db8e65ac9b99ce07",
+    "title": "使用 TCP 半关闭结束上传并继续读取响应",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,payload):\n    with socket.create_connection((host,port),timeout=2) as sock:\n        sock.sendall(payload);sock.shutdown(socket.SHUT_WR);out=[]\n        while True:\n            part=sock.recv(4096)\n            if not part:return b''.join(out)\n            out.append(part)\n```\n\n实现说明：实现execute(host,port,payload)，发送payload后shutdown(SHUT_WR)，继续循环读取服务端响应直到EOF并返回bytes。服务端必须看到上传EOF才计算摘要，不能先close整个连接，也不能一直等响应而不发FIN；超时2秒。\n\n原理补充（原题保留）：\n网络连接由应用调用 socket、bind/listen/accept 或 connect 等接口建立；TCP 按握手进入连接状态，close/shutdown 引发有序关闭或按情形复位。进程退出会关闭描述符，但协议状态如 TIME_WAIT 可继续存在。UDP socket 可发送数据而无需 TCP 式连接握手。",
+    "category": "网络与DNS",
+    "difficulty": "入门",
+    "section": "进程",
+    "type": "code",
+    "has_answer": true,
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "Linux",
+    "original_title": "你能解释一下网络进程/连接如何建立以及如何终止?",
+    "module": "network",
+    "topic": "使用 TCP 半关闭结束上传并继续读取响应",
+    "level": 2,
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,payload)，发送payload后shutdown(SHUT_WR)，继续循环读取服务端响应直到EOF并返回bytes。服务端必须看到上传EOF才计算摘要，不能先close整个连接，也不能一直等响应而不发FIN；超时2秒。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：服务端等待上传EOF，客户端却不半关闭而直接等响应，会形成双方互等。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,payload):\n    with socket.create_connection((host,port),timeout=2) as sock:\n        sock.sendall(payload);sock.shutdown(socket.SHUT_WR);out=[]\n        while True:\n            part=sock.recv(4096)\n            if not part:return b''.join(out)\n            out.append(part)\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,payload):\n    with socket.create_connection((host,port),timeout=1) as sock:sock.sendall(payload);return sock.recv(4096)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,payload)，发送payload后shutdown(SHUT_WR)，继续循环读取服务端响应直到EOF并返回bytes。服务端必须看到上传EOF才计算摘要，不能先close整个连接，也不能一直等响应而不发FIN；超时2秒。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "服务端等待上传EOF，客户端却不半关闭而直接等响应，会形成双方互等。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\nimport hashlib\nfor payload in [b'content'*1000,b'']:\n    def handler(conn):\n        parts=[]\n        while True:\n            part=conn.recv(4096)\n            if not part:break\n            parts.append(part)\n        data=b''.join(parts);assert data==payload;digest=hashlib.sha256(data).hexdigest().encode();conn.sendall(digest[:12]);time.sleep(.03);conn.sendall(digest[12:])\n    with tcp_server(handler) as endpoint:assert task.execute(*endpoint,payload)==hashlib.sha256(payload).hexdigest().encode()\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|src-db8e65ac9b99ce07|使用 TCP 半关闭结束上传并继续读取响应",
+    "conversion": {
+      "original_id": "src-db8e65ac9b99ce07",
+      "original_type": "source",
+      "original_title": "你能解释一下网络进程/连接如何建立以及如何终止?",
+      "original_source": "README-zh_CN.md",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "src-0a18d30b87cb2cff",
+    "title": "通过 UDP 完成 NTP 请求并验证响应关联",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port):\n    import os\n    nonce=os.urandom(8)\n    if nonce==b'\\0'*8:nonce=b'\\0'*7+b'\\1'\n    packet=bytearray(48);packet[0]=0x23;packet[40:48]=nonce\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:\n        sock.settimeout(2);sock.connect((host,port));sock.send(packet);data=sock.recv(512)\n    if len(data)<48 or data[0]&7!=4 or (data[0]>>3)&7 not in [3,4] or data[0]>>6==3 or not 1<=data[1]<=15 or data[24:32]!=nonce:raise ValueError('invalid NTP response')\n    seconds,fraction=struct.unpack('!II',data[40:48]);return seconds-2208988800+fraction/2**32\n```\n\n实现说明：实现execute(host,port)，向指定回环NTP端口发送48字节NTPv4客户端请求（mode3，transmit字段为非零8字节nonce）。接收48字节及以上响应，验证服务端mode4、版本3/4、LI非3、stratum为1..15，且originate字段精确回显nonce。解析transmit秒/分数为Unix时间float并返回。短包、错nonce、未同步或无效层级拒绝ValueError；不修改系统时间，超时2秒。\n\n原理补充（原题保留）：\nNTP 用于通过网络同步时钟，客户端估计偏差和网络延迟，常由 chrony 等实现。时间不准会影响证书、认证、日志关联和分布式任务。检查时间源、同步状态与漂移；大幅回拨可能影响应用，应采用受控校时策略。",
+    "category": "网络与DNS",
+    "difficulty": "入门",
+    "section": "进程",
+    "type": "code",
+    "has_answer": true,
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "Linux",
+    "original_title": "什么是NTP? 它是用来干什么的?",
+    "module": "network",
+    "topic": "通过 UDP 完成 NTP 请求并验证响应关联",
+    "level": 2,
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port)，向指定回环NTP端口发送48字节NTPv4客户端请求（mode3，transmit字段为非零8字节nonce）。接收48字节及以上响应，验证服务端mode4、版本3/4、LI非3、stratum为1..15，且originate字段精确回显nonce。按NTP era 0（1900至2036）解析transmit秒/分数为Unix时间float并返回。短包、错nonce、未同步或无效层级拒绝ValueError；不修改系统时间，超时2秒。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：只解析时间字段而不校验originate与同步状态，会接受不属于本次请求或未同步服务的时间。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-f672329f5575a9f5",
+        "title": "什么是 NTP？它的用途是什么？",
+        "category": "Linux",
+        "source": "topics/linux/README.md",
+        "sources": [
+          "topics/linux/README.md"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port):\n    import os\n    nonce=os.urandom(8)\n    if nonce==b'\\0'*8:nonce=b'\\0'*7+b'\\1'\n    packet=bytearray(48);packet[0]=0x23;packet[40:48]=nonce\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:\n        sock.settimeout(2);sock.connect((host,port));sock.send(packet);data=sock.recv(512)\n    if len(data)<48 or data[0]&7!=4 or (data[0]>>3)&7 not in [3,4] or data[0]>>6==3 or not 1<=data[1]<=15 or data[24:32]!=nonce:raise ValueError('invalid NTP response')\n    seconds,fraction=struct.unpack('!II',data[40:48]);return seconds-2208988800+fraction/2**32\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port):\n    import os\n    packet=bytearray(48);packet[0]=0x23;packet[40:48]=os.urandom(8)\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as s:s.settimeout(2);s.connect((host,port));s.send(packet);data=s.recv(512)\n    seconds,fraction=struct.unpack('!II',data[40:48]);return seconds-2208988800+fraction/2**32\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port)，向指定回环NTP端口发送48字节NTPv4客户端请求（mode3，transmit字段为非零8字节nonce）。接收48字节及以上响应，验证服务端mode4、版本3/4、LI非3、stratum为1..15，且originate字段精确回显nonce。按NTP era 0（1900至2036）解析transmit秒/分数为Unix时间float并返回。短包、错nonce、未同步或无效层级拒绝ValueError；不修改系统时间，超时2秒。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "只解析时间字段而不校验originate与同步状态，会接受不属于本次请求或未同步服务的时间。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\nfor case in ['valid','short','nonce','unsynced','stratum']:\n    def handler(sock,data,peer):\n        assert len(data)==48 and data[0]==0x23 and data[40:48]!=b'\\0'*8\n        response=bytearray(48);response[0]=0x24;response[1]=2;response[24:32]=data[40:48];response[40:48]=struct.pack('!II',2208988800+1700000000,2**30)\n        if case=='short':response=response[:20]\n        elif case=='nonce':response[24:32]=b'\\0'*8\n        elif case=='unsynced':response[0]|=0xc0\n        elif case=='stratum':response[1]=0\n        sock.sendto(response,peer)\n    with udp_server(handler) as endpoint:\n        if case=='valid':assert task.execute(*endpoint)==1700000000.25\n        else:\n            try:task.execute(*endpoint)\n            except ValueError:pass\n            else:raise AssertionError(case+' accepted')\n\nfor flag,stratum in [(0x23,2),(0x14,2),(0x24,16)]:\n    def invalid(sock,data,peer):\n        packet=bytearray(48);packet[0]=flag;packet[1]=stratum;packet[24:32]=data[40:48];packet[40:48]=struct.pack('!II',3908988800,0);sock.sendto(packet,peer)\n    with udp_server(invalid) as endpoint:\n        try:task.execute(*endpoint)\n        except ValueError:pass\n        else:raise AssertionError('invalid mode/version/stratum accepted')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|src-0a18d30b87cb2cff|通过 UDP 完成 NTP 请求并验证响应关联",
+    "conversion": {
+      "original_id": "src-0a18d30b87cb2cff",
+      "original_type": "source",
+      "original_title": "什么是NTP? 它是用来干什么的?",
+      "original_source": "README-zh_CN.md",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-network-completion-015",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 2,
+    "topic": "复用 HTTP keep-alive 连接完成顺序请求",
+    "title": "复用 HTTP keep-alive 连接完成顺序请求",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,paths):\n    import http.client\n    if not paths:return []\n    connection=http.client.HTTPConnection(host,port,timeout=2);out=[]\n    try:\n        for path in paths:\n            connection.request('GET',path);r=connection.getresponse();out.append((r.status,r.read()))\n        return out\n    finally:connection.close()\n```\n\n实现说明：实现execute(host,port,paths)，使用同一HTTPConnection顺序请求每个path，完整读完前一响应后再发下一请求，返回(status,body)列表。不能用TCP SO_KEEPALIVE代替HTTP连接复用，也不能每次新建连接。空paths返回空列表，不建连接；请求超时2秒，最后关闭。\n\n原理补充（原题保留）：\nTCP keepalive 在配置条件下探测长时间空闲连接的对端存活；HTTP keep-alive 指连接可复用于多个请求。它们不保证业务事务成功，也不保证代理和负载均衡器采用相同空闲超时。长连接设计要明确心跳、读写截止时间与重连语义。",
+    "type": "code",
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,paths)，使用同一HTTPConnection顺序请求每个path，完整读完前一响应后再发下一请求，返回(status,body)列表。不能用TCP SO_KEEPALIVE代替HTTP连接复用，也不能每次新建连接。空paths返回空列表，不建连接；请求超时2秒，最后关闭。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：为每个请求重新建TCP连接不能算HTTP keep-alive复用。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,paths):\n    import http.client\n    if not paths:return []\n    connection=http.client.HTTPConnection(host,port,timeout=2);out=[]\n    try:\n        for path in paths:\n            connection.request('GET',path);r=connection.getresponse();out.append((r.status,r.read()))\n        return out\n    finally:connection.close()\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,paths):\n    import http.client\n    out=[]\n    for path in paths:\n        c=http.client.HTTPConnection(host,port,timeout=1)\n        try:c.request('GET',path);r=c.getresponse();out.append((r.status,r.read()))\n        finally:c.close()\n    return out\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,paths)，使用同一HTTPConnection顺序请求每个path，完整读完前一响应后再发下一请求，返回(status,body)列表。不能用TCP SO_KEEPALIVE代替HTTP连接复用，也不能每次新建连接。空paths返回空列表，不建连接；请求超时2秒，最后关闭。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "为每个请求重新建TCP连接不能算HTTP keep-alive复用。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\ndef handler(conn):\n    for path,body in [('/one',b'first response'),('/two',b'second')]:\n        request=b''\n        while b'\\r\\n\\r\\n' not in request:\n            data=conn.recv(1024)\n            if not data:raise EOFError('client opened another connection instead of reusing')\n            request+=data\n        assert request.startswith(('GET '+path+' HTTP/1.1\\r\\n').encode());conn.sendall(('HTTP/1.1 200 OK\\r\\nContent-Length: '+str(len(body))+'\\r\\nConnection: keep-alive\\r\\n\\r\\n').encode()+body)\nwith tcp_server(handler) as endpoint:assert task.execute(*endpoint,['/one','/two'])==[(200,b'first response'),(200,b'second')]\nassert task.execute('127.0.0.1',1,[])==[]\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|curated-network-completion-015|复用 HTTP keep-alive 连接完成顺序请求",
+    "conversion": {
+      "original_id": "curated-network-completion-015",
+      "original_type": "interview",
+      "original_title": "TCP keepalive 与 HTTP keep-alive 各自意味着什么？",
+      "original_source": "OpsForge 原创网络专题题",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "src-d3fa9da8a1ee4c7e",
+    "title": "解析同连接上流水线请求的多个 HTTP 响应",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,paths):\n    if not paths:return []\n    if any(not p.startswith('/') or '\\r' in p or '\\n' in p for p in paths):raise ValueError('invalid path')\n    with socket.create_connection((host,port),timeout=2) as sock:\n        sock.sendall(''.join('GET '+p+' HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' for p in paths).encode('ascii'))\n        with sock.makefile('rb') as f:\n            out=[]\n            for _ in paths:\n                status=f.readline(8192)\n                if not status.endswith(b'\\r\\n'):raise EOFError('status truncated')\n                parts=status.split();code=int(parts[1]);headers={}\n                while True:\n                    line=f.readline(8192)\n                    if line==b'\\r\\n':break\n                    if not line.endswith(b'\\r\\n') or b':' not in line:raise ValueError('bad headers')\n                    k,v=line.split(b':',1);headers[k.lower()]=v.strip()\n                if b'content-length' not in headers:raise ValueError('length required')\n                length=int(headers[b'content-length'])\n                if not 0<=length<=1048576:raise ValueError('invalid length')\n                body=f.read(length)\n                if len(body)!=length:raise EOFError('body truncated')\n                out.append((code,body))\n            return out\n```\n\n实现说明：实现execute(host,port,paths)，一次发送按paths顺序拼接的HTTP/1.1 GET请求，在同一连接按顺序解析所有响应，返回(status,body)列表。题目服务端均使用Content-Length，不使用chunked；必须精确读满正文，不把合并到同次recv的第二个响应当成第一个正文。缺失长度、截断头/体拒绝，超时2秒。\n\n原理补充（原题保留）：\nHTTP/1.1 pipelining 允许在同一连接上连续发送多个请求而不逐个等待响应，但响应仍按顺序返回，容易出现队头阻塞且现实支持有限。HTTP/2 的多路复用不是同一机制；非幂等请求重试还需处理重复执行风险。",
+    "category": "网络与DNS",
+    "difficulty": "入门",
+    "section": "固件",
+    "type": "code",
+    "has_answer": true,
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "sources": [
+      "README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "HTTP",
+    "original_title": "HTTP 流水线是什么？",
+    "module": "network",
+    "topic": "解析同连接上流水线请求的多个 HTTP 响应",
+    "level": 3,
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,paths)，一次发送按paths顺序拼接的HTTP/1.1 GET请求，在同一连接按顺序解析所有响应，返回(status,body)列表。题目服务端均使用Content-Length，不使用chunked；必须精确读满正文，不把合并到同次recv的第二个响应当成第一个正文。缺失长度、截断头/体拒绝，超时2秒。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：只按第一次头部边界拆分整个recv，既会漏后续响应，也可能把第二个响应头当成第一个正文。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,paths):\n    if not paths:return []\n    if any(not p.startswith('/') or '\\r' in p or '\\n' in p for p in paths):raise ValueError('invalid path')\n    with socket.create_connection((host,port),timeout=2) as sock:\n        sock.sendall(''.join('GET '+p+' HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' for p in paths).encode('ascii'))\n        with sock.makefile('rb') as f:\n            out=[]\n            for _ in paths:\n                status=f.readline(8192)\n                if not status.endswith(b'\\r\\n'):raise EOFError('status truncated')\n                parts=status.split();code=int(parts[1]);headers={}\n                while True:\n                    line=f.readline(8192)\n                    if line==b'\\r\\n':break\n                    if not line.endswith(b'\\r\\n') or b':' not in line:raise ValueError('bad headers')\n                    k,v=line.split(b':',1);headers[k.lower()]=v.strip()\n                if b'content-length' not in headers:raise ValueError('length required')\n                length=int(headers[b'content-length'])\n                if not 0<=length<=1048576:raise ValueError('invalid length')\n                body=f.read(length)\n                if len(body)!=length:raise EOFError('body truncated')\n                out.append((code,body))\n            return out\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,paths):\n    with socket.create_connection((host,port),timeout=2) as s:\n        s.sendall(''.join('GET '+p+' HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' for p in paths).encode());data=s.recv(65535);header,body=data.split(b'\\r\\n\\r\\n',1);return [(int(header.split()[1]),body)]\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,paths)，一次发送按paths顺序拼接的HTTP/1.1 GET请求，在同一连接按顺序解析所有响应，返回(status,body)列表。题目服务端均使用Content-Length，不使用chunked；必须精确读满正文，不把合并到同次recv的第二个响应当成第一个正文。缺失长度、截断头/体拒绝，超时2秒。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "只按第一次头部边界拆分整个recv，既会漏后续响应，也可能把第二个响应头当成第一个正文。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\ndef handler(conn):\n    requests=b''\n    while requests.count(b'\\r\\n\\r\\n')<2:requests+=conn.recv(4096)\n    assert requests.startswith(b'GET /a ') and b'GET /b ' in requests\n    response=b'HTTP/1.1 200 OK\\r\\nContent-Length: 3\\r\\n\\r\\noneHTTP/1.1 404 Not Found\\r\\nContent-Length: 7\\r\\n\\r\\nmissing';conn.sendall(response[:17]);time.sleep(.02);conn.sendall(response[17:])\nwith tcp_server(handler) as endpoint:assert task.execute(*endpoint,['/a','/b'])==[(200,b'one'),(404,b'missing')]\ndef truncated(conn):conn.recv(4096);conn.sendall(b'HTTP/1.1 200 OK\\r\\nContent-Length: 5\\r\\n\\r\\nab')\nwith tcp_server(truncated) as endpoint:\n    try:task.execute(*endpoint,['/a'])\n    except EOFError:pass\n    else:raise AssertionError('truncated body accepted')\nassert task.execute('127.0.0.1',1,[])==[]\n\ndef no_length(conn):conn.recv(4096);conn.sendall(b'HTTP/1.1 200 OK\\r\\nConnection: close\\r\\n\\r\\nbody')\nwith tcp_server(no_length) as endpoint:\n    try:task.execute(*endpoint,['/a'])\n    except ValueError:pass\n    else:raise AssertionError('missing Content-Length accepted')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|src-d3fa9da8a1ee4c7e|解析同连接上流水线请求的多个 HTTP 响应",
+    "conversion": {
+      "original_id": "src-d3fa9da8a1ee4c7e",
+      "original_type": "source",
+      "original_title": "HTTP 流水线是什么？",
+      "original_source": "README.md",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-network-completion-025",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 2,
+    "topic": "构造并传输 PROXY protocol v1 前缀",
+    "title": "构造并传输 PROXY protocol v1 前缀",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,source_ip,source_port,destination_ip,destination_port,payload):\n    import ipaddress\n    src=ipaddress.ip_address(source_ip);dst=ipaddress.ip_address(destination_ip)\n    if src.version!=dst.version or type(source_port) is not int or type(destination_port) is not int or not 1<=source_port<=65535 or not 1<=destination_port<=65535:raise ValueError('invalid proxy metadata')\n    header=f'PROXY TCP{src.version} {src} {dst} {source_port} {destination_port}\\r\\n'.encode('ascii')\n    with socket.create_connection((host,port),timeout=2) as sock:\n        sock.sendall(header+payload);sock.shutdown(socket.SHUT_WR);out=[]\n        while True:\n            data=sock.recv(4096)\n            if not data:return b''.join(out)\n            out.append(data)\n```\n\n实现说明：实现execute(host,port,source_ip,source_port,destination_ip,destination_port,payload)。校验两个IP同为IPv4或同为IPv6、端口为1..65535，按PROXY TCP4/TCP6规范发送一行CRLF前缀再发送原始payload；半关闭写端并读取服务端ACK。不能把代理连接本身的回环地址覆盖原始地址，不允许地址字符串注入换行。\n\n原理补充（原题保留）：\n发送端会在连接前部传递原始来源等元数据；接收端若不理解，会把前导内容误当 HTTP/TLS 数据，反之也可能因缺少期望头失败。只在受信代理链之间启用并验证版本、监听端和来源，不能接受任意客户端伪造来源地址。",
+    "type": "code",
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,source_ip,source_port,destination_ip,destination_port,payload)。校验两个IP同为IPv4或同为IPv6、端口为1..65535，按PROXY TCP4/TCP6规范发送一行CRLF前缀再发送原始payload；半关闭写端并读取服务端ACK。不能把代理连接本身的回环地址覆盖原始地址，不允许地址字符串注入换行。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：发送端没有PROXY前缀而接收端启用协议时，业务报文会被误当作代理头并被拒绝。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,source_ip,source_port,destination_ip,destination_port,payload):\n    import ipaddress\n    src=ipaddress.ip_address(source_ip);dst=ipaddress.ip_address(destination_ip)\n    if src.version!=dst.version or type(source_port) is not int or type(destination_port) is not int or not 1<=source_port<=65535 or not 1<=destination_port<=65535:raise ValueError('invalid proxy metadata')\n    header=f'PROXY TCP{src.version} {src} {dst} {source_port} {destination_port}\\r\\n'.encode('ascii')\n    with socket.create_connection((host,port),timeout=2) as sock:\n        sock.sendall(header+payload);sock.shutdown(socket.SHUT_WR);out=[]\n        while True:\n            data=sock.recv(4096)\n            if not data:return b''.join(out)\n            out.append(data)\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,source_ip,source_port,destination_ip,destination_port,payload):\n    with socket.create_connection((host,port),timeout=2) as s:s.sendall(payload);s.shutdown(socket.SHUT_WR);return s.recv(4096)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,source_ip,source_port,destination_ip,destination_port,payload)。校验两个IP同为IPv4或同为IPv6、端口为1..65535，按PROXY TCP4/TCP6规范发送一行CRLF前缀再发送原始payload；半关闭写端并读取服务端ACK。不能把代理连接本身的回环地址覆盖原始地址，不允许地址字符串注入换行。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "发送端没有PROXY前缀而接收端启用协议时，业务报文会被误当作代理头并被拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\nfor src,dst,proto in [('192.0.2.10','198.51.100.5','TCP4'),('2001:db8::1','2001:db8::2','TCP6')]:\n    def handler(conn):\n        data=b''\n        while True:\n            part=conn.recv(4096)\n            if not part:break\n            data+=part\n        header,payload=data.split(b'\\r\\n',1);assert header==f'PROXY {proto} {src} {dst} 43210 443'.encode() and payload==b'raw\\x00payload';conn.sendall(b'accepted')\n    with tcp_server(handler) as endpoint:assert task.execute(*endpoint,src,43210,dst,443,b'raw\\x00payload')==b'accepted'\nfor src,dst,port in [('192.0.2.1\\r\\nFAKE','198.51.100.2',80),('192.0.2.1','2001:db8::1',80),('192.0.2.1','198.51.100.2',0)]:\n    try:task.execute('127.0.0.1',1,src,port,dst,443,b'')\n    except ValueError:pass\n    else:raise AssertionError('invalid metadata accepted')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|curated-network-completion-025|构造并传输 PROXY protocol v1 前缀",
+    "conversion": {
+      "original_id": "curated-network-completion-025",
+      "original_type": "interview",
+      "original_title": "启用 PROXY protocol 时，发送端与接收端不匹配会出现什么？",
+      "original_source": "OpsForge 原创网络专题题",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-feishu-w-095",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 3,
+    "topic": "处理 100 Continue 后再上传正文",
+    "title": "处理 100 Continue 后再上传正文",
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,payload)，发送带Expect:100-continue及Content-Length的POST请求头，收到100后才发送body；103 Early Hints可以跳过但不代表许可；若直接收到417等最终响应，不得发送body。读取最终Content-Length正文并返回(status,body)。收到101升级不属于本题支持范围，应ValueError。全部操作有2秒超时，截断拒绝。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：仅加Expect头并不保证客户端库等待100；提前发送大正文会违背服务器拒绝上传的流程。",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,payload):\n    with socket.create_connection((host,port),timeout=2) as sock:\n        sock.sendall(('POST /upload HTTP/1.1\\r\\nHost: localhost\\r\\nExpect: 100-continue\\r\\nContent-Length: '+str(len(payload))+'\\r\\n\\r\\n').encode())\n        with sock.makefile('rb') as f:\n            sent=False\n            for _ in range(10):\n                line=f.readline(8192)\n                if not line.endswith(b'\\r\\n'):raise EOFError('status truncated')\n                status=int(line.split()[1]);headers={}\n                while True:\n                    line=f.readline(8192)\n                    if line==b'\\r\\n':break\n                    if not line.endswith(b'\\r\\n') or b':' not in line:raise ValueError('bad header')\n                    k,v=line.split(b':',1);headers[k.lower()]=v.strip()\n                if status==101:raise ValueError('upgrade unsupported')\n                if status==100:\n                    if sent:raise ValueError('duplicate continue')\n                    sock.sendall(payload);sent=True;continue\n                if status<200:continue\n                length=int(headers.get(b'content-length',b'0'))\n                if not 0<=length<=1048576:raise ValueError('invalid length')\n                data=f.read(length)\n                if len(data)!=length:raise EOFError('body truncated')\n                return status,data\n            raise ValueError('too many interim responses')\n```\n\n实现说明：实现execute(host,port,payload)，发送带Expect:100-continue及Content-Length的POST请求头，收到100后才发送body；103 Early Hints可以跳过但不代表许可；若直接收到417等最终响应，不得发送body。读取最终Content-Length正文并返回(status,body)。收到101升级不属于本题支持范围，应ValueError。全部操作有2秒超时，截断拒绝。\n\n原理补充（原题保留）：\n100是临时响应，常用于Expect: 100-continue交互，允许客户端继续发送请求内容，随后仍需要最终响应；它不证明业务处理成功。101表示服务端接受客户端所请求的协议切换，需符合相应Upgrade握手条件，HTTP/1.1中的该流程不能泛化到所有HTTP版本。核对请求头、协议及最终响应序列；不要把所有1xx当最终成功或把收到101当普通页面内容。",
+    "type": "code",
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "source_block_id": "UkKVdm2fvolSTDxX6lAcoxrInMd",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "飞书W逐题补缺审校",
+    "hints": [],
+    "rubric": [
+      "100是临时响应，常用于Expect: 100-continue交互，允许客户端继续发送请求内容，随后仍需要最终响应；它不证明业务处理成功。",
+      "说明答案中的适用前提、失败边界及可观察的验收依据。"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "KjCqd5nqwo5LMPxcQBVcCZwbnib"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "UkKVdm2fvolSTDxX6lAcoxrInMd",
+          "J0BkdEovpoS9pQx8NJ6cemqWnaf",
+          "Yd5FdK0rho4h0Fx8ynhcaNe7nH6",
+          "D46Adfu6toPvdixGfAvcm1konnd"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,payload):\n    with socket.create_connection((host,port),timeout=2) as sock:\n        sock.sendall(('POST /upload HTTP/1.1\\r\\nHost: localhost\\r\\nExpect: 100-continue\\r\\nContent-Length: '+str(len(payload))+'\\r\\n\\r\\n').encode())\n        with sock.makefile('rb') as f:\n            sent=False\n            for _ in range(10):\n                line=f.readline(8192)\n                if not line.endswith(b'\\r\\n'):raise EOFError('status truncated')\n                status=int(line.split()[1]);headers={}\n                while True:\n                    line=f.readline(8192)\n                    if line==b'\\r\\n':break\n                    if not line.endswith(b'\\r\\n') or b':' not in line:raise ValueError('bad header')\n                    k,v=line.split(b':',1);headers[k.lower()]=v.strip()\n                if status==101:raise ValueError('upgrade unsupported')\n                if status==100:\n                    if sent:raise ValueError('duplicate continue')\n                    sock.sendall(payload);sent=True;continue\n                if status<200:continue\n                length=int(headers.get(b'content-length',b'0'))\n                if not 0<=length<=1048576:raise ValueError('invalid length')\n                data=f.read(length)\n                if len(data)!=length:raise EOFError('body truncated')\n                return status,data\n            raise ValueError('too many interim responses')\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,payload):\n    import http.client\n    c=http.client.HTTPConnection(host,port,timeout=2)\n    try:c.request('POST','/upload',body=payload,headers={'Expect':'100-continue'});r=c.getresponse();return r.status,r.read()\n    finally:c.close()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,payload)，发送带Expect:100-continue及Content-Length的POST请求头，收到100后才发送body；103 Early Hints可以跳过但不代表许可；若直接收到417等最终响应，不得发送body。读取最终Content-Length正文并返回(status,body)。收到101升级不属于本题支持范围，应ValueError。全部操作有2秒超时，截断拒绝。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "仅加Expect头并不保证客户端库等待100；提前发送大正文会违背服务器拒绝上传的流程。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\npayload=b'upload-bytes'\ndef allowed(conn):\n    header=b''\n    while b'\\r\\n\\r\\n' not in header:header+=conn.recv(1)\n    assert b'Expect: 100-continue' in header;conn.settimeout(.05)\n    try:premature=conn.recv(1)\n    except socket.timeout:premature=b''\n    assert not premature,'sent body before continue';conn.settimeout(2);conn.sendall(b'HTTP/1.1 103 Early Hints\\r\\nLink: </asset>\\r\\n\\r\\nHTTP/1.1 100 Continue\\r\\n\\r\\n');assert recv_exact(conn,len(payload))==payload;conn.sendall(b'HTTP/1.1 201 Created\\r\\nContent-Length: 2\\r\\n\\r\\nok')\nwith tcp_server(allowed) as endpoint:assert task.execute(*endpoint,payload)==(201,b'ok')\ndef rejected(conn):\n    header=b''\n    while b'\\r\\n\\r\\n' not in header:header+=conn.recv(1)\n    conn.sendall(b'HTTP/1.1 417 Expectation Failed\\r\\nContent-Length: 4\\r\\n\\r\\nstop');assert conn.recv(1)==b'','body sent despite rejection'\nwith tcp_server(rejected) as endpoint:assert task.execute(*endpoint,payload)==(417,b'stop')\n\ndef upgrade(conn):\n    data=b''\n    while b'\\r\\n\\r\\n' not in data:data+=conn.recv(4096)\n    conn.sendall(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\n\\r\\n')\nwith tcp_server(upgrade) as endpoint:\n    try:task.execute(*endpoint,b'x')\n    except ValueError:pass\n    else:raise AssertionError('unsupported upgrade accepted')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|curated-feishu-w-095|处理 100 Continue 后再上传正文",
+    "conversion": {
+      "original_id": "curated-feishu-w-095",
+      "original_type": "interview",
+      "original_title": "HTTP 100 Continue和101 Switching Protocols分别表示什么，是否代表业务请求已完成？",
+      "original_source": "飞书 W / IPGrwR4n4i69WJktQVlcHczfnEb / block:UkKVdm2fvolSTDxX6lAcoxrInMd",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-feishu-w-096",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 2,
+    "topic": "按 HTTP Range 响应验证分段下载产物",
+    "title": "按 HTTP Range 响应验证分段下载产物",
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,path,start,end,output)，发送单一bytes=start-end范围GET，严格要求206、Content-Range起止与请求一致、总长度大于end、正文长度恰好end-start+1，校验全部通过后才写output，返回字节数。服务端200全量、错区间或短正文必须拒绝且保留旧output。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：服务器可能忽略Range返回200全量；不校验206和Content-Range就写文件会破坏分段产物。",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,path,start,end,output):\n    import http.client,re\n    if type(start) is not int or type(end) is not int or start<0 or end<start:raise ValueError('invalid range')\n    c=http.client.HTTPConnection(host,port,timeout=2)\n    try:\n        c.request('GET',path,headers={'Range':f'bytes={start}-{end}'});r=c.getresponse();data=r.read();match=re.fullmatch(r'bytes (\\d+)-(\\d+)/(\\d+)',r.getheader('Content-Range',''))\n        if r.status!=206 or not match or tuple(map(int,match.groups()[:2]))!=(start,end) or int(match[3])<=end or len(data)!=end-start+1:raise ValueError('invalid partial response')\n        pathlib.Path(output).write_bytes(data);return len(data)\n    finally:c.close()\n```\n\n实现说明：实现execute(host,port,path,start,end,output)，发送单一bytes=start-end范围GET，严格要求206、Content-Range起止与请求一致、总长度大于end、正文长度恰好end-start+1，校验全部通过后才写output，返回字节数。服务端200全量、错区间或短正文必须拒绝且保留旧output。\n\n原理补充（原题保留）：\n200表示成功，响应语义取决于请求方法；201表示创建了资源，客户端按响应定位新资源；202只是接受处理，任务未必完成。203表示代理等对源响应作了变换的非权威信息，不是认证失败。204成功但无响应内容；205要求客户端重置文档视图，也不能携带响应内容；206是范围请求的部分内容，要结合Content-Range等处理。验收异步任务状态、空响应解析与范围拼接，不能把所有2xx都当作同样的完整JSON业务结果。",
+    "type": "code",
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "source_block_id": "H5yGddZ3NoV1eMxrsoIceuaZnEe",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "飞书W逐题补缺审校",
+    "hints": [],
+    "rubric": [
+      "200表示成功，响应语义取决于请求方法；201表示创建了资源，客户端按响应定位新资源；202只是接受处理，任务未必完成。",
+      "说明答案中的适用前提、失败边界及可观察的验收依据。"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "P3aUdGV80otoyVxjkRNczsYDn4f",
+          "DDcbdNBINouLGQxS9iqcpxTMnre",
+          "Im0Ad1JUGofhJFxIHl9c5W2VnMf",
+          "QAPTd4NnYoD3ufxMLgEcXxCUnub",
+          "J0sWdqNJuo9LxwxZ8yGculp0nTb",
+          "XGtcdNQ1mo3OjHxIu2wca9HTnzc",
+          "C5XcdPrh8oj0kfxofrxcQTSNn4f",
+          "UXuZdnPD6op4rZxUAbQcyvJ6n5f",
+          "I8Frdi5BPoRPnCxCsZecQM84nfb"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "KjCqd5nqwo5LMPxcQBVcCZwbnib"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "H5yGddZ3NoV1eMxrsoIceuaZnEe",
+          "Ph4Hd5aP4ogMzaxYREkc3CzInBf",
+          "K5JGdsMlgonxV5xyp4nctvXwnFf",
+          "MmXCdBrBzoYF4AxPU44ciQrrnwz",
+          "FZQXdJIOdo2e3Px1VjhcFW5xnnc",
+          "GnWodVc4Ko3HLwxIJ7Jcx0dXnJd",
+          "JGDGduBIooCYp2xDQiWcAtdLnzh",
+          "MvCVdc11YoQJB1xkpfwcRlBUnKg",
+          "H8bYdUBBEoZfOMxtnLhcy1ahnnc"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,path,start,end,output):\n    import http.client,re\n    if type(start) is not int or type(end) is not int or start<0 or end<start:raise ValueError('invalid range')\n    c=http.client.HTTPConnection(host,port,timeout=2)\n    try:\n        c.request('GET',path,headers={'Range':f'bytes={start}-{end}'});r=c.getresponse();data=r.read();match=re.fullmatch(r'bytes (\\d+)-(\\d+)/(\\d+)',r.getheader('Content-Range',''))\n        if r.status!=206 or not match or tuple(map(int,match.groups()[:2]))!=(start,end) or int(match[3])<=end or len(data)!=end-start+1:raise ValueError('invalid partial response')\n        pathlib.Path(output).write_bytes(data);return len(data)\n    finally:c.close()\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,path,start,end,output):\n    import http.client\n    c=http.client.HTTPConnection(host,port,timeout=2)\n    try:c.request('GET',path,headers={'Range':f'bytes={start}-{end}'});r=c.getresponse();data=r.read();pathlib.Path(output).write_bytes(data);return len(data)\n    finally:c.close()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,path,start,end,output)，发送单一bytes=start-end范围GET，严格要求206、Content-Range起止与请求一致、总长度大于end、正文长度恰好end-start+1，校验全部通过后才写output，返回字节数。服务端200全量、错区间或短正文必须拒绝且保留旧output。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "服务器可能忽略Range返回200全量；不校验206和Content-Range就写文件会破坏分段产物。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\noutput=pathlib.Path('segment.bin');output.write_bytes(b'old')\nfor case in ['valid','full','wrong','short']:\n    def handler(conn):\n        request=b''\n        while b'\\r\\n\\r\\n' not in request:request+=conn.recv(4096)\n        assert b'Range: bytes=2-5\\r\\n' in request\n        status=200 if case=='full' else 206;interval='bytes 1-4/10' if case=='wrong' else 'bytes 2-5/10';body=b'23' if case=='short' else b'2345';conn.sendall((f'HTTP/1.1 {status} Response\\r\\nContent-Range: {interval}\\r\\nContent-Length: {len(body)}\\r\\n\\r\\n').encode()+body)\n    with tcp_server(handler) as endpoint:\n        if case=='valid':assert task.execute(*endpoint,'/file',2,5,output)==4 and output.read_bytes()==b'2345'\n        else:\n            previous=output.read_bytes()\n            try:task.execute(*endpoint,'/file',2,5,output)\n            except ValueError:pass\n            else:raise AssertionError(case+' accepted')\n            assert output.read_bytes()==previous\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|curated-feishu-w-096|按 HTTP Range 响应验证分段下载产物",
+    "conversion": {
+      "original_id": "curated-feishu-w-096",
+      "original_type": "interview",
+      "original_title": "HTTP 200、201、202、203、204、205和206如何影响客户端处理？",
+      "original_source": "飞书 W / IPGrwR4n4i69WJktQVlcHczfnEb / block:H5yGddZ3NoV1eMxrsoIceuaZnEe",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "src-29456e505546b25f",
+    "title": "DNS UDP 截断后切换 TCP 并读取完整消息",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,query):\n    if not 12<=len(query)<=65535:raise ValueError('invalid query length')\n    def verify(data,allow_tc):\n        if len(data)<12 or data[:2]!=query[:2] or not data[2]&0x80 or (not allow_tc and data[2]&2):raise ValueError('invalid DNS response')\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:\n        sock.settimeout(2);sock.connect((host,port));sock.send(query);reply=sock.recv(65535)\n    verify(reply,True)\n    if not reply[2]&2:return reply\n    with socket.create_connection((host,port),timeout=2) as sock:\n        sock.sendall(struct.pack('!H',len(query))+query)\n        def read(n):\n            data=b''\n            while len(data)<n:\n                part=sock.recv(n-len(data))\n                if not part:raise EOFError('truncated TCP DNS')\n                data+=part\n            return data\n        reply=read(struct.unpack('!H',read(2))[0]);verify(reply,False);return reply\n```\n\n实现说明：实现execute(host,port,query)。query为12字节以上原始DNS查询，先通过UDP发送；检查响应QR及事务ID。若TC置位，连接同一地址TCP端口，发送2字节网络序消息长度加原查询，并精确读取长度前缀和完整DNS响应；TCP结果不得仍有TC，ID必须一致。返回完整响应bytes。不得把截断UDP结果直接当成功，不访问系统DNS。\n\n原理补充（原题保留）：\n传统 DNS 同时使用 UDP 和 TCP 53。普通查询常用 UDP，但截断响应、较大答案及区域传送等会涉及 TCP；不能只放行 UDP。另有 DoT/DoH 等加密传输形式，应按实际解析协议排查。",
+    "category": "网络与DNS",
+    "difficulty": "入门",
+    "section": "DNS",
+    "type": "code",
+    "has_answer": true,
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "Linux",
+    "original_title": "DNS是使用TCP还是UDP?",
+    "module": "network",
+    "topic": "DNS UDP 截断后切换 TCP 并读取完整消息",
+    "level": 3,
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,query)。query为12字节以上原始DNS查询，先通过UDP发送；检查响应QR及事务ID。若TC置位，连接同一地址TCP端口，发送2字节网络序消息长度加原查询，并精确读取长度前缀和完整DNS响应；TCP结果不得仍有TC，ID必须一致。返回完整响应bytes。不得把截断UDP结果直接当成功，不访问系统DNS。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：DNS并非只用UDP；收到TC后直接返回会丢掉完整答案，TCP还有独立长度前缀。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+        "block_ids": [
+          "PlsTdF3jCoKMHzxoMcKcnXWFnWd",
+          "Q6DRdofP7olntZxYUqxcJZSpn6d",
+          "G64OdDt9moG61TxHEn2cRyA8nLb",
+          "G15RdEYvYoVTD9xsNsMcOCp0nch",
+          "Oq0kdLVG0o2olgxZz2Ec2xl7nde",
+          "MT7Zd9PACoijLrx304PckvBLnOj",
+          "YyjjdB98Vo4DmxxhHiec1LOWnBd",
+          "JFOKdvCQNoOzrwxOzFFcc3yHn7f",
+          "J870dEaXRoDijVxoEatce3K3n0b",
+          "NLRedslbFo5gvWx8BINcbo4inuN",
+          "N1wSdIzS8olCLjxXQ4XcyoqEnAg",
+          "JWAFdVYUFoOiilxzlEBcgSacnq6",
+          "NLrcdHXAIoCH1pxqyX4ch7ZcnUg",
+          "IFnLdcPkGoUQyuxZIHCcq58Bnkb",
+          "DWhqdFeCqoNOAYxlZEychl3onfg",
+          "X31hd9GU1or9kZxPkUXc18j8nmc",
+          "RUJqdvJNto4P91xvknnckzdEnog",
+          "DK89dITcHoJ2O2x1p05c42tNnwc",
+          "FSiXdSNgJoq2qAxU0hycB3hEnxb",
+          "MAQodmtx9o7ecwxdkbActwsfnkh",
+          "JXRndM97EoMNolxMG1sct42Vn0c",
+          "TRLTdESWWoqRCBxlxOec6pNmnzf",
+          "Toktd744poXlskx1PhVcdFYHnGc",
+          "F1pUd0mfOoXYKZxM1ClcCrWKnzg",
+          "KvBMdvnEGoZ2cUxdteIcY3mAncd",
+          "XVKjdywL0oyvYRxxL7CcEok0nAD",
+          "UXnAdxtQwottiAx2IJkcUd15nec",
+          "ZqKFd9iMdoAsSaxP5lAcI3zRnNb",
+          "KAdndm4wJorHSpxPHX5c7JYonMc",
+          "BjZYd7ktkopZTyxp3eNcpCCUnNe",
+          "XmWQdvoozos9rUxj4yNcZgYynSb",
+          "WIfpdagCGoXI6cxP8RucpBaInCg",
+          "CpPNdXyUeoas0ixd8MScfXeCnjf",
+          "RbuzdbQ5OoWrFhxUFCUcXJfinhd",
+          "QEmqdVcZAoD6oExYryOch3XUnlf",
+          "UjuRdNdONoolRYxhlOYcOE8Ynrg",
+          "SrFzdwXRToxpDFxzlVtc6I7vn9f",
+          "BJkId2nRkoWK0BxylCNcQCJcn2e",
+          "EVlXddFJJo6sNvxtnWkctC8Rne1",
+          "WrqudvJNQo3rBkx1PRUc1U0NnYV",
+          "M13MdTLfMoj9lgxDDBxc7kSIn6d",
+          "GXobdpY4Po03qgxtdStcwAp8nhh",
+          "FGlmdJbjUozkyVxn2OtchEO7nYe",
+          "PUJKdyRvKo4F0zxuWGKcUGR9nwg",
+          "Zv8Nd6r2roG2UTxICi5cy7oJnff",
+          "EcKNdqY49oEjBtxDEsucMJ2tnfh",
+          "USw8di7fBoxcYOxF1g5cHllInGb",
+          "NaJrdOBOAo9nuOxXutTcTRQWnyf",
+          "EebVd1YEooE5RwxGfDvcwlzeneN",
+          "VN5HdxSAPozNAgxFjiHcZbVJnWf",
+          "IVYkdGBzooEpaxxplztcLP9MnOc",
+          "PDyHdmNOyoWQHlxysJJc4QH1nef",
+          "PveQdBnMHoLIGhxBOsncCFbAn3g",
+          "ZvCEdJnYdooTO7xnrZlcHdONnyg",
+          "CEppdM1e7ofpKixds1YckyeunPf",
+          "EBoQd5Lj1oT4MLxtcW4cJ8fqnZf"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+        "block_ids": [
+          "QEmqdVcZAoD6oExYryOch3XUnlf"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,query):\n    if not 12<=len(query)<=65535:raise ValueError('invalid query length')\n    def verify(data,allow_tc):\n        if len(data)<12 or data[:2]!=query[:2] or not data[2]&0x80 or (not allow_tc and data[2]&2):raise ValueError('invalid DNS response')\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:\n        sock.settimeout(2);sock.connect((host,port));sock.send(query);reply=sock.recv(65535)\n    verify(reply,True)\n    if not reply[2]&2:return reply\n    with socket.create_connection((host,port),timeout=2) as sock:\n        sock.sendall(struct.pack('!H',len(query))+query)\n        def read(n):\n            data=b''\n            while len(data)<n:\n                part=sock.recv(n-len(data))\n                if not part:raise EOFError('truncated TCP DNS')\n                data+=part\n            return data\n        reply=read(struct.unpack('!H',read(2))[0]);verify(reply,False);return reply\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,query):\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);return sock.recv(65535)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,query)。query为12字节以上原始DNS查询，先通过UDP发送；检查响应QR及事务ID。若TC置位，连接同一地址TCP端口，发送2字节网络序消息长度加原查询，并精确读取长度前缀和完整DNS响应；TCP结果不得仍有TC，ID必须一致。返回完整响应bytes。不得把截断UDP结果直接当成功，不访问系统DNS。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "DNS并非只用UDP；收到TC后直接返回会丢掉完整答案，TCP还有独立长度前缀。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\nquery=struct.pack('!HHHHHH',0x1234,0x0100,1,0,0,0)+b'\\x03www\\x07example\\0'+struct.pack('!HH',1,1)\nfull=struct.pack('!HHHHHH',0x1234,0x8180,1,0,0,0)+query[12:]\ndef normal(sock,data,peer):assert data==query;sock.sendto(full,peer)\nwith udp_server(normal) as endpoint:assert task.execute(*endpoint,query)==full\n# TCP binds an ephemeral port first; a UDP fixture binds the same numeric port.\ndef tcp(conn):\n    size=struct.unpack('!H',recv_exact(conn,2))[0];assert recv_exact(conn,size)==query;framed=struct.pack('!H',len(full))+full;conn.sendall(framed[:1]);time.sleep(.02);conn.sendall(framed[1:7]);time.sleep(.02);conn.sendall(framed[7:])\nwith tcp_server(tcp) as endpoint:\n    udp=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);udp.bind(endpoint);udp.settimeout(2);errors=[]\n    def send_truncated():\n        try:\n            data,peer=udp.recvfrom(4096);assert data==query;udp.sendto(struct.pack('!HHHHHH',0x1234,0x8380,1,0,0,0)+query[12:],peer)\n        except Exception as exc:errors.append(exc)\n    thread=threading.Thread(target=send_truncated,daemon=True);thread.start()\n    try:assert task.execute(*endpoint,query)==full\n    finally:udp.close();thread.join(3)\n    assert not thread.is_alive() and not errors\ndef wrong(sock,data,peer):sock.sendto(b'\\x99\\x99'+full[2:],peer)\nwith udp_server(wrong) as endpoint:\n    try:task.execute(*endpoint,query)\n    except ValueError:pass\n    else:raise AssertionError('wrong transaction accepted')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|src-29456e505546b25f|DNS UDP 截断后切换 TCP 并读取完整消息",
+    "conversion": {
+      "original_id": "src-29456e505546b25f",
+      "original_type": "source",
+      "original_title": "DNS是使用TCP还是UDP?",
+      "original_source": "README-zh_CN.md",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "src-dc34fe3b0cece933",
+    "title": "查询并解析带压缩名称的 DNS A 记录",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,name):\n    import secrets,ipaddress\n    labels=name.rstrip('.').encode('ascii').split(b'.')\n    if not labels or any(not 1<=len(x)<=63 for x in labels):raise ValueError('invalid name')\n    wire=b''.join(bytes([len(x)])+x for x in labels)+b'\\0'\n    if len(wire)>255:raise ValueError('name too long')\n    ident=secrets.randbelow(65536);query=struct.pack('!HHHHHH',ident,0x100,1,0,0,0)+wire+struct.pack('!HH',1,1)\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);data=sock.recv(65535)\n    if len(data)<12:raise ValueError('short header')\n    rid,flags,qd,an,ns,ar=struct.unpack('!HHHHHH',data[:12])\n    if rid!=ident or not flags&0x8000 or flags&0x020f:raise ValueError('DNS response error')\n    def skip(pos):\n        seen=set();end=None\n        while True:\n            if pos>=len(data) or pos in seen:raise ValueError('bad compressed name')\n            seen.add(pos);size=data[pos]\n            if size&0xc0==0xc0:\n                if pos+1>=len(data):raise ValueError('short pointer')\n                if end is None:end=pos+2\n                pos=((size&0x3f)<<8)|data[pos+1];continue\n            if size&0xc0:raise ValueError('bad label')\n            pos+=1\n            if size==0:return end if end is not None else pos\n            if pos+size>len(data):raise ValueError('short label')\n            pos+=size\n    offset=12\n    for _ in range(qd):\n        offset=skip(offset)+4\n        if offset>len(data):raise ValueError('short question')\n    out=[]\n    for _ in range(an):\n        offset=skip(offset)\n        if offset+10>len(data):raise ValueError('short resource record')\n        kind,cls,ttl,size=struct.unpack('!HHIH',data[offset:offset+10]);offset+=10\n        if offset+size>len(data):raise ValueError('short rdata')\n        if kind==1 and cls==1:\n            if size!=4:raise ValueError('invalid A size')\n            out.append(str(ipaddress.IPv4Address(data[offset:offset+4])))\n        offset+=size\n    return out\n```\n\n实现说明：实现execute(host,port,name)，构造DNS A/IN UDP查询，并解析回答区A记录为IPv4字符串列表。支持名称压缩指针及大小写ASCII标签；检查QR、事务ID、RCODE和截断标记，严格检查边界，压缩指针循环、短RDATA、坏标签须拒绝ValueError。没有A回答返回空列表。只访问给定回环DNS服务，超时2秒。\n\n原理补充（原题保留）：\nDNS A 记录把名称映射到 IPv4 地址；IPv6 对应 AAAA。一个名称可有多个 A 记录，记录 TTL 影响缓存。查到正确 A 记录不代表端口、TLS 或应用健康。",
+    "category": "网络与DNS",
+    "difficulty": "入门",
+    "section": "DNS",
+    "type": "code",
+    "has_answer": true,
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "Linux",
+    "original_title": "什么是 \"A record\"?",
+    "module": "network",
+    "topic": "查询并解析带压缩名称的 DNS A 记录",
+    "level": 3,
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,name)，构造DNS A/IN UDP查询，并解析回答区A记录为IPv4字符串列表。支持名称压缩指针及大小写ASCII标签；检查QR、事务ID、RCODE和截断标记，严格检查边界，压缩指针循环、短RDATA、坏标签须拒绝ValueError。没有A回答返回空列表。只访问给定回环DNS服务，超时2秒。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：直接把响应末尾4字节当作唯一A记录，无法处理多答案、空答案、压缩指针和截断。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "GLdGdyB0yoKfbLxwYvVceYhin0e",
+        "question": "56、dns的工作原理"
+      }
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "GLdGdyB0yoKfbLxwYvVceYhin0e"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,name):\n    import secrets,ipaddress\n    labels=name.rstrip('.').encode('ascii').split(b'.')\n    if not labels or any(not 1<=len(x)<=63 for x in labels):raise ValueError('invalid name')\n    wire=b''.join(bytes([len(x)])+x for x in labels)+b'\\0'\n    if len(wire)>255:raise ValueError('name too long')\n    ident=secrets.randbelow(65536);query=struct.pack('!HHHHHH',ident,0x100,1,0,0,0)+wire+struct.pack('!HH',1,1)\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);data=sock.recv(65535)\n    if len(data)<12:raise ValueError('short header')\n    rid,flags,qd,an,ns,ar=struct.unpack('!HHHHHH',data[:12])\n    if rid!=ident or not flags&0x8000 or flags&0x020f:raise ValueError('DNS response error')\n    def skip(pos):\n        seen=set();end=None\n        while True:\n            if pos>=len(data) or pos in seen:raise ValueError('bad compressed name')\n            seen.add(pos);size=data[pos]\n            if size&0xc0==0xc0:\n                if pos+1>=len(data):raise ValueError('short pointer')\n                if end is None:end=pos+2\n                pos=((size&0x3f)<<8)|data[pos+1];continue\n            if size&0xc0:raise ValueError('bad label')\n            pos+=1\n            if size==0:return end if end is not None else pos\n            if pos+size>len(data):raise ValueError('short label')\n            pos+=size\n    offset=12\n    for _ in range(qd):\n        offset=skip(offset)+4\n        if offset>len(data):raise ValueError('short question')\n    out=[]\n    for _ in range(an):\n        offset=skip(offset)\n        if offset+10>len(data):raise ValueError('short resource record')\n        kind,cls,ttl,size=struct.unpack('!HHIH',data[offset:offset+10]);offset+=10\n        if offset+size>len(data):raise ValueError('short rdata')\n        if kind==1 and cls==1:\n            if size!=4:raise ValueError('invalid A size')\n            out.append(str(ipaddress.IPv4Address(data[offset:offset+4])))\n        offset+=size\n    return out\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,name):\n    wire=b''.join(bytes([len(x)])+x.encode() for x in name.rstrip('.').split('.'))+b'\\0';query=struct.pack('!HHHHHH',1,0x100,1,0,0,0)+wire+struct.pack('!HH',1,1)\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);data=sock.recv(65535)\n    return [socket.inet_ntoa(data[-4:])]\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,name)，构造DNS A/IN UDP查询，并解析回答区A记录为IPv4字符串列表。支持名称压缩指针及大小写ASCII标签；检查QR、事务ID、RCODE和截断标记，严格检查边界，压缩指针循环、短RDATA、坏标签须拒绝ValueError。没有A回答返回空列表。只访问给定回环DNS服务，超时2秒。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "直接把响应末尾4字节当作唯一A记录，无法处理多答案、空答案、压缩指针和截断。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\nfor case in ['two','empty','pointer_loop','short_a','nxdomain']:\n    def handler(sock,query,peer):\n        assert query[12:]==b'\\x03WWW\\x07example\\0\\0\\1\\0\\1';ident=query[:2];flags=0x8183 if case=='nxdomain' else 0x8180;count=0 if case in ['empty','nxdomain'] else (2 if case=='two' else 1);response=ident+struct.pack('!HHHHH',flags,1,count,0,0)+query[12:]\n        if case=='two':response+=b'\\xc0\\x0c'+struct.pack('!HHIH',1,1,60,4)+bytes([192,0,2,1])+b'\\xc0\\x0c'+struct.pack('!HHIH',1,1,60,4)+bytes([192,0,2,2])\n        elif case=='pointer_loop':offset=len(response);response+=struct.pack('!H',0xc000|offset)+struct.pack('!HHIH',1,1,60,4)+bytes([192,0,2,1])\n        elif case=='short_a':response+=b'\\xc0\\x0c'+struct.pack('!HHIH',1,1,60,4)+bytes([192,0])\n        sock.sendto(response,peer)\n    with udp_server(handler) as endpoint:\n        if case in ['two','empty']:assert task.execute(*endpoint,'WWW.example.')==(['192.0.2.1','192.0.2.2'] if case=='two' else [])\n        else:\n            try:task.execute(*endpoint,'WWW.example.')\n            except ValueError:pass\n            else:raise AssertionError(case+' accepted')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|src-dc34fe3b0cece933|查询并解析带压缩名称的 DNS A 记录",
+    "conversion": {
+      "original_id": "src-dc34fe3b0cece933",
+      "original_type": "source",
+      "original_title": "什么是 \"A record\"?",
+      "original_source": "README-zh_CN.md",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-network-completion-010",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 3,
+    "topic": "区分 TLS SNI 与 HTTP Host 的独立路由信息",
+    "title": "区分 TLS SNI 与 HTTP Host 的独立路由信息",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,tls_name,http_host,ca_file):\n    import ssl,http.client\n    if not http_host or '\\r' in http_host or '\\n' in http_host:raise ValueError('invalid Host')\n    context=ssl.create_default_context(cafile=str(ca_file))\n    with socket.create_connection((host,port),timeout=2) as raw:\n        with context.wrap_socket(raw,server_hostname=tls_name) as tls:\n            tls.sendall(('GET / HTTP/1.1\\r\\nHost: '+http_host+'\\r\\nConnection: close\\r\\n\\r\\n').encode('ascii'));response=http.client.HTTPResponse(tls)\n            try:response.begin();return response.status,response.read()\n            finally:response.close()\n```\n\n实现说明：实现execute(host,port,tls_name,http_host,ca_file)，连接指定回环地址，用tls_name完成SNI及证书主机名校验，再发送HTTP GET /且Host头为http_host。返回(status,body)。必须使用提供的CA验证证书，不禁用check_hostname；HTTP租户名不一定等于证书握手名。拒绝Host换行注入，超时2秒。\n\n原理补充（原题保留）：\nSNI 在 TLS 握手中帮助服务器选择证书和虚拟站点，HTTP Host 或 :authority 在应用请求中参与路由。直接按 IP 连接时若两者不匹配，可能命中错误证书或站点；排查应保持目标域名语义，不能仅设置 Host 就假定 TLS 已正确验证。",
+    "type": "code",
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\nPython 3.11+ 与 OpenSSL命令，隔离本地工作区。验收即时生成一次性本地测试证书，不使用生产证书。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,tls_name,http_host,ca_file)，连接指定回环地址，用tls_name完成SNI及证书主机名校验，再发送HTTP GET /且Host头为http_host。返回(status,body)。必须使用提供的CA验证证书，不禁用check_hostname；HTTP租户名不一定等于证书握手名。拒绝Host换行注入，超时2秒。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：把HTTP Host直接当作SNI，会在租户Host与握手证书名不同的入口上选错证书或校验失败。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,tls_name,http_host,ca_file):\n    import ssl,http.client\n    if not http_host or '\\r' in http_host or '\\n' in http_host:raise ValueError('invalid Host')\n    context=ssl.create_default_context(cafile=str(ca_file))\n    with socket.create_connection((host,port),timeout=2) as raw:\n        with context.wrap_socket(raw,server_hostname=tls_name) as tls:\n            tls.sendall(('GET / HTTP/1.1\\r\\nHost: '+http_host+'\\r\\nConnection: close\\r\\n\\r\\n').encode('ascii'));response=http.client.HTTPResponse(tls)\n            try:response.begin();return response.status,response.read()\n            finally:response.close()\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,tls_name,http_host,ca_file):\n    import ssl,http.client\n    context=ssl.create_default_context(cafile=str(ca_file))\n    with socket.create_connection((host,port),timeout=2) as raw:\n        with context.wrap_socket(raw,server_hostname=http_host) as tls:\n            tls.sendall(('GET / HTTP/1.1\\r\\nHost: '+http_host+'\\r\\nConnection: close\\r\\n\\r\\n').encode());r=http.client.HTTPResponse(tls);r.begin();return r.status,r.read()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,tls_name,http_host,ca_file)，连接指定回环地址，用tls_name完成SNI及证书主机名校验，再发送HTTP GET /且Host头为http_host。返回(status,body)。必须使用提供的CA验证证书，不禁用check_hostname；HTTP租户名不一定等于证书握手名。拒绝Host换行注入，超时2秒。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "把HTTP Host直接当作SNI，会在租户Host与握手证书名不同的入口上选错证书或校验失败。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\nimport ssl,subprocess\nopenssl=os.environ.get('OPSFORGE_OPENSSL','openssl');config=pathlib.Path('fixture.cnf')\nconfig.write_text('[req]\\nprompt=no\\ndistinguished_name=dn\\nx509_extensions=ext\\n[dn]\\nCN=localhost\\n[ext]\\nsubjectAltName=DNS:localhost\\nbasicConstraints=critical,CA:TRUE\\nkeyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\\n',encoding='ascii')\nsubprocess.run([openssl,'req','-new','-x509','-newkey','rsa:2048','-nodes','-days','1','-config',str(config),'-keyout','fixture.key','-out','fixture.crt'],capture_output=True,check=True,timeout=15)\nca=pathlib.Path('fixture.crt').resolve()\ndef server_context():\n    context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain('fixture.crt','fixture.key');return context\n\ncontext=server_context();names=[];context.set_servername_callback(lambda sock,name,ctx:names.append(name))\ndef handler(conn):\n    try:\n        with context.wrap_socket(conn,server_side=True) as tls:\n            request=b''\n            while b'\\r\\n\\r\\n' not in request:request+=tls.recv(4096)\n            assert b'Host: tenant.internal\\r\\n' in request;tls.sendall(b'HTTP/1.1 200 OK\\r\\nContent-Length: 6\\r\\n\\r\\ntenant')\n    except (ssl.SSLError,ConnectionError):pass\nwith tcp_server(handler) as endpoint:assert task.execute(*endpoint,'localhost','tenant.internal',ca)==(200,b'tenant')\nassert names==['localhost']\nwith tcp_server(handler) as endpoint:\n    try:task.execute(*endpoint,'wrong.invalid','tenant.internal',ca)\n    except ssl.SSLCertVerificationError:pass\n    else:raise AssertionError('hostname verification disabled')\ntry:task.execute('127.0.0.1',1,'localhost','tenant\\r\\nX-Fake: yes',ca)\nexcept ValueError:pass\nelse:raise AssertionError('header injection accepted')\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "openssl"
+        ]
+      }
+    },
+    "case_signature": "network-converted|curated-network-completion-010|区分 TLS SNI 与 HTTP Host 的独立路由信息",
+    "conversion": {
+      "original_id": "curated-network-completion-010",
+      "original_type": "interview",
+      "original_title": "TLS 的 SNI 与 HTTP Host/authority 有何区别？",
+      "original_source": "OpsForge 原创网络专题题",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-network-completion-018",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 2,
+    "topic": "读取真实 ALPN 协商结果而不凭端口推断",
+    "title": "读取真实 ALPN 协商结果而不凭端口推断",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,server_name,ca_file,offered):\n    import ssl\n    context=ssl.create_default_context(cafile=str(ca_file));context.set_alpn_protocols(offered)\n    with socket.create_connection((host,port),timeout=2) as raw:\n        with context.wrap_socket(raw,server_hostname=server_name) as tls:return {'alpn':tls.selected_alpn_protocol(),'tls_version':tls.version()}\n```\n\n实现说明：实现execute(host,port,server_name,ca_file,offered)，用TLS客户端提供offered协议列表，完成CA和主机名校验后返回{alpn,tls_version}。alpn必须取实际协商值，未协商为None，不能把客户端第一偏好或443默认当结果。本题不实现HTTP/2帧，仅验收TLS应用协议协商。\n\n原理补充（原题保留）：\nALPN 在 TLS 握手中协商应用协议，例如 h2 与 http/1.1。端口不决定实际 HTTP 版本；HTTP/3 使用 QUIC，传输路径也不同。验证要查看协商结果、客户端能力及代理前后端协议，入口使用 h2 不意味着到上游也使用 h2。",
+    "type": "code",
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\nPython 3.11+ 与 OpenSSL命令，隔离本地工作区。验收即时生成一次性本地测试证书，不使用生产证书。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,server_name,ca_file,offered)，用TLS客户端提供offered协议列表，完成CA和主机名校验后返回{alpn,tls_version}。alpn必须取实际协商值，未协商为None，不能把客户端第一偏好或443默认当结果。本题不实现HTTP/2帧，仅验收TLS应用协议协商。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：客户端提供h2并不表示服务端选中了h2；也可能只协商http/1.1或没有ALPN。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,server_name,ca_file,offered):\n    import ssl\n    context=ssl.create_default_context(cafile=str(ca_file));context.set_alpn_protocols(offered)\n    with socket.create_connection((host,port),timeout=2) as raw:\n        with context.wrap_socket(raw,server_hostname=server_name) as tls:return {'alpn':tls.selected_alpn_protocol(),'tls_version':tls.version()}\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,server_name,ca_file,offered):\n    import ssl\n    context=ssl.create_default_context(cafile=str(ca_file));context.set_alpn_protocols(offered)\n    with socket.create_connection((host,port),timeout=2) as raw:\n        with context.wrap_socket(raw,server_hostname=server_name) as tls:return {'alpn':offered[0],'tls_version':tls.version()}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,server_name,ca_file,offered)，用TLS客户端提供offered协议列表，完成CA和主机名校验后返回{alpn,tls_version}。alpn必须取实际协商值，未协商为None，不能把客户端第一偏好或443默认当结果。本题不实现HTTP/2帧，仅验收TLS应用协议协商。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "客户端提供h2并不表示服务端选中了h2；也可能只协商http/1.1或没有ALPN。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\nimport ssl,subprocess\nopenssl=os.environ.get('OPSFORGE_OPENSSL','openssl');config=pathlib.Path('fixture.cnf')\nconfig.write_text('[req]\\nprompt=no\\ndistinguished_name=dn\\nx509_extensions=ext\\n[dn]\\nCN=localhost\\n[ext]\\nsubjectAltName=DNS:localhost\\nbasicConstraints=critical,CA:TRUE\\nkeyUsage=critical,digitalSignature,keyEncipherment,keyCertSign\\n',encoding='ascii')\nsubprocess.run([openssl,'req','-new','-x509','-newkey','rsa:2048','-nodes','-days','1','-config',str(config),'-keyout','fixture.key','-out','fixture.crt'],capture_output=True,check=True,timeout=15)\nca=pathlib.Path('fixture.crt').resolve()\ndef server_context():\n    context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain('fixture.crt','fixture.key');return context\n\nfor selected in [['http/1.1'],[]]:\n    context=server_context()\n    if selected:context.set_alpn_protocols(selected)\n    observed=[];names=[];context.set_servername_callback(lambda sock,name,ctx:names.append(name))\n    def handler(conn):\n        try:\n            with context.wrap_socket(conn,server_side=True) as tls:observed.append(tls.selected_alpn_protocol())\n        except (ssl.SSLError,ConnectionError):pass\n    with tcp_server(handler) as endpoint:\n        out=task.execute(*endpoint,'localhost',ca,['h2','http/1.1']);assert out['alpn']==('http/1.1' if selected else None) and out['tls_version'] in ['TLSv1.2','TLSv1.3']\n    assert names==['localhost'];assert not observed or observed==[out['alpn']]\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "openssl"
+        ]
+      }
+    },
+    "case_signature": "network-converted|curated-network-completion-018|读取真实 ALPN 协商结果而不凭端口推断",
+    "conversion": {
+      "original_id": "curated-network-completion-018",
+      "original_type": "interview",
+      "original_title": "ALPN 用于协商什么，为什么不能只凭443端口判断 HTTP 版本？",
+      "original_source": "OpsForge 原创网络专题题",
+      "preserve_history": true
+    }
+  }
+]

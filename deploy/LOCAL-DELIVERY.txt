@@ -1,0 +1,44 @@
+OpsForge 本地镜像交付
+
+范围
+本地单人预览使用 SQLite 五个独立持久化数据卷和 simulation 实验模式。
+六个后端进程（gateway/auth/bank/learning/exams/labs）和 Nginx 前端独立运行。
+此方案无需外部数据库，不代表 Kubernetes 真实实验或外部部署已经通过。
+生产 Kubernetes 部署继续使用 README.md、deploy/config.json 和原部署脚本。
+
+启动（Windows PowerShell，在解压后的 opsforge 项目根目录执行）
+1. Docker Desktop 选择 Linux 容器并保持运行。
+2. 如果还没有加载交付镜像，执行：
+   docker load -i 路径/opsforge-images.tar
+3. 设置本次终端的环境变量：
+   $env:OPSFORGE_PASSWORD = [guid]::NewGuid().ToString('N')
+   $env:OPSFORGE_SERVICE_SECRET = [guid]::NewGuid().ToString('N') + [guid]::NewGuid().ToString('N')
+   $env:OPSFORGE_LOCAL_PORT = '18090'
+   Write-Output "本地登录密码：$env:OPSFORGE_PASSWORD"
+4. 妥善保存上一步的密码及服务密钥。后续启动继续使用相同值，密码变化会撤销已有登录会话。
+5. 执行：
+   docker compose -p opsforge-local -f deploy/compose.local.yaml up -d
+6. 浏览器访问 http://127.0.0.1:18090 ，使用第 3 步密码登录。
+7. 检查状态：
+   docker compose -p opsforge-local -f deploy/compose.local.yaml ps
+   六个后端服务应显示 healthy；前端显示 Up。
+   http://127.0.0.1:18090/api/health 应显示 status=ok 和五个业务域。
+
+Linux/macOS Bash 可分别 export OPSFORGE_PASSWORD、OPSFORGE_SERVICE_SECRET 和 OPSFORGE_LOCAL_PORT，
+其余 docker 命令相同。密码至少 12 个字符，服务密钥至少 32 个字符。
+交付物不预置真实密码，未设置变量时 Compose 将拒绝启动。
+
+停止与保留数据
+   docker compose -p opsforge-local -f deploy/compose.local.yaml down
+down 默认保留五个数据卷；重新 up 使用原数据。不要加 -v，除非明确要删除本地全部学习数据。
+不同项目名创建不同数据卷；更换项目名会进入新的空白个人空间。
+仅绑定 127.0.0.1，默认只允许本机访问。不要把本地预览直接当作生产多用户服务。
+
+重新构建并导出（三个镜像含原生实验工具）
+   python scripts/export-local-images.py 新的空目录 --context desktop-linux --tag 20261025-local --include-dind
+Linux Docker 没有 desktop-linux context 时省略 --context。
+使用 --include-dind 前先执行 docker pull docker:27-dind；若只需本地模拟预览可省略该选项。
+脚本生成 opsforge-images.tar 和 local-images.json；清单记录镜像 ID、平台、大小、源码摘要和归档 SHA256。
+专用 Docker 题必须使用既有 Kubernetes 隔离 DinD 工作区，加载 DinD 镜像不代表本地模拟预览自动支持真实 Docker 实验。
+默认镜像标签是 20261025-local。自定义标签时设置环境变量 OPSFORGE_IMAGE_TAG 为相同值。
+本地镜像清单不可代替原生产 release.json；生产部署脚本仍要求已推送镜像的仓库摘要。

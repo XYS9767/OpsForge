@@ -1,0 +1,83 @@
+[
+  {
+    "id": "curated-parallel-alertmanager-028",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 2,
+    "topic": "抑制静默与时间控制",
+    "title": "在真实Alertmanager中原位续期静默并保留原有作用范围",
+    "answer": "```python\nimport copy\nfrom datetime import datetime,timezone,timedelta\ndef extend(current,new_end,now):\n    def parse(value):\n        if not isinstance(value,str):raise ValueError('timestamp required')\n        try:stamp=datetime.fromisoformat(value.replace('Z','+00:00'))\n        except ValueError:raise ValueError('invalid timestamp')\n        if stamp.tzinfo is None or stamp.utcoffset() is None:raise ValueError('timezone required')\n        return stamp.astimezone(timezone.utc)\n    start,old_end,end,clock=map(parse,[current['startsAt'],current['endsAt'],new_end,now])\n    if not isinstance(current.get('id'),str) or not current['id']:raise ValueError('existing id required')\n    if not start<=clock<old_end or not old_end<end<=start+timedelta(hours=8):raise ValueError('invalid extension window')\n    keys=['id','matchers','startsAt','createdBy','comment']\n    out={key:copy.deepcopy(current[key]) for key in keys}\n    out['endsAt']=end.isoformat().replace('+00:00','Z')\n    return out\n```\n\nGET返回status/updatedAt等只读字段，POST应提取允许字段；更新需要原id。总窗口锚定原始startsAt，防止每次续期又获得完整8小时预算。时间比较统一为UTC，但保留原开始时刻和范围。此题不测试生产访问控制，也不会修改真实静默。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "真实API维持原静默ID和匹配范围",
+      "有效续期且保留无关状态",
+      "时间与总时长边界拒绝错误输入"
+    ],
+    "references": [
+      "https://github.com/prometheus/alertmanager/blob/v0.28.1/api/v2/openapi.yaml"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "python",
+    "files": {
+      "renewal.py": "def extend(current,new_end,now):\n    return {k:v for k,v in current.items() if k in [\"id\",\"matchers\",\"startsAt\",\"endsAt\",\"createdBy\",\"comment\"]}\n",
+      "contract.json": "{\n  \"signature\": \"extend(current,new_end,now)\",\n  \"max_total_hours\": 8,\n  \"preserve\": [\n    \"id\",\n    \"matchers\",\n    \"startsAt\",\n    \"createdBy\",\n    \"comment\"\n  ],\n  \"timezones\": \"RFC3339带时区；允许等价偏移\",\n  \"invalid\": \"未活动/已过期/不延长/超过总窗口/无时区抛ValueError\"\n}"
+    },
+    "solution_files": {
+      "renewal.py": "import copy\nfrom datetime import datetime,timezone,timedelta\ndef extend(current,new_end,now):\n    def parse(value):\n        if not isinstance(value,str):raise ValueError('timestamp required')\n        try:stamp=datetime.fromisoformat(value.replace('Z','+00:00'))\n        except ValueError:raise ValueError('invalid timestamp')\n        if stamp.tzinfo is None or stamp.utcoffset() is None:raise ValueError('timezone required')\n        return stamp.astimezone(timezone.utc)\n    start,old_end,end,clock=map(parse,[current['startsAt'],current['endsAt'],new_end,now])\n    if not isinstance(current.get('id'),str) or not current['id']:raise ValueError('existing id required')\n    if not start<=clock<old_end or not old_end<end<=start+timedelta(hours=8):raise ValueError('invalid extension window')\n    keys=['id','matchers','startsAt','createdBy','comment']\n    out={key:copy.deepcopy(current[key]) for key in keys}\n    out['endsAt']=end.isoformat().replace('+00:00','Z')\n    return out\n"
+    },
+    "negative_files": {
+      "renewal.py": "import copy\nfrom datetime import datetime,timezone,timedelta\ndef extend(current,new_end,now):\n    def parse(value):\n        if not isinstance(value,str):raise ValueError('timestamp required')\n        try:stamp=datetime.fromisoformat(value.replace('Z','+00:00'))\n        except ValueError:raise ValueError('invalid timestamp')\n        if stamp.tzinfo is None or stamp.utcoffset() is None:raise ValueError('timezone required')\n        return stamp.astimezone(timezone.utc)\n    start,old_end,end,clock=map(parse,[current['startsAt'],current['endsAt'],new_end,now])\n    if not isinstance(current.get('id'),str) or not current['id']:raise ValueError('existing id required')\n    if not start<=clock<old_end or not old_end<end<=start+timedelta(hours=8):raise ValueError('invalid extension window')\n    keys=['id','matchers','startsAt','createdBy','comment']\n    out={key:copy.deepcopy(current[key]) for key in keys}\n    out.pop('id')\n    out['endsAt']=end.isoformat().replace('+00:00','Z')\n    return out\n"
+    },
+    "body": "## 环境与初始材料\n平台自动提供Python及隔离Alertmanager0.28，临时回环端口、空数据目录、无通知接收器；学员无需另开Kubernetes。contract.json给出函数合同，可信验收自动创建两条虚构维护静默。\n\n## 操作任务\n实现renewal.py的extend(current,new_end,now)，输入为GET /api/v2/silence/{id}响应、目标结束时间和当前时刻。只允许活动静默延期：startsAt<=now<旧endsAt，新endsAt严格晚于旧endsAt，且不晚于最初startsAt+8小时（恰好8小时合法）。时间必须带时区，+08:00与UTC等价。返回真实POST /api/v2/silences载荷，仅包含id/matchers/startsAt/endsAt/createdBy/comment，保留原ID、匹配范围、开始时刻及审计信息，不修改输入；非法时间/窗口抛ValueError。不能去掉id创建第二条静默，也不能每次以now重置8小时总预算。\n\n## 产物\n提交renewal.py，产生可直接调用原生API的续期请求载荷。\n\n## 验收方法\n执行python3 checks/check.py。真实创建静默、读取响应、调用你的函数并POST续期，再GET验证同ID/正确时限/原匹配范围/无关静默未改。注入3条虚构告警验证仅维护对象被静默；原生资源在finally结束。另检查过期、未延长、总上限、无时区等边界。初始不延期和错误丢ID版本必须失败。\n\n## 原理复习\n维护计划延迟时应怎样续静默？\n",
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated-alertmanager-service",
+      "deliverables": [
+        "renewal.py"
+      ],
+      "operation": "实现renewal.py的extend(current,new_end,now)，输入为GET /api/v2/silence/{id}响应、目标结束时间和当前时刻。只允许活动静默延期：startsAt<=now<旧endsAt，新endsAt严格晚于旧endsAt，且不晚于最初startsAt+8小时（恰好8小时合法）。时间必须带时区，+08:00与UTC等价。返回真实POST /api/v2/silences载荷，仅包含id/matchers/startsAt/endsAt/createdBy/comment，保留原ID、匹配范围、开始时刻及审计信息，不修改输入；非法时间/窗口抛ValueError。不能去掉id创建第二条静默，也不能每次以now重置8小时总预算。",
+      "verification": "实际Alertmanager API更新和silencedBy状态，配时区/窗口边界函数验收",
+      "capability_gap": [
+        "不验证生产鉴权/多租户隔离/跨节点gossip，不连接任何业务服务器"
+      ],
+      "failure_examples": [
+        "不变endsAt不能延期",
+        "丢id会产生新静默而不是续期",
+        "按now重算预算可无限续期"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "alertmanager"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport datetime,contextlib\n@contextlib.contextmanager\ndef native():\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'peak_rss_bytes':0,'terminated':False}\n try:\n  with tempfile.TemporaryDirectory(prefix='native-am-silence-') as d:\n   root=pathlib.Path(d);config=root/'am.yaml'\n   config.write_text('route:\\n  receiver: sink\\n  group_wait: 1h\\nreceivers:\\n- name: sink\\n',encoding='utf-8')\n   with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n   binary=shutil.which('alertmanager');assert binary\n   with (root/'server.log').open('wb') as log:\n    proc=subprocess.Popen([binary,'--config.file='+str(config),'--storage.path='+str(root/'state'),'--web.listen-address=127.0.0.1:'+str(port),'--cluster.listen-address=','--log.level=error'],stdout=log,stderr=log,cwd=root,env=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='64MiB'))\n    deadline=time.monotonic()+25\n    def monitor():\n     while not stop.wait(.1):\n      if proc.poll() is not None:return\n      try:\n       amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n       if amount>256*1024*1024 or time.monotonic()>deadline:fail.append('resource ceiling');proc.kill();return\n      except Exception as exc:\n       if proc.poll() is None:fail.append(str(exc));proc.kill()\n       return\n    guard=threading.Thread(target=monitor,daemon=True);guard.start()\n    base='http://127.0.0.1:'+str(port)\n    def request(path,data=None,method=None):\n     assert path.startswith('/api/v2/') or path=='/-/ready'\n     req=urllib.request.Request(base+path,data=None if data is None else json.dumps(data,ensure_ascii=False).encode(),headers={'Content-Type':'application/json'},method=method)\n     with urllib.request.urlopen(req,timeout=2) as r:\n      raw=r.read();return json.loads(raw) if path.startswith('/api/v2/') and raw else raw\n    end=time.monotonic()+5\n    while True:\n     assert proc.poll() is None,(root/'server.log').read_text(errors='replace')\n     try:request('/-/ready');break\n     except (OSError,urllib.error.URLError):\n      assert time.monotonic()<end,'native ready timeout';time.sleep(.05)\n    try:\n     yield request\n    finally:\n     stop.set()\n     if proc.poll() is None:\n      proc.terminate()\n      try:proc.wait(timeout=4)\n      except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n     stats['terminated']=proc.poll() is not None\n     if guard:guard.join(timeout=2)\n    assert not fail,'resource guard: '+str(fail)\n finally:\n  stop.set()\n  if proc is not None:\n   if proc.poll() is None:\n    proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n   stats['terminated']=proc.poll() is not None\n  if guard:guard.join(timeout=2)\n  print('native child lifecycle:',json.dumps(stats))\n  assert not fail,'resource guard: '+str(fail)\n\nimport sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom renewal import extend\nUTC=datetime.timezone.utc\nnow=datetime.datetime.now(UTC).replace(microsecond=0)\ndef iso(t):return t.isoformat().replace('+00:00','Z')\ndef parse(s):return datetime.datetime.fromisoformat(s.replace('Z','+00:00')).astimezone(UTC)\nwith native() as request:\n base={'matchers':[{'name':'instance','value':'node-a','isRegex':False,'isEqual':True},{'name':'team','value':'payments','isRegex':False,'isEqual':True}],'startsAt':iso(now-datetime.timedelta(minutes=30)),'endsAt':iso(now+datetime.timedelta(minutes=30)),'createdBy':'operator@example.invalid','comment':'CHG-42 controlled maintenance'}\n sid=request('/api/v2/silences',base)['silenceID']\n other=copy.deepcopy(base);other['matchers'][0]['value']='node-z';other['comment']='CHG-unrelated'\n otherid=request('/api/v2/silences',other)['silenceID']\n current=request('/api/v2/silence/'+sid);before=copy.deepcopy(current);unrelated=request('/api/v2/silence/'+otherid)\n assert current['status']['state']=='active'\n now=datetime.datetime.now(UTC)\n now=now.replace(microsecond=(now.microsecond//1000)*1000)\n target=now+datetime.timedelta(minutes=60)\n # Offset-form timestamp is equivalent to UTC and must not be treated as local naive time.\n shifted=target.astimezone(datetime.timezone(datetime.timedelta(hours=8))).isoformat()\n input_current=copy.deepcopy(current)\n proposal=extend(input_current,shifted,iso(now))\n assert set(proposal) in [{'id','matchers','startsAt','endsAt','createdBy','comment'},{'matchers','startsAt','endsAt','createdBy','comment'}]\n result=request('/api/v2/silences',proposal)\n actual=request('/api/v2/silence/'+sid)\n assert result['silenceID']==sid,'renewal created a second silence instead of updating original'\n print('native renewal times:',json.dumps({'before_start':before['startsAt'],'after_start':actual['startsAt'],'after_end':actual['endsAt'],'target':iso(target)}))\n assert parse(actual['endsAt'])==target and parse(actual['startsAt'])==parse(before['startsAt'])\n assert sorted(actual['matchers'],key=lambda x:x['name'])==sorted(before['matchers'],key=lambda x:x['name'])\n assert actual['createdBy']==before['createdBy'] and actual['comment']==before['comment']\n assert len(request('/api/v2/silences'))==2\n assert request('/api/v2/silence/'+otherid)==unrelated,'unrelated silence changed'\n assert input_current==before,'input was mutated'\n # Actual suppression scope must remain exactly the maintenance pair.\n alerts=[{'labels':{'alertname':'HostIncident','instance':host,'team':team},'startsAt':iso(now-datetime.timedelta(minutes=5)),'endsAt':iso(now+datetime.timedelta(hours=1))} for host,team in [('node-a','payments'),('node-a','core'),('node-b','payments')]]\n request('/api/v2/alerts',alerts)\n end=time.monotonic()+4\n while True:\n  rows=request('/api/v2/alerts')\n  if len(rows)==3 and all(r['status']['state']!='unprocessed' for r in rows):break\n  assert time.monotonic()<end;time.sleep(.05)\n time.sleep(.2);rows=request('/api/v2/alerts')\n for row in rows:\n  expected=row['labels']['instance']=='node-a' and row['labels']['team']=='payments'\n  assert bool(row['status']['silencedBy'])==expected\n  if expected:assert row['status']['silencedBy']==[sid]\n # Out-of-window updates must fail before sending an API call.\n for altered,ending,clock in [\n  (before,before['endsAt'],iso(now)),\n  (before,iso(now+datetime.timedelta(minutes=20)),iso(now)),\n  (before,iso(parse(before['startsAt'])+datetime.timedelta(hours=8,seconds=1)),iso(now)),\n  (before,'2026-01-01T12:00:00',iso(now)),\n  (before,shifted,iso(parse(before['endsAt'])+datetime.timedelta(seconds=1))),\n ]:\n  try:extend(copy.deepcopy(altered),ending,clock)\n  except ValueError:pass\n  else:raise AssertionError('invalid renewal was accepted')\n # A later renewal must still use the original start rather than resetting the budget.\n extended_history=copy.deepcopy(before)\n extended_history['endsAt']=iso(parse(before['startsAt'])+datetime.timedelta(hours=2))\n try:extend(extended_history,iso(parse(before['startsAt'])+datetime.timedelta(hours=8,seconds=1)),iso(parse(before['startsAt'])+datetime.timedelta(hours=1)))\n except ValueError:pass\n else:raise AssertionError('extension reset the total maintenance budget')\n # Exact upper bound is allowed; no API mutation required for this validation.\n limit=parse(before['startsAt'])+datetime.timedelta(hours=8)\n assert parse(extend(copy.deepcopy(before),iso(limit),iso(now))['endsAt'])==limit\n print('native silence renewal preserved ID, scope, unrelated state and bounded validity')\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-028",
+      "original_version": 1,
+      "original_title": "维护计划延迟时应怎样续静默？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  }
+]

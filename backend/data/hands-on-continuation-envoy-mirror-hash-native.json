@@ -1,0 +1,147 @@
+[
+  {
+    "id": "curated-parallel-envoy-058",
+    "module": "envoy",
+    "category": "Envoy",
+    "level": 3,
+    "topic": "安全、证书与身份",
+    "title": "真实请求镜像边界：只复制获批合成GET，写操作与敏感请求仍只到主上游",
+    "answer": "```python\nimport copy\ndef configure(base):\n    fixed=copy.deepcopy(base)\n    manager=fixed['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\n    routes=manager['route_config']['virtual_hosts'][0]['routes']\n    approved=copy.deepcopy(routes[0]);approved['name']='approved-synthetic-mirror'\n    headers=[{'name':':method','string_match':{'exact':'GET'}},{'name':':path','string_match':{'exact':'/mirror-probe'}},{'name':'content-length','string_match':{'safe_regex':{'regex':'(?:0)?'}},'treat_missing_header_as_empty':True}]\n    for name in ('authorization','cookie','transfer-encoding'):headers.append({'name':name,'present_match':False})\n    approved['match']={'path':'/mirror-probe','headers':headers}\n    approved['route']['request_mirror_policies']=[{'cluster':'shadow','runtime_fraction':{'default_value':{'numerator':100,'denominator':'HUNDRED'}}}]\n    routes.insert(0,approved)\n    return fixed\n```\n\n原题知识说明：\n镜像请求可能携带真实用户数据并触发测试端副作用，且镜像结果通常不直接决定主响应。明确允许方法、脱敏、目标隔离和负载预算，验证镜像比例与关闭机制；不能默认测试环境可以接收所有生产流量。",
+    "type": "code",
+    "source": "OpsForge Envoy 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 操作任务\n实现configure(base)深拷贝，在首个HCM/virtual host现有route前增加approved-synthetic-mirror。仅GET且:path精确/mirror-probe（无query）、无Authorization/Cookie/Transfer-Encoding、Content-Length缺失或0时，以100% request_mirror_policies复制到已存在shadow cluster；其他请求原样走原primary route且不镜像。主请求结果不受shadow返回500影响，主上游每次仅收到一次；POST/PUT、带授权/ Cookie/ query/正文以及其他路径均不得到shadow。保留原routes、clusters和主请求身份数据。题定请求由获批HTTP/1.1合成探针产生，不把这些头条件视作任意不可信HTTP/2正文的完整脱敏方案。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Envoy1.36.13及两个私有HTTP上游，实际异步镜像和主/影子请求记录；只用固定测试数据。不连接业务镜像服务，不证明任意真实流量的敏感数据清洗或业务副作用安全。",
+    "rubric": [
+      "对象和阶段区分准确",
+      "适用条件明确",
+      "结论有可核验证据"
+    ],
+    "hints": [],
+    "references": [
+      "https://raw.githubusercontent.com/envoyproxy/envoy/v1.36.13/api/envoy/config/route/v3/route_components.proto"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-envoy-058",
+      "original_title": "请求镜像到测试cluster时，为什么必须审查写操作与隐私？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef configure(base):\n    fixed=copy.deepcopy(base)\n    manager=fixed['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\n    routes=manager['route_config']['virtual_hosts'][0]['routes']\n    approved=copy.deepcopy(routes[0]);approved['name']='approved-synthetic-mirror'\n    headers=[{'name':':method','string_match':{'exact':'GET'}},{'name':':path','string_match':{'exact':'/mirror-probe'}},{'name':'content-length','string_match':{'safe_regex':{'regex':'(?:0)?'}},'treat_missing_header_as_empty':True}]\n    for name in ('authorization','cookie','transfer-encoding'):headers.append({'name':name,'present_match':False})\n    approved['match']={'path':'/mirror-probe','headers':headers}\n    approved['route']['request_mirror_policies']=[{'cluster':'shadow','runtime_fraction':{'default_value':{'numerator':100,'denominator':'HUNDRED'}}}]\n    routes.insert(0,approved)\n    return fixed\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef configure(base):\n    fixed=copy.deepcopy(base)\n    manager=fixed['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\n    routes=manager['route_config']['virtual_hosts'][0]['routes']\n    approved=copy.deepcopy(routes[0]);approved['name']='approved-synthetic-mirror'\n    headers=[{'name':':method','string_match':{'exact':'GET'}},{'name':':path','string_match':{'exact':'/mirror-probe'}},{'name':'content-length','string_match':{'safe_regex':{'regex':'(?:0)?'}},'treat_missing_header_as_empty':True}]\n    for name in ('authorization','cookie','transfer-encoding'):headers.append({'name':name,'present_match':False})\n    approved['match']={'path':'/mirror-probe','headers':headers}\n    approved['route']['request_mirror_policies']=[{'cluster':'shadow','runtime_fraction':{'default_value':{'numerator':100,'denominator':'HUNDRED'}}}]\n    routes[0]['route']['request_mirror_policies']=copy.deepcopy(approved['route']['request_mirror_policies'])\n    routes.insert(0,approved)\n    return fixed\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现configure(base)深拷贝，在首个HCM/virtual host现有route前增加approved-synthetic-mirror。仅GET且:path精确/mirror-probe（无query）、无Authorization/Cookie/Transfer-Encoding、Content-Length缺失或0时，以100% request_mirror_policies复制到已存在shadow cluster；其他请求原样走原primary route且不镜像。主请求结果不受shadow返回500影响，主上游每次仅收到一次；POST/PUT、带授权/ Cookie/ query/正文以及其他路径均不得到shadow。保留原routes、clusters和主请求身份数据。题定请求由获批HTTP/1.1合成探针产生，不把这些头条件视作任意不可信HTTP/2正文的完整脱敏方案。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Envoy1.36.13及两个私有HTTP上游，实际异步镜像和主/影子请求记录；只用固定测试数据。不连接业务镜像服务，不证明任意真实流量的敏感数据清洗或业务副作用安全。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "envoy"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/envoy_native.py": "\"\"\"Pinned standalone Envoy and loopback-only HTTP peers, no image or host changes.\"\"\"\nimport copy,http.server,json,os,pathlib,shutil,socket,subprocess,tempfile,threading,time,urllib.error,urllib.request\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\ndef request(base,path,method='GET',body=None,headers=None):\n req=urllib.request.Request(base+path,data=body,method=method,headers=headers or {})\n opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n try:\n  with opener.open(req,timeout=3) as response:return response.status,response.read(),dict(response.headers)\n except urllib.error.HTTPError as response:\n  try:return response.code,response.read(),dict(response.headers)\n  finally:response.close()\n\nclass Upstream:\n def __init__(self,status=200):self.status=status;self.requests=[];self.lock=threading.Lock()\n def __enter__(self):\n  owner=self\n  class Handler(http.server.BaseHTTPRequestHandler):\n   protocol_version='HTTP/1.1'\n   def log_message(self,*args):pass\n   def respond(self):\n    raw=self.rfile.read(int(self.headers.get('Content-Length',0)))\n    with owner.lock:owner.requests.append({'method':self.command,'path':self.path,'body':raw.decode('utf8'),'headers':dict(self.headers)});index=len(owner.requests)\n    status=owner.status(self.command,self.path,index) if callable(owner.status) else owner.status\n    body=json.dumps({'method':self.command,'path':self.path,'attempt':index}).encode()\n    self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers()\n    try:self.wfile.write(body);self.wfile.flush()\n    except (BrokenPipeError,ConnectionResetError):pass\n   do_GET=do_POST=do_PUT=respond\n  self.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);self.port=self.server.server_port\n  self.thread=threading.Thread(target=lambda:self.server.serve_forever(poll_interval=.02),daemon=True);self.thread.start();return self\n def __exit__(self,*args):self.server.shutdown();self.server.server_close();self.thread.join(2)\n\ndef bootstrap(upstream_port):\n return {'node':{'id':'private-probe','cluster':'opsforge'},\n  'admin':{'address':{'socket_address':{'address':'127.0.0.1','port_value':0}}},\n  'static_resources':{'listeners':[{'name':'ingress','address':{'socket_address':{'address':'127.0.0.1','port_value':0}},'filter_chains':[{'filters':[{'name':'envoy.filters.network.http_connection_manager','typed_config':{\n   '@type':'type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager','stat_prefix':'ingress','codec_type':'AUTO',\n   'route_config':{'name':'local','virtual_hosts':[{'name':'service','domains':['*'],'routes':[{'match':{'prefix':'/'},'route':{'cluster':'service','timeout':'1s'}}]}]},\n   'http_filters':[{'name':'envoy.filters.http.router','typed_config':{'@type':'type.googleapis.com/envoy.extensions.filters.http.router.v3.Router'}}]}}]}]}],\n  'clusters':[{'name':'service','connect_timeout':'0.2s','type':'STATIC','lb_policy':'ROUND_ROBIN','load_assignment':{'cluster_name':'service','endpoints':[{'lb_endpoints':[{'endpoint':{'address':{'socket_address':{'address':'127.0.0.1','port_value':upstream_port}}}}]}]}}]}}\n\ndef hcm(config):return config['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\ndef routes(config):return hcm(config)['route_config']['virtual_hosts'][0]['routes']\n\nclass Envoy:\n def __init__(self,config):self.config=copy.deepcopy(config);self.process=None;self.temp=None;self.log=None\n def __enter__(self):\n  binary=shutil.which('envoy')\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: standalone Envoy missing')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '/1.36.13/' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Envoy1.36.13 required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-envoy-');self.root=pathlib.Path(self.temp.name);port=free_port();admin=free_port()\n  while admin==port:admin=free_port()\n  self.config['static_resources']['listeners'][0]['address']['socket_address']['port_value']=port\n  self.config['admin']['address']['socket_address']['port_value']=admin\n  self.base='http://127.0.0.1:'+str(port);self.admin='http://127.0.0.1:'+str(admin)\n  path=self.root/'bootstrap.json';path.write_text(json.dumps(self.config),encoding='utf8');self.log=(self.root/'envoy.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--config-path',str(path),'--disable-hot-restart','--concurrency','1','--log-level','error'],cwd=self.root,stdout=self.log,stderr=self.log)\n   deadline=time.monotonic()+5\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:raise RuntimeError('Envoy startup failed: '+(self.root/'envoy.log').read_text(errors='replace')[-2400:])\n    try:\n     if request(self.admin,'/ready')[0]==200:break\n    except (OSError,urllib.error.URLError):pass\n    time.sleep(.02)\n   else:raise RuntimeError('Envoy private readiness deadline')\n   print('NATIVE_ENVOY_READY:1.36.13',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,method='GET',body=None,headers=None):return request(self.base,path,method,body,headers)\n def stats(self):return {r['name']:r['value'] for r in json.loads(request(self.admin,'/stats?format=json')[1])['stats'] if 'name' in r and 'value' in r}\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student Envoy operation failed: '+type(error).__name__) from error\n",
+        "checks/check.py": "import sys,pathlib,copy,time\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom envoy_native import Envoy,Upstream,bootstrap,hcm,student\nprint('NATIVE_LINUX_READY',flush=True)\nwith Upstream() as primary,Upstream(status=500) as shadow:\n base=bootstrap(primary.port);cluster=base['static_resources']['clusters'][0];cluster['name']='primary';cluster['load_assignment']['cluster_name']='primary'\n mirror=copy.deepcopy(cluster);mirror['name']='shadow';mirror['load_assignment']['cluster_name']='shadow';mirror['load_assignment']['endpoints'][0]['lb_endpoints'][0]['endpoint']['address']['socket_address']['port_value']=shadow.port\n base['static_resources']['clusters'].append(mirror);hcm(base)['route_config']['virtual_hosts'][0]['routes'][0]['route']['cluster']='primary'\n before=copy.deepcopy(base);fixed=student(task.configure,base);assert base==before\n with Envoy(fixed) as proxy:\n  assert proxy.request('/mirror-probe',headers={'x-probe-id':'approved-first'})[0]==200\n  cases=[('/mirror-probe','POST',b'write-data',{}),('/mirror-probe','PUT',b'write-data',{}),('/mirror-probe','GET',None,{'Authorization':'fixture-only'}),('/mirror-probe','GET',None,{'Cookie':'fixture-only'}),('/mirror-probe?private=value','GET',None,{}),('/mirror-probe','GET',b'private-body',{}),('/ordinary','GET',None,{})]\n  for index,(path,method,body,headers) in enumerate(cases):\n   assert proxy.request(path,method,body,{**headers,'x-probe-id':'forbidden-'+str(index)})[0]==200,'primary operation changed'\n  assert proxy.request('/mirror-probe',headers={'x-probe-id':'approved-last'})[0]==200\n  deadline=time.monotonic()+2\n  def ids():return {next((v for k,v in row['headers'].items() if k.lower()=='x-probe-id'),None) for row in shadow.requests}\n  while time.monotonic()<deadline and 'approved-last' not in ids():time.sleep(.01)\n  time.sleep(.08)\n  assert ids()=={'approved-first','approved-last'} and len(shadow.requests)==2,[(r['method'],r['path']) for r in shadow.requests]\n  assert len(primary.requests)==len(cases)+2,'mirroring replaced or duplicated primary work'\n restored=copy.deepcopy(fixed);added=hcm(restored)['route_config']['virtual_hosts'][0]['routes'].pop(0)\n assert added['route']['request_mirror_policies'][0]['cluster']=='shadow' and restored==base,'existing route or primary cluster changed'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "envoy"
+    ]
+  },
+  {
+    "id": "curated-parallel-envoy-067",
+    "module": "envoy",
+    "category": "Envoy",
+    "level": 3,
+    "topic": "负载均衡、健康与重试",
+    "title": "真实ring hash会话粘性：同头键稳定、URI变化和端点顺序不改分配",
+    "answer": "```python\nimport copy\ndef configure(base):\n    fixed=copy.deepcopy(base)\n    clusters=[c for c in fixed['static_resources']['clusters'] if c.get('name')=='service']\n    if len(clusters)!=1:raise ValueError('one service cluster required')\n    clusters[0]['lb_policy']='RING_HASH';clusters[0]['ring_hash_lb_config']={'minimum_ring_size':1024,'maximum_ring_size':1024}\n    manager=fixed['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\n    manager['route_config']['virtual_hosts'][0]['routes'][0]['route']['hash_policy']=[{'header':{'header_name':'x-session-key'},'terminal':True}]\n    return fixed\n```\n\n原题知识说明：\n先固定请求哈希来源，再测端点增删时键迁移比例、负载偏斜和热点键。核对实现参数、端点权重和跨实例配置一致性；均匀分配不保证热键均衡，客户端无稳定哈希输入也不会得到可复现亲和性。会话状态仍需要独立容灾设计。",
+    "type": "code",
+    "source": "OpsForge Envoy 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 操作任务\n实现configure(base)深拷贝，仅将唯一service cluster的lb_policy设RING_HASH、ring_hash_lb_config的minimum_ring_size/maximum_ring_size都1024，并将首个HCM/virtual host首route的hash_policy设为x-session-key header（terminal=True）。保留端点、权重、元数据及其余配置。真实3个上游、96个会话键，每键重复3次必须落在同一端点；换一个Envoy实例并逆序端点列表、改变URL前缀但保持header键，同键仍落在原端点。不得使用:path或未提供的头替代会话键，不能仅凭看起来均匀就证明粘性。无键、增加/移除端点、进程内业务会话状态恢复不在本合同内；缺失或重复service ValueError。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实固定Envoy1.36.13 ring hash、三个本地上游及重建实例对照，证明题定键与同一端点集合下的稳定性；不承诺增删端点零迁移、生产分布SLO或服务端状态持久性。",
+    "rubric": [
+      "对象和阶段区分准确",
+      "适用条件明确",
+      "结论有可核验证据"
+    ],
+    "hints": [],
+    "references": [
+      "https://raw.githubusercontent.com/envoyproxy/envoy/v1.36.13/api/envoy/config/cluster/v3/cluster.proto",
+      "https://raw.githubusercontent.com/envoyproxy/envoy/v1.36.13/api/envoy/config/route/v3/route_components.proto"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-envoy-067",
+      "original_title": "选择ring hash或Maglev时，如何证明会话分配稳定而不是只看均匀度？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef configure(base):\n    fixed=copy.deepcopy(base)\n    clusters=[c for c in fixed['static_resources']['clusters'] if c.get('name')=='service']\n    if len(clusters)!=1:raise ValueError('one service cluster required')\n    clusters[0]['lb_policy']='RING_HASH';clusters[0]['ring_hash_lb_config']={'minimum_ring_size':1024,'maximum_ring_size':1024}\n    manager=fixed['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\n    manager['route_config']['virtual_hosts'][0]['routes'][0]['route']['hash_policy']=[{'header':{'header_name':'x-session-key'},'terminal':True}]\n    return fixed\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef configure(base):\n    fixed=copy.deepcopy(base)\n    clusters=[c for c in fixed['static_resources']['clusters'] if c.get('name')=='service']\n    if len(clusters)!=1:raise ValueError('one service cluster required')\n    clusters[0]['lb_policy']='ROUND_ROBIN'\n    manager=fixed['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\n    manager['route_config']['virtual_hosts'][0]['routes'][0]['route']['hash_policy']=[{'header':{'header_name':'x-session-key'},'terminal':True}]\n    return fixed\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现configure(base)深拷贝，仅将唯一service cluster的lb_policy设RING_HASH、ring_hash_lb_config的minimum_ring_size/maximum_ring_size都1024，并将首个HCM/virtual host首route的hash_policy设为x-session-key header（terminal=True）。保留端点、权重、元数据及其余配置。真实3个上游、96个会话键，每键重复3次必须落在同一端点；换一个Envoy实例并逆序端点列表、改变URL前缀但保持header键，同键仍落在原端点。不得使用:path或未提供的头替代会话键，不能仅凭看起来均匀就证明粘性。无键、增加/移除端点、进程内业务会话状态恢复不在本合同内；缺失或重复service ValueError。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实固定Envoy1.36.13 ring hash、三个本地上游及重建实例对照，证明题定键与同一端点集合下的稳定性；不承诺增删端点零迁移、生产分布SLO或服务端状态持久性。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "envoy"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/envoy_native.py": "\"\"\"Pinned standalone Envoy and loopback-only HTTP peers, no image or host changes.\"\"\"\nimport copy,http.server,json,os,pathlib,shutil,socket,subprocess,tempfile,threading,time,urllib.error,urllib.request\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\ndef request(base,path,method='GET',body=None,headers=None):\n req=urllib.request.Request(base+path,data=body,method=method,headers=headers or {})\n opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n try:\n  with opener.open(req,timeout=3) as response:return response.status,response.read(),dict(response.headers)\n except urllib.error.HTTPError as response:\n  try:return response.code,response.read(),dict(response.headers)\n  finally:response.close()\n\nclass Upstream:\n def __init__(self,status=200):self.status=status;self.requests=[];self.lock=threading.Lock()\n def __enter__(self):\n  owner=self\n  class Handler(http.server.BaseHTTPRequestHandler):\n   protocol_version='HTTP/1.1'\n   def log_message(self,*args):pass\n   def respond(self):\n    raw=self.rfile.read(int(self.headers.get('Content-Length',0)))\n    with owner.lock:owner.requests.append({'method':self.command,'path':self.path,'body':raw.decode('utf8'),'headers':dict(self.headers)});index=len(owner.requests)\n    status=owner.status(self.command,self.path,index) if callable(owner.status) else owner.status\n    body=json.dumps({'method':self.command,'path':self.path,'attempt':index}).encode()\n    self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers()\n    try:self.wfile.write(body);self.wfile.flush()\n    except (BrokenPipeError,ConnectionResetError):pass\n   do_GET=do_POST=do_PUT=respond\n  self.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);self.port=self.server.server_port\n  self.thread=threading.Thread(target=lambda:self.server.serve_forever(poll_interval=.02),daemon=True);self.thread.start();return self\n def __exit__(self,*args):self.server.shutdown();self.server.server_close();self.thread.join(2)\n\ndef bootstrap(upstream_port):\n return {'node':{'id':'private-probe','cluster':'opsforge'},\n  'admin':{'address':{'socket_address':{'address':'127.0.0.1','port_value':0}}},\n  'static_resources':{'listeners':[{'name':'ingress','address':{'socket_address':{'address':'127.0.0.1','port_value':0}},'filter_chains':[{'filters':[{'name':'envoy.filters.network.http_connection_manager','typed_config':{\n   '@type':'type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager','stat_prefix':'ingress','codec_type':'AUTO',\n   'route_config':{'name':'local','virtual_hosts':[{'name':'service','domains':['*'],'routes':[{'match':{'prefix':'/'},'route':{'cluster':'service','timeout':'1s'}}]}]},\n   'http_filters':[{'name':'envoy.filters.http.router','typed_config':{'@type':'type.googleapis.com/envoy.extensions.filters.http.router.v3.Router'}}]}}]}]}],\n  'clusters':[{'name':'service','connect_timeout':'0.2s','type':'STATIC','lb_policy':'ROUND_ROBIN','load_assignment':{'cluster_name':'service','endpoints':[{'lb_endpoints':[{'endpoint':{'address':{'socket_address':{'address':'127.0.0.1','port_value':upstream_port}}}}]}]}}]}}\n\ndef hcm(config):return config['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\ndef routes(config):return hcm(config)['route_config']['virtual_hosts'][0]['routes']\n\nclass Envoy:\n def __init__(self,config):self.config=copy.deepcopy(config);self.process=None;self.temp=None;self.log=None\n def __enter__(self):\n  binary=shutil.which('envoy')\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: standalone Envoy missing')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '/1.36.13/' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Envoy1.36.13 required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-envoy-');self.root=pathlib.Path(self.temp.name);port=free_port();admin=free_port()\n  while admin==port:admin=free_port()\n  self.config['static_resources']['listeners'][0]['address']['socket_address']['port_value']=port\n  self.config['admin']['address']['socket_address']['port_value']=admin\n  self.base='http://127.0.0.1:'+str(port);self.admin='http://127.0.0.1:'+str(admin)\n  path=self.root/'bootstrap.json';path.write_text(json.dumps(self.config),encoding='utf8');self.log=(self.root/'envoy.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--config-path',str(path),'--disable-hot-restart','--concurrency','1','--log-level','error'],cwd=self.root,stdout=self.log,stderr=self.log)\n   deadline=time.monotonic()+5\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:raise RuntimeError('Envoy startup failed: '+(self.root/'envoy.log').read_text(errors='replace')[-2400:])\n    try:\n     if request(self.admin,'/ready')[0]==200:break\n    except (OSError,urllib.error.URLError):pass\n    time.sleep(.02)\n   else:raise RuntimeError('Envoy private readiness deadline')\n   print('NATIVE_ENVOY_READY:1.36.13',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,method='GET',body=None,headers=None):return request(self.base,path,method,body,headers)\n def stats(self):return {r['name']:r['value'] for r in json.loads(request(self.admin,'/stats?format=json')[1])['stats'] if 'name' in r and 'value' in r}\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student Envoy operation failed: '+type(error).__name__) from error\n",
+        "checks/check.py": "import sys,pathlib,copy,time\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom envoy_native import Envoy,Upstream,bootstrap,hcm,student\nprint('NATIVE_LINUX_READY',flush=True)\nwith Upstream() as a,Upstream() as b,Upstream() as c:\n peers=[a,b,c];base=bootstrap(a.port);entries=[]\n for peer in peers:entries.append({'endpoint':{'address':{'socket_address':{'address':'127.0.0.1','port_value':peer.port}}}})\n base['static_resources']['clusters'][0]['load_assignment']['endpoints'][0]['lb_endpoints']=entries\n before=copy.deepcopy(base);fixed=student(task.configure,base);assert base==before\n keys=['session-'+str(i) for i in range(96)]\n def gather(proxy,prefix,repeats):\n  offsets=[len(p.requests) for p in peers]\n  for key in keys:\n   for _ in range(repeats):assert proxy.request('/'+prefix+'/'+key,headers={'x-session-key':key})[0]==200\n  mapping={}\n  for identity,peer in enumerate(peers):\n   for row in peer.requests[offsets[identity]:]:\n    key=next(v for k,v in row['headers'].items() if k.lower()=='x-session-key')\n    mapping.setdefault(key,set()).add(identity)\n  assert set(mapping)==set(keys) and all(len(hosts)==1 for hosts in mapping.values()),'same session moved between hosts'\n  assert set.union(*mapping.values())=={0,1,2},'finite sample did not exercise every host'\n  return {k:next(iter(v)) for k,v in mapping.items()}\n with Envoy(fixed) as first:mapping=gather(first,'first',3)\n reordered=copy.deepcopy(fixed);reordered['static_resources']['clusters'][0]['load_assignment']['endpoints'][0]['lb_endpoints'].reverse()\n with Envoy(reordered) as second:\n  again=gather(second,'second',1);assert again==mapping,'endpoint list order or URL path changed header-key affinity'\n restored=copy.deepcopy(fixed);target=restored['static_resources']['clusters'][0];target['lb_policy']='ROUND_ROBIN';target.pop('ring_hash_lb_config')\n hcm(restored)['route_config']['virtual_hosts'][0]['routes'][0]['route'].pop('hash_policy')\n assert restored==base,'endpoints, metadata, request budgets or other routing fields changed'\n for clusters in [[],[copy.deepcopy(base['static_resources']['clusters'][0])]*2]:\n  invalid=copy.deepcopy(base);invalid['static_resources']['clusters']=clusters\n  try:task.configure(invalid)\n  except ValueError:pass\n  else:raise AssertionError('missing or duplicated service cluster accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "envoy"
+    ]
+  }
+]

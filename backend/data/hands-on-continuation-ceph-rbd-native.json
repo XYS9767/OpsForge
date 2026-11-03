@@ -1,0 +1,245 @@
+[
+  {
+    "id": "curated-parallel-ceph-024",
+    "module": "ceph",
+    "category": "Ceph",
+    "level": 1,
+    "topic": "块存储RBD",
+    "title": "真实RBD逻辑容量与对象粒度分配：实际diff和整对象discard",
+    "answer": "```python\ndef report(image):\n    extents=[]\n    image.diff_iterate(0,image.size(),None,lambda offset,length,exists:extents.append((offset,length,exists)),whole_object=True)\n    return {'virtual_bytes':image.size(),'allocated_extent_bytes':sum(length for offset,length,exists in extents if exists)}\n```\n\n原题知识说明：\nRBD通常按需分配对象，逻辑虚拟容量可大于实际已写空间；快照和克隆又会保留旧对象。分别看provisioned与used，不能只读文件系统df。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Ceph Squid 官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现report(image)，对真实rbd.Image调用size()及diff_iterate(0,size,None,callback,whole_object=True)，返回{virtual_bytes:size,allocated_extent_bytes:仅exists为真extent长度之和}。只读查询，不修改volume。16MiB逻辑卷初始分配0，写入4KiB产生4MiB对象粒度extent，另一个对象写入再增加4MiB，整对象discard回收对应extent但逻辑大小不变。extent字节不是底层OSD物理磁盘占用，也不等于用户写入字节；不使用df。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Ceph16.2.15私有MON/内存型OSD、librbd/Python3.11。隔离容器关闭Cephx，所有卷/pool仅为本题合成数据；不是容器镜像，不构建镜像，不接触外部集群。仅验证题面限定行为，不证明物理磁盘占用、生产耐久或异地容灾。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://docs.ceph.com/en/pacific/rbd/rbd-snapshot/",
+      "https://docs.ceph.com/en/pacific/rbd/api/librbdpy/"
+    ],
+    "related_modules": [
+      "ceph"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-ceph-024",
+      "original_title": "RBD image的逻辑大小与实际分配空间为什么不同？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def report(image):\n    extents=[]\n    image.diff_iterate(0,image.size(),None,lambda offset,length,exists:extents.append((offset,length,exists)),whole_object=True)\n    return {'virtual_bytes':image.size(),'allocated_extent_bytes':sum(length for offset,length,exists in extents if exists)}\n"
+    },
+    "negative_files": {
+      "task.py": "def report(image):\n    extents=[]\n    image.diff_iterate(0,image.size(),None,lambda offset,length,exists:extents.append((offset,length,exists)),whole_object=True)\n    return {'virtual_bytes':image.size(),'allocated_extent_bytes':image.size()}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有镜像加只读Ceph/RBD16.2.15，显式2GiB，私有MON/内存OSD；不构建镜像",
+      "operation": "实现report(image)，对真实rbd.Image调用size()及diff_iterate(0,size,None,callback,whole_object=True)，返回{virtual_bytes:size,allocated_extent_bytes:仅exists为真extent长度之和}。只读查询，不修改volume。16MiB逻辑卷初始分配0，写入4KiB产生4MiB对象粒度extent，另一个对象写入再增加4MiB，整对象discard回收对应extent但逻辑大小不变。extent字节不是底层OSD物理磁盘占用，也不等于用户写入字节；不使用df。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Ceph16.2.15私有MON/内存型OSD、librbd/Python3.11。隔离容器关闭Cephx，所有卷/pool仅为本题合成数据；不是容器镜像，不构建镜像，不接触外部集群。仅验证题面限定行为，不证明物理磁盘占用、生产耐久或异地容灾。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "ceph",
+          "ceph-mon",
+          "ceph-osd",
+          "ceph-authtool",
+          "monmaptool",
+          "rbd"
+        ],
+        "python_modules": [
+          "rados",
+          "rbd"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/ceph_cluster_native.py": "\"\"\"Experimental nonroot, private MON/memstore OSD; no question or incident credit.\"\"\"\nimport json,os,pathlib,socket,subprocess,tempfile,time,uuid\nimport rados\nassert os.geteuid()==1000\nTOOL=pathlib.Path('/opt/opsforge-ceph')\nENV={**os.environ,'LD_LIBRARY_PATH':str(TOOL/'usr/lib/x86_64-linux-gnu/ceph')+':'+str(TOOL/'usr/lib/x86_64-linux-gnu')+':'+str(TOOL/'lib/x86_64-linux-gnu'),'PYTHONPATH':str(TOOL/'usr/lib/python3/dist-packages')}\ndef command(name,*args,timeout=20):\n result=subprocess.run([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,capture_output=True,text=True,timeout=timeout)\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\ndef port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\nclass PrivateCeph:\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-private-ceph-');self.root=pathlib.Path(self.temp.name);self.processes=[];self.logs=[];self.client=None\n  try:\n   self.fsid=str(uuid.uuid4());self.monport=port();self.config=self.root/'ceph.conf';self.monmap=self.root/'monmap';self.mondata=self.root/'mon.a';self.mondata.mkdir()\n   (self.root/'run').mkdir();(self.root/'crash').mkdir()\n   self.config.write_text('''[global]\nfsid = {fsid}\nmon initial members = a\nmon host = 127.0.0.1:{port}\nauth cluster required = none\nauth service required = none\nauth client required = none\npublic addr = 127.0.0.1\ncluster addr = 127.0.0.1\nms bind ipv4 = true\nms bind ipv6 = false\nms async op threads = 1\nlog to stderr = true\nlog to file = false\nrun dir = {root}/run\ncrash dir = {root}/crash\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nadmin socket = {root}/$name.asok\npid file = {root}/$name.pid\nkeyring = {root}/$name.keyring\nmon data avail crit = 0\nmon data avail warn = 0\nmon allow pool delete = true\nmon allow pool size one = true\nosd pool default size = 1\nosd pool default min size = 1\nosd pool default pg num = 1\nosd pool default pgp num = 1\nosd pool default pg autoscale mode = off\nosd crush chooseleaf type = 0\nrados mon op timeout = 3\nrados osd op timeout = 3\n[mon.a]\nmon data = {root}/mon.a\nmon addr = 127.0.0.1:{port}\n[osd]\nosd objectstore = memstore\nosd data = {root}/osd.$id\nkeyring = {root}/osd.$id/keyring\nosd memory target = 134217728\nmemstore device bytes = 134217728\nosd op num shards = 1\nosd op num threads per shard = 1\nosd op num shards hdd = 1\nosd op num threads per shard hdd = 1\nosd op num shards ssd = 1\nosd op num threads per shard ssd = 1\nosd recovery max active = 1\nosd max backfills = 1\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\n'''.format(fsid=self.fsid,port=self.monport,root=self.root,tool=TOOL))\n   command('monmaptool','--create','--fsid',self.fsid,'--add','a','127.0.0.1:'+str(self.monport),self.monmap)\n   command('ceph-authtool','--create-keyring',self.root/'mon.keyring','--gen-key','-n','mon.')\n   command('ceph-mon','--mkfs','-i','a','-c',self.config,'--monmap',self.monmap,'--mon-data',self.mondata,'--keyring',self.root/'mon.keyring')\n   monitor=self.start('ceph-mon','-f','-i','a','-c',self.config,'--mon-data',self.mondata,'--setuser','1000','--setgroup','1000')\n   deadline=time.monotonic()+20;last=None\n   while time.monotonic()<deadline:\n    if monitor.poll() is not None:raise RuntimeError('private MON exited before readiness: '+self.log_tail())\n    try:\n     status=json.loads(command('ceph','--admin-daemon',self.root/'mon.a.asok','mon_status',timeout=3))\n     if status.get('state') not in ('leader','peon'):time.sleep(.2);continue\n     assert status['monmap']['fsid']==self.fsid;break\n    except Exception as error:\n     last=error\n     time.sleep(.2)\n   else:raise RuntimeError('private MON readiness failed: '+str(last)+' '+self.log_tail())\n   print('NATIVE_PRIVATE_CEPH_MON_READY '+json.dumps({'fsid':self.fsid,'uid':os.geteuid(),'quorum':status.get('quorum'),'network':'none-loopback-only'}),flush=True)\n   self.client=rados.Rados(conffile=str(self.config),name='client.admin');self.client.connect(timeout=3)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def start(self,name,*args):\n  log=(self.root/(name+'-'+str(len(self.processes))+'.log')).open('wb');self.logs.append(log)\n  process=subprocess.Popen([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,stdin=subprocess.DEVNULL,stdout=log,stderr=log);self.processes.append(process)\n  return process\n def mon(self,prefix,**kwargs):\n  rc,out,err=self.client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kwargs}),b'')\n  if rc:raise RuntimeError('private mon command '+prefix+' failed: '+str(rc)+' '+str(err))\n  try:return json.loads(out)\n  except json.JSONDecodeError:return out.decode().strip()\n def add_osd(self):\n  osduuid=str(uuid.uuid4());created=self.mon('osd create',uuid=osduuid);osdid=int(created['osdid'] if isinstance(created,dict) else created);data=self.root/('osd.'+str(osdid));data.mkdir()\n  command('ceph-osd','--mkfs','--mkkey','-i',osdid,'-c',self.config,'--osd-uuid',osduuid,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  process=self.start('ceph-osd','-f','-i',osdid,'-c',self.config,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  deadline=time.monotonic()+20\n  while time.monotonic()<deadline:\n   if process.poll() is not None:raise RuntimeError('private OSD exited: '+self.log_tail())\n   status=self.mon('osd dump');row=next((row for row in status['osds'] if row['osd']==osdid),None)\n   if row and row['up']==1 and row['in']==1:break\n   time.sleep(.2)\n  else:raise RuntimeError('private OSD readiness timeout: '+self.log_tail())\n  print('NATIVE_PRIVATE_CEPH_MEMSTORE_OSD_READY '+str(osdid),flush=True);return osdid\n def log_tail(self):\n  return '\\n'.join(path.read_text(errors='replace')[-2500:] for path in self.root.glob('*.log'))\n def __exit__(self,*args):\n  if self.client:\n   try:self.client.shutdown()\n   except Exception:pass\n  for process in reversed(self.processes):\n   if process.poll() is None:process.terminate()\n   try:process.wait(timeout=8)\n   except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)\n  for log in self.logs:log.close()\n  self.temp.cleanup()\n",
+        "checks/ceph_rbd_native.py": "\"\"\"Private object-class loader aliases, without changing the sealed daemon tool tree.\"\"\"\nimport pathlib,subprocess,rbd\nfrom ceph_cluster_native import PrivateCeph\n\nclass PrivateRBD(PrivateCeph):\n def __enter__(self):\n  super().__enter__()\n  try:\n   classes=self.root/'object-classes';classes.mkdir()\n   source=pathlib.Path('/opt/opsforge-ceph/usr/lib/x86_64-linux-gnu/rados-classes')\n   for library in sorted(source.glob('*.so*')):\n    alias=classes/(library.name.split('.so',1)[0]+'.so')\n    if not alias.exists():alias.symlink_to(library)\n   self.config.write_text(self.config.read_text().replace(str(source),str(classes)))\n   version=subprocess.run(['rbd','--version'],capture_output=True,text=True,timeout=10)\n   assert version.returncode==0 and 'ceph version 16.2.15 ' in version.stdout\n   return self\n  except BaseException:\n   import sys\n   super().__exit__(*sys.exc_info());raise\n\ndef create(api,io,name,size=16*1024*1024):\n api.create(io,name,size,order=22,old_format=False,features=rbd.RBD_FEATURE_LAYERING)\n",
+        "checks/check.py": "import os,sys,pathlib,hashlib,json,rbd,rados\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom ceph_rbd_native import PrivateRBD,create\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nwith PrivateRBD() as cluster:\n cluster.add_osd();cluster.client.create_pool('owned_rbd_space')\n with cluster.client.open_ioctx('owned_rbd_space') as io:\n  api=rbd.RBD();size=16*1024*1024;create(api,io,'volume',size)\n  with rbd.Image(io,'volume') as image:\n   def checked(expected):\n    print('STUDENT_OPERATION_ENTERED:query_actual_rbd_virtual_size_and_whole_object_diff_extents',flush=True)\n    try:actual=task.report(image)\n    except Exception as error:raise AssertionError('actual RBD extent query failed') from error\n    assert actual=={'virtual_bytes':size,'allocated_extent_bytes':expected},'logical capacity and allocated object extents conflated'\n   print('NATIVE_RBD_EMPTY_VOLUME_READY',flush=True);checked(0)\n   image.write(b'A'*4096,0);image.flush();checked(4*1024*1024)\n   image.write(b'B'*4096,8*1024*1024);image.flush();checked(8*1024*1024)\n   image.discard(0,4*1024*1024);image.flush();checked(4*1024*1024)\n   assert image.read(0,4096)==b'\\x00'*4096 and image.read(8*1024*1024,4096)==b'B'*4096\n   image.discard(8*1024*1024,4*1024*1024);image.flush();checked(0);assert image.size()==size\n print('NATIVE_RBD_LOGICAL_SIZE_SEPARATE_FROM_OBJECT_GRANULAR_EXTENTS_FULL_OBJECT_DISCARD_VERIFIED_NO_PHYSICAL_DISK_CLAIM',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-ceph-025",
+    "module": "ceph",
+    "category": "Ceph",
+    "level": 1,
+    "topic": "块存储RBD",
+    "title": "真实RBD快照依赖源pool：导出完整快照后删教学源pool，再恢复验字节",
+    "answer": "```python\nimport hashlib,pathlib,rbd\n\ndef export_snapshot(io,name,snapshot,path):\n    digest=hashlib.sha256()\n    with rbd.Image(io,name,snapshot=snapshot,read_only=True) as image:\n        size=image.size()\n        with pathlib.Path(path).open('xb') as stream:\n            for offset in range(0,size,1024*1024):\n                block=image.read(offset,min(1024*1024,size-offset));stream.write(block);digest.update(block)\n    return {'bytes':size,'sha256':digest.hexdigest()}\n\ndef restore(io,name,path,manifest):\n    data=pathlib.Path(path).read_bytes()\n    if len(data)!=manifest['bytes'] or hashlib.sha256(data).hexdigest()!=manifest['sha256']:raise ValueError('backup integrity mismatch')\n    rbd.RBD().create(io,name,len(data),order=22,old_format=False,features=rbd.RBD_FEATURE_LAYERING)\n    with rbd.Image(io,name) as image:image.write(data,0);image.flush()\n```\n\n原题知识说明：\n它依赖同一底层集群及对象历史，集群整体损坏或误操作仍可影响。需要独立复制或备份恢复路径，验收故障域与应用一致性。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Ceph Squid 官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现export_snapshot(io,name,snapshot,path)与restore(io,name,path,manifest)。前者只读打开批准snapshot，按不超过1MiB块读取全部逻辑字节，以xb写批准本地路径，返回{bytes:大小,sha256:完整内容摘要}；不得读当前head或只导出元数据。后者先完整校验本地文件长度和SHA256，不符ValueError且零建卷；再用RBD().create(order=22,old_format=False,features=RBD_FEATURE_LAYERING)建立批准卷，写入全部字节并flush。判分器在导出后删除自有教学源pool、证实其不可打开，再向新pool恢复并逐字节验证。保护pool不变。此文件仅独立于源pool，仍在同一容器临时目录，绝不称为异地/远程/生产耐久备份或应用一致性证明。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Ceph16.2.15私有MON/内存型OSD、librbd/Python3.11。隔离容器关闭Cephx，所有卷/pool仅为本题合成数据；不是容器镜像，不构建镜像，不接触外部集群。仅验证题面限定行为，不证明物理磁盘占用、生产耐久或异地容灾。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://docs.ceph.com/en/pacific/rbd/rbd-snapshot/",
+      "https://docs.ceph.com/en/pacific/rbd/api/librbdpy/"
+    ],
+    "related_modules": [
+      "ceph"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-ceph-025",
+      "original_title": "RBD快照为何不是独立的异地备份？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import hashlib,pathlib,rbd\n\ndef export_snapshot(io,name,snapshot,path):\n    digest=hashlib.sha256()\n    with rbd.Image(io,name,snapshot=snapshot,read_only=True) as image:\n        size=image.size()\n        with pathlib.Path(path).open('xb') as stream:\n            for offset in range(0,size,1024*1024):\n                block=image.read(offset,min(1024*1024,size-offset));stream.write(block);digest.update(block)\n    return {'bytes':size,'sha256':digest.hexdigest()}\n\ndef restore(io,name,path,manifest):\n    data=pathlib.Path(path).read_bytes()\n    if len(data)!=manifest['bytes'] or hashlib.sha256(data).hexdigest()!=manifest['sha256']:raise ValueError('backup integrity mismatch')\n    rbd.RBD().create(io,name,len(data),order=22,old_format=False,features=rbd.RBD_FEATURE_LAYERING)\n    with rbd.Image(io,name) as image:image.write(data,0);image.flush()\n"
+    },
+    "negative_files": {
+      "task.py": "import hashlib,pathlib,rbd\n\ndef export_snapshot(io,name,snapshot,path):\n    digest=hashlib.sha256()\n    with rbd.Image(io,name,read_only=True) as image:\n        size=image.size()\n        with pathlib.Path(path).open('xb') as stream:\n            for offset in range(0,size,1024*1024):\n                block=image.read(offset,min(1024*1024,size-offset));stream.write(block);digest.update(block)\n    return {'bytes':size,'sha256':digest.hexdigest()}\n\ndef restore(io,name,path,manifest):\n    data=pathlib.Path(path).read_bytes()\n    if len(data)!=manifest['bytes'] or hashlib.sha256(data).hexdigest()!=manifest['sha256']:raise ValueError('backup integrity mismatch')\n    rbd.RBD().create(io,name,len(data),order=22,old_format=False,features=rbd.RBD_FEATURE_LAYERING)\n    with rbd.Image(io,name) as image:image.write(data,0);image.flush()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有镜像加只读Ceph/RBD16.2.15，显式2GiB，私有MON/内存OSD；不构建镜像",
+      "operation": "实现export_snapshot(io,name,snapshot,path)与restore(io,name,path,manifest)。前者只读打开批准snapshot，按不超过1MiB块读取全部逻辑字节，以xb写批准本地路径，返回{bytes:大小,sha256:完整内容摘要}；不得读当前head或只导出元数据。后者先完整校验本地文件长度和SHA256，不符ValueError且零建卷；再用RBD().create(order=22,old_format=False,features=RBD_FEATURE_LAYERING)建立批准卷，写入全部字节并flush。判分器在导出后删除自有教学源pool、证实其不可打开，再向新pool恢复并逐字节验证。保护pool不变。此文件仅独立于源pool，仍在同一容器临时目录，绝不称为异地/远程/生产耐久备份或应用一致性证明。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Ceph16.2.15私有MON/内存型OSD、librbd/Python3.11。隔离容器关闭Cephx，所有卷/pool仅为本题合成数据；不是容器镜像，不构建镜像，不接触外部集群。仅验证题面限定行为，不证明物理磁盘占用、生产耐久或异地容灾。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "ceph",
+          "ceph-mon",
+          "ceph-osd",
+          "ceph-authtool",
+          "monmaptool",
+          "rbd"
+        ],
+        "python_modules": [
+          "rados",
+          "rbd"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/ceph_cluster_native.py": "\"\"\"Experimental nonroot, private MON/memstore OSD; no question or incident credit.\"\"\"\nimport json,os,pathlib,socket,subprocess,tempfile,time,uuid\nimport rados\nassert os.geteuid()==1000\nTOOL=pathlib.Path('/opt/opsforge-ceph')\nENV={**os.environ,'LD_LIBRARY_PATH':str(TOOL/'usr/lib/x86_64-linux-gnu/ceph')+':'+str(TOOL/'usr/lib/x86_64-linux-gnu')+':'+str(TOOL/'lib/x86_64-linux-gnu'),'PYTHONPATH':str(TOOL/'usr/lib/python3/dist-packages')}\ndef command(name,*args,timeout=20):\n result=subprocess.run([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,capture_output=True,text=True,timeout=timeout)\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\ndef port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\nclass PrivateCeph:\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-private-ceph-');self.root=pathlib.Path(self.temp.name);self.processes=[];self.logs=[];self.client=None\n  try:\n   self.fsid=str(uuid.uuid4());self.monport=port();self.config=self.root/'ceph.conf';self.monmap=self.root/'monmap';self.mondata=self.root/'mon.a';self.mondata.mkdir()\n   (self.root/'run').mkdir();(self.root/'crash').mkdir()\n   self.config.write_text('''[global]\nfsid = {fsid}\nmon initial members = a\nmon host = 127.0.0.1:{port}\nauth cluster required = none\nauth service required = none\nauth client required = none\npublic addr = 127.0.0.1\ncluster addr = 127.0.0.1\nms bind ipv4 = true\nms bind ipv6 = false\nms async op threads = 1\nlog to stderr = true\nlog to file = false\nrun dir = {root}/run\ncrash dir = {root}/crash\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nadmin socket = {root}/$name.asok\npid file = {root}/$name.pid\nkeyring = {root}/$name.keyring\nmon data avail crit = 0\nmon data avail warn = 0\nmon allow pool delete = true\nmon allow pool size one = true\nosd pool default size = 1\nosd pool default min size = 1\nosd pool default pg num = 1\nosd pool default pgp num = 1\nosd pool default pg autoscale mode = off\nosd crush chooseleaf type = 0\nrados mon op timeout = 3\nrados osd op timeout = 3\n[mon.a]\nmon data = {root}/mon.a\nmon addr = 127.0.0.1:{port}\n[osd]\nosd objectstore = memstore\nosd data = {root}/osd.$id\nkeyring = {root}/osd.$id/keyring\nosd memory target = 134217728\nmemstore device bytes = 134217728\nosd op num shards = 1\nosd op num threads per shard = 1\nosd op num shards hdd = 1\nosd op num threads per shard hdd = 1\nosd op num shards ssd = 1\nosd op num threads per shard ssd = 1\nosd recovery max active = 1\nosd max backfills = 1\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\n'''.format(fsid=self.fsid,port=self.monport,root=self.root,tool=TOOL))\n   command('monmaptool','--create','--fsid',self.fsid,'--add','a','127.0.0.1:'+str(self.monport),self.monmap)\n   command('ceph-authtool','--create-keyring',self.root/'mon.keyring','--gen-key','-n','mon.')\n   command('ceph-mon','--mkfs','-i','a','-c',self.config,'--monmap',self.monmap,'--mon-data',self.mondata,'--keyring',self.root/'mon.keyring')\n   monitor=self.start('ceph-mon','-f','-i','a','-c',self.config,'--mon-data',self.mondata,'--setuser','1000','--setgroup','1000')\n   deadline=time.monotonic()+20;last=None\n   while time.monotonic()<deadline:\n    if monitor.poll() is not None:raise RuntimeError('private MON exited before readiness: '+self.log_tail())\n    try:\n     status=json.loads(command('ceph','--admin-daemon',self.root/'mon.a.asok','mon_status',timeout=3))\n     if status.get('state') not in ('leader','peon'):time.sleep(.2);continue\n     assert status['monmap']['fsid']==self.fsid;break\n    except Exception as error:\n     last=error\n     time.sleep(.2)\n   else:raise RuntimeError('private MON readiness failed: '+str(last)+' '+self.log_tail())\n   print('NATIVE_PRIVATE_CEPH_MON_READY '+json.dumps({'fsid':self.fsid,'uid':os.geteuid(),'quorum':status.get('quorum'),'network':'none-loopback-only'}),flush=True)\n   self.client=rados.Rados(conffile=str(self.config),name='client.admin');self.client.connect(timeout=3)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def start(self,name,*args):\n  log=(self.root/(name+'-'+str(len(self.processes))+'.log')).open('wb');self.logs.append(log)\n  process=subprocess.Popen([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,stdin=subprocess.DEVNULL,stdout=log,stderr=log);self.processes.append(process)\n  return process\n def mon(self,prefix,**kwargs):\n  rc,out,err=self.client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kwargs}),b'')\n  if rc:raise RuntimeError('private mon command '+prefix+' failed: '+str(rc)+' '+str(err))\n  try:return json.loads(out)\n  except json.JSONDecodeError:return out.decode().strip()\n def add_osd(self):\n  osduuid=str(uuid.uuid4());created=self.mon('osd create',uuid=osduuid);osdid=int(created['osdid'] if isinstance(created,dict) else created);data=self.root/('osd.'+str(osdid));data.mkdir()\n  command('ceph-osd','--mkfs','--mkkey','-i',osdid,'-c',self.config,'--osd-uuid',osduuid,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  process=self.start('ceph-osd','-f','-i',osdid,'-c',self.config,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  deadline=time.monotonic()+20\n  while time.monotonic()<deadline:\n   if process.poll() is not None:raise RuntimeError('private OSD exited: '+self.log_tail())\n   status=self.mon('osd dump');row=next((row for row in status['osds'] if row['osd']==osdid),None)\n   if row and row['up']==1 and row['in']==1:break\n   time.sleep(.2)\n  else:raise RuntimeError('private OSD readiness timeout: '+self.log_tail())\n  print('NATIVE_PRIVATE_CEPH_MEMSTORE_OSD_READY '+str(osdid),flush=True);return osdid\n def log_tail(self):\n  return '\\n'.join(path.read_text(errors='replace')[-2500:] for path in self.root.glob('*.log'))\n def __exit__(self,*args):\n  if self.client:\n   try:self.client.shutdown()\n   except Exception:pass\n  for process in reversed(self.processes):\n   if process.poll() is None:process.terminate()\n   try:process.wait(timeout=8)\n   except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)\n  for log in self.logs:log.close()\n  self.temp.cleanup()\n",
+        "checks/ceph_rbd_native.py": "\"\"\"Private object-class loader aliases, without changing the sealed daemon tool tree.\"\"\"\nimport pathlib,subprocess,rbd\nfrom ceph_cluster_native import PrivateCeph\n\nclass PrivateRBD(PrivateCeph):\n def __enter__(self):\n  super().__enter__()\n  try:\n   classes=self.root/'object-classes';classes.mkdir()\n   source=pathlib.Path('/opt/opsforge-ceph/usr/lib/x86_64-linux-gnu/rados-classes')\n   for library in sorted(source.glob('*.so*')):\n    alias=classes/(library.name.split('.so',1)[0]+'.so')\n    if not alias.exists():alias.symlink_to(library)\n   self.config.write_text(self.config.read_text().replace(str(source),str(classes)))\n   version=subprocess.run(['rbd','--version'],capture_output=True,text=True,timeout=10)\n   assert version.returncode==0 and 'ceph version 16.2.15 ' in version.stdout\n   return self\n  except BaseException:\n   import sys\n   super().__exit__(*sys.exc_info());raise\n\ndef create(api,io,name,size=16*1024*1024):\n api.create(io,name,size,order=22,old_format=False,features=rbd.RBD_FEATURE_LAYERING)\n",
+        "checks/check.py": "import os,sys,pathlib,hashlib,json,rbd,rados\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom ceph_rbd_native import PrivateRBD,create\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nwith PrivateRBD() as cluster:\n cluster.add_osd();cluster.client.create_pool('owned_rbd_source');cluster.client.create_pool('protected_rbd_pool')\n with cluster.client.open_ioctx('protected_rbd_pool') as control:control.write_full('keep',b'protected-pool-data')\n size=4*1024*1024;expected=(b'snapshot-content\\x00\\xff'*((size//18)+1))[:size];assert len(expected)==size\n api=rbd.RBD();path=cluster.root/'approved-independent-export.bin'\n with cluster.client.open_ioctx('owned_rbd_source') as io:\n  create(api,io,'source',size)\n  with rbd.Image(io,'source') as head:\n   head.write(expected,0);head.flush();head.create_snap('checkpoint');head.write(b'H'*size,0);head.flush()\n  print('NATIVE_RBD_SNAPSHOT_AND_HEAD_DIFFER_ACTUAL_SOURCE_POOL_READY',flush=True)\n  print('STUDENT_OPERATION_ENTERED:export_actual_approved_snapshot_bytes_outside_source_pool',flush=True)\n  try:manifest=task.export_snapshot(io,'source','checkpoint',path)\n  except Exception as error:raise AssertionError('snapshot export operation failed') from error\n  assert manifest=={'bytes':size,'sha256':hashlib.sha256(expected).hexdigest()} and path.read_bytes()==expected,'export must contain actual complete snapshot bytes, not head/metadata'\n cluster.client.delete_pool('owned_rbd_source')\n try:cluster.client.open_ioctx('owned_rbd_source')\n except rados.ObjectNotFound:pass\n else:raise AssertionError('source pool was not removed')\n assert path.read_bytes()==expected,'export depended on deleted pool'\n cluster.client.create_pool('owned_rbd_restore')\n with cluster.client.open_ioctx('owned_rbd_restore') as restored:\n  try:task.restore(restored,'restored',path,manifest)\n  except Exception as error:raise AssertionError('restore from independent export failed') from error\n  with rbd.Image(restored,'restored') as volume:assert volume.size()==size and volume.read(0,size)==expected\n  damaged=cluster.root/'damaged-export';damaged.write_bytes(expected[:-1]+b'!')\n  try:task.restore(restored,'must-not-create',damaged,manifest)\n  except ValueError:pass\n  else:raise AssertionError('damaged backup accepted')\n  assert api.list(restored)==['restored'],'invalid backup caused partial volume creation'\n with cluster.client.open_ioctx('protected_rbd_pool') as control:assert control.read('keep')==b'protected-pool-data'\n print('NATIVE_RBD_SNAPSHOT_EXPORT_BYTES_SURVIVE_SOURCE_POOL_DELETION_RESTORE_EXACT_AND_INTEGRITY_FAILURE_PREVALIDATED_NOT_REMOTE_BACKUP',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-ceph-026",
+    "module": "ceph",
+    "category": "Ceph",
+    "level": 1,
+    "topic": "块存储RBD",
+    "title": "真实RBD clone父快照依赖：先flatten，再删除父对象验证子卷",
+    "answer": "```python\ndef detach(child,parent,snapshot):\n    child.flatten()\n```\n\n原题知识说明：\nclone通常依赖父快照并按写入分化，初始更快省空间；完整copy更独立但需复制数据。验收父子依赖、性能与删除顺序。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Ceph Squid 官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现detach(child,parent,snapshot)：仅对批准child执行真实flatten()，不得修改或删除其他卷。私有fixture建立真实受保护父快照与clone，实际解除快照保护先报ImageBusy；detach后child.overlap()==0，判分器才能解除保护、删父快照和父卷，子卷仍读回继承字节且逻辑大小保持。另一组保护父子依赖不变。不得只flush、改大小、提前删除父快照或把返回值当作完整复制证明。仅验证依赖解除与字节，不衡量clone创建性能或物理空间。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Ceph16.2.15私有MON/内存型OSD、librbd/Python3.11。隔离容器关闭Cephx，所有卷/pool仅为本题合成数据；不是容器镜像，不构建镜像，不接触外部集群。仅验证题面限定行为，不证明物理磁盘占用、生产耐久或异地容灾。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://docs.ceph.com/en/pacific/rbd/rbd-snapshot/",
+      "https://docs.ceph.com/en/pacific/rbd/api/librbdpy/"
+    ],
+    "related_modules": [
+      "ceph"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-ceph-026",
+      "original_title": "RBD clone与完整copy在初始成本和依赖上有何差异？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def detach(child,parent,snapshot):\n    child.flatten()\n"
+    },
+    "negative_files": {
+      "task.py": "def detach(child,parent,snapshot):\n    child.flush()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有镜像加只读Ceph/RBD16.2.15，显式2GiB，私有MON/内存OSD；不构建镜像",
+      "operation": "实现detach(child,parent,snapshot)：仅对批准child执行真实flatten()，不得修改或删除其他卷。私有fixture建立真实受保护父快照与clone，实际解除快照保护先报ImageBusy；detach后child.overlap()==0，判分器才能解除保护、删父快照和父卷，子卷仍读回继承字节且逻辑大小保持。另一组保护父子依赖不变。不得只flush、改大小、提前删除父快照或把返回值当作完整复制证明。仅验证依赖解除与字节，不衡量clone创建性能或物理空间。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Ceph16.2.15私有MON/内存型OSD、librbd/Python3.11。隔离容器关闭Cephx，所有卷/pool仅为本题合成数据；不是容器镜像，不构建镜像，不接触外部集群。仅验证题面限定行为，不证明物理磁盘占用、生产耐久或异地容灾。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "ceph",
+          "ceph-mon",
+          "ceph-osd",
+          "ceph-authtool",
+          "monmaptool",
+          "rbd"
+        ],
+        "python_modules": [
+          "rados",
+          "rbd"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/ceph_cluster_native.py": "\"\"\"Experimental nonroot, private MON/memstore OSD; no question or incident credit.\"\"\"\nimport json,os,pathlib,socket,subprocess,tempfile,time,uuid\nimport rados\nassert os.geteuid()==1000\nTOOL=pathlib.Path('/opt/opsforge-ceph')\nENV={**os.environ,'LD_LIBRARY_PATH':str(TOOL/'usr/lib/x86_64-linux-gnu/ceph')+':'+str(TOOL/'usr/lib/x86_64-linux-gnu')+':'+str(TOOL/'lib/x86_64-linux-gnu'),'PYTHONPATH':str(TOOL/'usr/lib/python3/dist-packages')}\ndef command(name,*args,timeout=20):\n result=subprocess.run([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,capture_output=True,text=True,timeout=timeout)\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\ndef port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\nclass PrivateCeph:\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-private-ceph-');self.root=pathlib.Path(self.temp.name);self.processes=[];self.logs=[];self.client=None\n  try:\n   self.fsid=str(uuid.uuid4());self.monport=port();self.config=self.root/'ceph.conf';self.monmap=self.root/'monmap';self.mondata=self.root/'mon.a';self.mondata.mkdir()\n   (self.root/'run').mkdir();(self.root/'crash').mkdir()\n   self.config.write_text('''[global]\nfsid = {fsid}\nmon initial members = a\nmon host = 127.0.0.1:{port}\nauth cluster required = none\nauth service required = none\nauth client required = none\npublic addr = 127.0.0.1\ncluster addr = 127.0.0.1\nms bind ipv4 = true\nms bind ipv6 = false\nms async op threads = 1\nlog to stderr = true\nlog to file = false\nrun dir = {root}/run\ncrash dir = {root}/crash\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nadmin socket = {root}/$name.asok\npid file = {root}/$name.pid\nkeyring = {root}/$name.keyring\nmon data avail crit = 0\nmon data avail warn = 0\nmon allow pool delete = true\nmon allow pool size one = true\nosd pool default size = 1\nosd pool default min size = 1\nosd pool default pg num = 1\nosd pool default pgp num = 1\nosd pool default pg autoscale mode = off\nosd crush chooseleaf type = 0\nrados mon op timeout = 3\nrados osd op timeout = 3\n[mon.a]\nmon data = {root}/mon.a\nmon addr = 127.0.0.1:{port}\n[osd]\nosd objectstore = memstore\nosd data = {root}/osd.$id\nkeyring = {root}/osd.$id/keyring\nosd memory target = 134217728\nmemstore device bytes = 134217728\nosd op num shards = 1\nosd op num threads per shard = 1\nosd op num shards hdd = 1\nosd op num threads per shard hdd = 1\nosd op num shards ssd = 1\nosd op num threads per shard ssd = 1\nosd recovery max active = 1\nosd max backfills = 1\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\n'''.format(fsid=self.fsid,port=self.monport,root=self.root,tool=TOOL))\n   command('monmaptool','--create','--fsid',self.fsid,'--add','a','127.0.0.1:'+str(self.monport),self.monmap)\n   command('ceph-authtool','--create-keyring',self.root/'mon.keyring','--gen-key','-n','mon.')\n   command('ceph-mon','--mkfs','-i','a','-c',self.config,'--monmap',self.monmap,'--mon-data',self.mondata,'--keyring',self.root/'mon.keyring')\n   monitor=self.start('ceph-mon','-f','-i','a','-c',self.config,'--mon-data',self.mondata,'--setuser','1000','--setgroup','1000')\n   deadline=time.monotonic()+20;last=None\n   while time.monotonic()<deadline:\n    if monitor.poll() is not None:raise RuntimeError('private MON exited before readiness: '+self.log_tail())\n    try:\n     status=json.loads(command('ceph','--admin-daemon',self.root/'mon.a.asok','mon_status',timeout=3))\n     if status.get('state') not in ('leader','peon'):time.sleep(.2);continue\n     assert status['monmap']['fsid']==self.fsid;break\n    except Exception as error:\n     last=error\n     time.sleep(.2)\n   else:raise RuntimeError('private MON readiness failed: '+str(last)+' '+self.log_tail())\n   print('NATIVE_PRIVATE_CEPH_MON_READY '+json.dumps({'fsid':self.fsid,'uid':os.geteuid(),'quorum':status.get('quorum'),'network':'none-loopback-only'}),flush=True)\n   self.client=rados.Rados(conffile=str(self.config),name='client.admin');self.client.connect(timeout=3)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def start(self,name,*args):\n  log=(self.root/(name+'-'+str(len(self.processes))+'.log')).open('wb');self.logs.append(log)\n  process=subprocess.Popen([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,stdin=subprocess.DEVNULL,stdout=log,stderr=log);self.processes.append(process)\n  return process\n def mon(self,prefix,**kwargs):\n  rc,out,err=self.client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kwargs}),b'')\n  if rc:raise RuntimeError('private mon command '+prefix+' failed: '+str(rc)+' '+str(err))\n  try:return json.loads(out)\n  except json.JSONDecodeError:return out.decode().strip()\n def add_osd(self):\n  osduuid=str(uuid.uuid4());created=self.mon('osd create',uuid=osduuid);osdid=int(created['osdid'] if isinstance(created,dict) else created);data=self.root/('osd.'+str(osdid));data.mkdir()\n  command('ceph-osd','--mkfs','--mkkey','-i',osdid,'-c',self.config,'--osd-uuid',osduuid,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  process=self.start('ceph-osd','-f','-i',osdid,'-c',self.config,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  deadline=time.monotonic()+20\n  while time.monotonic()<deadline:\n   if process.poll() is not None:raise RuntimeError('private OSD exited: '+self.log_tail())\n   status=self.mon('osd dump');row=next((row for row in status['osds'] if row['osd']==osdid),None)\n   if row and row['up']==1 and row['in']==1:break\n   time.sleep(.2)\n  else:raise RuntimeError('private OSD readiness timeout: '+self.log_tail())\n  print('NATIVE_PRIVATE_CEPH_MEMSTORE_OSD_READY '+str(osdid),flush=True);return osdid\n def log_tail(self):\n  return '\\n'.join(path.read_text(errors='replace')[-2500:] for path in self.root.glob('*.log'))\n def __exit__(self,*args):\n  if self.client:\n   try:self.client.shutdown()\n   except Exception:pass\n  for process in reversed(self.processes):\n   if process.poll() is None:process.terminate()\n   try:process.wait(timeout=8)\n   except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)\n  for log in self.logs:log.close()\n  self.temp.cleanup()\n",
+        "checks/ceph_rbd_native.py": "\"\"\"Private object-class loader aliases, without changing the sealed daemon tool tree.\"\"\"\nimport pathlib,subprocess,rbd\nfrom ceph_cluster_native import PrivateCeph\n\nclass PrivateRBD(PrivateCeph):\n def __enter__(self):\n  super().__enter__()\n  try:\n   classes=self.root/'object-classes';classes.mkdir()\n   source=pathlib.Path('/opt/opsforge-ceph/usr/lib/x86_64-linux-gnu/rados-classes')\n   for library in sorted(source.glob('*.so*')):\n    alias=classes/(library.name.split('.so',1)[0]+'.so')\n    if not alias.exists():alias.symlink_to(library)\n   self.config.write_text(self.config.read_text().replace(str(source),str(classes)))\n   version=subprocess.run(['rbd','--version'],capture_output=True,text=True,timeout=10)\n   assert version.returncode==0 and 'ceph version 16.2.15 ' in version.stdout\n   return self\n  except BaseException:\n   import sys\n   super().__exit__(*sys.exc_info());raise\n\ndef create(api,io,name,size=16*1024*1024):\n api.create(io,name,size,order=22,old_format=False,features=rbd.RBD_FEATURE_LAYERING)\n",
+        "checks/check.py": "import os,sys,pathlib,hashlib,json,rbd,rados\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom ceph_rbd_native import PrivateRBD,create\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nwith PrivateRBD() as cluster:\n cluster.add_osd();cluster.client.create_pool('owned_rbd_clone')\n with cluster.client.open_ioctx('owned_rbd_clone') as io:\n  api=rbd.RBD();size=16*1024*1024\n  for name in ('parent','control-parent'):\n   create(api,io,name,size)\n   with rbd.Image(io,name) as parent:\n    parent.write(b'A'*4096,0);parent.flush();parent.create_snap('checkpoint');parent.protect_snap('checkpoint')\n   api.clone(io,name,'checkpoint',io,name+'-child',features=rbd.RBD_FEATURE_LAYERING)\n  with rbd.Image(io,'parent') as parent,rbd.Image(io,'parent-child') as child:\n   assert child.parent_info()[1:]==('parent','checkpoint') and child.read(0,4096)==b'A'*4096\n   try:parent.unprotect_snap('checkpoint')\n   except rbd.ImageBusy:pass\n   else:raise AssertionError('parent snapshot was not protected by clone dependency')\n   print('NATIVE_RBD_REAL_CLONE_PARENT_DEPENDENCY_IMAGEBUSY_READY',flush=True)\n   print('STUDENT_OPERATION_ENTERED:flatten_only_approved_child_before_parent_snapshot_removal',flush=True)\n   try:task.detach(child,parent,'checkpoint')\n   except Exception as error:raise AssertionError('approved clone detach failed') from error\n   assert child.overlap()==0,'child still depends on parent extents'\n   try:parent.unprotect_snap('checkpoint');parent.remove_snap('checkpoint')\n   except Exception as error:raise AssertionError('parent snapshot still needed by child') from error\n  api.remove(io,'parent')\n  with rbd.Image(io,'parent-child') as child:assert child.size()==size and child.read(0,4096)==b'A'*4096\n  with rbd.Image(io,'control-parent-child') as control:assert control.parent_info()[1:]==('control-parent','checkpoint') and control.overlap()>0 and control.read(0,4096)==b'A'*4096\n  with rbd.Image(io,'control-parent') as control:assert control.is_protected_snap('checkpoint')\n print('NATIVE_RBD_APPROVED_CLONE_FLATTENED_CHILD_BYTES_SURVIVE_PARENT_REMOVAL_OTHER_CLONE_DEPENDENCY_UNCHANGED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

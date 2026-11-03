@@ -1,0 +1,436 @@
+[
+  {
+    "id": "curated-parallel-redis-045",
+    "module": "redis",
+    "category": "Redis",
+    "level": 2,
+    "topic": "复制与集群",
+    "title": "真实迁槽对照ASK与MOVED：临时ASKING不污染持久槽缓存",
+    "answer": "```python\ndef get_redirected(connect,address,key,cache,max_hops=4):\n    if type(max_hops) is not int or not 1<=max_hops<=8:raise ValueError('bounded hops')\n    current=connect(address)\n    try:\n        for _ in range(max_hops):\n            try:return current.command('GET',key)\n            except Exception as error:\n                parts=str(error).split()\n                if len(parts)!=3 or parts[0] not in ('ASK','MOVED') or not parts[1].isdecimal() or not 0<=int(parts[1])<16384:raise\n                kind,slot,address=parts[0],int(parts[1]),parts[2]\n                if kind=='MOVED':cache[slot]=address\n                current.close();current=connect(address)\n                if kind=='ASK':current.command('ASKING')\n        raise RuntimeError('redirect budget exhausted')\n    finally:current.close()\n```\n\n原题知识说明：\nMOVED表示槽当前归属应更新，ASK常用于迁移中的单次临时转向，需对目标连接执行ASKING后请求。永久把ASK写入槽表可能导致错误路由；用迁槽场景验证客户端。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 get_redirected(connect,address,key,cache,max_hops=4)。connect为可信工厂，只连接本题两节点，返回command/close客户端；cache为slot到地址字典。执行GET遇ASK需新连接、ASKING再GET但不改槽缓存；MOVED更新对应slot并重试。仅处理格式正确的ASK/MOVED，其他异常传播；max_hops为1..8非bool整数，耗尽RuntimeError，关闭全部本次连接，保留其他缓存项。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n实际Redis7.2两主节点私有Cluster的迁槽协议；没有副本，不验高可用、TLS、生产拓扑、故障转移或任意第三方驱动。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-045",
+      "original_title": "MOVED与ASK重定向为什么不能用相同缓存更新策略？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def get_redirected(connect,address,key,cache,max_hops=4):\n    if type(max_hops) is not int or not 1<=max_hops<=8:raise ValueError('bounded hops')\n    current=connect(address)\n    try:\n        for _ in range(max_hops):\n            try:return current.command('GET',key)\n            except Exception as error:\n                parts=str(error).split()\n                if len(parts)!=3 or parts[0] not in ('ASK','MOVED') or not parts[1].isdecimal() or not 0<=int(parts[1])<16384:raise\n                kind,slot,address=parts[0],int(parts[1]),parts[2]\n                if kind=='MOVED':cache[slot]=address\n                current.close();current=connect(address)\n                if kind=='ASK':current.command('ASKING')\n        raise RuntimeError('redirect budget exhausted')\n    finally:current.close()\n"
+    },
+    "negative_files": {
+      "task.py": "def get_redirected(connect,address,key,cache,max_hops=4):\n    if type(max_hops) is not int or not 1<=max_hops<=8:raise ValueError('bounded hops')\n    current=connect(address)\n    try:\n        for _ in range(max_hops):\n            try:return current.command('GET',key)\n            except Exception as error:\n                parts=str(error).split()\n                if len(parts)!=3 or parts[0] not in ('ASK','MOVED') or not parts[1].isdecimal() or not 0<=int(parts[1])<16384:raise\n                kind,slot,address=parts[0],int(parts[1]),parts[2]\n                if kind in ('ASK','MOVED'):cache[slot]=address\n                current.close();current=connect(address)\n                if kind=='ASK':current.command('ASKING')\n        raise RuntimeError('redirect budget exhausted')\n    finally:current.close()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现 get_redirected(connect,address,key,cache,max_hops=4)。connect为可信工厂，只连接本题两节点，返回command/close客户端；cache为slot到地址字典。执行GET遇ASK需新连接、ASKING再GET但不改槽缓存；MOVED更新对应slot并重试。仅处理格式正确的ASK/MOVED，其他异常传播；max_hops为1..8非bool整数，耗尽RuntimeError，关闭全部本次连接，保留其他缓存项。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "实际Redis7.2两主节点私有Cluster的迁槽协议；没有副本，不验高可用、TLS、生产拓扑、故障转移或任意第三方驱动。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/redis_cluster_native.py": "\"\"\"Private Redis7.2 TCP peers, real cluster slots and migration; no external peers.\"\"\"\nimport contextlib,socket,secrets,time\nfrom redis_native import NativeRedis\n\n\ndef free_port():\n    for _ in range(200):\n        port=20000+secrets.randbelow(19000)\n        try:\n            with socket.socket() as client,socket.socket() as bus:\n                client.bind(('127.0.0.1',port));bus.bind(('127.0.0.1',port+10000))\n            return port\n        except OSError:pass\n    raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private TCP ports unavailable')\n\n\nclass TCPRedis(NativeRedis):\n    def __init__(self,cluster=False):self.cluster=cluster;self.port=free_port();self.address='127.0.0.1:'+str(self.port)\n    def start(self):\n        if not getattr(self,'configured',False):\n            with self.config.open('a',encoding='utf8') as stream:\n                stream.write('\\nport '+str(self.port)+'\\nbind 127.0.0.1\\nrepl-diskless-sync-delay 0\\n')\n                if self.cluster:\n                    stream.write('cluster-enabled yes\\ncluster-config-file cluster.conf\\ncluster-node-timeout 1000\\ncluster-announce-ip 127.0.0.1\\ncluster-announce-port '+str(self.port)+'\\ncluster-announce-bus-port '+str(self.port+10000)+'\\n')\n            self.configured=True\n        super().start()\n\n\nclass Cluster:\n    def __enter__(self):\n        self.stack=contextlib.ExitStack()\n        try:\n            self.used_slots=set()\n            self.source=self.stack.enter_context(TCPRedis(cluster=True))\n            self.target=self.stack.enter_context(TCPRedis(cluster=True))\n            self.source_id=self.source.command('CLUSTER','MYID');self.target_id=self.target.command('CLUSTER','MYID')\n            self.source.command('CLUSTER','ADDSLOTSRANGE',0,8191)\n            self.target.command('CLUSTER','ADDSLOTSRANGE',8192,16383)\n            self.source.command('CLUSTER','MEET','127.0.0.1',self.target.port)\n            deadline=time.monotonic()+8\n            while time.monotonic()<deadline:\n                if all('cluster_state:ok' in server.command('CLUSTER','INFO') and server.command('CLUSTER','NODES').count('\\n')==2 for server in [self.source,self.target]):\n                    print('NATIVE_CLUSTER_READY:2-private-masters',flush=True);return self\n                time.sleep(.02)\n            raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private cluster did not converge')\n        except BaseException:self.stack.close();raise\n    def __exit__(self,*args):self.stack.close()\n    def tag(self):\n        for _ in range(1000):\n            tag='of_'+secrets.token_hex(8);slot=self.source.command('CLUSTER','KEYSLOT','{'+tag+'}:x')\n            if slot<8192 and slot not in self.used_slots:\n                self.used_slots.add(slot);return tag,slot\n        raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: could not select source slot')\n    def begin(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'IMPORTING',self.source_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'MIGRATING',self.target_id)\n    def move(self,key):\n        assert self.source.command('MIGRATE','127.0.0.1',self.target.port,key,0,2000)=='OK'\n    def finish(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n    def connect(self,address):\n        if address==self.source.address:return self.source.client()\n        if address==self.target.address:return self.target.client()\n        raise AssertionError('unexpected peer outside private cluster')\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,time,copy,json\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token,acl_profile\nfrom redis_cluster_native import Cluster,TCPRedis\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith Cluster() as c:\n tag,slot=c.tag();key='{'+tag+'}:value';payload=token('value');c.source.command('SET',key,payload);c.begin(slot);c.move(key)\n clients=[]\n def connect(address):\n  client=c.connect(address);clients.append(client);return client\n cache={slot:c.source.address,(slot+1)%16384:'preserve-neighbor'};before=copy.deepcopy(cache)\n assert student(task.get_redirected,connect,c.source.address,key,cache)==payload\n assert cache==before,'ASK is temporary; it must not rewrite the slot ownership cache'\n assert all(client.closed for client in clients),'redirected connection leaked'\n c.finish(slot)\n assert task.get_redirected(connect,c.source.address,key,cache)==payload\n assert cache[slot]==c.target.address and cache[(slot+1)%16384]=='preserve-neighbor','MOVED must refresh only its slot'\n assert all(client.closed for client in clients)\n count=len(clients)\n try:task.get_redirected(connect,c.source.address,key,cache,0)\n except ValueError:pass\n else:raise AssertionError('unbounded redirect budget accepted')\n assert len(clients)==count\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-redis-047",
+    "module": "redis",
+    "category": "Redis",
+    "level": 2,
+    "topic": "复制与集群",
+    "title": "真实迁槽产生TRYAGAIN：恢复后重读，持续错误按预算终止",
+    "answer": "```python\ndef retry_mget(command,keys,attempts,on_retry):\n    if type(attempts) is not int or not 1<=attempts<=5:raise ValueError('bounded attempts')\n    for index in range(attempts):\n        try:return command(keys)\n        except Exception as error:\n            if not str(error).startswith('TRYAGAIN '):raise\n            if index+1==attempts:raise TimeoutError('migration retry budget exhausted') from error\n            on_retry(index+1)\n```\n\n原题知识说明：\n涉及多个键的操作可能在迁移期间无法在单节点满足并返回临时错误。客户端需有界退避重试并保持业务幂等；验收迁移中的错误率和恢复，而不是无限立即重试。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 retry_mget(command,keys,attempts,on_retry)。command是已处理ASK/MOVED路由的可信读回调，执行实际同槽MGET；仅TRYAGAIN错误可重试。attempts是1..5非bool整数，总调用不超过此数；只有仍有下一次机会才调用on_retry(已失败次数)。最后一次TRYAGAIN抛TimeoutError并保留原因，WRONGTYPE等其他异常原样传播。只读，不把跨槽写拆开，不无限等待。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实两节点迁槽时一部分同槽键已移动、一部分未移动的TRYAGAIN；恢复动作由可信夹具完成，未证明任意故障重试安全或生产延迟SLO。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/commands/cluster-setslot/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-047",
+      "original_title": "Redis Cluster迁槽期间为什么应验证客户端对TRYAGAIN的处理？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def retry_mget(command,keys,attempts,on_retry):\n    if type(attempts) is not int or not 1<=attempts<=5:raise ValueError('bounded attempts')\n    for index in range(attempts):\n        try:return command(keys)\n        except Exception as error:\n            if not str(error).startswith('TRYAGAIN '):raise\n            if index+1==attempts:raise TimeoutError('migration retry budget exhausted') from error\n            on_retry(index+1)\n"
+    },
+    "negative_files": {
+      "task.py": "def retry_mget(command,keys,attempts,on_retry):\n    if type(attempts) is not int or not 1<=attempts<=5:raise ValueError('bounded attempts')\n    for index in range(attempts):\n        try:return command(keys)\n        except Exception as error:\n            if False:raise\n            if index+1==attempts:raise TimeoutError('migration retry budget exhausted') from error\n            on_retry(index+1)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现 retry_mget(command,keys,attempts,on_retry)。command是已处理ASK/MOVED路由的可信读回调，执行实际同槽MGET；仅TRYAGAIN错误可重试。attempts是1..5非bool整数，总调用不超过此数；只有仍有下一次机会才调用on_retry(已失败次数)。最后一次TRYAGAIN抛TimeoutError并保留原因，WRONGTYPE等其他异常原样传播。只读，不把跨槽写拆开，不无限等待。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实两节点迁槽时一部分同槽键已移动、一部分未移动的TRYAGAIN；恢复动作由可信夹具完成，未证明任意故障重试安全或生产延迟SLO。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/redis_cluster_native.py": "\"\"\"Private Redis7.2 TCP peers, real cluster slots and migration; no external peers.\"\"\"\nimport contextlib,socket,secrets,time\nfrom redis_native import NativeRedis\n\n\ndef free_port():\n    for _ in range(200):\n        port=20000+secrets.randbelow(19000)\n        try:\n            with socket.socket() as client,socket.socket() as bus:\n                client.bind(('127.0.0.1',port));bus.bind(('127.0.0.1',port+10000))\n            return port\n        except OSError:pass\n    raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private TCP ports unavailable')\n\n\nclass TCPRedis(NativeRedis):\n    def __init__(self,cluster=False):self.cluster=cluster;self.port=free_port();self.address='127.0.0.1:'+str(self.port)\n    def start(self):\n        if not getattr(self,'configured',False):\n            with self.config.open('a',encoding='utf8') as stream:\n                stream.write('\\nport '+str(self.port)+'\\nbind 127.0.0.1\\nrepl-diskless-sync-delay 0\\n')\n                if self.cluster:\n                    stream.write('cluster-enabled yes\\ncluster-config-file cluster.conf\\ncluster-node-timeout 1000\\ncluster-announce-ip 127.0.0.1\\ncluster-announce-port '+str(self.port)+'\\ncluster-announce-bus-port '+str(self.port+10000)+'\\n')\n            self.configured=True\n        super().start()\n\n\nclass Cluster:\n    def __enter__(self):\n        self.stack=contextlib.ExitStack()\n        try:\n            self.used_slots=set()\n            self.source=self.stack.enter_context(TCPRedis(cluster=True))\n            self.target=self.stack.enter_context(TCPRedis(cluster=True))\n            self.source_id=self.source.command('CLUSTER','MYID');self.target_id=self.target.command('CLUSTER','MYID')\n            self.source.command('CLUSTER','ADDSLOTSRANGE',0,8191)\n            self.target.command('CLUSTER','ADDSLOTSRANGE',8192,16383)\n            self.source.command('CLUSTER','MEET','127.0.0.1',self.target.port)\n            deadline=time.monotonic()+8\n            while time.monotonic()<deadline:\n                if all('cluster_state:ok' in server.command('CLUSTER','INFO') and server.command('CLUSTER','NODES').count('\\n')==2 for server in [self.source,self.target]):\n                    print('NATIVE_CLUSTER_READY:2-private-masters',flush=True);return self\n                time.sleep(.02)\n            raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private cluster did not converge')\n        except BaseException:self.stack.close();raise\n    def __exit__(self,*args):self.stack.close()\n    def tag(self):\n        for _ in range(1000):\n            tag='of_'+secrets.token_hex(8);slot=self.source.command('CLUSTER','KEYSLOT','{'+tag+'}:x')\n            if slot<8192 and slot not in self.used_slots:\n                self.used_slots.add(slot);return tag,slot\n        raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: could not select source slot')\n    def begin(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'IMPORTING',self.source_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'MIGRATING',self.target_id)\n    def move(self,key):\n        assert self.source.command('MIGRATE','127.0.0.1',self.target.port,key,0,2000)=='OK'\n    def finish(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n    def connect(self,address):\n        if address==self.source.address:return self.source.client()\n        if address==self.target.address:return self.target.client()\n        raise AssertionError('unexpected peer outside private cluster')\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,time,copy,json\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token,acl_profile\nfrom redis_cluster_native import Cluster,TCPRedis\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith Cluster() as c:\n tag,slot=c.tag();one='{'+tag+'}:one';two='{'+tag+'}:two';c.source.command('MSET',one,'a',two,'b');c.begin(slot);c.move(one)\n calls=[];retries=[]\n def command(keys):\n  calls.append(tuple(keys))\n  try:return c.source.command('MGET',*keys)\n  except RedisError as error:\n   if not str(error).startswith('MOVED '):raise\n   return c.target.command('MGET',*keys)\n def recover(index):retries.append(index);c.move(two);c.finish(slot)\n assert student(task.retry_mget,command,[one,two],3,recover)==['a','b']\n assert len(calls)==2 and retries==[1],'transient native TRYAGAIN did not consume one bounded retry'\n tag,slot=c.tag();one='{'+tag+'}:one';two='{'+tag+'}:two';c.source.command('MSET',one,'x',two,'y');c.begin(slot);c.move(one);calls=[];retries=[]\n def stuck(keys):calls.append(tuple(keys));return c.source.command('MGET',*keys)\n try:task.retry_mget(stuck,[one,two],2,lambda index:retries.append(index))\n except TimeoutError:pass\n else:raise AssertionError('persistent native TRYAGAIN accepted')\n assert len(calls)==2 and retries==[1],'retry bound was exceeded or final failure retried again'\n bad=token('list');tag,other_slot=c.tag();bad='{'+tag+'}:list';c.source.command('LPUSH',bad,'x')\n def wrong_type(keys):return c.source.command('GET',bad)\n try:task.retry_mget(wrong_type,[bad],2,lambda _:None)\n except RedisError as error:assert str(error).startswith('WRONGTYPE')\n except Exception as error:raise AssertionError('non-transient WRONGTYPE was converted into a retry failure') from error\n else:raise AssertionError('non-transient error was hidden by retry')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-redis-103",
+    "module": "redis",
+    "category": "Redis",
+    "level": 3,
+    "topic": "复制与集群",
+    "title": "真实复现CROSSSLOT，将独立批量读按槽分组并恢复原顺序",
+    "answer": "```python\ndef read_many(command,keys):\n    if not isinstance(keys,list) or len(keys)>64 or any(not isinstance(key,str) or not key or len(key)>256 for key in keys):raise ValueError('bounded string keys')\n    groups={}\n    for index,key in enumerate(keys):\n        slot=command('CLUSTER','KEYSLOT',key)\n        groups.setdefault(slot,[]).append((index,key))\n    result=[None]*len(keys)\n    for entries in groups.values():\n        values=command('MGET',*(key for _,key in entries))\n        for (index,key),value in zip(entries,values):result[index]=value\n    return result\n```\n\n原题知识说明：\n键当前映射到不同槽，这是请求布局约束而非暂态网络失败。检查各键KEYSLOT，拆成允许独立的请求或由开发设计同槽标签；验收原子性要求，不能靠重试制造跨槽事务。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；对应产品官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 read_many(command,keys)。keys为最多64项非空字符串list，每项最长256字符。用实际CLUSTER KEYSLOT分组，每槽一次MGET，再按原输入顺序返回值；重复键、缺失键None占位必须保留，空list返回[]。command为可信节点路由回调，仍由真实Redis拒绝跨槽单次MGET。仅用于允许分批的独立读取，不声称跨槽全局快照，不拆分原子写操作。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实两节点Cluster的CROSSSLOT与同槽MGET；没有修改原键模型或生产客户端，不声称所有多键业务均可安全拆分。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-103",
+      "original_title": "Redis Cluster客户端收到CROSSSLOT时为何不能只对原请求无限重试？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def read_many(command,keys):\n    if not isinstance(keys,list) or len(keys)>64 or any(not isinstance(key,str) or not key or len(key)>256 for key in keys):raise ValueError('bounded string keys')\n    groups={}\n    for index,key in enumerate(keys):\n        slot=command('CLUSTER','KEYSLOT',key)\n        groups.setdefault(slot,[]).append((index,key))\n    result=[None]*len(keys)\n    for entries in groups.values():\n        values=command('MGET',*(key for _,key in entries))\n        for (index,key),value in zip(entries,values):result[index]=value\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "def read_many(command,keys):\n    return command('MGET',*keys)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现 read_many(command,keys)。keys为最多64项非空字符串list，每项最长256字符。用实际CLUSTER KEYSLOT分组，每槽一次MGET，再按原输入顺序返回值；重复键、缺失键None占位必须保留，空list返回[]。command为可信节点路由回调，仍由真实Redis拒绝跨槽单次MGET。仅用于允许分批的独立读取，不声称跨槽全局快照，不拆分原子写操作。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实两节点Cluster的CROSSSLOT与同槽MGET；没有修改原键模型或生产客户端，不声称所有多键业务均可安全拆分。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/redis_cluster_native.py": "\"\"\"Private Redis7.2 TCP peers, real cluster slots and migration; no external peers.\"\"\"\nimport contextlib,socket,secrets,time\nfrom redis_native import NativeRedis\n\n\ndef free_port():\n    for _ in range(200):\n        port=20000+secrets.randbelow(19000)\n        try:\n            with socket.socket() as client,socket.socket() as bus:\n                client.bind(('127.0.0.1',port));bus.bind(('127.0.0.1',port+10000))\n            return port\n        except OSError:pass\n    raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private TCP ports unavailable')\n\n\nclass TCPRedis(NativeRedis):\n    def __init__(self,cluster=False):self.cluster=cluster;self.port=free_port();self.address='127.0.0.1:'+str(self.port)\n    def start(self):\n        if not getattr(self,'configured',False):\n            with self.config.open('a',encoding='utf8') as stream:\n                stream.write('\\nport '+str(self.port)+'\\nbind 127.0.0.1\\nrepl-diskless-sync-delay 0\\n')\n                if self.cluster:\n                    stream.write('cluster-enabled yes\\ncluster-config-file cluster.conf\\ncluster-node-timeout 1000\\ncluster-announce-ip 127.0.0.1\\ncluster-announce-port '+str(self.port)+'\\ncluster-announce-bus-port '+str(self.port+10000)+'\\n')\n            self.configured=True\n        super().start()\n\n\nclass Cluster:\n    def __enter__(self):\n        self.stack=contextlib.ExitStack()\n        try:\n            self.used_slots=set()\n            self.source=self.stack.enter_context(TCPRedis(cluster=True))\n            self.target=self.stack.enter_context(TCPRedis(cluster=True))\n            self.source_id=self.source.command('CLUSTER','MYID');self.target_id=self.target.command('CLUSTER','MYID')\n            self.source.command('CLUSTER','ADDSLOTSRANGE',0,8191)\n            self.target.command('CLUSTER','ADDSLOTSRANGE',8192,16383)\n            self.source.command('CLUSTER','MEET','127.0.0.1',self.target.port)\n            deadline=time.monotonic()+8\n            while time.monotonic()<deadline:\n                if all('cluster_state:ok' in server.command('CLUSTER','INFO') and server.command('CLUSTER','NODES').count('\\n')==2 for server in [self.source,self.target]):\n                    print('NATIVE_CLUSTER_READY:2-private-masters',flush=True);return self\n                time.sleep(.02)\n            raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private cluster did not converge')\n        except BaseException:self.stack.close();raise\n    def __exit__(self,*args):self.stack.close()\n    def tag(self):\n        for _ in range(1000):\n            tag='of_'+secrets.token_hex(8);slot=self.source.command('CLUSTER','KEYSLOT','{'+tag+'}:x')\n            if slot<8192 and slot not in self.used_slots:\n                self.used_slots.add(slot);return tag,slot\n        raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: could not select source slot')\n    def begin(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'IMPORTING',self.source_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'MIGRATING',self.target_id)\n    def move(self,key):\n        assert self.source.command('MIGRATE','127.0.0.1',self.target.port,key,0,2000)=='OK'\n    def finish(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n    def connect(self,address):\n        if address==self.source.address:return self.source.client()\n        if address==self.target.address:return self.target.client()\n        raise AssertionError('unexpected peer outside private cluster')\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,time,copy,json\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token,acl_profile\nfrom redis_cluster_native import Cluster,TCPRedis\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith Cluster() as c:\n tags=[c.tag()[0] for _ in range(3)];keys=['{'+tag+'}:value' for tag in tags];missing='{'+tags[0]+'}:missing'\n slots=[c.source.command('CLUSTER','KEYSLOT',key) for key in keys];assert len(set(slots))>1\n for index,key in enumerate(keys):c.source.command('SET',key,'value-'+str(index))\n try:c.source.command('MGET',*keys)\n except RedisError as error:assert str(error).startswith('CROSSSLOT');print('NATIVE_FAULT_REPRODUCED:CROSSSLOT',flush=True)\n else:raise AssertionError('cross-slot fixture unexpectedly succeeded')\n calls=[]\n def command(*parts):calls.append(parts);return c.source.command(*parts)\n requested=[keys[1],missing,keys[0],keys[1],keys[2]]\n assert student(task.read_many,command,requested)==['value-1',None,'value-0','value-1','value-2'],'read batching lost order, duplicates or missing placeholders'\n mgets=[parts for parts in calls if parts[0]=='MGET']\n assert len(mgets)==len(set(slots))\n for parts in mgets:assert len({c.source.command('CLUSTER','KEYSLOT',key) for key in parts[1:]})==1\n assert task.read_many(command,[])==[]\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-redis-096",
+    "module": "redis",
+    "category": "Redis",
+    "level": 3,
+    "topic": "复制与集群",
+    "title": "真实KEYSLOT验证订单标签：保留单订单原子性，解除全订单单槽集中",
+    "answer": "```python\nimport re\ndef order_keys(tenant,order):\n    if not isinstance(tenant,str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,31}',tenant) or type(order) is not int or order<=0:raise ValueError('literal tenant and positive order')\n    tag=tenant+':'+str(order)\n    return {'header':'order:{'+tag+'}:header','items':'order:{'+tag+'}:items'}\n```\n\n原题知识说明：\n桌面推演，未在生产执行。用KEYSLOT及流量采样证实热点集中同槽，迁更多普通槽不会分散该标签。由开发按必要原子范围重设标签和迁移计划；验收新模型跨槽操作兼容及最忙节点负载，保留旧键回读边界。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 order_keys(tenant,order)，tenant为小写字母开头及小写字母数字下划线，最长32；order为正整数且拒绝bool。返回header/items两个不同order:前缀键；同一订单同槽、不同订单和租户不碰撞，不使用固定全局或仅租户标签。验收实际MSET/MGET单订单并比较16个订单的CLUSTER KEYSLOT分布。不得修改已有数据或声称业务迁移已完成。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n实际Cluster槽映射与一订单两键原子操作；不压测热点负载，不证明全节点流量均衡或既有生产键已迁移。",
+    "hints": [],
+    "rubric": [
+      "识别题设具体根因并提供对应证据",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/operate/oss_and_stack/reference/cluster-spec/"
+    ],
+    "incident_signature": "redis:cluster-hash-tag-hot-slot",
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-096",
+      "original_title": "Cluster扩容后只有一节点持续过载，全部订单键用了同一{orders}标签，如何修复？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import re\ndef order_keys(tenant,order):\n    if not isinstance(tenant,str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,31}',tenant) or type(order) is not int or order<=0:raise ValueError('literal tenant and positive order')\n    tag=tenant+':'+str(order)\n    return {'header':'order:{'+tag+'}:header','items':'order:{'+tag+'}:items'}\n"
+    },
+    "negative_files": {
+      "task.py": "import re\ndef order_keys(tenant,order):\n    if not isinstance(tenant,str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,31}',tenant) or type(order) is not int or order<=0:raise ValueError('literal tenant and positive order')\n    tag=tenant\n    return {'header':'order:{'+tag+'}:header','items':'order:{'+tag+'}:items'}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现 order_keys(tenant,order)，tenant为小写字母开头及小写字母数字下划线，最长32；order为正整数且拒绝bool。返回header/items两个不同order:前缀键；同一订单同槽、不同订单和租户不碰撞，不使用固定全局或仅租户标签。验收实际MSET/MGET单订单并比较16个订单的CLUSTER KEYSLOT分布。不得修改已有数据或声称业务迁移已完成。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "实际Cluster槽映射与一订单两键原子操作；不压测热点负载，不证明全节点流量均衡或既有生产键已迁移。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/redis_cluster_native.py": "\"\"\"Private Redis7.2 TCP peers, real cluster slots and migration; no external peers.\"\"\"\nimport contextlib,socket,secrets,time\nfrom redis_native import NativeRedis\n\n\ndef free_port():\n    for _ in range(200):\n        port=20000+secrets.randbelow(19000)\n        try:\n            with socket.socket() as client,socket.socket() as bus:\n                client.bind(('127.0.0.1',port));bus.bind(('127.0.0.1',port+10000))\n            return port\n        except OSError:pass\n    raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private TCP ports unavailable')\n\n\nclass TCPRedis(NativeRedis):\n    def __init__(self,cluster=False):self.cluster=cluster;self.port=free_port();self.address='127.0.0.1:'+str(self.port)\n    def start(self):\n        if not getattr(self,'configured',False):\n            with self.config.open('a',encoding='utf8') as stream:\n                stream.write('\\nport '+str(self.port)+'\\nbind 127.0.0.1\\nrepl-diskless-sync-delay 0\\n')\n                if self.cluster:\n                    stream.write('cluster-enabled yes\\ncluster-config-file cluster.conf\\ncluster-node-timeout 1000\\ncluster-announce-ip 127.0.0.1\\ncluster-announce-port '+str(self.port)+'\\ncluster-announce-bus-port '+str(self.port+10000)+'\\n')\n            self.configured=True\n        super().start()\n\n\nclass Cluster:\n    def __enter__(self):\n        self.stack=contextlib.ExitStack()\n        try:\n            self.used_slots=set()\n            self.source=self.stack.enter_context(TCPRedis(cluster=True))\n            self.target=self.stack.enter_context(TCPRedis(cluster=True))\n            self.source_id=self.source.command('CLUSTER','MYID');self.target_id=self.target.command('CLUSTER','MYID')\n            self.source.command('CLUSTER','ADDSLOTSRANGE',0,8191)\n            self.target.command('CLUSTER','ADDSLOTSRANGE',8192,16383)\n            self.source.command('CLUSTER','MEET','127.0.0.1',self.target.port)\n            deadline=time.monotonic()+8\n            while time.monotonic()<deadline:\n                if all('cluster_state:ok' in server.command('CLUSTER','INFO') and server.command('CLUSTER','NODES').count('\\n')==2 for server in [self.source,self.target]):\n                    print('NATIVE_CLUSTER_READY:2-private-masters',flush=True);return self\n                time.sleep(.02)\n            raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private cluster did not converge')\n        except BaseException:self.stack.close();raise\n    def __exit__(self,*args):self.stack.close()\n    def tag(self):\n        for _ in range(1000):\n            tag='of_'+secrets.token_hex(8);slot=self.source.command('CLUSTER','KEYSLOT','{'+tag+'}:x')\n            if slot<8192 and slot not in self.used_slots:\n                self.used_slots.add(slot);return tag,slot\n        raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: could not select source slot')\n    def begin(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'IMPORTING',self.source_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'MIGRATING',self.target_id)\n    def move(self,key):\n        assert self.source.command('MIGRATE','127.0.0.1',self.target.port,key,0,2000)=='OK'\n    def finish(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n    def connect(self,address):\n        if address==self.source.address:return self.source.client()\n        if address==self.target.address:return self.target.client()\n        raise AssertionError('unexpected peer outside private cluster')\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,time,copy,json\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token,acl_profile\nfrom redis_cluster_native import Cluster,TCPRedis\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith Cluster() as c:\n tenant=token('tenant');old=['order:{orders}:'+str(index) for index in range(16)]\n assert len({c.source.command('CLUSTER','KEYSLOT',key) for key in old})==1\n print('NATIVE_FAULT_REPRODUCED:all-orders-one-slot',flush=True)\n slots=[];allkeys=set()\n for number in range(100,116):\n  result=student(task.order_keys,tenant,number)\n  assert set(result)=={'header','items'} and all(isinstance(key,str) and key.startswith('order:') for key in result.values())\n  header,items=result['header'],result['items'];slot=c.source.command('CLUSTER','KEYSLOT',header)\n  assert slot==c.source.command('CLUSTER','KEYSLOT',items),'one order lost required same-slot atomicity'\n  assert header!=items and not ({header,items}&allkeys),'different orders collided'\n  allkeys.update([header,items]);slots.append(slot)\n  server=c.source if slot<8192 else c.target\n  assert server.command('MSET',header,str(number),items,'items-'+str(number))=='OK'\n  assert server.command('MGET',header,items)==[str(number),'items-'+str(number)]\n assert len(set(slots))>=8,'per-tenant or global tag still concentrates independent orders'\n assert set(task.order_keys(tenant+'x',100).values()).isdisjoint(allkeys)\n for tenant_arg,order_arg in [('bad{tag}',1),(tenant,True),(tenant,0)]:\n  try:task.order_keys(tenant_arg,order_arg)\n  except ValueError:pass\n  else:raise AssertionError('unsafe tag input accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-redis-009",
+    "module": "redis",
+    "category": "Redis",
+    "level": 0,
+    "topic": "数据结构与命令",
+    "title": "真实SELECT跨逻辑库读取：同一ACL身份仍可访问，成功失败都恢复原库",
+    "answer": "```python\ndef probe_databases(command,key):\n    fields=dict(part.split('=',1) for part in command('CLIENT','INFO').split() if '=' in part)\n    original=int(fields['db'])\n    try:\n        command('SELECT',0);zero=command('GET',key)\n        command('SELECT',1);one=command('GET',key)\n        return {'db0':zero,'db1':one}\n    finally:command('SELECT',original)\n```\n\n原题知识说明：\n不能，逻辑库共享进程、资源和部分管理操作，且Redis Cluster只支持数据库0。强隔离需要独立实例或适当权限与资源边界，验收不能只确认SELECT编号不同。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 probe_databases(command,key)。command已绑定获准GET该键且可SELECT的实验用户，初始库未知。读取CLIENT INFO确定原db，分别SELECT 0/1实际GET同名键并返回db0/db1；成功失败均恢复原db，原异常传播，不改ACL、值或其他连接。不能把逻辑库编号当作独立身份或强租户隔离。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Redis7.2同一个已认证用户在0/1/2库的访问，保留原默认访问行为；不替换账号，不修改外部实例或论证完整多租户安全。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/commands/select/",
+      "https://redis.io/docs/latest/operate/oss_and_stack/management/security/acl/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-009",
+      "original_title": "Redis逻辑数据库编号能否当作强租户隔离？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def probe_databases(command,key):\n    fields=dict(part.split('=',1) for part in command('CLIENT','INFO').split() if '=' in part)\n    original=int(fields['db'])\n    try:\n        command('SELECT',0);zero=command('GET',key)\n        command('SELECT',1);one=command('GET',key)\n        return {'db0':zero,'db1':one}\n    finally:command('SELECT',original)\n"
+    },
+    "negative_files": {
+      "task.py": "def probe_databases(command,key):\n    value=command('GET',key)\n    return {'db0':value,'db1':value}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现 probe_databases(command,key)。command已绑定获准GET该键且可SELECT的实验用户，初始库未知。读取CLIENT INFO确定原db，分别SELECT 0/1实际GET同名键并返回db0/db1；成功失败均恢复原db，原异常传播，不改ACL、值或其他连接。不能把逻辑库编号当作独立身份或强租户隔离。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Redis7.2同一个已认证用户在0/1/2库的访问，保留原默认访问行为；不替换账号，不修改外部实例或论证完整多租户安全。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/redis_cluster_native.py": "\"\"\"Private Redis7.2 TCP peers, real cluster slots and migration; no external peers.\"\"\"\nimport contextlib,socket,secrets,time\nfrom redis_native import NativeRedis\n\n\ndef free_port():\n    for _ in range(200):\n        port=20000+secrets.randbelow(19000)\n        try:\n            with socket.socket() as client,socket.socket() as bus:\n                client.bind(('127.0.0.1',port));bus.bind(('127.0.0.1',port+10000))\n            return port\n        except OSError:pass\n    raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private TCP ports unavailable')\n\n\nclass TCPRedis(NativeRedis):\n    def __init__(self,cluster=False):self.cluster=cluster;self.port=free_port();self.address='127.0.0.1:'+str(self.port)\n    def start(self):\n        if not getattr(self,'configured',False):\n            with self.config.open('a',encoding='utf8') as stream:\n                stream.write('\\nport '+str(self.port)+'\\nbind 127.0.0.1\\nrepl-diskless-sync-delay 0\\n')\n                if self.cluster:\n                    stream.write('cluster-enabled yes\\ncluster-config-file cluster.conf\\ncluster-node-timeout 1000\\ncluster-announce-ip 127.0.0.1\\ncluster-announce-port '+str(self.port)+'\\ncluster-announce-bus-port '+str(self.port+10000)+'\\n')\n            self.configured=True\n        super().start()\n\n\nclass Cluster:\n    def __enter__(self):\n        self.stack=contextlib.ExitStack()\n        try:\n            self.used_slots=set()\n            self.source=self.stack.enter_context(TCPRedis(cluster=True))\n            self.target=self.stack.enter_context(TCPRedis(cluster=True))\n            self.source_id=self.source.command('CLUSTER','MYID');self.target_id=self.target.command('CLUSTER','MYID')\n            self.source.command('CLUSTER','ADDSLOTSRANGE',0,8191)\n            self.target.command('CLUSTER','ADDSLOTSRANGE',8192,16383)\n            self.source.command('CLUSTER','MEET','127.0.0.1',self.target.port)\n            deadline=time.monotonic()+8\n            while time.monotonic()<deadline:\n                if all('cluster_state:ok' in server.command('CLUSTER','INFO') and server.command('CLUSTER','NODES').count('\\n')==2 for server in [self.source,self.target]):\n                    print('NATIVE_CLUSTER_READY:2-private-masters',flush=True);return self\n                time.sleep(.02)\n            raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private cluster did not converge')\n        except BaseException:self.stack.close();raise\n    def __exit__(self,*args):self.stack.close()\n    def tag(self):\n        for _ in range(1000):\n            tag='of_'+secrets.token_hex(8);slot=self.source.command('CLUSTER','KEYSLOT','{'+tag+'}:x')\n            if slot<8192 and slot not in self.used_slots:\n                self.used_slots.add(slot);return tag,slot\n        raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: could not select source slot')\n    def begin(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'IMPORTING',self.source_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'MIGRATING',self.target_id)\n    def move(self,key):\n        assert self.source.command('MIGRATE','127.0.0.1',self.target.port,key,0,2000)=='OK'\n    def finish(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n    def connect(self,address):\n        if address==self.source.address:return self.source.client()\n        if address==self.target.address:return self.target.client()\n        raise AssertionError('unexpected peer outside private cluster')\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,time,copy,json\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token,acl_profile\nfrom redis_cluster_native import Cluster,TCPRedis\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith NativeRedis() as server:\n admin=server.command;key=token('common');values=[token('db0'),token('db1'),token('db2')]\n for index,value in enumerate(values):admin('SELECT',index);admin('SET',key,value)\n admin('SELECT',0);user=token('reader');password=token('secret')\n admin('ACL','SETUSER',user,'reset','on','>'+password,'~'+key,'-@all','+get','+select','+client|info')\n profile=acl_profile(admin,user);client=server.client(user,password)\n try:\n  client.command('SELECT',2)\n  assert student(task.probe_databases,client.command,key)=={'db0':values[0],'db1':values[1]},'logical DBs were treated as independent authorization identities'\n  assert client.command('GET',key)==values[2] and acl_profile(admin,user)==profile,'selected DB or authorization changed'\n  def injected(*parts):\n   if parts==('GET',key) and 'db=1 ' in client.command('CLIENT','INFO'):raise ConnectionError('explicit read transport fault')\n   return client.command(*parts)\n  try:task.probe_databases(injected,key)\n  except ConnectionError:pass\n  else:raise AssertionError('read failure hidden')\n  assert client.command('GET',key)==values[2],'error path changed original selected DB'\n finally:client.close()\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-redis-043",
+    "module": "redis",
+    "category": "Redis",
+    "level": 2,
+    "topic": "复制与集群",
+    "title": "真实WAIT超时仍已写入：区分复制确认不足与事务回滚",
+    "answer": "```python\ndef write_wait(command,key,value,replicas,timeout_ms):\n    if type(replicas) is not int or not 0<=replicas<=1 or type(timeout_ms) is not int or not 1<=timeout_ms<=500:raise ValueError('bounded replication wait')\n    if command('SET',key,value)!='OK':raise RuntimeError('write rejected')\n    acknowledgments=command('WAIT',replicas,timeout_ms)\n    return {'written':True,'acks':acknowledgments,'required_met':acknowledgments>=replicas,'linearizable_proven':False}\n```\n\n原题知识说明：\n不能。WAIT等待指定数量副本确认当前连接先前写入的复制进度，但故障切换和持久化条件仍可能导致丢失。验收返回副本数、超时路径和故障模型，不把成功返回当永久提交。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 write_wait(command,key,value,replicas,timeout_ms)，replicas为0..1非bool整数，timeout_ms为1..500非bool整数。仅一次SET成功后在同连接WAIT，返回written=True、实际acks、required_met和linearizable_proven=False；确认不足正常返回，不重放SET、不DEL回滚、不伪造确认。验收先在无副本实例观察0确认但键存在，再接入真实副本取得1确认。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n实际Redis7.2单主单副本与同连接WAIT；不证明断电持久性、故障转移不丢失、线性一致或生产RPO。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/commands/wait/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-043",
+      "original_title": "Redis WAIT能否把异步复制系统变为强一致数据库？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def write_wait(command,key,value,replicas,timeout_ms):\n    if type(replicas) is not int or not 0<=replicas<=1 or type(timeout_ms) is not int or not 1<=timeout_ms<=500:raise ValueError('bounded replication wait')\n    if command('SET',key,value)!='OK':raise RuntimeError('write rejected')\n    acknowledgments=command('WAIT',replicas,timeout_ms)\n    return {'written':True,'acks':acknowledgments,'required_met':acknowledgments>=replicas,'linearizable_proven':False}\n"
+    },
+    "negative_files": {
+      "task.py": "def write_wait(command,key,value,replicas,timeout_ms):\n    if type(replicas) is not int or not 0<=replicas<=1 or type(timeout_ms) is not int or not 1<=timeout_ms<=500:raise ValueError('bounded replication wait')\n    if command('SET',key,value)!='OK':raise RuntimeError('write rejected')\n    acknowledgments=replicas\n    command('WAIT',replicas,timeout_ms)\n    return {'written':True,'acks':acknowledgments,'required_met':acknowledgments>=replicas,'linearizable_proven':False}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现 write_wait(command,key,value,replicas,timeout_ms)，replicas为0..1非bool整数，timeout_ms为1..500非bool整数。仅一次SET成功后在同连接WAIT，返回written=True、实际acks、required_met和linearizable_proven=False；确认不足正常返回，不重放SET、不DEL回滚、不伪造确认。验收先在无副本实例观察0确认但键存在，再接入真实副本取得1确认。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "实际Redis7.2单主单副本与同连接WAIT；不证明断电持久性、故障转移不丢失、线性一致或生产RPO。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/redis_cluster_native.py": "\"\"\"Private Redis7.2 TCP peers, real cluster slots and migration; no external peers.\"\"\"\nimport contextlib,socket,secrets,time\nfrom redis_native import NativeRedis\n\n\ndef free_port():\n    for _ in range(200):\n        port=20000+secrets.randbelow(19000)\n        try:\n            with socket.socket() as client,socket.socket() as bus:\n                client.bind(('127.0.0.1',port));bus.bind(('127.0.0.1',port+10000))\n            return port\n        except OSError:pass\n    raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private TCP ports unavailable')\n\n\nclass TCPRedis(NativeRedis):\n    def __init__(self,cluster=False):self.cluster=cluster;self.port=free_port();self.address='127.0.0.1:'+str(self.port)\n    def start(self):\n        if not getattr(self,'configured',False):\n            with self.config.open('a',encoding='utf8') as stream:\n                stream.write('\\nport '+str(self.port)+'\\nbind 127.0.0.1\\nrepl-diskless-sync-delay 0\\n')\n                if self.cluster:\n                    stream.write('cluster-enabled yes\\ncluster-config-file cluster.conf\\ncluster-node-timeout 1000\\ncluster-announce-ip 127.0.0.1\\ncluster-announce-port '+str(self.port)+'\\ncluster-announce-bus-port '+str(self.port+10000)+'\\n')\n            self.configured=True\n        super().start()\n\n\nclass Cluster:\n    def __enter__(self):\n        self.stack=contextlib.ExitStack()\n        try:\n            self.used_slots=set()\n            self.source=self.stack.enter_context(TCPRedis(cluster=True))\n            self.target=self.stack.enter_context(TCPRedis(cluster=True))\n            self.source_id=self.source.command('CLUSTER','MYID');self.target_id=self.target.command('CLUSTER','MYID')\n            self.source.command('CLUSTER','ADDSLOTSRANGE',0,8191)\n            self.target.command('CLUSTER','ADDSLOTSRANGE',8192,16383)\n            self.source.command('CLUSTER','MEET','127.0.0.1',self.target.port)\n            deadline=time.monotonic()+8\n            while time.monotonic()<deadline:\n                if all('cluster_state:ok' in server.command('CLUSTER','INFO') and server.command('CLUSTER','NODES').count('\\n')==2 for server in [self.source,self.target]):\n                    print('NATIVE_CLUSTER_READY:2-private-masters',flush=True);return self\n                time.sleep(.02)\n            raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private cluster did not converge')\n        except BaseException:self.stack.close();raise\n    def __exit__(self,*args):self.stack.close()\n    def tag(self):\n        for _ in range(1000):\n            tag='of_'+secrets.token_hex(8);slot=self.source.command('CLUSTER','KEYSLOT','{'+tag+'}:x')\n            if slot<8192 and slot not in self.used_slots:\n                self.used_slots.add(slot);return tag,slot\n        raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: could not select source slot')\n    def begin(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'IMPORTING',self.source_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'MIGRATING',self.target_id)\n    def move(self,key):\n        assert self.source.command('MIGRATE','127.0.0.1',self.target.port,key,0,2000)=='OK'\n    def finish(self,slot):\n        self.target.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n        self.source.command('CLUSTER','SETSLOT',slot,'NODE',self.target_id)\n    def connect(self,address):\n        if address==self.source.address:return self.source.client()\n        if address==self.target.address:return self.target.client()\n        raise AssertionError('unexpected peer outside private cluster')\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,time,copy,json\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError,student,token,acl_profile\nfrom redis_cluster_native import Cluster,TCPRedis\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith TCPRedis() as primary:\n key=token('wait');calls=[]\n def command(*parts):calls.append(parts);return primary.command(*parts)\n result=student(task.write_wait,command,key,'first',1,25)\n assert result=={'written':True,'acks':0,'required_met':False,'linearizable_proven':False},'WAIT timeout was treated as write rollback or fabricated acknowledgment'\n assert primary.command('GET',key)=='first' and [row[0] for row in calls]==['SET','WAIT'],'write replayed or removed after insufficient acknowledgments'\n with TCPRedis() as replica:\n  replica.command('REPLICAOF','127.0.0.1',primary.port)\n  deadline=time.monotonic()+6\n  while time.monotonic()<deadline:\n   if 'master_link_status:up' in replica.command('INFO','replication'):break\n   time.sleep(.02)\n  else:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private replica did not synchronize')\n  ready=token('replica_ready');primary.command('SET',ready,'ready');deadline=time.monotonic()+3\n  while primary.command('WAIT',1,500)!=1:\n   if time.monotonic()>deadline:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private replica did not acknowledge readiness barrier')\n  assert replica.command('GET',ready)=='ready'\n  calls=[];result=task.write_wait(command,key,'second',1,500)\n  assert result=={'written':True,'acks':1,'required_met':True,'linearizable_proven':False},repr(result)\n  assert replica.command('GET',key)=='second' and [row[0] for row in calls]==['SET','WAIT']\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

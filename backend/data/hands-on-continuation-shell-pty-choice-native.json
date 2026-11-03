@@ -1,0 +1,72 @@
+[
+  {
+    "id": "curated-advanced-shell-007",
+    "module": "shell",
+    "category": "Shell",
+    "level": 5,
+    "topic": "基础与执行环境",
+    "title": "真实无人值守TTY选择：显式PTY承载确认，二进制批处理保持独立管道",
+    "body": "## 操作任务\n实现execute(argv,interactive,payload)。interactive精确bool，payload为最多4096字节bytes；非交互只用独立stdin/stdout/stderr管道并保留原始字节与退出码，不能因命令拒绝就偷偷重试PTY。显式交互用自建PTY连接三个标准流，关闭输入回显，送入批准行并捕获合并终端输出，保留真实退出码；2秒期限和64KiB交互输出上限，超限RuntimeError，kill/wait仅自有进程并关闭master/slave。返回code/stdout/stderr，PTY模式stderr为空因流已合并。argv为夹具提供的可信参数列表、不用shell。平台真实TTY-only程序先在管道拒绝，再验证批准/拒绝流程；NUL/非UTF8/CRLF批数据不得经过终端转换或混入诊断。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实非root Linux PTY及内核isatty、行规程和子进程；不触碰宿主终端，不运行远程SSH。只满足明确检查标准流TTY的教学CLI，不承诺控制终端、作业控制、任意交互协议或生产命令安全；通用超时回收复用不另计。",
+    "answer": "```python\nimport os,subprocess,pty,termios,select,time,errno\ndef execute(argv,interactive,payload):\n    if type(interactive) is not bool or type(payload) is not bytes or len(payload)>4096:raise ValueError('explicit mode and bounded bytes required')\n    if not interactive:\n        result=subprocess.run(argv,input=payload,capture_output=True,timeout=2)\n        return dict(code=result.returncode,stdout=result.stdout,stderr=result.stderr)\n    master,slave=pty.openpty();child=None\n    try:\n        attrs=termios.tcgetattr(slave);attrs[3]&=~termios.ECHO;termios.tcsetattr(slave,termios.TCSANOW,attrs)\n        child=subprocess.Popen(argv,stdin=slave,stdout=slave,stderr=slave,start_new_session=True)\n        os.close(slave);slave=None\n        offset=0\n        while offset<len(payload):offset+=os.write(master,payload[offset:])\n        output=bytearray();deadline=time.monotonic()+2\n        while True:\n            remaining=deadline-time.monotonic()\n            if remaining<=0:raise RuntimeError('interactive deadline exceeded')\n            ready,_,_=select.select([master],[],[],min(.1,remaining))\n            if not ready:continue\n            try:data=os.read(master,4096)\n            except OSError as error:\n                if error.errno==errno.EIO:break\n                raise\n            if not data:break\n            output.extend(data)\n            if len(output)>65536:raise RuntimeError('interactive output limit exceeded')\n        code=child.wait(timeout=max(.01,deadline-time.monotonic()))\n        return dict(code=code,stdout=bytes(output),stderr=b'')\n    finally:\n        if child is not None:\n            if child.poll() is None:child.kill()\n            child.wait()\n        os.close(master)\n        if slave is not None:os.close(slave)\n```\n\n原题知识说明：\n交付终端依赖清单，识别程序是否根据isatty改变颜色、进度条、缓冲、分页和交互提示，并确认是否有受支持的非交互模式。优先选择稳定机器接口；必须使用PTY时，明确回显、行规程、窗口尺寸、控制字符、终端断开和会话退出语义，不能把终端输出当无损二进制流。验收分别使用有终端、无终端、慢读取和交互请求超时，要求任务不会等待不可见输入，日志无控制序列污染或凭据回显。对需要人工确认的步骤，应形成显式审批而不是向提示盲发yes。失败停止该交互会话并核对外部动作是否发生，恢复保留人工入口；不因PTY让命令返回0就取消业务结果检查。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设特有机制及前提",
+      "给出可核验的证据、成功与失败判据",
+      "界定异常恢复与不可承诺的边界"
+    ],
+    "references": [
+      "https://docs.python.org/3/library/pty.html",
+      "https://docs.python.org/3/library/termios.html"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-shell-007",
+      "original_title": "把只能在终端正常工作的维护命令纳入无人值守流程，怎样评审PTY依赖而非盲目增加伪终端？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,subprocess,pty,termios,select,time,errno\ndef execute(argv,interactive,payload):\n    if type(interactive) is not bool or type(payload) is not bytes or len(payload)>4096:raise ValueError('explicit mode and bounded bytes required')\n    if not interactive:\n        result=subprocess.run(argv,input=payload,capture_output=True,timeout=2)\n        return dict(code=result.returncode,stdout=result.stdout,stderr=result.stderr)\n    master,slave=pty.openpty();child=None\n    try:\n        attrs=termios.tcgetattr(slave);attrs[3]&=~termios.ECHO;termios.tcsetattr(slave,termios.TCSANOW,attrs)\n        child=subprocess.Popen(argv,stdin=slave,stdout=slave,stderr=slave,start_new_session=True)\n        os.close(slave);slave=None\n        offset=0\n        while offset<len(payload):offset+=os.write(master,payload[offset:])\n        output=bytearray();deadline=time.monotonic()+2\n        while True:\n            remaining=deadline-time.monotonic()\n            if remaining<=0:raise RuntimeError('interactive deadline exceeded')\n            ready,_,_=select.select([master],[],[],min(.1,remaining))\n            if not ready:continue\n            try:data=os.read(master,4096)\n            except OSError as error:\n                if error.errno==errno.EIO:break\n                raise\n            if not data:break\n            output.extend(data)\n            if len(output)>65536:raise RuntimeError('interactive output limit exceeded')\n        code=child.wait(timeout=max(.01,deadline-time.monotonic()))\n        return dict(code=code,stdout=bytes(output),stderr=b'')\n    finally:\n        if child is not None:\n            if child.poll() is None:child.kill()\n            child.wait()\n        os.close(master)\n        if slave is not None:os.close(slave)\n"
+    },
+    "negative_files": {
+      "task.py": "import os,subprocess,pty,termios,select,time,errno\ndef execute(argv,interactive,payload):\n    if type(interactive) is not bool or type(payload) is not bytes or len(payload)>4096:raise ValueError('explicit mode and bounded bytes required')\n    if False:\n        result=subprocess.run(argv,input=payload,capture_output=True,timeout=2)\n        return dict(code=result.returncode,stdout=result.stdout,stderr=result.stderr)\n    master,slave=pty.openpty();child=None\n    try:\n        attrs=termios.tcgetattr(slave);attrs[3]&=~termios.ECHO;termios.tcsetattr(slave,termios.TCSANOW,attrs)\n        child=subprocess.Popen(argv,stdin=slave,stdout=slave,stderr=slave,start_new_session=True)\n        os.close(slave);slave=None\n        offset=0\n        while offset<len(payload):offset+=os.write(master,payload[offset:])\n        output=bytearray();deadline=time.monotonic()+2\n        while True:\n            remaining=deadline-time.monotonic()\n            if remaining<=0:raise RuntimeError('interactive deadline exceeded')\n            ready,_,_=select.select([master],[],[],min(.1,remaining))\n            if not ready:continue\n            try:data=os.read(master,4096)\n            except OSError as error:\n                if error.errno==errno.EIO:break\n                raise\n            if not data:break\n            output.extend(data)\n            if len(output)>65536:raise RuntimeError('interactive output limit exceeded')\n        code=child.wait(timeout=max(.01,deadline-time.monotonic()))\n        return dict(code=code,stdout=bytes(output),stderr=b'')\n    finally:\n        if child is not None:\n            if child.poll() is None:child.kill()\n            child.wait()\n        os.close(master)\n        if slave is not None:os.close(slave)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现execute(argv,interactive,payload)。interactive精确bool，payload为最多4096字节bytes；非交互只用独立stdin/stdout/stderr管道并保留原始字节与退出码，不能因命令拒绝就偷偷重试PTY。显式交互用自建PTY连接三个标准流，关闭输入回显，送入批准行并捕获合并终端输出，保留真实退出码；2秒期限和64KiB交互输出上限，超限RuntimeError，kill/wait仅自有进程并关闭master/slave。返回code/stdout/stderr，PTY模式stderr为空因流已合并。argv为夹具提供的可信参数列表、不用shell。平台真实TTY-only程序先在管道拒绝，再验证批准/拒绝流程；NUL/非UTF8/CRLF批数据不得经过终端转换或混入诊断。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实非root Linux PTY及内核isatty、行规程和子进程；不触碰宿主终端，不运行远程SSH。只满足明确检查标准流TTY的教学CLI，不承诺控制终端、作业控制、任意交互协议或生产命令安全；通用超时回收复用不另计。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,subprocess,time,hashlib\nsys.path.insert(0,os.getcwd());import task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith tempfile.TemporaryDirectory(prefix='of-pty-choice-') as directory:\n root=pathlib.Path(directory);interactive=root/'approval.py';binary=root/'batch.py'\n interactive.write_text(\"import sys,os\\nif not all(os.isatty(fd) for fd in (0,1,2)):\\n sys.stderr.write('TTY_REQUIRED\\\\n');sys.exit(23)\\nsys.stdout.write('PROMPT> ');sys.stdout.flush()\\nanswer=input()\\nprint('APPROVED' if answer=='approve' else 'DENIED')\\nsys.exit(0 if answer=='approve' else 7)\\n\")\n binary.write_text(\"import sys,os\\nassert not any(os.isatty(fd) for fd in (0,1,2))\\ndata=sys.stdin.buffer.read();sys.stdout.buffer.write(data);sys.stderr.buffer.write(b'DIAGNOSTIC\\\\n')\\n\")\n argv=[sys.executable,'-I',str(interactive)]\n initial=subprocess.run(argv,input=b'approve\\n',capture_output=True,timeout=3);assert initial.returncode==23 and initial.stderr==b'TTY_REQUIRED\\n'\n print('NATIVE_TTY_ONLY_APPROVAL_ACTUALLY_REFUSED_PIPE_INPUT',flush=True)\n print('STUDENT_OPERATION_ENTERED:explicit_pty_approval_separate_from_binary_batch_pipes',flush=True)\n before={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir()};fd_count=len(list(pathlib.Path('/proc/self/fd').iterdir()));children=[];original_popen=subprocess.Popen\n def record(*args,**kwargs):\n  child=original_popen(*args,**kwargs);children.append(child);return child\n subprocess.Popen=record\n try:\n  try:\n   for payload,code,output in [(b'approve\\n',0,b'PROMPT> APPROVED\\r\\n'),(b'reject\\n',7,b'PROMPT> DENIED\\r\\n')]:\n    result=task.execute(argv,True,payload);assert result==dict(code=code,stdout=output,stderr=b''),'PTY not real, prompt lost, echo not disabled or status hidden'\n   result=task.execute(argv,False,b'approve\\n');assert result==dict(code=23,stdout=b'',stderr=b'TTY_REQUIRED\\n'),'noninteractive request silently promoted to PTY'\n   payload=b'one\\nsecond\\r\\n\\x00binary\\xffend'\n   result=task.execute([sys.executable,'-I',str(binary)],False,payload)\n   assert result==dict(code=0,stdout=payload,stderr=b'DIAGNOSTIC\\n'),'batch data transformed by terminal or diagnostic stream merged'\n  except Exception as error:raise AssertionError('student explicit terminal-mode execution failed') from error\n  sleeper=root/'sleeper.py';sleeper.write_text('import time;time.sleep(30)')\n  started=time.monotonic()\n  try:task.execute([sys.executable,'-I',str(sleeper)],True,b'')\n  except RuntimeError:pass\n  else:raise AssertionError('interactive timeout left unbounded wait')\n  assert time.monotonic()-started<3.5\n  assert all(child.returncode is not None for child in children),'owned child not reaped'\n  for child in children:\n   try:os.kill(child.pid,0)\n   except ProcessLookupError:pass\n   else:raise AssertionError('owned child remains alive or zombie')\n  assert len(list(pathlib.Path('/proc/self/fd').iterdir()))==fd_count,'PTY master/slave or pipe FD leaked'\n finally:\n  subprocess.Popen=original_popen\n  for child in children:\n   if child.poll() is None:child.kill()\n   child.wait()\n assert before=={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in root.iterdir() if p.name!='sleeper.py'}\n print('NATIVE_EXPLICIT_PTY_APPROVAL_BINARY_PIPES_DIAGNOSTIC_SEPARATION_AND_TIMEOUT_REAP',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "shell"
+    ]
+  }
+]

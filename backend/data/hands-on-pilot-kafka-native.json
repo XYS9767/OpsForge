@@ -1,0 +1,314 @@
+[
+  {
+    "category": "Kafka",
+    "module": "kafka",
+    "source": "OpsForge 原创教学题",
+    "version": 2,
+    "has_answer": true,
+    "tags": [
+      "Topic",
+      "分区",
+      "副本",
+      "消费组",
+      "offset",
+      "积压"
+    ],
+    "id": "basic-kafka",
+    "type": "code",
+    "level": 1,
+    "title": "Kafka真实分区快照：high watermark、提交位置与分区lag",
+    "intro": "Topic 被划分为分区；消费组内分配分区，offset 记录消费位置。",
+    "body": "## 环境与初始材料\nKafka 4.0.0、Java17+、confluent-kafka2.10.1。分布式实验档；验收在隔离工作区启动真实单broker/单controller KRaft，loopback监听、临时日志、无外置服务或宿主socket。此配置只用于实验，不代表生产高可用。\n\n## 操作任务\n实现 snapshot(bootstrap,topic,group)：返回按partition升序的list[dict]，键为partition/low/high/committed/lag。使用真实元数据与broker查询，不订阅、不提交、不重置offset。已提交位置为next-offset，lag=high-committed；未提交时committed和lag均None，不得当作0或推断已处理。关闭consumer。主题与group均动态传入。此实验覆盖原基础实操的分区offset/lag证据采集；吞吐时间序列、业务处理成功率、rebalance及生产根因归属需另外采集。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py 使用真实broker及native librdkafka客户端，验证动态主题、分区、事务、错误路径。最长120秒。仅验收以下合同，不声称复现生产多broker、网络分区、权限、历史灾难恢复全流程。",
+    "answer": "```python\nfrom confluent_kafka import Consumer,TopicPartition\ndef snapshot(bootstrap,topic,group):\n    client=Consumer({'bootstrap.servers':bootstrap,'group.id':group,'enable.auto.commit':False})\n    try:\n        metadata=client.list_topics(topic,timeout=10).topics[topic]\n        if metadata.error:raise RuntimeError(str(metadata.error))\n        partitions=[TopicPartition(topic,p) for p in sorted(metadata.partitions)]\n        committed=client.committed(partitions,timeout=10)\n        rows=[]\n        for partition,position in zip(partitions,committed):\n            low,high=client.get_watermark_offsets(partition,timeout=10,cached=False)\n            offset=position.offset if position.offset>=0 else None\n            rows.append({'partition':partition.partition,'low':low,'high':high,'committed':offset,'lag':None if offset is None else high-offset})\n        return rows\n    finally:client.close()\n```\n\n原事故诊断及生产条件（不等同于本实验已全部验证）：\n记录生产速率、消费处理速率和 lag 时间序列。kafka-consumer-groups.sh --bootstrap-server 地址 --describe --group 组名 查看各分区 offset 和 lag，结合重平衡、错误与下游耗时判断。工具路径和认证参数按环境设置。",
+    "hints": [
+      "先阅读概念，识别任务中的对象和目标。",
+      "先检查状态，再执行变更，最后再次检查。"
+    ],
+    "minutes": 20,
+    "rubric": [
+      "能解释基本概念",
+      "记录操作和输出",
+      "说明验证结果"
+    ],
+    "related_modules": [
+      "kafka"
+    ],
+    "review_status": "reviewed",
+    "review_note": "Kafka原生专项：保持原ID、保留原诊断答案；真实KRaft验收限定以下可执行合同。",
+    "difficulty": "入门",
+    "topic": "消费与位点",
+    "language": "python",
+    "conversion": {
+      "original_id": "basic-kafka",
+      "original_title": "Kafka · 基础实操",
+      "original_type": "practice",
+      "preserve_history": true
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement the native Kafka task\")\n"
+    },
+    "solution_files": {
+      "task.py": "from confluent_kafka import Consumer,TopicPartition\ndef snapshot(bootstrap,topic,group):\n    client=Consumer({'bootstrap.servers':bootstrap,'group.id':group,'enable.auto.commit':False})\n    try:\n        metadata=client.list_topics(topic,timeout=10).topics[topic]\n        if metadata.error:raise RuntimeError(str(metadata.error))\n        partitions=[TopicPartition(topic,p) for p in sorted(metadata.partitions)]\n        committed=client.committed(partitions,timeout=10)\n        rows=[]\n        for partition,position in zip(partitions,committed):\n            low,high=client.get_watermark_offsets(partition,timeout=10,cached=False)\n            offset=position.offset if position.offset>=0 else None\n            rows.append({'partition':partition.partition,'low':low,'high':high,'committed':offset,'lag':None if offset is None else high-offset})\n        return rows\n    finally:client.close()\n"
+    },
+    "negative_files": {
+      "task.py": "from confluent_kafka import Consumer,TopicPartition\ndef snapshot(bootstrap,topic,group):\n    c=Consumer({'bootstrap.servers':bootstrap,'group.id':group})\n    try:\n        rows=[]\n        for p in sorted(c.list_topics(topic,timeout=10).topics[topic].partitions):\n            low,high=c.get_watermark_offsets(TopicPartition(topic,p),timeout=10)\n            position=c.committed([TopicPartition(topic,p)],timeout=10)[0].offset\n            position=max(0,position)\n            rows.append(dict(partition=p,low=low,high=high,committed=position,lag=high-position))\n        return rows\n    finally:c.close()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "resource_profile": "distributed",
+      "operation": "实现 snapshot(bootstrap,topic,group)：返回按partition升序的list[dict]，键为partition/low/high/committed/lag。使用真实元数据与broker查询，不订阅、不提交、不重置offset。已提交位置为next-offset，lag=high-committed；未提交时committed和lag均None，不得当作0或推断已处理。关闭consumer。主题与group均动态传入。此实验覆盖原基础实操的分区offset/lag证据采集；吞吐时间序列、业务处理成功率、rebalance及生产根因归属需另外采集。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实单节点KRaft机制，保留原生产事故诊断条件；不覆盖生产集群完整恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "java",
+          "bash"
+        ],
+        "python_modules": [
+          "confluent_kafka"
+        ],
+        "features": [
+          "kafka:kraft-v4.0.0"
+        ]
+      },
+      "test_files": {
+        "checks/kafka_native.py": "\"\"\"Private grader fixture: genuine self-contained Kafka 4 KRaft, loopback only.\"\"\"\nimport os\nimport pathlib\nimport signal\nimport socket\nimport subprocess\nimport tempfile\nimport time\nimport uuid\nfrom contextlib import contextmanager\n\nfrom confluent_kafka import Consumer, KafkaException, Producer, TopicPartition\nfrom confluent_kafka.admin import AdminClient, NewTopic\n\n\ndef port():\n    with socket.socket() as sock:\n        sock.bind(('127.0.0.1', 0))\n        return sock.getsockname()[1]\n\n\n@contextmanager\ndef broker():\n    \"\"\"Own only this Java process group; never access Docker or external services.\"\"\"\n    with tempfile.TemporaryDirectory(prefix='opsforge-kafka-') as directory:\n        root = pathlib.Path(directory)\n        client_port, controller_port = port(), port()\n        while controller_port == client_port:\n            controller_port = port()\n        bootstrap = f'127.0.0.1:{client_port}'\n        config = root / 'server.properties'\n        config.write_text('\\n'.join([\n            'process.roles=broker,controller', 'node.id=1',\n            f'controller.quorum.bootstrap.servers=127.0.0.1:{controller_port}',\n            f'listeners=PLAINTEXT://{bootstrap},CONTROLLER://127.0.0.1:{controller_port}',\n            f'advertised.listeners=PLAINTEXT://{bootstrap}',\n            'listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT',\n            'controller.listener.names=CONTROLLER', 'inter.broker.listener.name=PLAINTEXT',\n            f'log.dirs={root}/data', 'num.partitions=3',\n            'offsets.topic.replication.factor=1', 'offsets.topic.num.partitions=1',\n            'transaction.state.log.replication.factor=1', 'transaction.state.log.min.isr=1',\n            'transaction.state.log.num.partitions=1', 'group.initial.rebalance.delay.ms=0',\n            'auto.create.topics.enable=false', 'log.segment.bytes=10485760',\n            'num.network.threads=2', 'num.io.threads=2',\n        ]) + '\\n')\n        env = dict(os.environ, KAFKA_HEAP_OPTS='-Xms128m -Xmx384m', LOG_DIR=str(root / 'logs'))\n        # JAVA_HOME is supplied by the deliverable image (glibc JDK17+).\n        storage = ['/opt/kafka/bin/kafka-storage.sh', 'format', '--standalone',\n                   '-t', uuid.uuid4().hex[:22], '-c', str(config)]\n        formatted = subprocess.run(storage, env=env, capture_output=True, text=True, timeout=20)\n        assert formatted.returncode == 0, formatted.stderr + formatted.stdout\n        log = open(root / 'broker.log', 'w+')\n        proc = subprocess.Popen(['/opt/kafka/bin/kafka-server-start.sh', str(config)],\n                                env=env, stdout=log, stderr=subprocess.STDOUT,\n                                start_new_session=True)\n        try:\n            deadline = time.monotonic() + 35\n            admin = AdminClient({'bootstrap.servers': bootstrap, 'socket.timeout.ms': 1000})\n            ready = False\n            while time.monotonic() < deadline:\n                if proc.poll() is not None:\n                    break\n                try:\n                    if admin.list_topics(timeout=1).brokers:\n                        ready = True\n                        break\n                except KafkaException:\n                    time.sleep(.2)\n            if not ready:\n                log.flush(); log.seek(0)\n                raise AssertionError('self-started Kafka readiness failed: ' + log.read()[-9000:])\n            yield bootstrap\n        finally:\n            if proc.poll() is None:\n                os.killpg(proc.pid, signal.SIGTERM)\n                try:\n                    proc.wait(timeout=8)\n                except subprocess.TimeoutExpired:\n                    os.killpg(proc.pid, signal.SIGKILL)\n                    proc.wait(timeout=3)\n            log.close()\n\n\ndef topic(bootstrap, name, partitions=1, config=None):\n    admin = AdminClient({'bootstrap.servers': bootstrap})\n    admin.create_topics([NewTopic(name, partitions, 1, config=config or {})])[name].result(10)\n\n\ndef produce(producer, name, values, partition=0, expected_error=None):\n    errors = []\n    for value in values:\n        producer.produce(name, value, partition=partition,\n                         on_delivery=lambda err, message: errors.append(err))\n    assert producer.flush(10) == 0\n    assert len(errors) == len(values), errors\n    if expected_error is None:\n        assert all(error is None for error in errors), errors\n    else:\n        assert all(error and error.code() == expected_error for error in errors), errors\n\n\ndef consumer(bootstrap, group=None, isolation='read_committed'):\n    return Consumer({'bootstrap.servers': bootstrap, 'group.id': group or uuid.uuid4().hex,\n                     'enable.auto.commit': False, 'isolation.level': isolation,\n                     'enable.partition.eof': True, 'auto.offset.reset': 'earliest',\n                     'fetch.wait.max.ms': 50})\n\n\ndef read(bootstrap, name, isolation='read_committed', seconds=2):\n    client = consumer(bootstrap, isolation=isolation)\n    values = []\n    try:\n        client.assign([TopicPartition(name, 0, 0)])\n        deadline = time.monotonic() + seconds\n        while time.monotonic() < deadline:\n            message = client.poll(.1)\n            if message is not None and not message.error():\n                values.append(message.value())\n        return values\n    finally:\n        client.close()\n\n\ndef tx(bootstrap, transaction_id):\n    producer = Producer({'bootstrap.servers': bootstrap, 'transactional.id': transaction_id,\n                         'transaction.timeout.ms': 30000, 'message.timeout.ms': 10000})\n    producer.init_transactions(15)\n    return producer\n",
+        "checks/check.py": "import pathlib,sys,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nsys.path.insert(0,str(pathlib.Path.cwd()/\"checks\"))\nimport task\nfrom kafka_native import *\nwith broker() as bootstrap:\n    for counts in [[7,3,9],[2,8,4,6]]:\n        name='lag-'+uuid.uuid4().hex;group='group-'+uuid.uuid4().hex\n        topic(bootstrap,name,len(counts));p=Producer({'bootstrap.servers':bootstrap})\n        for index,count in enumerate(counts):produce(p,name,[uuid.uuid4().bytes for _ in range(count)],partition=index)\n        c=consumer(bootstrap,group);offsets=[TopicPartition(name,0,2),TopicPartition(name,2,counts[2])]\n        c.assign([TopicPartition(name,i,0) for i in range(len(counts))]);c.commit(offsets=offsets,asynchronous=False);c.close()\n        expected=[dict(partition=i,low=0,high=n,committed=2 if i==0 else n if i==2 else None,lag=n-2 if i==0 else 0 if i==2 else None) for i,n in enumerate(counts)]\n        assert task.snapshot(bootstrap,name,group)==expected\n        produce(p,name,[b'new1',b'new2'],partition=0);expected[0]['high']+=2;expected[0]['lag']+=2\n        assert task.snapshot(bootstrap,name,group)==expected\n        admin=AdminClient({'bootstrap.servers':bootstrap})\n        deletion=admin.delete_records([TopicPartition(name,1,1)],operation_timeout=10,request_timeout=12)\n        for future in deletion.values():assert future.result(13).low_watermark==1\n        expected[1]['low']=1\n        assert task.snapshot(bootstrap,name,group)==expected,'retention-truncated partition must expose actual nonzero low watermark'\n        verify=consumer(bootstrap,group)\n        assert [x.offset for x in verify.committed([TopicPartition(name,i) for i in range(len(counts))],timeout=10)]==[2 if i==0 else counts[i] if i==2 else -1001 for i in range(len(counts))]\n        verify.close()\nprint('native partition snapshots: uneven partitions, uncommitted, next-offset, dynamic high watermark and no offset mutation passed')\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-kafka-095",
+    "module": "kafka",
+    "category": "Kafka",
+    "level": 4,
+    "topic": "生产与事务",
+    "title": "Kafka事务生产者所有权：稳定槽位、代际替换与fencing",
+    "answer": "```python\nfrom confluent_kafka import Producer\ndef claim_owner(bootstrap,namespace,slot):\n    if not isinstance(namespace,str) or not namespace or '/' in namespace or not isinstance(slot,str) or not slot or '/' in slot:raise ValueError('unambiguous nonempty namespace/slot')\n    producer=Producer({'bootstrap.servers':bootstrap,'transactional.id':namespace+'/'+slot,'transaction.timeout.ms':30000,'message.timeout.ms':10000})\n    producer.init_transactions(15)\n    return producer\n```\n\n原事故诊断及生产条件（不等同于本实验已全部验证）：\n桌面推演，未在生产执行。比对事务ID、实例生命周期和producer epoch，确认互相隔离。为逻辑任务建立唯一所有权与稳定ID，停止冲突实例并处理未决事务；验收滚动重启无同时持有、已中止记录不可见。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Apache Kafka 4.0 官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "Kafka原生专项：保持原ID、保留原诊断答案；真实KRaft验收限定以下可执行合同。",
+    "pack": "parallel-data-20261021",
+    "body": "## 环境与初始材料\nKafka 4.0.0、Java17+、confluent-kafka2.10.1。分布式实验档；验收在隔离工作区启动真实单broker/单controller KRaft，loopback监听、临时日志、无外置服务或宿主socket。此配置只用于实验，不代表生产高可用。\n\n## 操作任务\n实现 claim_owner(bootstrap,namespace,slot)，返回已init_transactions(15)的confluent_kafka.Producer，transactional.id必须是namespace+\"/\"+slot（两个非空且不含/的字符串，否则ValueError，避免组合键歧义）。同一namespace/slot代表同一逻辑任务的代际替换，旧owner必须被broker fence；不同slot应并行不互相fence。启用transaction.timeout.ms=30000、message.timeout.ms=10000。不使用随机后缀逃避fencing，不吞掉初始化错误。调度层避免双活、事务失败告警等原事故生产要点保留于参考答案；本题验证原生所有权矩阵及已提交记录可见性。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py 使用真实broker及native librdkafka客户端，验证动态主题、分区、事务、错误路径。最长120秒。仅验收以下合同，不声称复现生产多broker、网络分区、权限、历史灾难恢复全流程。",
+    "hints": [],
+    "rubric": [
+      "识别题设具体根因并提供对应证据",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [],
+    "incident_signature": "kafka:transactional-id-producer-fencing",
+    "related_modules": [
+      "kafka"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-kafka-095",
+      "original_title": "两个并行实例使用同一transactional.id，交替出现ProducerFencedException，怎么修复？",
+      "original_type": "case",
+      "preserve_history": true
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement the native Kafka task\")\n"
+    },
+    "solution_files": {
+      "task.py": "from confluent_kafka import Producer\ndef claim_owner(bootstrap,namespace,slot):\n    if not isinstance(namespace,str) or not namespace or '/' in namespace or not isinstance(slot,str) or not slot or '/' in slot:raise ValueError('unambiguous nonempty namespace/slot')\n    producer=Producer({'bootstrap.servers':bootstrap,'transactional.id':namespace+'/'+slot,'transaction.timeout.ms':30000,'message.timeout.ms':10000})\n    producer.init_transactions(15)\n    return producer\n"
+    },
+    "negative_files": {
+      "task.py": "from confluent_kafka import Producer\nimport uuid\ndef claim_owner(bootstrap,namespace,slot):\n    p=Producer({'bootstrap.servers':bootstrap,'transactional.id':namespace+'/'+slot+'/'+uuid.uuid4().hex,'transaction.timeout.ms':30000,'message.timeout.ms':10000})\n    p.init_transactions(15)\n    return p\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "resource_profile": "distributed",
+      "operation": "实现 claim_owner(bootstrap,namespace,slot)，返回已init_transactions(15)的confluent_kafka.Producer，transactional.id必须是namespace+\"/\"+slot（两个非空且不含/的字符串，否则ValueError，避免组合键歧义）。同一namespace/slot代表同一逻辑任务的代际替换，旧owner必须被broker fence；不同slot应并行不互相fence。启用transaction.timeout.ms=30000、message.timeout.ms=10000。不使用随机后缀逃避fencing，不吞掉初始化错误。调度层避免双活、事务失败告警等原事故生产要点保留于参考答案；本题验证原生所有权矩阵及已提交记录可见性。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实单节点KRaft机制，保留原生产事故诊断条件；不覆盖生产集群完整恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "java",
+          "bash"
+        ],
+        "python_modules": [
+          "confluent_kafka"
+        ],
+        "features": [
+          "kafka:kraft-v4.0.0"
+        ]
+      },
+      "test_files": {
+        "checks/kafka_native.py": "\"\"\"Private grader fixture: genuine self-contained Kafka 4 KRaft, loopback only.\"\"\"\nimport os\nimport pathlib\nimport signal\nimport socket\nimport subprocess\nimport tempfile\nimport time\nimport uuid\nfrom contextlib import contextmanager\n\nfrom confluent_kafka import Consumer, KafkaException, Producer, TopicPartition\nfrom confluent_kafka.admin import AdminClient, NewTopic\n\n\ndef port():\n    with socket.socket() as sock:\n        sock.bind(('127.0.0.1', 0))\n        return sock.getsockname()[1]\n\n\n@contextmanager\ndef broker():\n    \"\"\"Own only this Java process group; never access Docker or external services.\"\"\"\n    with tempfile.TemporaryDirectory(prefix='opsforge-kafka-') as directory:\n        root = pathlib.Path(directory)\n        client_port, controller_port = port(), port()\n        while controller_port == client_port:\n            controller_port = port()\n        bootstrap = f'127.0.0.1:{client_port}'\n        config = root / 'server.properties'\n        config.write_text('\\n'.join([\n            'process.roles=broker,controller', 'node.id=1',\n            f'controller.quorum.bootstrap.servers=127.0.0.1:{controller_port}',\n            f'listeners=PLAINTEXT://{bootstrap},CONTROLLER://127.0.0.1:{controller_port}',\n            f'advertised.listeners=PLAINTEXT://{bootstrap}',\n            'listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT',\n            'controller.listener.names=CONTROLLER', 'inter.broker.listener.name=PLAINTEXT',\n            f'log.dirs={root}/data', 'num.partitions=3',\n            'offsets.topic.replication.factor=1', 'offsets.topic.num.partitions=1',\n            'transaction.state.log.replication.factor=1', 'transaction.state.log.min.isr=1',\n            'transaction.state.log.num.partitions=1', 'group.initial.rebalance.delay.ms=0',\n            'auto.create.topics.enable=false', 'log.segment.bytes=10485760',\n            'num.network.threads=2', 'num.io.threads=2',\n        ]) + '\\n')\n        env = dict(os.environ, KAFKA_HEAP_OPTS='-Xms128m -Xmx384m', LOG_DIR=str(root / 'logs'))\n        # JAVA_HOME is supplied by the deliverable image (glibc JDK17+).\n        storage = ['/opt/kafka/bin/kafka-storage.sh', 'format', '--standalone',\n                   '-t', uuid.uuid4().hex[:22], '-c', str(config)]\n        formatted = subprocess.run(storage, env=env, capture_output=True, text=True, timeout=20)\n        assert formatted.returncode == 0, formatted.stderr + formatted.stdout\n        log = open(root / 'broker.log', 'w+')\n        proc = subprocess.Popen(['/opt/kafka/bin/kafka-server-start.sh', str(config)],\n                                env=env, stdout=log, stderr=subprocess.STDOUT,\n                                start_new_session=True)\n        try:\n            deadline = time.monotonic() + 35\n            admin = AdminClient({'bootstrap.servers': bootstrap, 'socket.timeout.ms': 1000})\n            ready = False\n            while time.monotonic() < deadline:\n                if proc.poll() is not None:\n                    break\n                try:\n                    if admin.list_topics(timeout=1).brokers:\n                        ready = True\n                        break\n                except KafkaException:\n                    time.sleep(.2)\n            if not ready:\n                log.flush(); log.seek(0)\n                raise AssertionError('self-started Kafka readiness failed: ' + log.read()[-9000:])\n            yield bootstrap\n        finally:\n            if proc.poll() is None:\n                os.killpg(proc.pid, signal.SIGTERM)\n                try:\n                    proc.wait(timeout=8)\n                except subprocess.TimeoutExpired:\n                    os.killpg(proc.pid, signal.SIGKILL)\n                    proc.wait(timeout=3)\n            log.close()\n\n\ndef topic(bootstrap, name, partitions=1, config=None):\n    admin = AdminClient({'bootstrap.servers': bootstrap})\n    admin.create_topics([NewTopic(name, partitions, 1, config=config or {})])[name].result(10)\n\n\ndef produce(producer, name, values, partition=0, expected_error=None):\n    errors = []\n    for value in values:\n        producer.produce(name, value, partition=partition,\n                         on_delivery=lambda err, message: errors.append(err))\n    assert producer.flush(10) == 0\n    assert len(errors) == len(values), errors\n    if expected_error is None:\n        assert all(error is None for error in errors), errors\n    else:\n        assert all(error and error.code() == expected_error for error in errors), errors\n\n\ndef consumer(bootstrap, group=None, isolation='read_committed'):\n    return Consumer({'bootstrap.servers': bootstrap, 'group.id': group or uuid.uuid4().hex,\n                     'enable.auto.commit': False, 'isolation.level': isolation,\n                     'enable.partition.eof': True, 'auto.offset.reset': 'earliest',\n                     'fetch.wait.max.ms': 50})\n\n\ndef read(bootstrap, name, isolation='read_committed', seconds=2):\n    client = consumer(bootstrap, isolation=isolation)\n    values = []\n    try:\n        client.assign([TopicPartition(name, 0, 0)])\n        deadline = time.monotonic() + seconds\n        while time.monotonic() < deadline:\n            message = client.poll(.1)\n            if message is not None and not message.error():\n                values.append(message.value())\n        return values\n    finally:\n        client.close()\n\n\ndef tx(bootstrap, transaction_id):\n    producer = Producer({'bootstrap.servers': bootstrap, 'transactional.id': transaction_id,\n                         'transaction.timeout.ms': 30000, 'message.timeout.ms': 10000})\n    producer.init_transactions(15)\n    return producer\n",
+        "checks/check.py": "import pathlib,sys,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nsys.path.insert(0,str(pathlib.Path.cwd()/\"checks\"))\nimport task\nfrom kafka_native import *\nwith broker() as bootstrap:\n    name='owners-'+uuid.uuid4().hex;topic(bootstrap,name);namespace=uuid.uuid4().hex\n    first=task.claim_owner(bootstrap,namespace,'worker-A');first.begin_transaction();produce(first,name,[b'old-uncommitted'])\n    replacement=task.claim_owner(bootstrap,namespace,'worker-A')\n    try:first.commit_transaction(10)\n    except KafkaException as error:assert error.args[0].code() in (-144,90,47),str(error)\n    else:raise AssertionError('same logical slot must fence old owner')\n    other=task.claim_owner(bootstrap,namespace,'worker-B')\n    separate=task.claim_owner(bootstrap,uuid.uuid4().hex,'worker-A')\n    for producer,value in [(replacement,b'replacement'),(other,b'parallel-slot'),(separate,b'parallel-namespace')]:\n        producer.begin_transaction();produce(producer,name,[value]);producer.commit_transaction(10)\n    assert sorted(read(bootstrap,name))==sorted([b'replacement',b'parallel-slot',b'parallel-namespace'])\n    for args in [('', 'A'),('ns',''),(None,'A'),('ns',3),('ns/x','A'),('ns','A/x')]:\n        try:task.claim_owner(bootstrap,*args)\n        except ValueError:pass\n        else:raise AssertionError('invalid ownership key')\nprint('native ownership: generation fencing, independent slots/namespaces, aborted old records and invalid inputs passed')\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-kafka-097",
+    "module": "kafka",
+    "category": "Kafka",
+    "level": 4,
+    "topic": "生产与事务",
+    "title": "Kafka悬挂事务恢复：推进LSO且不泄漏aborted记录",
+    "answer": "```python\nfrom confluent_kafka import Producer\ndef recover_and_publish(bootstrap,transactional_id,topic,records):\n    producer=Producer({'bootstrap.servers':bootstrap,'transactional.id':transactional_id,'transaction.timeout.ms':30000,'message.timeout.ms':10000})\n    producer.init_transactions(15)\n    producer.begin_transaction()\n    try:\n        errors=[]\n        for value in records:producer.produce(topic,value,partition=0,on_delivery=lambda error,message:errors.append(error))\n        if producer.flush(10) or any(errors):raise RuntimeError('delivery failed: '+str(errors))\n        producer.commit_transaction(15)\n    except Exception:\n        try:producer.abort_transaction(5)\n        except Exception:pass\n        raise\n```\n\n原事故诊断及生产条件（不等同于本实验已全部验证）：\n桌面推演，未在生产执行。对比LSO、日志末端与事务协调状态，确认开放事务阻挡稳定可见边界。恢复事务拥有者或按受支持流程处理超时中止，不能仅改隔离级别绕过契约；验收LSO推进且中止数据不泄露。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Apache Kafka 4.0 官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "Kafka原生专项：保持原ID、保留原诊断答案；真实KRaft验收限定以下可执行合同。",
+    "pack": "parallel-data-20261021",
+    "body": "## 环境与初始材料\nKafka 4.0.0、Java17+、confluent-kafka2.10.1。分布式实验档；验收在隔离工作区启动真实单broker/单controller KRaft，loopback监听、临时日志、无外置服务或宿主socket。此配置只用于实验，不代表生产高可用。\n\n## 操作任务\n实现 recover_and_publish(bootstrap,transactional_id,topic,records)。调度器已确认旧owner永久停止（题目不授权对仍健康owner抢占）。以相同稳定transactional.id创建Producer并init_transactions(15)，让broker终结旧未完成事务；开启新事务，按传入records(byte列表)逐条发送并commit_transaction(15)。遇发送/提交失败必须向上抛错（可best effort abort），不得降级消费者read_uncommitted、改用随机ID或声称旧记录已成功。本题用真实open transaction验证恢复前read_committed被LSO挡住、read_uncommitted可见旧数据，恢复后仅已提交记录可见；不覆盖跨集群业务补偿/真实owner健康仲裁。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py 使用真实broker及native librdkafka客户端，验证动态主题、分区、事务、错误路径。最长120秒。仅验收以下合同，不声称复现生产多broker、网络分区、权限、历史灾难恢复全流程。",
+    "hints": [],
+    "rubric": [
+      "识别题设具体根因并提供对应证据",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [],
+    "incident_signature": "kafka:open-transaction-lso-stall",
+    "related_modules": [
+      "kafka"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-kafka-097",
+      "original_title": "read_uncommitted能看到新记录，read_committed停在旧位置，发现早先事务一直未结束，如何处理？",
+      "original_type": "case",
+      "preserve_history": true
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement the native Kafka task\")\n"
+    },
+    "solution_files": {
+      "task.py": "from confluent_kafka import Producer\ndef recover_and_publish(bootstrap,transactional_id,topic,records):\n    producer=Producer({'bootstrap.servers':bootstrap,'transactional.id':transactional_id,'transaction.timeout.ms':30000,'message.timeout.ms':10000})\n    producer.init_transactions(15)\n    producer.begin_transaction()\n    try:\n        errors=[]\n        for value in records:producer.produce(topic,value,partition=0,on_delivery=lambda error,message:errors.append(error))\n        if producer.flush(10) or any(errors):raise RuntimeError('delivery failed: '+str(errors))\n        producer.commit_transaction(15)\n    except Exception:\n        try:producer.abort_transaction(5)\n        except Exception:pass\n        raise\n"
+    },
+    "negative_files": {
+      "task.py": "from confluent_kafka import Producer\nimport uuid\ndef recover_and_publish(bootstrap,transactional_id,topic,records):\n    p=Producer({'bootstrap.servers':bootstrap,'transactional.id':uuid.uuid4().hex,'message.timeout.ms':10000})\n    p.init_transactions(15);p.begin_transaction()\n    for value in records:p.produce(topic,value,partition=0)\n    p.commit_transaction(15)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "resource_profile": "distributed",
+      "operation": "实现 recover_and_publish(bootstrap,transactional_id,topic,records)。调度器已确认旧owner永久停止（题目不授权对仍健康owner抢占）。以相同稳定transactional.id创建Producer并init_transactions(15)，让broker终结旧未完成事务；开启新事务，按传入records(byte列表)逐条发送并commit_transaction(15)。遇发送/提交失败必须向上抛错（可best effort abort），不得降级消费者read_uncommitted、改用随机ID或声称旧记录已成功。本题用真实open transaction验证恢复前read_committed被LSO挡住、read_uncommitted可见旧数据，恢复后仅已提交记录可见；不覆盖跨集群业务补偿/真实owner健康仲裁。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实单节点KRaft机制，保留原生产事故诊断条件；不覆盖生产集群完整恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "java",
+          "bash"
+        ],
+        "python_modules": [
+          "confluent_kafka"
+        ],
+        "features": [
+          "kafka:kraft-v4.0.0"
+        ]
+      },
+      "test_files": {
+        "checks/kafka_native.py": "\"\"\"Private grader fixture: genuine self-contained Kafka 4 KRaft, loopback only.\"\"\"\nimport os\nimport pathlib\nimport signal\nimport socket\nimport subprocess\nimport tempfile\nimport time\nimport uuid\nfrom contextlib import contextmanager\n\nfrom confluent_kafka import Consumer, KafkaException, Producer, TopicPartition\nfrom confluent_kafka.admin import AdminClient, NewTopic\n\n\ndef port():\n    with socket.socket() as sock:\n        sock.bind(('127.0.0.1', 0))\n        return sock.getsockname()[1]\n\n\n@contextmanager\ndef broker():\n    \"\"\"Own only this Java process group; never access Docker or external services.\"\"\"\n    with tempfile.TemporaryDirectory(prefix='opsforge-kafka-') as directory:\n        root = pathlib.Path(directory)\n        client_port, controller_port = port(), port()\n        while controller_port == client_port:\n            controller_port = port()\n        bootstrap = f'127.0.0.1:{client_port}'\n        config = root / 'server.properties'\n        config.write_text('\\n'.join([\n            'process.roles=broker,controller', 'node.id=1',\n            f'controller.quorum.bootstrap.servers=127.0.0.1:{controller_port}',\n            f'listeners=PLAINTEXT://{bootstrap},CONTROLLER://127.0.0.1:{controller_port}',\n            f'advertised.listeners=PLAINTEXT://{bootstrap}',\n            'listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT',\n            'controller.listener.names=CONTROLLER', 'inter.broker.listener.name=PLAINTEXT',\n            f'log.dirs={root}/data', 'num.partitions=3',\n            'offsets.topic.replication.factor=1', 'offsets.topic.num.partitions=1',\n            'transaction.state.log.replication.factor=1', 'transaction.state.log.min.isr=1',\n            'transaction.state.log.num.partitions=1', 'group.initial.rebalance.delay.ms=0',\n            'auto.create.topics.enable=false', 'log.segment.bytes=10485760',\n            'num.network.threads=2', 'num.io.threads=2',\n        ]) + '\\n')\n        env = dict(os.environ, KAFKA_HEAP_OPTS='-Xms128m -Xmx384m', LOG_DIR=str(root / 'logs'))\n        # JAVA_HOME is supplied by the deliverable image (glibc JDK17+).\n        storage = ['/opt/kafka/bin/kafka-storage.sh', 'format', '--standalone',\n                   '-t', uuid.uuid4().hex[:22], '-c', str(config)]\n        formatted = subprocess.run(storage, env=env, capture_output=True, text=True, timeout=20)\n        assert formatted.returncode == 0, formatted.stderr + formatted.stdout\n        log = open(root / 'broker.log', 'w+')\n        proc = subprocess.Popen(['/opt/kafka/bin/kafka-server-start.sh', str(config)],\n                                env=env, stdout=log, stderr=subprocess.STDOUT,\n                                start_new_session=True)\n        try:\n            deadline = time.monotonic() + 35\n            admin = AdminClient({'bootstrap.servers': bootstrap, 'socket.timeout.ms': 1000})\n            ready = False\n            while time.monotonic() < deadline:\n                if proc.poll() is not None:\n                    break\n                try:\n                    if admin.list_topics(timeout=1).brokers:\n                        ready = True\n                        break\n                except KafkaException:\n                    time.sleep(.2)\n            if not ready:\n                log.flush(); log.seek(0)\n                raise AssertionError('self-started Kafka readiness failed: ' + log.read()[-9000:])\n            yield bootstrap\n        finally:\n            if proc.poll() is None:\n                os.killpg(proc.pid, signal.SIGTERM)\n                try:\n                    proc.wait(timeout=8)\n                except subprocess.TimeoutExpired:\n                    os.killpg(proc.pid, signal.SIGKILL)\n                    proc.wait(timeout=3)\n            log.close()\n\n\ndef topic(bootstrap, name, partitions=1, config=None):\n    admin = AdminClient({'bootstrap.servers': bootstrap})\n    admin.create_topics([NewTopic(name, partitions, 1, config=config or {})])[name].result(10)\n\n\ndef produce(producer, name, values, partition=0, expected_error=None):\n    errors = []\n    for value in values:\n        producer.produce(name, value, partition=partition,\n                         on_delivery=lambda err, message: errors.append(err))\n    assert producer.flush(10) == 0\n    assert len(errors) == len(values), errors\n    if expected_error is None:\n        assert all(error is None for error in errors), errors\n    else:\n        assert all(error and error.code() == expected_error for error in errors), errors\n\n\ndef consumer(bootstrap, group=None, isolation='read_committed'):\n    return Consumer({'bootstrap.servers': bootstrap, 'group.id': group or uuid.uuid4().hex,\n                     'enable.auto.commit': False, 'isolation.level': isolation,\n                     'enable.partition.eof': True, 'auto.offset.reset': 'earliest',\n                     'fetch.wait.max.ms': 50})\n\n\ndef read(bootstrap, name, isolation='read_committed', seconds=2):\n    client = consumer(bootstrap, isolation=isolation)\n    values = []\n    try:\n        client.assign([TopicPartition(name, 0, 0)])\n        deadline = time.monotonic() + seconds\n        while time.monotonic() < deadline:\n            message = client.poll(.1)\n            if message is not None and not message.error():\n                values.append(message.value())\n        return values\n    finally:\n        client.close()\n\n\ndef tx(bootstrap, transaction_id):\n    producer = Producer({'bootstrap.servers': bootstrap, 'transactional.id': transaction_id,\n                         'transaction.timeout.ms': 30000, 'message.timeout.ms': 10000})\n    producer.init_transactions(15)\n    return producer\n",
+        "checks/check.py": "import pathlib,sys,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nsys.path.insert(0,str(pathlib.Path.cwd()/\"checks\"))\nimport task\nfrom kafka_native import *\nwith broker() as bootstrap:\n    for records in [[uuid.uuid4().bytes,uuid.uuid4().bytes],[]]:\n        name='isolation-'+uuid.uuid4().hex;topic(bootstrap,name);identity=uuid.uuid4().hex\n        ordinary=Producer({'bootstrap.servers':bootstrap});produce(ordinary,name,[b'before'])\n        old=tx(bootstrap,identity);old.begin_transaction();secret=b'ABORT-'+uuid.uuid4().bytes;produce(old,name,[secret])\n        produce(ordinary,name,[b'after-open'])\n        assert read(bootstrap,name)==[b'before'],'read_committed must stop at open transaction LSO'\n        assert secret in read(bootstrap,name,'read_uncommitted')\n        task.recover_and_publish(bootstrap,identity,name,records)\n        assert read(bootstrap,name)==[b'before',b'after-open']+records,'recovery must advance LSO without aborted leak'\n        assert secret in read(bootstrap,name,'read_uncommitted'),'fixture must retain aborted physical record'\n        try:old.commit_transaction(5)\n        except KafkaException:pass\n        else:raise AssertionError('old owner unexpectedly usable')\n    failure_identity=uuid.uuid4().hex\n    try:task.recover_and_publish(bootstrap,failure_identity,'missing-'+uuid.uuid4().hex,[b'must-not-succeed'])\n    except Exception:pass\n    else:raise AssertionError('native delivery failure was hidden')\n    task.recover_and_publish(bootstrap,failure_identity,name,[b'after-failure'])\n    assert read(bootstrap,name)==[b'before',b'after-open',b'after-failure']\nprint('native LSO/isolation: open transaction blocks, takeover abort, normal writes released, empty recovery, no aborted leakage and delivery failure propagation passed')\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-kafka-100",
+    "module": "kafka",
+    "category": "Kafka",
+    "level": 3,
+    "topic": "生产与事务",
+    "title": "Kafka真实大消息边界：增量调整topic限制并保留既有配置",
+    "answer": "```python\nfrom confluent_kafka.admin import AdminClient,ConfigResource,ConfigEntry,AlterConfigOpType,ResourceType\ndef set_topic_limit(bootstrap,topic,limit):\n    if type(limit) is not int or limit<=0:raise ValueError('positive integer limit required')\n    resource=ConfigResource(ResourceType.TOPIC,topic)\n    resource.add_incremental_config(ConfigEntry('max.message.bytes',str(limit),incremental_operation=AlterConfigOpType.SET))\n    admin=AdminClient({'bootstrap.servers':bootstrap})\n    futures=admin.incremental_alter_configs([resource],request_timeout=10)\n    futures[resource].result(12)\n```\n\n原事故诊断及生产条件（不等同于本实验已全部验证）：\n桌面推演，未在生产执行。比较序列化后记录批大小、生产请求上限、主题或broker上限与复制及消费fetch设置。优先评估缩小载荷或引用方案，再一致调整有预算的限制；验收最大真实消息、复制追平和消费者内存。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Apache Kafka 4.0 官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "Kafka原生专项：保持原ID、保留原诊断答案；真实KRaft验收限定以下可执行合同。",
+    "pack": "parallel-data-20261021",
+    "body": "## 环境与初始材料\nKafka 4.0.0、Java17+、confluent-kafka2.10.1。分布式实验档；验收在隔离工作区启动真实单broker/单controller KRaft，loopback监听、临时日志、无外置服务或宿主socket。此配置只用于实验，不代表生产高可用。\n\n## 操作任务\n实现 set_topic_limit(bootstrap,topic,limit)，limit须为正整数（bool不算整数），否则ValueError。使用AdminClient.incremental_alter_configs，仅SET指定topic的max.message.bytes为十进制limit，等待broker确认；不重置cleanup.policy、retention.ms，不修改其他主题，不捕获并隐藏broker错误。本题在producer/broker/replication的既有上限内验证topic层不同大小真实发送、失败码和消费完整性。修改topic仅为定位一个限制层的实验；生产仍需按原诊断答案评估序列化/压缩/批次、请求、broker、复制、消费者及大对象外置方案，不能根据此实验直接放大生产上限。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py 使用真实broker及native librdkafka客户端，验证动态主题、分区、事务、错误路径。最长120秒。仅验收以下合同，不声称复现生产多broker、网络分区、权限、历史灾难恢复全流程。",
+    "hints": [],
+    "rubric": [
+      "识别题设具体根因并提供对应证据",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [],
+    "incident_signature": "kafka:message-size-cross-layer-mismatch",
+    "related_modules": [
+      "kafka"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-kafka-100",
+      "original_title": "生产者放宽消息限制后仍出现RecordTooLarge，主题有效max.message.bytes较小，如何协调？",
+      "original_type": "case",
+      "preserve_history": true
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"Implement the native Kafka task\")\n"
+    },
+    "solution_files": {
+      "task.py": "from confluent_kafka.admin import AdminClient,ConfigResource,ConfigEntry,AlterConfigOpType,ResourceType\ndef set_topic_limit(bootstrap,topic,limit):\n    if type(limit) is not int or limit<=0:raise ValueError('positive integer limit required')\n    resource=ConfigResource(ResourceType.TOPIC,topic)\n    resource.add_incremental_config(ConfigEntry('max.message.bytes',str(limit),incremental_operation=AlterConfigOpType.SET))\n    admin=AdminClient({'bootstrap.servers':bootstrap})\n    futures=admin.incremental_alter_configs([resource],request_timeout=10)\n    futures[resource].result(12)\n"
+    },
+    "negative_files": {
+      "task.py": "def set_topic_limit(bootstrap,topic,limit):\n    return None\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "resource_profile": "distributed",
+      "operation": "实现 set_topic_limit(bootstrap,topic,limit)，limit须为正整数（bool不算整数），否则ValueError。使用AdminClient.incremental_alter_configs，仅SET指定topic的max.message.bytes为十进制limit，等待broker确认；不重置cleanup.policy、retention.ms，不修改其他主题，不捕获并隐藏broker错误。本题在producer/broker/replication的既有上限内验证topic层不同大小真实发送、失败码和消费完整性。修改topic仅为定位一个限制层的实验；生产仍需按原诊断答案评估序列化/压缩/批次、请求、broker、复制、消费者及大对象外置方案，不能根据此实验直接放大生产上限。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实单节点KRaft机制，保留原生产事故诊断条件；不覆盖生产集群完整恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "java",
+          "bash"
+        ],
+        "python_modules": [
+          "confluent_kafka"
+        ],
+        "features": [
+          "kafka:kraft-v4.0.0"
+        ]
+      },
+      "test_files": {
+        "checks/kafka_native.py": "\"\"\"Private grader fixture: genuine self-contained Kafka 4 KRaft, loopback only.\"\"\"\nimport os\nimport pathlib\nimport signal\nimport socket\nimport subprocess\nimport tempfile\nimport time\nimport uuid\nfrom contextlib import contextmanager\n\nfrom confluent_kafka import Consumer, KafkaException, Producer, TopicPartition\nfrom confluent_kafka.admin import AdminClient, NewTopic\n\n\ndef port():\n    with socket.socket() as sock:\n        sock.bind(('127.0.0.1', 0))\n        return sock.getsockname()[1]\n\n\n@contextmanager\ndef broker():\n    \"\"\"Own only this Java process group; never access Docker or external services.\"\"\"\n    with tempfile.TemporaryDirectory(prefix='opsforge-kafka-') as directory:\n        root = pathlib.Path(directory)\n        client_port, controller_port = port(), port()\n        while controller_port == client_port:\n            controller_port = port()\n        bootstrap = f'127.0.0.1:{client_port}'\n        config = root / 'server.properties'\n        config.write_text('\\n'.join([\n            'process.roles=broker,controller', 'node.id=1',\n            f'controller.quorum.bootstrap.servers=127.0.0.1:{controller_port}',\n            f'listeners=PLAINTEXT://{bootstrap},CONTROLLER://127.0.0.1:{controller_port}',\n            f'advertised.listeners=PLAINTEXT://{bootstrap}',\n            'listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT',\n            'controller.listener.names=CONTROLLER', 'inter.broker.listener.name=PLAINTEXT',\n            f'log.dirs={root}/data', 'num.partitions=3',\n            'offsets.topic.replication.factor=1', 'offsets.topic.num.partitions=1',\n            'transaction.state.log.replication.factor=1', 'transaction.state.log.min.isr=1',\n            'transaction.state.log.num.partitions=1', 'group.initial.rebalance.delay.ms=0',\n            'auto.create.topics.enable=false', 'log.segment.bytes=10485760',\n            'num.network.threads=2', 'num.io.threads=2',\n        ]) + '\\n')\n        env = dict(os.environ, KAFKA_HEAP_OPTS='-Xms128m -Xmx384m', LOG_DIR=str(root / 'logs'))\n        # JAVA_HOME is supplied by the deliverable image (glibc JDK17+).\n        storage = ['/opt/kafka/bin/kafka-storage.sh', 'format', '--standalone',\n                   '-t', uuid.uuid4().hex[:22], '-c', str(config)]\n        formatted = subprocess.run(storage, env=env, capture_output=True, text=True, timeout=20)\n        assert formatted.returncode == 0, formatted.stderr + formatted.stdout\n        log = open(root / 'broker.log', 'w+')\n        proc = subprocess.Popen(['/opt/kafka/bin/kafka-server-start.sh', str(config)],\n                                env=env, stdout=log, stderr=subprocess.STDOUT,\n                                start_new_session=True)\n        try:\n            deadline = time.monotonic() + 35\n            admin = AdminClient({'bootstrap.servers': bootstrap, 'socket.timeout.ms': 1000})\n            ready = False\n            while time.monotonic() < deadline:\n                if proc.poll() is not None:\n                    break\n                try:\n                    if admin.list_topics(timeout=1).brokers:\n                        ready = True\n                        break\n                except KafkaException:\n                    time.sleep(.2)\n            if not ready:\n                log.flush(); log.seek(0)\n                raise AssertionError('self-started Kafka readiness failed: ' + log.read()[-9000:])\n            yield bootstrap\n        finally:\n            if proc.poll() is None:\n                os.killpg(proc.pid, signal.SIGTERM)\n                try:\n                    proc.wait(timeout=8)\n                except subprocess.TimeoutExpired:\n                    os.killpg(proc.pid, signal.SIGKILL)\n                    proc.wait(timeout=3)\n            log.close()\n\n\ndef topic(bootstrap, name, partitions=1, config=None):\n    admin = AdminClient({'bootstrap.servers': bootstrap})\n    admin.create_topics([NewTopic(name, partitions, 1, config=config or {})])[name].result(10)\n\n\ndef produce(producer, name, values, partition=0, expected_error=None):\n    errors = []\n    for value in values:\n        producer.produce(name, value, partition=partition,\n                         on_delivery=lambda err, message: errors.append(err))\n    assert producer.flush(10) == 0\n    assert len(errors) == len(values), errors\n    if expected_error is None:\n        assert all(error is None for error in errors), errors\n    else:\n        assert all(error and error.code() == expected_error for error in errors), errors\n\n\ndef consumer(bootstrap, group=None, isolation='read_committed'):\n    return Consumer({'bootstrap.servers': bootstrap, 'group.id': group or uuid.uuid4().hex,\n                     'enable.auto.commit': False, 'isolation.level': isolation,\n                     'enable.partition.eof': True, 'auto.offset.reset': 'earliest',\n                     'fetch.wait.max.ms': 50})\n\n\ndef read(bootstrap, name, isolation='read_committed', seconds=2):\n    client = consumer(bootstrap, isolation=isolation)\n    values = []\n    try:\n        client.assign([TopicPartition(name, 0, 0)])\n        deadline = time.monotonic() + seconds\n        while time.monotonic() < deadline:\n            message = client.poll(.1)\n            if message is not None and not message.error():\n                values.append(message.value())\n        return values\n    finally:\n        client.close()\n\n\ndef tx(bootstrap, transaction_id):\n    producer = Producer({'bootstrap.servers': bootstrap, 'transactional.id': transaction_id,\n                         'transaction.timeout.ms': 30000, 'message.timeout.ms': 10000})\n    producer.init_transactions(15)\n    return producer\n",
+        "checks/check.py": "import pathlib,sys,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nsys.path.insert(0,str(pathlib.Path.cwd()/\"checks\"))\nimport task\nfrom kafka_native import *\nfrom confluent_kafka import KafkaError\nfrom confluent_kafka.admin import ConfigResource,ResourceType\ndef config(bootstrap,name):\n    resource=ConfigResource(ResourceType.TOPIC,name)\n    admin=AdminClient({'bootstrap.servers':bootstrap})\n    entries=admin.describe_configs([resource])[resource].result(10)\n    return {key:value.value for key,value in entries.items()}\nwith broker() as bootstrap:\n    name='limits-'+uuid.uuid4().hex;other='untouched-'+uuid.uuid4().hex\n    settings={'max.message.bytes':'1024','cleanup.policy':'delete','retention.ms':'12345678'}\n    topic(bootstrap,name,config=settings);topic(bootstrap,other,config=settings)\n    p=Producer({'bootstrap.servers':bootstrap,'compression.type':'none','message.timeout.ms':10000})\n    payload=uuid.uuid4().bytes*256\n    produce(p,name,[payload],expected_error=KafkaError.MSG_SIZE_TOO_LARGE)\n    task.set_topic_limit(bootstrap,name,8192)\n    after=config(bootstrap,name);assert after['max.message.bytes']=='8192'\n    assert after['retention.ms']=='12345678' and after['cleanup.policy']=='delete'\n    assert config(bootstrap,other)['max.message.bytes']=='1024'\n    produce(p,name,[payload]);produce(p,name,[uuid.uuid4().bytes*768],expected_error=KafkaError.MSG_SIZE_TOO_LARGE)\n    task.set_topic_limit(bootstrap,name,2048);assert config(bootstrap,name)['max.message.bytes']=='2048'\n    produce(p,name,[payload],expected_error=KafkaError.MSG_SIZE_TOO_LARGE)\n    small=uuid.uuid4().bytes*32;produce(p,name,[small]);assert read(bootstrap,name)==[payload,small]\n    for invalid in [0,-1,True,1.5,'8192',None]:\n        try:task.set_topic_limit(bootstrap,name,invalid)\n        except ValueError:pass\n        else:raise AssertionError('invalid limit accepted')\n    assert config(bootstrap,name)['max.message.bytes']=='2048'\n    try:task.set_topic_limit(bootstrap,'missing-'+uuid.uuid4().hex,2048)\n    except Exception:pass\n    else:raise AssertionError('missing topic error swallowed')\nprint('native topic boundary: actual rejection/success, preserved settings, other topic, lowered bound, payload fidelity and invalid inputs passed')\n"
+      }
+    }
+  }
+]

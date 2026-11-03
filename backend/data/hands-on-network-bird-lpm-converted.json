@@ -1,0 +1,80 @@
+[
+  {
+    "id": "curated-network-completion-002",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 1,
+    "topic": "最长前缀匹配原生配置",
+    "title": "配置并查询最长前缀匹配，区分前缀长度与路由偏好",
+    "answer": "```bird\nprotocol static broad {\n    ipv4 { preference 200; };\n    route 10.0.0.0/8 blackhole;\n}\nprotocol static narrow {\n    ipv4 { preference 50; };\n    route 10.2.0.0/16 unreachable;\n}\n```\n\n/16比/8匹配更具体。这里两条不同前缀都存在，目的查询先选最长匹配；不能用不同协议的preference大小取代此前缀选择。真实系统数据转发还需路由安装与可达下一跳，本题没有执行这些动作。\n\n原题原理说明：\n同一路由表内通常先按最长前缀匹配，/16 比 /8 更具体；同等前缀再结合路由优先级、度量和实现规则。策略路由可先决定查哪张表，因此要同时检查规则和实际路由查询，不能仅按默认路由判断。",
+    "type": "code",
+    "source": "OpsForge 原创网络专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\n非root Linux、BIRD 2；routes.conf含broad与narrow两个静态协议，narrow误写为10.20.0.0/16。平台启动无网络监听的BIRD实例，只有工作区控制socket；无Kernel/Direct/OSPF，系统路由不变。\n\n## 操作任务\n修正routes.conf内narrow的网段，使10.2.0.0/16中的任意地址命中narrow，其他10.0.0.0/8地址仍命中broad。保留broad的preference 200/blackhole和narrow的preference 50/unreachable，不通过改变偏好或删除广域路由回避最长前缀匹配。两个静态协议只进入BIRD内部表，不向系统安装路由。\n\n## 提交产物\nroutes.conf，保留题给结构，仅修正目标网段。执行后生成lookup-observations.json。\n\n## 验收方法\npython3 checks/check.py让真实BIRD解析配置并执行birdc show route for：验证10.2网段首尾及随机地址命中/16，即使它的协议偏好较低；其他10网段命中/8；无匹配地址显示Network not found。记录原生查询输出并确认内核路由未改变。 所有断言通过退出0。本题验证内部路由查询，不做真实网络连通性测试；blackhole/unreachable仅用于区分结果。\n\n失败示例：把10.2.0.0写成/24只覆盖其中一个小网段，首个地址可能通过但尾部和随机地址会失败；将10.20误认为10.2会命中错误范围。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "files": {
+      "routes.conf": "protocol static broad {\n    ipv4 { preference 200; };\n    route 10.0.0.0/8 blackhole;\n}\nprotocol static narrow {\n    ipv4 { preference 50; };\n    route 10.20.0.0/16 unreachable;\n}\n"
+    },
+    "solution_files": {
+      "routes.conf": "protocol static broad {\n    ipv4 { preference 200; };\n    route 10.0.0.0/8 blackhole;\n}\nprotocol static narrow {\n    ipv4 { preference 50; };\n    route 10.2.0.0/16 unreachable;\n}\n"
+    },
+    "negative_files": {
+      "routes.conf": "protocol static broad {\n    ipv4 { preference 200; };\n    route 10.0.0.0/8 blackhole;\n}\nprotocol static narrow {\n    ipv4 { preference 50; };\n    route 10.2.0.0/24 unreachable;\n}\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bird",
+          "birdc",
+          "ip"
+        ],
+        "features": [
+          "bird:v2"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,re,subprocess,time,os,json,secrets\nassert os.getuid()!=0\nfragment=pathlib.Path('routes.conf').read_text()\npattern=r'\\s*protocol static broad\\s*\\{\\s*ipv4\\s*\\{\\s*preference 200;\\s*\\};\\s*route ([0-9./]+) blackhole;\\s*\\}\\s*protocol static narrow\\s*\\{\\s*ipv4\\s*\\{\\s*preference 50;\\s*\\};\\s*route ([0-9./]+) unreachable;\\s*\\}\\s*'\nassert re.fullmatch(pattern,fragment),'keep the two private static protocols and their stated preferences/actions'\nbefore=subprocess.check_output(['ip','-j','route','show','table','all'])\npathlib.Path('runtime.conf').write_text('log stderr all;\\nrouter id 192.0.2.1;\\n'+fragment)\nchecked=subprocess.run(['bird','-p','-c','runtime.conf'],capture_output=True,text=True,timeout=2)\nassert checked.returncode==0,checked.stderr\nlog=open('bird.log','w');process=subprocess.Popen(['bird','-f','-c','runtime.conf','-s','bird.ctl','-P','bird.pid'],stdout=log,stderr=log)\nobservations=[]\ntry:\n    for _ in range(100):\n        assert process.poll() is None\n        if pathlib.Path('bird.ctl').exists():break\n        time.sleep(.01)\n    samples=['10.2.0.1','10.2.255.254','10.2.'+str(secrets.randbelow(254)+1)+'.'+str(secrets.randbelow(254)+1)]\n    samples+=['10.1.0.1','10.3.0.1','10.255.255.254','192.0.2.9']\n    for address in samples:\n        result=subprocess.run(['birdc','-s','bird.ctl','show','route','for',address,'all'],capture_output=True,text=True,timeout=2)\n        observations.append({'address':address,'stdout':result.stdout,'exit':result.returncode})\n        if address.startswith('10.2.'):\n            assert result.returncode==0 and '10.2.0.0/16' in result.stdout and '[narrow ' in result.stdout and 'unreachable' in result.stdout,result.stdout\n        elif address.startswith('10.'):\n            assert result.returncode==0 and '10.0.0.0/8' in result.stdout and '[broad ' in result.stdout and 'blackhole' in result.stdout,result.stdout\n        else:assert 'Network not found' in result.stdout,result.stdout\n    pathlib.Path('lookup-observations.json').write_text(json.dumps({'lookups':observations,'kernel_forwarding_verified':False},indent=2))\nfinally:\n    if process.poll() is None:process.terminate()\n    try:process.wait(timeout=2)\n    except subprocess.TimeoutExpired:process.kill();process.wait(timeout=2)\n    log.close()\n    assert before==subprocess.check_output(['ip','-j','route','show','table','all'])\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "修正routes.conf内narrow的网段，使10.2.0.0/16中的任意地址命中narrow，其他10.0.0.0/8地址仍命中broad。保留broad的preference 200/blackhole和narrow的preference 50/unreachable，不通过改变偏好或删除广域路由回避最长前缀匹配。两个静态协议只进入BIRD内部表，不向系统安装路由。",
+      "deliverables": [
+        "routes.conf"
+      ],
+      "generated_artifacts": [
+        "lookup-observations.json"
+      ],
+      "verification": "python3 checks/check.py让真实BIRD解析配置并执行birdc show route for：验证10.2网段首尾及随机地址命中/16，即使它的协议偏好较低；其他10网段命中/8；无匹配地址显示Network not found。记录原生查询输出并确认内核路由未改变。",
+      "failure_examples": [
+        "把10.2.0.0写成/24只覆盖其中一个小网段，首个地址可能通过但尾部和随机地址会失败；将10.20误认为10.2会命中错误范围。"
+      ]
+    },
+    "case_signature": "curated-network-completion-002|native-bird-lpm-independent-of-protocol-preference",
+    "conversion": {
+      "original_id": "curated-network-completion-002",
+      "original_title": "目的地址同时匹配 10.0.0.0/8 和 10.2.0.0/16 时，为什么一般选择后者？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

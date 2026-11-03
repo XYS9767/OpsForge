@@ -1,0 +1,718 @@
+[
+  {
+    "id": "curated-parallel-disk-055",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "level": 2,
+    "topic": "存储介质与设备模型",
+    "title": "分区和I/O对齐为何影响4K物理扇区设备？",
+    "answer": "未对齐的逻辑写可能跨越多个物理扇区，触发额外读改写，增加延迟与写放大。检查逻辑/物理扇区尺寸及分区起始偏移，按设备约束规划。不能仅看到512字节逻辑扇区就认定物理介质也是512字节。",
+    "type": "practice",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 1,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "已进行内容编审和与已发布题对照；命令为知识说明，未在生产执行。 本候选仅作者编审；独立复核待执行，不代表统一验收登记。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "未对齐的逻辑写可能跨越多个物理扇区，触发额外读改写，增加延迟与写放大。",
+      "检查逻辑/物理扇区尺寸及分区起始偏移，按设备约束规划。",
+      "不能仅看到512字节逻辑扇区就认定物理介质也是512字节。"
+    ],
+    "references": [],
+    "question_format": "practice",
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "body": "## 操作任务\n对本题多份真实GPT磁盘镜像执行只读GPT查询（sfdisk --json或等价原生读取），run(image,physical_sector_bytes)返回{'logical_sector_bytes':...,'physical_sector_bytes':...,'partitions':[{'start_bytes':...,'aligned':bool,'sectors_per_physical':...}]}。physical_sector_bytes为操作者提供的设备几何约束（4096或8192），普通镜像本身不具备物理扇区。按实际logical sectorsize换算start，不把512逻辑扇区等同物理扇区。只读，不改表/载荷。基线镜像含start=63/2048两个分区；另有运行时生成布局的镜像，不能硬编码分区数或起始扇区；另测几何8192。解释跨物理扇区会增加读改写，但本题没有物理4Kn设备，不测硬件写放大。\n\n## 产物\ntask.py；透明原生夹具见附带文件。\n\n## 验收方法\npython3 checks/check.py。只使用题目创建的资源，全部回收；依赖不满足时报告环境阻塞。\n",
+    "files": {
+      "task.py": "def run(*args):\n    raise NotImplementedError()\n"
+    },
+    "solution_files": {
+      "task.py": "import json,subprocess\ndef run(image,physical_sector_bytes):\n    table=json.loads(subprocess.run(['sfdisk','--json',str(image)],check=True,capture_output=True,text=True).stdout)['partitiontable']\n    logical=table['sectorsize']\n    return {'logical_sector_bytes':logical,'physical_sector_bytes':physical_sector_bytes,'partitions':[{'start_bytes':p['start']*logical,'aligned':p['start']*logical%physical_sector_bytes==0,'sectors_per_physical':physical_sector_bytes//logical}for p in table['partitions']]}\n"
+    },
+    "negative_files": {
+      "task.py": "import json,subprocess\ndef run(image,physical_sector_bytes):\n    t=json.loads(subprocess.run(['sfdisk','--json',str(image)],check=True,capture_output=True,text=True).stdout)['partitiontable'];s=t['sectorsize']\n    return {'logical_sector_bytes':s,'physical_sector_bytes':physical_sector_bytes,'partitions':[{'start_bytes':p['start']*s,'aligned':p['start']%physical_sector_bytes==0,'sectors_per_physical':physical_sector_bytes//s}for p in t['partitions']]}\n"
+    },
+    "exercise": {
+      "environment": "Linux非root student UID1000；仅自有临时镜像/目录/namespace；不接触真实设备、默认身份或挂载树。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "sfdisk"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import hashlib,json,pathlib,subprocess,tempfile,sys,os,secrets\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nassert os.geteuid()==1000\nwith tempfile.TemporaryDirectory(prefix='of-s07-disk055-')as d:\n layouts=[[63,2048],[secrets.randbelow(100)*8+515,secrets.randbelow(100)*8+4096,secrets.randbelow(100)*8+8193]]\n for image_number,starts in enumerate(layouts):\n  p=pathlib.Path(d)/('disk-'+str(image_number)+'.img')\n  with p.open('wb')as f:f.truncate(32*1024*1024)\n  text='label: gpt\\nfirst-lba: 34\\nunit: sectors\\n'+''.join('start='+str(start)+',size=128\\n'for start in starts)\n  result=subprocess.run(['sfdisk','--no-reread','--no-tell-kernel',str(p)],input=text,text=True,capture_output=True);assert result.returncode==0,result.stderr\n  table=json.loads(subprocess.check_output(['sfdisk','--json',str(p)]))['partitiontable'];before=hashlib.sha256(p.read_bytes()).hexdigest()\n  for physical in (4096,8192):\n   got=task.run(p,physical);logical=table['sectorsize'];expected={'logical_sector_bytes':logical,'physical_sector_bytes':physical,'partitions':[{'start_bytes':part['start']*logical,'aligned':part['start']*logical%physical==0,'sectors_per_physical':physical//logical}for part in table['partitions']]}\n   assert got==expected,('native variable GPT layout/units/alignment',got,expected)\n   assert all(type(row['aligned'])is bool for row in got['partitions'])\n  assert hashlib.sha256(p.read_bytes()).hexdigest()==before,'read-only audit modified GPT image'\n print('NATIVE_GPT_FIXED_AND_RANDOMIZED_LAYOUTS_TWO_PHYSICAL_CONSTRAINTS_READONLY',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-disk-064",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "level": 3,
+    "topic": "备份迁移与存储恢复",
+    "title": "误删后为何应尽快停止对原文件系统的写入？",
+    "answer": "被释放块可被后续分配覆盖，持续运行会降低恢复概率，SSD回收机制还可能进一步使数据不可恢复。先保留介质并从备份恢复到独立目标，必要时由专业恢复流程处理镜像。不能保证普通文件删除都能找回。",
+    "type": "practice",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 1,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "已进行内容编审和与已发布题对照；命令为知识说明，未在生产执行。 本候选仅作者编审；独立复核待执行，不代表统一验收登记。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "被释放块可被后续分配覆盖，持续运行会降低恢复概率，SSD回收机制还可能进一步使数据不可恢复。",
+      "先保留介质并从备份恢复到独立目标，必要时由专业恢复流程处理镜像。",
+      "不能保证普通文件删除都能找回。"
+    ],
+    "references": [],
+    "question_format": "practice",
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "body": "## 操作任务\nrun(image,backup,target)在发生真实ext4离线误删后，只读保全原镜像，从独立备份恢复到/dev/shm中的独立目标。返回image_sha256、backup_sha256、target_sha256、recovered_from='independent_backup'、undelete_guaranteed=False。不得向原镜像写入，不保证删块仍可恢复；普通文件系统删除与SSD discard/GC的恢复概率不能混同。本实验使用mkfs.ext4/debugfs真实元数据，并不模拟SSD或通用取证恢复。\n\n## 产物\ntask.py；透明原生夹具见附带文件。\n\n## 验收方法\npython3 checks/check.py。只使用题目创建的资源，全部回收；依赖不满足时报告环境阻塞。\n",
+    "files": {
+      "task.py": "def run(*args):\n    raise NotImplementedError()\n"
+    },
+    "solution_files": {
+      "task.py": "import hashlib,pathlib,shutil\ndef run(image,backup,target):\n    image,backup,target=map(pathlib.Path,(image,backup,target))\n    if image.resolve()==target.resolve()or backup.resolve()==target.resolve():raise ValueError('independent target required')\n    before=hashlib.sha256(image.read_bytes()).hexdigest();shutil.copy2(backup,target)\n    return {'image_sha256':before,'backup_sha256':hashlib.sha256(backup.read_bytes()).hexdigest(),'target_sha256':hashlib.sha256(target.read_bytes()).hexdigest(),'recovered_from':'independent_backup','undelete_guaranteed':False}\n"
+    },
+    "negative_files": {
+      "task.py": "import hashlib,pathlib,shutil\ndef run(image,backup,target):\n    image,backup,target=map(pathlib.Path,(image,backup,target))\n    if image.resolve()==target.resolve()or backup.resolve()==target.resolve():raise ValueError('independent target required')\n    before=hashlib.sha256(image.read_bytes()).hexdigest();shutil.copy2(backup,image);shutil.copy2(backup,target)\n    return {'image_sha256':before,'backup_sha256':hashlib.sha256(backup.read_bytes()).hexdigest(),'target_sha256':hashlib.sha256(target.read_bytes()).hexdigest(),'recovered_from':'independent_backup','undelete_guaranteed':False}\n"
+    },
+    "exercise": {
+      "environment": "Linux非root student UID1000；仅自有临时镜像/目录/namespace；不接触真实设备、默认身份或挂载树。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "mkfs.ext4",
+          "debugfs"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import hashlib,pathlib,subprocess,tempfile,sys,os\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nassert os.geteuid()==1000\nwith tempfile.TemporaryDirectory(prefix='of-s07-disk064-')as d,tempfile.TemporaryDirectory(prefix='of-s07-disk064-restore-',dir='/dev/shm')as out:\n root=pathlib.Path(d);image=root/'disk.img';backup=root/'backup';payload=os.urandom(8192);backup.write_bytes(payload)\n with image.open('wb')as f:f.truncate(24*1024*1024)\n subprocess.run(['mkfs.ext4','-F','-q',str(image)],check=True,capture_output=True)\n def debug(command):return subprocess.run(['debugfs','-w','-R',command,str(image)],check=True,capture_output=True,text=True)\n debug('write '+str(backup)+' /critical');check=subprocess.run(['debugfs','-R','cat /critical',str(image)],capture_output=True);assert check.stdout==payload\n debug('rm /critical');missing=subprocess.run(['debugfs','-R','stat /critical',str(image)],capture_output=True,text=True);assert 'File not found' in missing.stderr\n before=hashlib.sha256(image.read_bytes()).hexdigest();target=pathlib.Path(out)/'restored';assert image.stat().st_dev!=target.parent.stat().st_dev\n got=task.run(image,backup,target)\n assert hashlib.sha256(image.read_bytes()).hexdigest()==before,'original deleted ext4 image overwritten'\n assert backup.read_bytes()==payload and target.read_bytes()==payload,'independent backup restoration failed'\n assert got=={'image_sha256':before,'backup_sha256':hashlib.sha256(payload).hexdigest(),'target_sha256':hashlib.sha256(payload).hexdigest(),'recovered_from':'independent_backup','undelete_guaranteed':False}\n assert got['undelete_guaranteed']is False\n print('NATIVE_EXT4_REAL_DELETE_SOURCE_PRESERVED_DIFFERENT_FS_BACKUP_RESTORE_NO_UNDELETE_PROMISE',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-disk-066",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "level": 3,
+    "topic": "I/O性能与数据持久性",
+    "title": "为什么存储基准必须说明工作集是否超过缓存？",
+    "answer": "小工作集可能主要测内存或控制器缓存，而生产工作集超出缓存时性能不同。应说明读写分布、块大小、并发、持续时间、预热和缓存层，报告稳定态及尾延迟。短时峰值不能证明长期容量。",
+    "type": "practice",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 1,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "已进行内容编审和与已发布题对照；命令为知识说明，未在生产执行。 本候选仅作者编审；独立复核待执行，不代表统一验收登记。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "小工作集可能主要测内存或控制器缓存，而生产工作集超出缓存时性能不同。",
+      "应说明读写分布、块大小、并发、持续时间、预热和缓存层，报告稳定态及尾延迟。",
+      "短时峰值不能证明长期容量。"
+    ],
+    "references": [],
+    "question_format": "practice",
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "body": "## 操作任务\nrun(path,observe)完成真实文件缓存基准报告：依次调用透明原生observe(path,'cold_advisory')、observe(path,'warm')，保留全部原始观测并给每次读请求计算nearest-rank p99；记录工作集和真实物理RAM是否被超过。输出working_set_bytes、physical_memory_bytes、working_set_exceeds_physical_memory(bool)、samples=[{observation:原记录,p99_ns:...}]、sustained_device_capacity_proven=False、controller_cache_measured=False。\n观察器真实fsync后的自有文件、POSIX_FADV_DONTNEED建议丢缓存、mincore驻留页、单并发按系统页顺序pread、monotonic_ns单次和全程耗时。两种文件尺寸分别测。丢缓存是建议而非强制；不强求冷读慢于热读，不宣称测量了控制器缓存。样本工作集没有超过RAM，短测不能证明生产稳态吞吐或耐久。原题中块大小、并发、读写比例、缓存层、预热和尾延迟要求均在透明记录/报告中体现。\n\n## 产物\ntask.py；透明原生夹具见附带文件。\n\n## 验收方法\npython3 checks/check.py。只使用题目创建的资源，全部回收；依赖不满足时报告环境阻塞。\n",
+    "files": {
+      "task.py": "def run(*args):\n    raise NotImplementedError()\n",
+      "native_cache.py": "import ctypes,mmap,os,pathlib,time,statistics,math\ndef resident(path):\n    path=pathlib.Path(path);fd=os.open(path,os.O_RDONLY);mm=mmap.mmap(fd,path.stat().st_size,access=mmap.ACCESS_COPY)\n    try:\n        page=os.sysconf('SC_PAGE_SIZE');count=(len(mm)+page-1)//page;vec=(ctypes.c_ubyte*count)();buf=(ctypes.c_char*len(mm)).from_buffer(mm);addr=ctypes.addressof(buf);lib=ctypes.CDLL(None,use_errno=True)\n        if lib.mincore(ctypes.c_void_p(addr),ctypes.c_size_t(len(mm)),vec):raise OSError(ctypes.get_errno(),'mincore')\n        del buf;return sum(bool(v&1)for v in vec)\n    finally:mm.close();os.close(fd)\ndef sample(path,phase):\n    path=pathlib.Path(path);fd=os.open(path,os.O_RDONLY);size=path.stat().st_size;page=os.sysconf('SC_PAGE_SIZE')\n    try:\n        if phase=='cold_advisory':os.posix_fadvise(fd,0,0,os.POSIX_FADV_DONTNEED)\n        before=resident(path);latencies=[];start=time.monotonic_ns();total=0\n        for offset in range(0,size,page):\n            begin=time.monotonic_ns();data=os.pread(fd,page,offset);latencies.append(time.monotonic_ns()-begin);total+=len(data)\n        elapsed=time.monotonic_ns()-start;after=resident(path)\n        return dict(phase=phase,file_bytes=size,block_bytes=page,concurrency=1,operation='read',cache_mode='buffered_posix_fadvise_advisory',bytes_read=total,resident_pages_before=before,resident_pages_after=after,request_latencies_ns=latencies,elapsed_ns=elapsed)\n    finally:os.close(fd)\n"
+    },
+    "solution_files": {
+      "task.py": "import os,math\ndef run(path,observe):\n    cold=observe(path,'cold_advisory');warm=observe(path,'warm');size=cold['file_bytes'];physical_memory=os.sysconf('SC_PHYS_PAGES')*os.sysconf('SC_PAGE_SIZE')\n    rows=[]\n    for record in (cold,warm):\n        times=record['request_latencies_ns'];rows.append(dict(observation=record,p99_ns=sorted(times)[math.ceil(len(times)*0.99)-1]))\n    return {'working_set_bytes':size,'physical_memory_bytes':physical_memory,'working_set_exceeds_physical_memory':size>physical_memory,'samples':rows,'sustained_device_capacity_proven':False,'controller_cache_measured':False}\n"
+    },
+    "negative_files": {
+      "task.py": "import os,math\ndef run(path,observe):\n    cold=observe(path,'cold_advisory');warm=observe(path,'warm');size=cold['file_bytes'];physical_memory=os.sysconf('SC_PHYS_PAGES')*os.sysconf('SC_PAGE_SIZE')\n    rows=[]\n    for record in (cold,warm):\n        times=record['request_latencies_ns'];rows.append(dict(observation=record,p99_ns=sorted(times)[math.ceil(len(times)*0.99)-1]))\n    return {'working_set_bytes':size,'physical_memory_bytes':physical_memory,'working_set_exceeds_physical_memory':size>physical_memory,'samples':rows,'sustained_device_capacity_proven':True,'controller_cache_measured':False}\n"
+    },
+    "exercise": {
+      "environment": "Linux非root student UID1000；仅自有临时镜像/目录/namespace；不接触真实设备、默认身份或挂载树。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,tempfile,sys,os,math,copy,hashlib\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'));from trusted_cache import sample\nassert os.geteuid()==1000\nwith tempfile.TemporaryDirectory(prefix='of-s07-cache-')as d:\n for size in (1024*1024,3*1024*1024):\n  path=pathlib.Path(d)/str(size);path.write_bytes(os.urandom(size))\n  with path.open('rb')as f:os.fsync(f.fileno())\n  digest=hashlib.sha256(path.read_bytes()).hexdigest();seen=[]\n  def observe(p,phase):\n   assert pathlib.Path(p)==path and phase in ('cold_advisory','warm');row=sample(p,phase);seen.append(copy.deepcopy(row));return row\n  got=task.run(path,observe);assert [x['phase']for x in seen]==['cold_advisory','warm'],'actual cold/warm measurements required'\n  ram=os.sysconf('SC_PHYS_PAGES')*os.sysconf('SC_PAGE_SIZE');expected={'working_set_bytes':size,'physical_memory_bytes':ram,'working_set_exceeds_physical_memory':size>ram,'samples':[{'observation':x,'p99_ns':sorted(x['request_latencies_ns'])[math.ceil(len(x['request_latencies_ns'])*.99)-1]}for x in seen],'sustained_device_capacity_proven':False,'controller_cache_measured':False}\n  assert got==expected,'sample metadata/cache boundary/tail mismatch';assert got['sustained_device_capacity_proven']is False and got['controller_cache_measured']is False and type(got['working_set_exceeds_physical_memory'])is bool\n  assert all(x['bytes_read']==size and x['resident_pages_after']>0 and x['elapsed_ns']>0 for x in seen)\n  assert hashlib.sha256(path.read_bytes()).hexdigest()==digest,'read benchmark changed source'\n print('NATIVE_PREAD_MINCORE_COLD_ADVISORY_WARM_REAL_WORKING_SET_RAM_AND_TAIL_NO_SUSTAINED_CLAIM',flush=True)\n",
+        "checks/trusted_cache.py": "import ctypes,mmap,os,pathlib,time,statistics,math\ndef resident(path):\n    path=pathlib.Path(path);fd=os.open(path,os.O_RDONLY);mm=mmap.mmap(fd,path.stat().st_size,access=mmap.ACCESS_COPY)\n    try:\n        page=os.sysconf('SC_PAGE_SIZE');count=(len(mm)+page-1)//page;vec=(ctypes.c_ubyte*count)();buf=(ctypes.c_char*len(mm)).from_buffer(mm);addr=ctypes.addressof(buf);lib=ctypes.CDLL(None,use_errno=True)\n        if lib.mincore(ctypes.c_void_p(addr),ctypes.c_size_t(len(mm)),vec):raise OSError(ctypes.get_errno(),'mincore')\n        del buf;return sum(bool(v&1)for v in vec)\n    finally:mm.close();os.close(fd)\ndef sample(path,phase):\n    path=pathlib.Path(path);fd=os.open(path,os.O_RDONLY);size=path.stat().st_size;page=os.sysconf('SC_PAGE_SIZE')\n    try:\n        if phase=='cold_advisory':os.posix_fadvise(fd,0,0,os.POSIX_FADV_DONTNEED)\n        before=resident(path);latencies=[];start=time.monotonic_ns();total=0\n        for offset in range(0,size,page):\n            begin=time.monotonic_ns();data=os.pread(fd,page,offset);latencies.append(time.monotonic_ns()-begin);total+=len(data)\n        elapsed=time.monotonic_ns()-start;after=resident(path)\n        return dict(phase=phase,file_bytes=size,block_bytes=page,concurrency=1,operation='read',cache_mode='buffered_posix_fadvise_advisory',bytes_read=total,resident_pages_before=before,resident_pages_after=after,request_latencies_ns=latencies,elapsed_ns=elapsed)\n    finally:os.close(fd)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-disk-069",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "level": 4,
+    "topic": "I/O性能与数据持久性",
+    "title": "平均 await 很低为什么仍可能存在严重尾延迟？",
+    "answer": "平均值会稀释少量慢请求，还混合读写、设备和不同时间段。需看请求延迟分布、峰值时段和应用调用链，关联队列与后台回收/刷写。单一平均指标不能证明满足p99目标。",
+    "type": "practice",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 1,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "已进行内容编审和与已发布题对照；命令为知识说明，未在生产执行。 本候选仅作者编审；独立复核待执行，不代表统一验收登记。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "平均值会稀释少量慢请求，还混合读写、设备和不同时间段。",
+      "需看请求延迟分布、峰值时段和应用调用链，关联队列与后台回收/刷写。",
+      "单一平均指标不能证明满足p99目标。"
+    ],
+    "references": [],
+    "question_format": "practice",
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "body": "## 操作任务\nrun(samples,target_ns)分析本题真实应用I/O采样，不用平均值替代尾延迟。每条样本为实际flock→pwrite(4096)→fsync端到端monotonic耗时，最后两请求由另一个真实FD持有flock制造排队。交付overall与by_phase（按uncontended/queued分组）的count/mean_ns/p99_ns/max_ns；p99按nearest-rank ceil(.99*N)，p99_meets_target必须bool，另device_await_measured=False、application_queueing_included=True。\n本题确实执行文件I/O与锁排队，并非块设备await采集器：不能从应用排队样本反推硬盘固件延迟。用于说明总体平均值掩盖少量慢请求，并把慢请求归至可证明的应用队列；生产仍需另采块层分布、设备/读写分组、峰值时段和调用链。输入样本为借入只读，不得篡改或删除慢样本。\n\n## 产物\ntask.py；透明原生夹具见附带文件。\n\n## 验收方法\npython3 checks/check.py。只使用题目创建的资源，全部回收；依赖不满足时报告环境阻塞。\n",
+    "files": {
+      "task.py": "def run(*args):\n    raise NotImplementedError()\n",
+      "native_tail.py": "import fcntl,os,pathlib,threading,time\ndef collect(path):\n    path=pathlib.Path(path);fd=os.open(path,os.O_RDWR|os.O_CREAT,0o600);rows=[]\n    try:\n        for i in range(101):\n            queued=i>=99;ready=threading.Event();holder=None\n            if queued:\n                def hold():\n                    other=os.open(path,os.O_RDWR)\n                    try:fcntl.flock(other,fcntl.LOCK_EX);ready.set();time.sleep(.05)\n                    finally:fcntl.flock(other,fcntl.LOCK_UN);os.close(other)\n                holder=threading.Thread(target=hold);holder.start();assert ready.wait(2)\n            begin=time.monotonic_ns();fcntl.flock(fd,fcntl.LOCK_EX)\n            try:os.pwrite(fd,b'X'*4096,0);os.fsync(fd)\n            finally:fcntl.flock(fd,fcntl.LOCK_UN)\n            rows.append({'latency_ns':time.monotonic_ns()-begin,'phase':'queued'if queued else'uncontended','operation':'pwrite_fsync','block_bytes':4096,'queued_on_flock':queued})\n            if holder:holder.join(timeout=2);assert not holder.is_alive()\n        return rows\n    finally:os.close(fd)\n"
+    },
+    "solution_files": {
+      "task.py": "import math\ndef run(samples,target_ns):\n    def summary(rows):\n        values=[x['latency_ns']for x in rows];return {'count':len(values),'mean_ns':sum(values)/len(values),'p99_ns':sorted(values)[math.ceil(.99*len(values))-1],'max_ns':max(values)}\n    all_rows=summary(samples);return {'overall':all_rows,'by_phase':{phase:summary([x for x in samples if x['phase']==phase])for phase in sorted({x['phase']for x in samples})},'p99_meets_target':all_rows['p99_ns']<=target_ns,'device_await_measured':False,'application_queueing_included':True}\n"
+    },
+    "negative_files": {
+      "task.py": "import math\ndef run(samples,target_ns):\n    def summary(rows):\n        values=[x['latency_ns']for x in rows];return {'count':len(values),'mean_ns':sum(values)/len(values),'p99_ns':sorted(values)[math.ceil(.99*len(values))-1],'max_ns':max(values)}\n    all_rows=summary(samples);return {'overall':all_rows,'by_phase':{phase:summary([x for x in samples if x['phase']==phase])for phase in sorted({x['phase']for x in samples})},'p99_meets_target':all_rows['mean_ns']<=target_ns,'device_await_measured':False,'application_queueing_included':True}\n"
+    },
+    "exercise": {
+      "environment": "Linux非root student UID1000；仅自有临时镜像/目录/namespace；不接触真实设备、默认身份或挂载树。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,tempfile,sys,os,copy,math\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'));from trusted_tail import collect\nassert os.geteuid()==1000\nwith tempfile.TemporaryDirectory(prefix='of-s07-tail-')as d:\n samples=collect(pathlib.Path(d)/'io');before=copy.deepcopy(samples);vals=[x['latency_ns']for x in samples];mean=sum(vals)/len(vals);p99=sorted(vals)[math.ceil(.99*len(vals))-1];assert p99>mean and p99<max(vals)\n def summary(rows):\n  values=[x['latency_ns']for x in rows];return dict(count=len(values),mean_ns=sum(values)/len(values),p99_ns=sorted(values)[math.ceil(.99*len(values))-1],max_ns=max(values))\n for target in ((mean+p99)/2,p99,p99+1):\n  got=task.run(samples,target);expected=dict(overall=summary(samples),by_phase={phase:summary([x for x in samples if x['phase']==phase])for phase in ('queued','uncontended')},p99_meets_target=p99<=target,device_await_measured=False,application_queueing_included=True)\n  assert got==expected,'mean used instead of true tail or phases/queue origin lost'\n  assert type(got['p99_meets_target'])is bool and got['device_await_measured']is False and got['application_queueing_included']is True\n  assert samples==before,'borrowed real measurements modified'\n print('NATIVE_101_FLOCK_PWRITE_FSYNC_SAMPLES_QUEUED_TAIL_NEAREST_RANK_PHASES_NO_DEVICE_AWAIT_CLAIM',flush=True)\n",
+        "checks/trusted_tail.py": "import fcntl,os,pathlib,threading,time\ndef collect(path):\n    path=pathlib.Path(path);fd=os.open(path,os.O_RDWR|os.O_CREAT,0o600);rows=[]\n    try:\n        for i in range(101):\n            queued=i>=99;ready=threading.Event();holder=None\n            if queued:\n                def hold():\n                    other=os.open(path,os.O_RDWR)\n                    try:fcntl.flock(other,fcntl.LOCK_EX);ready.set();time.sleep(.05)\n                    finally:fcntl.flock(other,fcntl.LOCK_UN);os.close(other)\n                holder=threading.Thread(target=hold);holder.start();assert ready.wait(2)\n            begin=time.monotonic_ns();fcntl.flock(fd,fcntl.LOCK_EX)\n            try:os.pwrite(fd,b'X'*4096,0);os.fsync(fd)\n            finally:fcntl.flock(fd,fcntl.LOCK_UN)\n            rows.append({'latency_ns':time.monotonic_ns()-begin,'phase':'queued'if queued else'uncontended','operation':'pwrite_fsync','block_bytes':4096,'queued_on_flock':queued})\n            if holder:holder.join(timeout=2);assert not holder.is_alive()\n        return rows\n    finally:os.close(fd)\n"
+      }
+    }
+  },
+  {
+    "id": "extra-ceph-01",
+    "title": "OSD down 与 out 有什么区别？",
+    "answer": "down 是 OSD 当前不可达或不正常；out 是它不再参与预期的数据放置。这是两个不同维度。\n\n处理前我会先查为什么 down，以及集群有没有足够副本和容量恢复，不会看到 down 就马上做移除。",
+    "level": 2,
+    "module": "ceph",
+    "category": "Ceph",
+    "type": "practice",
+    "version": 1,
+    "body": "## 操作任务\n补全inspect_osd(client,osd_id)，只读查询当前OSD map，返回{fsid,epoch,osd_id,reachable:bool,participates:bool}。reachable来自up维度，participates来自in维度，两者不能互推。OSD id须非负整数且存在（bool不当整数）；无效id抛ValueError。实际经历up/in→up/out→down/in→恢复up/in，对每阶段保留原生报告并在恢复后核对已知内容；不执行destroy/purge。\n\n保留原题知识：down 是 OSD 当前不可达或不正常；out 是它不再参与预期的数据放置。这是两个不同维度。\n\n处理前我会先查为什么 down，以及集群有没有足够副本和容量恢复，不会看到 down 就马上做移除。\n\n## 提交产物\ntask.py。只查询本题提供的真实rados客户端，不能修改集群或借用报告。\n\n## 验收方法\npython3 checks/check.py；教师启动真实私有MON/MGR和3个memstore OSD，在隔离回环集群执行状态变化、核验实际数据与资源清理。\n\n## 能力边界\n单台宿主的有限原生Ceph协议/命令实操，不证明生产故障域、硬件性能、持久介质可靠性或生产维护授权。所有数据和daemon仅属于本题，不连接默认集群；auth=none仅用于本地隔离题，不能作为Cephx安全证明。\n",
+    "hints": [
+      "先说明概念与边界，再给出判断依据。"
+    ],
+    "has_answer": true,
+    "source": "OpsForge 原创扩展问答",
+    "rubric": [
+      "原理准确",
+      "判断有依据",
+      "说明适用边界"
+    ],
+    "answer_style": "spoken",
+    "related_modules": [
+      "ceph"
+    ],
+    "review_status": "reviewed",
+    "review_note": "会话07作者候选；保持原知识答案，真实Ceph19.2.3单机私有MON/MGR/三memstore OSD有界原生验证；独立复核待会话08/10调度，未计验收完成。",
+    "difficulty": "进阶",
+    "topic": "OSD与存储引擎",
+    "question_format": "project",
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "def inspect_osd(client,osd_id):\n    raise NotImplementedError(\"implement live Ceph observation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef inspect_osd(client,osd_id):\n    if type(osd_id)is not int or osd_id<0:raise ValueError('nonnegative OSD id required')\n    data=mon(client,'osd dump')\n    row=next((x for x in data['osds']if x['osd']==osd_id),None)\n    if row is None:raise ValueError('OSD does not exist')\n    return {'fsid':data['fsid'],'epoch':data['epoch'],'osd_id':osd_id,'reachable':row['up']==1,'participates':row['in']==1}\n"
+    },
+    "negative_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef inspect_osd(client,osd_id):\n    if type(osd_id)is not int or osd_id<0:raise ValueError('nonnegative OSD id required')\n    data=mon(client,'osd dump')\n    row=next((x for x in data['osds']if x['osd']==osd_id),None)\n    if row is None:raise ValueError('OSD does not exist')\n    return {'fsid':data['fsid'],'epoch':data['epoch'],'osd_id':osd_id,'reachable':row['up']==1,'participates':row['up']==1}\n"
+    },
+    "equivalent_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef inspect_osd(client,osd_id):\n    if type(osd_id)is not int or osd_id<0:raise ValueError('OSD id')\n    snapshot=mon(client,'osd dump');tree=mon(client,'osd tree')\n    osds={x['id']:x for x in tree['nodes']+tree.get('stray',[])if x.get('type')=='osd'}\n    if osd_id not in osds:raise ValueError('OSD missing')\n    node=osds[osd_id]\n    return dict(fsid=snapshot['fsid'],epoch=snapshot['epoch'],osd_id=osd_id,reachable=node['status']=='up',participates=node['reweight']>0)\n"
+    },
+    "exercise": {
+      "environment": "Linux student UID1000，Ceph Squid19.2.3私有解包工具；显式WSL OpsForge-Validation-20261022；不改PATH/默认账号/集群",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "real private MON/MGR/three memstore OSDs, loopback-only synthetic data; no production or hardware reliability claim"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "python3"
+        ],
+        "python_modules": [
+          "rados"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,json,time,pathlib\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'));sys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ceph_topology_native import TopologyCeph,command\nimport task\nassert os.geteuid()==1000\n\ndef invoke(client,function,*args):\n    offset=len(client.records);result=function(client,*args)\n    return result,client.records[offset:]\n\ndef native_json(value):return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)\n\ndef bound_mon(value,records,prefix,**kw):\n    native=[json.loads(r[3])for r in records if r[0]=='mon'and r[2]==0 and r[1].get('prefix')==prefix and all(r[1].get(k)==v for k,v in kw.items())]\n    assert native and any(native_json(value)==native_json(x)for x in native),'reported JSON was not returned by this operation on real Ceph'\n\ndef same_bool(actual,expected,label):\n    assert type(actual)is bool and actual is expected,label\nwith TopologyCeph()as c:\n    pid=c.pool();ident=0\n    def check(up,inside):\n        before=c.mon('osd dump')['epoch'];actual=task.inspect_osd(c.client,ident);after=c.mon('osd dump')['epoch'];native=next(x for x in c.mon('osd dump')['osds']if x['osd']==ident)\n        assert set(actual)=={'fsid','epoch','osd_id','reachable','participates'}\n        assert actual['fsid']==c.fsid and actual['osd_id']==ident and type(actual['epoch'])is int and before<=actual['epoch']<=after\n        same_bool(actual['reachable'],up,'OSD up/down is reachability');same_bool(actual['participates'],inside,'OSD in/out is expected placement')\n        assert native['up']==int(up)and native['in']==int(inside)\n        print('NATIVE_OSD_DIMENSIONS '+json.dumps(actual),flush=True)\n    check(True,True)\n    c.mon('osd out',ids=['0']);c.wait(lambda:next(x for x in c.mon('osd dump')['osds']if x['osd']==0)['in']==0,'target out');check(True,False)\n    c.stop_osd(0);c.mon('osd in',ids=['0']);check(False,True)\n    c.restart_osd(0);c.wait_clean(pid);c.verify_payloads();check(True,True)\n    for invalid in (-1,True,999):\n        try:task.inspect_osd(c.client,invalid)\n        except ValueError:pass\n        else:raise AssertionError('invalid OSD identity accepted')\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED')\n",
+        "checks/ceph_topology_native.py": "\"\"\"Experimental nonroot, private MON/memstore OSD; no question or incident credit.\"\"\"\nimport json,os,pathlib,socket,subprocess,tempfile,time,uuid\nimport rados\nassert os.geteuid()==1000\nTOOL=pathlib.Path('/tmp/opsforge-session07-20261029/native')\nENV={**os.environ,'LD_LIBRARY_PATH':str(TOOL/'usr/lib/x86_64-linux-gnu/ceph')+':'+str(TOOL/'usr/lib/x86_64-linux-gnu')+':'+str(TOOL/'lib/x86_64-linux-gnu'),'PYTHONPATH':str(TOOL/'usr/lib/python3/dist-packages')}\ndef command(name,*args,timeout=20):\n result=subprocess.run([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,capture_output=True,text=True,timeout=timeout)\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\ndef port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\nclass PrivateCeph:\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-session07-ceph-');self.root=pathlib.Path(self.temp.name);self.processes=[];self.logs=[];self.client=None\n  try:\n   self.fsid=str(uuid.uuid4());self.monport=port();self.config=self.root/'ceph.conf';self.monmap=self.root/'monmap';self.mondata=self.root/'mon.a';self.mondata.mkdir()\n   (self.root/'run').mkdir();(self.root/'crash').mkdir()\n   self.config.write_text('''[global]\nplugin dir = {tool}/usr/lib/x86_64-linux-gnu/ceph\nmon cluster log file = {root}/cluster.log\nmon cluster log to file = false\nfsid = {fsid}\nmon initial members = a\nmon host = 127.0.0.1:{port}\nauth cluster required = none\nauth service required = none\nauth client required = none\npublic addr = 127.0.0.1\ncluster addr = 127.0.0.1\nms bind ipv4 = true\nms bind ipv6 = false\nms async op threads = 1\nlog to stderr = true\nlog to file = false\nrun dir = {root}/run\ncrash dir = {root}/crash\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nadmin socket = {root}/$name.asok\npid file = {root}/$name.pid\nkeyring = {root}/$name.keyring\nmon data avail crit = 0\nmon data avail warn = 0\nmon allow pool delete = true\nmon allow pool size one = true\nosd pool default size = 1\nosd pool default min size = 1\nosd pool default pg num = 1\nosd pool default pgp num = 1\nosd pool default pg autoscale mode = off\nosd crush chooseleaf type = 0\nrados mon op timeout = 3\nrados osd op timeout = 3\n[mon.a]\nmon data = {root}/mon.a\nmon addr = 127.0.0.1:{port}\n[osd]\nosd objectstore = memstore\nosd data = {root}/osd.$id\nkeyring = {root}/osd.$id/keyring\nosd memory target = 134217728\nmemstore device bytes = 134217728\nosd op num shards = 1\nosd op num threads per shard = 1\nosd op num shards hdd = 1\nosd op num threads per shard hdd = 1\nosd op num shards ssd = 1\nosd op num threads per shard ssd = 1\nosd recovery max active = 1\nosd max backfills = 1\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\n'''.format(fsid=self.fsid,port=self.monport,root=self.root,tool=TOOL))\n   command('monmaptool','--create','--fsid',self.fsid,'--add','a','127.0.0.1:'+str(self.monport),self.monmap)\n   command('ceph-authtool','--create-keyring',self.root/'mon.keyring','--gen-key','-n','mon.')\n   command('ceph-mon','--mkfs','-i','a','-c',self.config,'--monmap',self.monmap,'--mon-data',self.mondata,'--keyring',self.root/'mon.keyring')\n   monitor=self.start('ceph-mon','-f','-i','a','-c',self.config,'--mon-data',self.mondata,'--setuser','1000','--setgroup','1000')\n   deadline=time.monotonic()+20;last=None\n   while time.monotonic()<deadline:\n    if monitor.poll() is not None:raise RuntimeError('private MON exited before readiness: '+self.log_tail())\n    try:\n     status=json.loads(command('ceph','--admin-daemon',self.root/'mon.a.asok','mon_status',timeout=3))\n     if status.get('state') not in ('leader','peon'):time.sleep(.2);continue\n     assert status['monmap']['fsid']==self.fsid;break\n    except Exception as error:\n     last=error\n     time.sleep(.2)\n   else:raise RuntimeError('private MON readiness failed: '+str(last)+' '+self.log_tail())\n   print('NATIVE_PRIVATE_CEPH_MON_READY '+json.dumps({'fsid':self.fsid,'uid':os.geteuid(),'quorum':status.get('quorum'),'network':'none-loopback-only'}),flush=True)\n   self.client=rados.Rados(conffile=str(self.config),name='client.admin');self.client.connect(timeout=3)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def start(self,name,*args):\n  log=(self.root/(name+'-'+str(len(self.processes))+'.log')).open('wb');self.logs.append(log)\n  process=subprocess.Popen([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,stdin=subprocess.DEVNULL,stdout=log,stderr=log);self.processes.append(process)\n  return process\n def mon(self,prefix,**kwargs):\n  rc,out,err=self.client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kwargs}),b'')\n  if rc:raise RuntimeError('private mon command '+prefix+' failed: '+str(rc)+' '+str(err))\n  try:return json.loads(out)\n  except json.JSONDecodeError:return out.decode().strip()\n def add_osd(self):\n  osduuid=str(uuid.uuid4());created=self.mon('osd create',uuid=osduuid);osdid=int(created['osdid'] if isinstance(created,dict) else created);data=self.root/('osd.'+str(osdid));data.mkdir()\n  command('ceph-osd','--mkfs','--mkkey','-i',osdid,'-c',self.config,'--osd-uuid',osduuid,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  process=self.start('ceph-osd','-f','-i',osdid,'-c',self.config,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  deadline=time.monotonic()+20\n  while time.monotonic()<deadline:\n   if process.poll() is not None:raise RuntimeError('private OSD exited: '+self.log_tail())\n   status=self.mon('osd dump');row=next((row for row in status['osds'] if row['osd']==osdid),None)\n   if row and row['up']==1 and row['in']==1:break\n   time.sleep(.2)\n  else:raise RuntimeError('private OSD readiness timeout: '+self.log_tail())\n  print('NATIVE_PRIVATE_CEPH_MEMSTORE_OSD_READY '+str(osdid),flush=True);return osdid\n def log_tail(self):\n  return '\\n'.join(path.read_text(errors='replace')[-2500:] for path in self.root.glob('*.log'))\n def __exit__(self,*args):\n  if self.client:\n   try:self.client.shutdown()\n   except Exception:pass\n  for process in reversed(self.processes):\n   if process.poll() is None:process.terminate()\n   try:process.wait(timeout=8)\n   except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)\n  for log in self.logs:log.close()\n  self.temp.cleanup()\n\n\ndef native_trace(record):\n path=pathlib.Path.cwd()/'checks/native-commands.jsonl'\n if path.parent.is_dir():\n  with path.open('a',encoding='utf8')as stream:stream.write(json.dumps({'at_ns':time.time_ns(),'uid':os.getuid(),**record})+'\\n')\n\nimport copy\n\nclass TracingClient:\n def __init__(self,client):self.real=client;self._records=[]\n @property\n def records(self):return copy.deepcopy(self._records)\n def __getattr__(self,name):return getattr(self.real,name)\n def mon_command(self,command,*args,**kwargs):\n  result=self.real.mon_command(command,*args,**kwargs)\n  self._records.append(('mon',json.loads(command),result[0],result[1],str(result[2])))\n  native_trace({'kind':'real_rados_mon_command','request':json.loads(command),'rc':result[0],'stdout':result[1].decode('utf8','replace'),'stderr':str(result[2])})\n  return result\n def pg_command(self,pgid,command,*args,**kwargs):\n  result=self.real.pg_command(pgid,command,*args,**kwargs)\n  self._records.append(('pg',{'pgid':pgid,**json.loads(command)},result[0],result[1],str(result[2])))\n  native_trace({'kind':'real_rados_pg_command','request':{'pgid':pgid,**json.loads(command)},'rc':result[0],'stdout':result[1].decode('utf8','replace'),'stderr':str(result[2])})\n  return result\n\n_original_command=command\ndef command(name,*args,timeout=20):\n argv=[str(TOOL/'usr/bin'/name),*map(str,args)]\n result=subprocess.run(argv,env=ENV,capture_output=True,text=True,timeout=timeout)\n native_trace({'kind':'real_subprocess','argv':argv,'rc':result.returncode,'stdout':result.stdout,'stderr':result.stderr})\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\n\nclass TopologyCeph(PrivateCeph):\n def start(self,name,*args):\n  process=super().start(name,*args)\n  print('NATIVE_OWNED_PROCESS_START '+json.dumps({'pid':process.pid,'argv':[str(TOOL/'usr/bin'/name),*map(str,args)]}),flush=True)\n  return process\n def __enter__(self):\n  self.parent_identity=(os.geteuid(),os.environ.get('HOME'),os.environ.get('PATH'))\n  super().__enter__()\n  self.client=TracingClient(self.client)\n  try:\n   (self.root/'mgr.a').mkdir()\n   self.config.write_text(self.config.read_text()+'\\n[mgr]\\nmgr data = '+str(self.root/'mgr.a')+'\\nmgr module path = '+str(TOOL/'usr/share/ceph/mgr')+'\\nmgr initial modules = \\nmgr tick period = 1\\n[osd]\\nosd pg stat report interval max = 1\\n')\n   self.manager=self.start('ceph-mgr','-f','-i','a','-c',self.config,'--setuser','1000','--setgroup','1000')\n   self.wait(lambda:self.mon('mgr dump').get('available'),'manager available')\n   self.osds={}\n   for _ in range(3):\n    ident=self.add_osd();self.osds[ident]=self.processes[-1]\n   self.mon('osd set',key='noout')\n   print('NATIVE_TOPOLOGY_READY '+json.dumps({'fsid':self.fsid,'uid':os.getuid(),'pids':[p.pid for p in self.processes],'monport':self.monport}),flush=True)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def wait(self,predicate,label,seconds=25):\n  until=time.monotonic()+seconds;last=None\n  while time.monotonic()<until:\n   if any(p.poll()is not None for p in self.processes if p is self.manager):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: mgr exited '+self.log_tail())\n   try:\n    result=predicate()\n    if result:return result\n   except Exception as error:last=error\n   time.sleep(.25)\n  raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: '+label+' deadline '+str(last)+' '+self.log_tail())\n def pool(self,name='owned',size=2,pg=4):\n  self.mon('osd pool create',pool=name,pg_num=pg,pgp_num=pg,pool_type='replicated')\n  self.mon('osd pool set',pool=name,var='size',val=str(size))\n  self.mon('osd pool set',pool=name,var='min_size',val='1')\n  self.mon('osd pool application enable',pool=name,app='opsforge')\n  pid=next(p['pool']for p in self.mon('osd dump')['pools']if p['pool_name']==name)\n  self.wait_clean(pid,pg)\n  with self.client.open_ioctx(name)as io:\n   for index in range(16):io.write_full('obj-'+str(index),('known-payload-'+str(index)).encode())\n  self.wait_clean(pid,pg)\n  return pid\n def pg_rows(self,pid=None):\n  rows=self.mon('pg dump',dumpcontents=['pgs'])['pg_stats']\n  return [x for x in rows if pid is None or x['pgid'].startswith(str(pid)+'.')]\n def wait_clean(self,pid,pg=4):\n  return self.wait(lambda:(lambda rows:rows if len(rows)==pg and all(set(x['state'].split('+'))=={'active','clean'}for x in rows)else None)(self.pg_rows(pid)),'all owned PG active+clean')\n def stop_osd(self,ident):\n  process=self.osds[ident]\n  if process.poll()is None:process.terminate();process.wait(timeout=8)\n  self.mon('osd down',ids=[str(ident)])\n  self.wait(lambda:next(x for x in self.mon('osd dump')['osds']if x['osd']==ident)['up']==0,'owned OSD down')\n def restart_osd(self,ident):\n  process=self.start('ceph-osd','-f','-i',ident,'-c',self.config,'--osd-data',self.root/('osd.'+str(ident)),'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000');self.osds[ident]=process\n  self.mon('osd in',ids=[str(ident)])\n  self.wait(lambda:next(x for x in self.mon('osd dump')['osds']if x['osd']==ident)['up']==1,'owned OSD restarted')\n def verify_payloads(self,name='owned'):\n  with self.client.open_ioctx(name)as io:\n   for index in range(16):assert io.read('obj-'+str(index))==('known-payload-'+str(index)).encode(),'native payload not recovered'\n def __exit__(self,*args):\n  pids=[p.pid for p in self.processes];root=self.root\n  super().__exit__(*args)\n  assert all(p.poll()is not None for p in self.processes),'owned daemon leaked'\n  assert not root.exists(),'owned directory leaked'\n  assert self.parent_identity==(os.geteuid(),os.environ.get('HOME'),os.environ.get('PATH')),'default process identity/environment changed'\n  print('NATIVE_TOPOLOGY_CLEANED '+json.dumps({'pids':pids,'returncodes':[p.returncode for p in self.processes],'directory_removed':True,'identity_preserved':True}),flush=True)\n\n"
+      }
+    },
+    "references": [
+      "https://docs.ceph.com/en/squid/rados/operations/monitoring/",
+      "https://docs.ceph.com/en/squid/rados/operations/monitoring-osd-pg/"
+    ]
+  },
+  {
+    "id": "src-680b66b1b084bf36",
+    "title": "什么是“归置组”？",
+    "answer": "Ceph Placement Group（PG，归置组）是 pool 内对象映射与恢复管理的中间单位，多个对象经哈希映射到 PG，PG 再映射到 OSD 集合。PG 不是物理磁盘，也不是每个对象一组；数量需结合容量、池策略和自动调整建议。",
+    "category": "Ceph",
+    "difficulty": "入门",
+    "section": "Apache Hadoop",
+    "type": "practice",
+    "has_answer": true,
+    "source": "README.md",
+    "sources": [
+      "README.md"
+    ],
+    "version": 3,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "会话07作者候选；保持原知识答案，真实Ceph19.2.3单机私有MON/MGR/三memstore OSD有界原生验证；独立复核待会话08/10调度，未计验收完成。",
+    "original_category": "Ceph",
+    "original_title": "什么是“归置组”？",
+    "module": "ceph",
+    "topic": "架构与数据放置",
+    "level": 0,
+    "body": "## 操作任务\n补全placements(client,pool,objects)，对每个对象执行真实osd map并按输入顺序返回完整原生JSON记录，不自行实现哈希/CRUSH、不假设一对象一PG。pool须非空字符串，objects须1–64个非空字符串的list，允许重复对象但保持顺序；无效参数ValueError。两个真实pool内创建同名对象及多个对象，核PG归属和实际up/acting OSD集合；同一pool的多个对象共享PG，不同pool同名对象的PG前缀属于各自pool。返回的是放置状态，不代表对象一定存在或PG已经健康。\n\n保留原题知识：Ceph Placement Group（PG，归置组）是 pool 内对象映射与恢复管理的中间单位，多个对象经哈希映射到 PG，PG 再映射到 OSD 集合。PG 不是物理磁盘，也不是每个对象一组；数量需结合容量、池策略和自动调整建议。\n\n## 提交产物\ntask.py。只查询本题提供的真实rados客户端，不能修改集群或借用报告。\n\n## 验收方法\npython3 checks/check.py；教师启动真实私有MON/MGR和3个memstore OSD，在隔离回环集群执行状态变化、核验实际数据与资源清理。\n\n## 能力边界\n单台宿主的有限原生Ceph协议/命令实操，不证明生产故障域、硬件性能、持久介质可靠性或生产维护授权。所有数据和daemon仅属于本题，不连接默认集群；auth=none仅用于本地隔离题，不能作为Cephx安全证明。\n",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "question_format": "practice",
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "def placements(client,pool,objects):\n    raise NotImplementedError(\"implement live Ceph observation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef placements(client,pool,objects):\n    if not isinstance(pool,str)or not pool or not isinstance(objects,list)or not 1<=len(objects)<=64 or any(not isinstance(x,str)or not x for x in objects):raise ValueError('bounded pool/object names required')\n    return [mon(client,'osd map',pool=pool,object=name)for name in objects]\n"
+    },
+    "negative_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef placements(client,pool,objects):\n    if not isinstance(pool,str)or not pool or not isinstance(objects,list)or not 1<=len(objects)<=64 or any(not isinstance(x,str)or not x for x in objects):raise ValueError('bounded pool/object names required')\n    rows=[mon(client,'osd map',pool=pool,object=name)for name in objects]\n    for index,row in enumerate(rows):row['pgid']=str(row['pool_id'])+'.'+str(index)\n    return rows\n"
+    },
+    "equivalent_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef placements(client,pool,objects):\n    if not isinstance(pool,str)or not pool or not isinstance(objects,list)or not 1<=len(objects)<=64 or any(not isinstance(x,str)or not x for x in objects):raise ValueError('pool/object names')\n    from concurrent.futures import ThreadPoolExecutor\n    def query(name):return mon(client,'osd map',pool=pool,object=name)\n    with ThreadPoolExecutor(max_workers=4)as workers:return list(workers.map(query,objects))\n"
+    },
+    "exercise": {
+      "environment": "Linux student UID1000，Ceph Squid19.2.3私有解包工具；显式WSL OpsForge-Validation-20261022；不改PATH/默认账号/集群",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "real private MON/MGR/three memstore OSDs, loopback-only synthetic data; no production or hardware reliability claim"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "python3"
+        ],
+        "python_modules": [
+          "rados"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,json,time,pathlib\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'));sys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ceph_topology_native import TopologyCeph,command\nimport task\nassert os.geteuid()==1000\n\ndef invoke(client,function,*args):\n    offset=len(client.records);result=function(client,*args)\n    return result,client.records[offset:]\n\ndef native_json(value):return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)\n\ndef bound_mon(value,records,prefix,**kw):\n    native=[json.loads(r[3])for r in records if r[0]=='mon'and r[2]==0 and r[1].get('prefix')==prefix and all(r[1].get(k)==v for k,v in kw.items())]\n    assert native and any(native_json(value)==native_json(x)for x in native),'reported JSON was not returned by this operation on real Ceph'\n\ndef same_bool(actual,expected,label):\n    assert type(actual)is bool and actual is expected,label\nwith TopologyCeph()as c:\n    first=c.pool('owned_a');second=c.pool('owned_b');names=['obj-'+str(i)for i in range(16)]\n    for pool,pid in [('owned_a',first),('owned_b',second)]:\n        rows=task.placements(c.client,pool,names+names[:2]);assert isinstance(rows,list)and len(rows)==18\n        observed=[]\n        for name,actual in zip(names+names[:2],rows):\n            expected=c.mon('osd map',pool=pool,object=name)\n            assert native_json(actual)==native_json(expected),'must use actual pool/object PG and ordered OSD placement'\n            assert actual['pgid'].startswith(str(pid)+'.')and len(actual['acting'])==2\n            observed.append(actual['pgid'])\n        assert len(set(observed))<len(names),'native many objects to one PG witness missing'\n        with c.client.open_ioctx(pool)as io:\n            for name in names:assert io.read(name)==('known-payload-'+name.split('-')[-1]).encode()\n        print('NATIVE_OBJECT_PG_OSD_MAPPING '+json.dumps({'pool':pool,'id':pid,'objects':len(rows),'unique_pgs':sorted(set(observed)),'sample':rows[:2]}),flush=True)\n    for pool,nameset in [('',names),('owned_a',[]),('owned_a',[None]),('owned_a',['x']*65)]:\n        try:task.placements(c.client,pool,nameset)\n        except ValueError:pass\n        else:raise AssertionError('invalid mapping query input accepted')\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED')\n",
+        "checks/ceph_topology_native.py": "\"\"\"Experimental nonroot, private MON/memstore OSD; no question or incident credit.\"\"\"\nimport json,os,pathlib,socket,subprocess,tempfile,time,uuid\nimport rados\nassert os.geteuid()==1000\nTOOL=pathlib.Path('/tmp/opsforge-session07-20261029/native')\nENV={**os.environ,'LD_LIBRARY_PATH':str(TOOL/'usr/lib/x86_64-linux-gnu/ceph')+':'+str(TOOL/'usr/lib/x86_64-linux-gnu')+':'+str(TOOL/'lib/x86_64-linux-gnu'),'PYTHONPATH':str(TOOL/'usr/lib/python3/dist-packages')}\ndef command(name,*args,timeout=20):\n result=subprocess.run([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,capture_output=True,text=True,timeout=timeout)\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\ndef port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\nclass PrivateCeph:\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-session07-ceph-');self.root=pathlib.Path(self.temp.name);self.processes=[];self.logs=[];self.client=None\n  try:\n   self.fsid=str(uuid.uuid4());self.monport=port();self.config=self.root/'ceph.conf';self.monmap=self.root/'monmap';self.mondata=self.root/'mon.a';self.mondata.mkdir()\n   (self.root/'run').mkdir();(self.root/'crash').mkdir()\n   self.config.write_text('''[global]\nplugin dir = {tool}/usr/lib/x86_64-linux-gnu/ceph\nmon cluster log file = {root}/cluster.log\nmon cluster log to file = false\nfsid = {fsid}\nmon initial members = a\nmon host = 127.0.0.1:{port}\nauth cluster required = none\nauth service required = none\nauth client required = none\npublic addr = 127.0.0.1\ncluster addr = 127.0.0.1\nms bind ipv4 = true\nms bind ipv6 = false\nms async op threads = 1\nlog to stderr = true\nlog to file = false\nrun dir = {root}/run\ncrash dir = {root}/crash\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nadmin socket = {root}/$name.asok\npid file = {root}/$name.pid\nkeyring = {root}/$name.keyring\nmon data avail crit = 0\nmon data avail warn = 0\nmon allow pool delete = true\nmon allow pool size one = true\nosd pool default size = 1\nosd pool default min size = 1\nosd pool default pg num = 1\nosd pool default pgp num = 1\nosd pool default pg autoscale mode = off\nosd crush chooseleaf type = 0\nrados mon op timeout = 3\nrados osd op timeout = 3\n[mon.a]\nmon data = {root}/mon.a\nmon addr = 127.0.0.1:{port}\n[osd]\nosd objectstore = memstore\nosd data = {root}/osd.$id\nkeyring = {root}/osd.$id/keyring\nosd memory target = 134217728\nmemstore device bytes = 134217728\nosd op num shards = 1\nosd op num threads per shard = 1\nosd op num shards hdd = 1\nosd op num threads per shard hdd = 1\nosd op num shards ssd = 1\nosd op num threads per shard ssd = 1\nosd recovery max active = 1\nosd max backfills = 1\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\n'''.format(fsid=self.fsid,port=self.monport,root=self.root,tool=TOOL))\n   command('monmaptool','--create','--fsid',self.fsid,'--add','a','127.0.0.1:'+str(self.monport),self.monmap)\n   command('ceph-authtool','--create-keyring',self.root/'mon.keyring','--gen-key','-n','mon.')\n   command('ceph-mon','--mkfs','-i','a','-c',self.config,'--monmap',self.monmap,'--mon-data',self.mondata,'--keyring',self.root/'mon.keyring')\n   monitor=self.start('ceph-mon','-f','-i','a','-c',self.config,'--mon-data',self.mondata,'--setuser','1000','--setgroup','1000')\n   deadline=time.monotonic()+20;last=None\n   while time.monotonic()<deadline:\n    if monitor.poll() is not None:raise RuntimeError('private MON exited before readiness: '+self.log_tail())\n    try:\n     status=json.loads(command('ceph','--admin-daemon',self.root/'mon.a.asok','mon_status',timeout=3))\n     if status.get('state') not in ('leader','peon'):time.sleep(.2);continue\n     assert status['monmap']['fsid']==self.fsid;break\n    except Exception as error:\n     last=error\n     time.sleep(.2)\n   else:raise RuntimeError('private MON readiness failed: '+str(last)+' '+self.log_tail())\n   print('NATIVE_PRIVATE_CEPH_MON_READY '+json.dumps({'fsid':self.fsid,'uid':os.geteuid(),'quorum':status.get('quorum'),'network':'none-loopback-only'}),flush=True)\n   self.client=rados.Rados(conffile=str(self.config),name='client.admin');self.client.connect(timeout=3)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def start(self,name,*args):\n  log=(self.root/(name+'-'+str(len(self.processes))+'.log')).open('wb');self.logs.append(log)\n  process=subprocess.Popen([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,stdin=subprocess.DEVNULL,stdout=log,stderr=log);self.processes.append(process)\n  return process\n def mon(self,prefix,**kwargs):\n  rc,out,err=self.client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kwargs}),b'')\n  if rc:raise RuntimeError('private mon command '+prefix+' failed: '+str(rc)+' '+str(err))\n  try:return json.loads(out)\n  except json.JSONDecodeError:return out.decode().strip()\n def add_osd(self):\n  osduuid=str(uuid.uuid4());created=self.mon('osd create',uuid=osduuid);osdid=int(created['osdid'] if isinstance(created,dict) else created);data=self.root/('osd.'+str(osdid));data.mkdir()\n  command('ceph-osd','--mkfs','--mkkey','-i',osdid,'-c',self.config,'--osd-uuid',osduuid,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  process=self.start('ceph-osd','-f','-i',osdid,'-c',self.config,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  deadline=time.monotonic()+20\n  while time.monotonic()<deadline:\n   if process.poll() is not None:raise RuntimeError('private OSD exited: '+self.log_tail())\n   status=self.mon('osd dump');row=next((row for row in status['osds'] if row['osd']==osdid),None)\n   if row and row['up']==1 and row['in']==1:break\n   time.sleep(.2)\n  else:raise RuntimeError('private OSD readiness timeout: '+self.log_tail())\n  print('NATIVE_PRIVATE_CEPH_MEMSTORE_OSD_READY '+str(osdid),flush=True);return osdid\n def log_tail(self):\n  return '\\n'.join(path.read_text(errors='replace')[-2500:] for path in self.root.glob('*.log'))\n def __exit__(self,*args):\n  if self.client:\n   try:self.client.shutdown()\n   except Exception:pass\n  for process in reversed(self.processes):\n   if process.poll() is None:process.terminate()\n   try:process.wait(timeout=8)\n   except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)\n  for log in self.logs:log.close()\n  self.temp.cleanup()\n\n\ndef native_trace(record):\n path=pathlib.Path.cwd()/'checks/native-commands.jsonl'\n if path.parent.is_dir():\n  with path.open('a',encoding='utf8')as stream:stream.write(json.dumps({'at_ns':time.time_ns(),'uid':os.getuid(),**record})+'\\n')\n\nimport copy\n\nclass TracingClient:\n def __init__(self,client):self.real=client;self._records=[]\n @property\n def records(self):return copy.deepcopy(self._records)\n def __getattr__(self,name):return getattr(self.real,name)\n def mon_command(self,command,*args,**kwargs):\n  result=self.real.mon_command(command,*args,**kwargs)\n  self._records.append(('mon',json.loads(command),result[0],result[1],str(result[2])))\n  native_trace({'kind':'real_rados_mon_command','request':json.loads(command),'rc':result[0],'stdout':result[1].decode('utf8','replace'),'stderr':str(result[2])})\n  return result\n def pg_command(self,pgid,command,*args,**kwargs):\n  result=self.real.pg_command(pgid,command,*args,**kwargs)\n  self._records.append(('pg',{'pgid':pgid,**json.loads(command)},result[0],result[1],str(result[2])))\n  native_trace({'kind':'real_rados_pg_command','request':{'pgid':pgid,**json.loads(command)},'rc':result[0],'stdout':result[1].decode('utf8','replace'),'stderr':str(result[2])})\n  return result\n\n_original_command=command\ndef command(name,*args,timeout=20):\n argv=[str(TOOL/'usr/bin'/name),*map(str,args)]\n result=subprocess.run(argv,env=ENV,capture_output=True,text=True,timeout=timeout)\n native_trace({'kind':'real_subprocess','argv':argv,'rc':result.returncode,'stdout':result.stdout,'stderr':result.stderr})\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\n\nclass TopologyCeph(PrivateCeph):\n def start(self,name,*args):\n  process=super().start(name,*args)\n  print('NATIVE_OWNED_PROCESS_START '+json.dumps({'pid':process.pid,'argv':[str(TOOL/'usr/bin'/name),*map(str,args)]}),flush=True)\n  return process\n def __enter__(self):\n  self.parent_identity=(os.geteuid(),os.environ.get('HOME'),os.environ.get('PATH'))\n  super().__enter__()\n  self.client=TracingClient(self.client)\n  try:\n   (self.root/'mgr.a').mkdir()\n   self.config.write_text(self.config.read_text()+'\\n[mgr]\\nmgr data = '+str(self.root/'mgr.a')+'\\nmgr module path = '+str(TOOL/'usr/share/ceph/mgr')+'\\nmgr initial modules = \\nmgr tick period = 1\\n[osd]\\nosd pg stat report interval max = 1\\n')\n   self.manager=self.start('ceph-mgr','-f','-i','a','-c',self.config,'--setuser','1000','--setgroup','1000')\n   self.wait(lambda:self.mon('mgr dump').get('available'),'manager available')\n   self.osds={}\n   for _ in range(3):\n    ident=self.add_osd();self.osds[ident]=self.processes[-1]\n   self.mon('osd set',key='noout')\n   print('NATIVE_TOPOLOGY_READY '+json.dumps({'fsid':self.fsid,'uid':os.getuid(),'pids':[p.pid for p in self.processes],'monport':self.monport}),flush=True)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def wait(self,predicate,label,seconds=25):\n  until=time.monotonic()+seconds;last=None\n  while time.monotonic()<until:\n   if any(p.poll()is not None for p in self.processes if p is self.manager):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: mgr exited '+self.log_tail())\n   try:\n    result=predicate()\n    if result:return result\n   except Exception as error:last=error\n   time.sleep(.25)\n  raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: '+label+' deadline '+str(last)+' '+self.log_tail())\n def pool(self,name='owned',size=2,pg=4):\n  self.mon('osd pool create',pool=name,pg_num=pg,pgp_num=pg,pool_type='replicated')\n  self.mon('osd pool set',pool=name,var='size',val=str(size))\n  self.mon('osd pool set',pool=name,var='min_size',val='1')\n  self.mon('osd pool application enable',pool=name,app='opsforge')\n  pid=next(p['pool']for p in self.mon('osd dump')['pools']if p['pool_name']==name)\n  self.wait_clean(pid,pg)\n  with self.client.open_ioctx(name)as io:\n   for index in range(16):io.write_full('obj-'+str(index),('known-payload-'+str(index)).encode())\n  self.wait_clean(pid,pg)\n  return pid\n def pg_rows(self,pid=None):\n  rows=self.mon('pg dump',dumpcontents=['pgs'])['pg_stats']\n  return [x for x in rows if pid is None or x['pgid'].startswith(str(pid)+'.')]\n def wait_clean(self,pid,pg=4):\n  return self.wait(lambda:(lambda rows:rows if len(rows)==pg and all(set(x['state'].split('+'))=={'active','clean'}for x in rows)else None)(self.pg_rows(pid)),'all owned PG active+clean')\n def stop_osd(self,ident):\n  process=self.osds[ident]\n  if process.poll()is None:process.terminate();process.wait(timeout=8)\n  self.mon('osd down',ids=[str(ident)])\n  self.wait(lambda:next(x for x in self.mon('osd dump')['osds']if x['osd']==ident)['up']==0,'owned OSD down')\n def restart_osd(self,ident):\n  process=self.start('ceph-osd','-f','-i',ident,'-c',self.config,'--osd-data',self.root/('osd.'+str(ident)),'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000');self.osds[ident]=process\n  self.mon('osd in',ids=[str(ident)])\n  self.wait(lambda:next(x for x in self.mon('osd dump')['osds']if x['osd']==ident)['up']==1,'owned OSD restarted')\n def verify_payloads(self,name='owned'):\n  with self.client.open_ioctx(name)as io:\n   for index in range(16):assert io.read('obj-'+str(index))==('known-payload-'+str(index)).encode(),'native payload not recovered'\n def __exit__(self,*args):\n  pids=[p.pid for p in self.processes];root=self.root\n  super().__exit__(*args)\n  assert all(p.poll()is not None for p in self.processes),'owned daemon leaked'\n  assert not root.exists(),'owned directory leaked'\n  assert self.parent_identity==(os.geteuid(),os.environ.get('HOME'),os.environ.get('PATH')),'default process identity/environment changed'\n  print('NATIVE_TOPOLOGY_CLEANED '+json.dumps({'pids':pids,'returncodes':[p.returncode for p in self.processes],'directory_removed':True,'identity_preserved':True}),flush=True)\n\n"
+      }
+    },
+    "references": [
+      "https://docs.ceph.com/en/squid/rados/operations/monitoring/",
+      "https://docs.ceph.com/en/squid/rados/operations/monitoring-osd-pg/"
+    ]
+  },
+  {
+    "id": "curated-parallel-ceph-067",
+    "module": "ceph",
+    "category": "Ceph",
+    "level": 3,
+    "topic": "一致性与恢复",
+    "title": "Ceph OSD safe-to-destroy检查为什么必须紧贴实际销毁前执行？",
+    "answer": "它基于当前副本与集群状态判断安全性，状态变化可能使早先结果失效。销毁前核对身份及最新结果，保留迁出证据；不能依据几天前记录删盘。",
+    "type": "practice",
+    "source": "OpsForge 原创编审 2026-10-21；Ceph Squid 官方文档核对",
+    "version": 1,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "会话07作者候选；保持原知识答案，真实Ceph19.2.3单机私有MON/MGR/三memstore OSD有界原生验证；独立复核待会话08/10调度，未计验收完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n交付preflight(client,osd_id,expected_fsid,previous_epoch)只读销毁前检查：先取当前osd dump并核FSID/OSD身份，再实时osd safe-to-destroy，最后重取osd dump。返回精确字段{fsid,osd_id,epoch_before,epoch_after,changed_since_evidence:bool,safe_to_destroy:bool,eligible:bool,native:原生安全命令JSON}。safe_to_destroy必须目标在原生safe_to_destroy集合且不在active/missing_stats/stored_pgs集合；返回码0不是安全许可。eligible仅当两次epoch相同、native_safe为真、目标down且out时为真。previous_epoch仅为旧迁出证据水位，不能复用旧安全结论；changed_since_evidence指出旧证据是否过期。身份错/无效整数/不存在目标抛ValueError。报告仅为当前有界观测，任何后续状态变化均须紧贴实际销毁重新检查；本题不执行销毁。原生验收迁出前拒绝、迁出后存活时仍拒绝、down/out且安全时可出具报告、原生noscrub flag变化使检查窗口epoch不同则拒绝、重新加入后拒绝旧许可，保留数据恢复和迁出PG证据。\n\n保留原题知识：它基于当前副本与集群状态判断安全性，状态变化可能使早先结果失效。销毁前核对身份及最新结果，保留迁出证据；不能依据几天前记录删盘。\n\n## 提交产物\ntask.py。只查询本题提供的真实rados客户端，不能修改集群或借用报告。\n\n## 验收方法\npython3 checks/check.py；教师启动真实私有MON/MGR和3个memstore OSD，在隔离回环集群执行状态变化、核验实际数据与资源清理。\n\n## 能力边界\n单台宿主的有限原生Ceph协议/命令实操，不证明生产故障域、硬件性能、持久介质可靠性或生产维护授权。所有数据和daemon仅属于本题，不连接默认集群；auth=none仅用于本地隔离题，不能作为Cephx安全证明。\n",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://docs.ceph.com/en/squid/rados/operations/monitoring/",
+      "https://docs.ceph.com/en/squid/rados/operations/monitoring-osd-pg/"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "VVPKdTiBHofXPHxc6SRcqG6Pnkb",
+          "KYZ5dCu02odB0fxlwqkcgXP8njh",
+          "Qp2cdAHxporpWaxAgaDc4gVtn9e",
+          "Wi3xdgRjboAVGPxDr96csO9Dngh",
+          "CDMZdLFTpotn6WxkSsSc9Snonsd",
+          "HYe8dt489ojhtFxxyHcc2ER6nkb",
+          "HbMhdXwQ1oxVkixALihcK9PgnLd",
+          "KIQ2dUaUroAmtSxtzTEc0WPPnXf",
+          "Co21d8Tk0ofZkIxi94KcUydnnWg",
+          "CIFAdxeAQoyEn7xRu9pcUEyVnYf",
+          "O0MrdSPkjoqxiKxcQOwcWrOSnSd",
+          "WG50dPN2coQY8uxG2bvcMRJSnWb",
+          "CXDtd28yXokNKqxEJfCckwWXnOb",
+          "DCiudyaozogYwDxwxFucQgVInPg",
+          "SI23dAg79ojf0cxrAPJc8dhonze",
+          "R3n5dfFhQoXCrCxvBKzcGzXpnFb",
+          "W0Ysd6OheoYbssxFAPrcv2sNnuf",
+          "FqqjdEoVHo3QZDxZxsccRE4ZnMc",
+          "OviKdI2YfoxzNJx7zW9cCAZRnab",
+          "YEL7dByAroQcEWxwD9ycQlCzncd",
+          "Z9wYd3tUhoOaKexywCacULzonee",
+          "Xrawdg8kpofb1sxq0CbcMU7dnIm",
+          "IE7ldxQIOooQfpxMcJTcC0BCn7b",
+          "Wq9zdoZnLopyk7xvMgxcYml7n5f",
+          "MGCMdnwevor2XnxpbwWcM7RTnFe",
+          "XczJduUHFoyweExpWBmcnKJGnTh",
+          "GWS2dkpJHo1oVxxYJuycKhyTnQg",
+          "TLN8dgSshoYG3JxPSJuce4Tvn7g",
+          "NpdidzK1vo5k9Gxefh4cJV73n7d",
+          "EohndJp3AoHAVix65seckcjnnxd",
+          "KUnyd8pdfoQceaxdfC2c0L8unDb"
+        ]
+      }
+    ],
+    "question_format": "project",
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "def preflight(client,osd_id,expected_fsid,previous_epoch):\n    raise NotImplementedError(\"implement live Ceph observation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef preflight(client,osd_id,expected_fsid,previous_epoch):\n    if type(osd_id)is not int or osd_id<0 or type(previous_epoch)is not int or previous_epoch<0:raise ValueError('OSD identity/previous epoch')\n    before=mon(client,'osd dump')\n    if before['fsid']!=expected_fsid:raise ValueError('wrong cluster identity')\n    row=next((x for x in before['osds']if x['osd']==osd_id),None)\n    if row is None:raise ValueError('OSD missing')\n    result=mon(client,'osd safe-to-destroy',ids=[str(osd_id)])\n    after=mon(client,'osd dump');stable=before['epoch']==after['epoch']\n    native_safe=osd_id in result.get('safe_to_destroy',[]) and all(osd_id not in result.get(k,[])for k in ('active','missing_stats','stored_pgs'))\n    return {'fsid':expected_fsid,'osd_id':osd_id,'epoch_before':before['epoch'],'epoch_after':after['epoch'],'changed_since_evidence':previous_epoch!=after['epoch'],'safe_to_destroy':native_safe,'eligible':bool(stable and native_safe and row['up']==0 and row['in']==0),'native':result}\n"
+    },
+    "negative_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef preflight(client,osd_id,expected_fsid,previous_epoch):\n    if type(osd_id)is not int or osd_id<0 or type(previous_epoch)is not int or previous_epoch<0:raise ValueError('OSD identity/previous epoch')\n    before=mon(client,'osd dump')\n    if before['fsid']!=expected_fsid:raise ValueError('wrong cluster identity')\n    row=next((x for x in before['osds']if x['osd']==osd_id),None)\n    if row is None:raise ValueError('OSD missing')\n    result=mon(client,'osd safe-to-destroy',ids=[str(osd_id)])\n    after=mon(client,'osd dump');stable=before['epoch']==after['epoch']\n    native_safe=True\n    return {'fsid':expected_fsid,'osd_id':osd_id,'epoch_before':before['epoch'],'epoch_after':after['epoch'],'changed_since_evidence':previous_epoch!=after['epoch'],'safe_to_destroy':native_safe,'eligible':bool(stable and native_safe and row['up']==0 and row['in']==0),'native':result}\n"
+    },
+    "equivalent_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef preflight(client,osd_id,expected_fsid,previous_epoch):\n    if type(osd_id)is not int or osd_id<0 or type(previous_epoch)is not int or previous_epoch<0:raise ValueError('OSD identity/previous epoch')\n    before=mon(client,'osd dump')\n    if before['fsid']!=expected_fsid:raise ValueError('wrong cluster identity')\n    row=next((x for x in before['osds']if x['osd']==osd_id),None)\n    if row is None:raise ValueError('OSD missing')\n    result=mon(client,'osd safe-to-destroy',ids=[str(osd_id)])\n    after=mon(client,'osd dump');stable=before['epoch']==after['epoch']\n    blocked=set(result.get('active',[]))|set(result.get('missing_stats',[]))|set(result.get('stored_pgs',[]))\n    native_safe=osd_id in set(result.get('safe_to_destroy',[]))-blocked\n    return {'fsid':expected_fsid,'osd_id':osd_id,'epoch_before':before['epoch'],'epoch_after':after['epoch'],'changed_since_evidence':previous_epoch!=after['epoch'],'safe_to_destroy':native_safe,'eligible':bool(stable and native_safe and row['up']==0 and row['in']==0),'native':result}\n"
+    },
+    "exercise": {
+      "environment": "Linux student UID1000，Ceph Squid19.2.3私有解包工具；显式WSL OpsForge-Validation-20261022；不改PATH/默认账号/集群",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "real private MON/MGR/three memstore OSDs, loopback-only synthetic data; no production or hardware reliability claim"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "python3"
+        ],
+        "python_modules": [
+          "rados"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,json,time,pathlib\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'));sys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ceph_topology_native import TopologyCeph,command\nimport task\nassert os.geteuid()==1000\n\ndef invoke(client,function,*args):\n    offset=len(client.records);result=function(client,*args)\n    return result,client.records[offset:]\n\ndef native_json(value):return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)\n\ndef bound_mon(value,records,prefix,**kw):\n    native=[json.loads(r[3])for r in records if r[0]=='mon'and r[2]==0 and r[1].get('prefix')==prefix and all(r[1].get(k)==v for k,v in kw.items())]\n    assert native and any(native_json(value)==native_json(x)for x in native),'reported JSON was not returned by this operation on real Ceph'\n\ndef same_bool(actual,expected,label):\n    assert type(actual)is bool and actual is expected,label\nwith TopologyCeph()as c:\n    pid=c.pool();previous=c.mon('osd dump')['epoch'];ident=0\n    def native_safe():\n        r=c.mon('osd safe-to-destroy',ids=['0'])\n        return 0 in r.get('safe_to_destroy',[])and all(0 not in r.get(k,[])for k in ('active','missing_stats','stored_pgs'))\n    def check(eligible,safe,client=None):\n        r,receipts=invoke(client or c.client,task.preflight,0,c.fsid,previous)\n        assert set(r)=={'fsid','osd_id','epoch_before','epoch_after','changed_since_evidence','safe_to_destroy','eligible','native'}\n        assert r['fsid']==c.fsid and r['osd_id']==0 and type(r['epoch_before'])is int and type(r['epoch_after'])is int\n        bound_mon(r['native'],receipts,'osd safe-to-destroy',ids=['0'])\n        snapshots=[json.loads(x[3])for x in receipts if x[0]=='mon'and x[1].get('prefix')=='osd dump'and x[2]==0]\n        assert len(snapshots)>=2 and r['epoch_before']==snapshots[0]['epoch']and r['epoch_after']==snapshots[-1]['epoch'],'epochs not bound to actual safety window'\n        same_bool(r['eligible'],eligible,'only fresh safe down/out target is eligible');same_bool(r['safe_to_destroy'],safe,'native JSON target membership is authoritative')\n        same_bool(r['changed_since_evidence'],r['epoch_after']!=previous,'old evidence epoch must be evaluated')\n        assert (0 in r['native'].get('safe_to_destroy',[]))is safe\n        print('NATIVE_LATEST_SAFE_TO_DESTROY '+json.dumps(r),flush=True)\n        return r\n    c.wait(lambda:not native_safe(),'target initially unsafe');check(False,False)\n    c.mon('osd out',ids=['0']);c.wait_clean(pid);c.wait(native_safe,'target data migrated and safe');check(False,True)\n    assert all(0 not in pg['acting']for pg in c.pg_rows(pid)),'owned migration proof missing'\n    c.stop_osd(0);c.wait(native_safe,'stopped target safe');old=check(True,True)\n    class InterleavedClient:\n        def __init__(self,client):self.real=client;self.changed=False\n        def __getattr__(self,name):return getattr(self.real,name)\n        def mon_command(self,raw,*args,**kw):\n            if json.loads(raw).get('prefix')=='osd safe-to-destroy'and not self.changed:\n                self.changed=True;c.mon('osd set',key='noscrub')\n            return self.real.mon_command(raw,*args,**kw)\n    interleaved=InterleavedClient(c.client)\n    try:raced=check(False,True,interleaved)\n    finally:c.mon('osd unset',key='noscrub')\n    assert interleaved.changed and raced['epoch_after']>raced['epoch_before'],'native map epoch race not exercised'\n    print('NATIVE_REAL_EPOCH_RACE '+json.dumps({'before':raced['epoch_before'],'after':raced['epoch_after'],'eligible':raced['eligible']}),flush=True)\n    c.restart_osd(0);c.wait_clean(pid);c.verify_payloads();c.wait(lambda:not native_safe(),'target rejoined and active');new=check(False,False)\n    assert new['epoch_after']>old['epoch_after'],'native OSD map change witness missing'\n    for ident,fsid,epoch in [(-1,c.fsid,0),(True,c.fsid,0),(999,c.fsid,0),(0,'wrong-fsid',0),(0,c.fsid,True)]:\n        try:task.preflight(c.client,ident,fsid,epoch)\n        except ValueError:pass\n        else:raise AssertionError('wrong destruction identity/epoch accepted')\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED')\n",
+        "checks/ceph_topology_native.py": "\"\"\"Experimental nonroot, private MON/memstore OSD; no question or incident credit.\"\"\"\nimport json,os,pathlib,socket,subprocess,tempfile,time,uuid\nimport rados\nassert os.geteuid()==1000\nTOOL=pathlib.Path('/tmp/opsforge-session07-20261029/native')\nENV={**os.environ,'LD_LIBRARY_PATH':str(TOOL/'usr/lib/x86_64-linux-gnu/ceph')+':'+str(TOOL/'usr/lib/x86_64-linux-gnu')+':'+str(TOOL/'lib/x86_64-linux-gnu'),'PYTHONPATH':str(TOOL/'usr/lib/python3/dist-packages')}\ndef command(name,*args,timeout=20):\n result=subprocess.run([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,capture_output=True,text=True,timeout=timeout)\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\ndef port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\nclass PrivateCeph:\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-session07-ceph-');self.root=pathlib.Path(self.temp.name);self.processes=[];self.logs=[];self.client=None\n  try:\n   self.fsid=str(uuid.uuid4());self.monport=port();self.config=self.root/'ceph.conf';self.monmap=self.root/'monmap';self.mondata=self.root/'mon.a';self.mondata.mkdir()\n   (self.root/'run').mkdir();(self.root/'crash').mkdir()\n   self.config.write_text('''[global]\nplugin dir = {tool}/usr/lib/x86_64-linux-gnu/ceph\nmon cluster log file = {root}/cluster.log\nmon cluster log to file = false\nfsid = {fsid}\nmon initial members = a\nmon host = 127.0.0.1:{port}\nauth cluster required = none\nauth service required = none\nauth client required = none\npublic addr = 127.0.0.1\ncluster addr = 127.0.0.1\nms bind ipv4 = true\nms bind ipv6 = false\nms async op threads = 1\nlog to stderr = true\nlog to file = false\nrun dir = {root}/run\ncrash dir = {root}/crash\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nadmin socket = {root}/$name.asok\npid file = {root}/$name.pid\nkeyring = {root}/$name.keyring\nmon data avail crit = 0\nmon data avail warn = 0\nmon allow pool delete = true\nmon allow pool size one = true\nosd pool default size = 1\nosd pool default min size = 1\nosd pool default pg num = 1\nosd pool default pgp num = 1\nosd pool default pg autoscale mode = off\nosd crush chooseleaf type = 0\nrados mon op timeout = 3\nrados osd op timeout = 3\n[mon.a]\nmon data = {root}/mon.a\nmon addr = 127.0.0.1:{port}\n[osd]\nosd objectstore = memstore\nosd data = {root}/osd.$id\nkeyring = {root}/osd.$id/keyring\nosd memory target = 134217728\nmemstore device bytes = 134217728\nosd op num shards = 1\nosd op num threads per shard = 1\nosd op num shards hdd = 1\nosd op num threads per shard hdd = 1\nosd op num shards ssd = 1\nosd op num threads per shard ssd = 1\nosd recovery max active = 1\nosd max backfills = 1\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\n'''.format(fsid=self.fsid,port=self.monport,root=self.root,tool=TOOL))\n   command('monmaptool','--create','--fsid',self.fsid,'--add','a','127.0.0.1:'+str(self.monport),self.monmap)\n   command('ceph-authtool','--create-keyring',self.root/'mon.keyring','--gen-key','-n','mon.')\n   command('ceph-mon','--mkfs','-i','a','-c',self.config,'--monmap',self.monmap,'--mon-data',self.mondata,'--keyring',self.root/'mon.keyring')\n   monitor=self.start('ceph-mon','-f','-i','a','-c',self.config,'--mon-data',self.mondata,'--setuser','1000','--setgroup','1000')\n   deadline=time.monotonic()+20;last=None\n   while time.monotonic()<deadline:\n    if monitor.poll() is not None:raise RuntimeError('private MON exited before readiness: '+self.log_tail())\n    try:\n     status=json.loads(command('ceph','--admin-daemon',self.root/'mon.a.asok','mon_status',timeout=3))\n     if status.get('state') not in ('leader','peon'):time.sleep(.2);continue\n     assert status['monmap']['fsid']==self.fsid;break\n    except Exception as error:\n     last=error\n     time.sleep(.2)\n   else:raise RuntimeError('private MON readiness failed: '+str(last)+' '+self.log_tail())\n   print('NATIVE_PRIVATE_CEPH_MON_READY '+json.dumps({'fsid':self.fsid,'uid':os.geteuid(),'quorum':status.get('quorum'),'network':'none-loopback-only'}),flush=True)\n   self.client=rados.Rados(conffile=str(self.config),name='client.admin');self.client.connect(timeout=3)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def start(self,name,*args):\n  log=(self.root/(name+'-'+str(len(self.processes))+'.log')).open('wb');self.logs.append(log)\n  process=subprocess.Popen([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,stdin=subprocess.DEVNULL,stdout=log,stderr=log);self.processes.append(process)\n  return process\n def mon(self,prefix,**kwargs):\n  rc,out,err=self.client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kwargs}),b'')\n  if rc:raise RuntimeError('private mon command '+prefix+' failed: '+str(rc)+' '+str(err))\n  try:return json.loads(out)\n  except json.JSONDecodeError:return out.decode().strip()\n def add_osd(self):\n  osduuid=str(uuid.uuid4());created=self.mon('osd create',uuid=osduuid);osdid=int(created['osdid'] if isinstance(created,dict) else created);data=self.root/('osd.'+str(osdid));data.mkdir()\n  command('ceph-osd','--mkfs','--mkkey','-i',osdid,'-c',self.config,'--osd-uuid',osduuid,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  process=self.start('ceph-osd','-f','-i',osdid,'-c',self.config,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  deadline=time.monotonic()+20\n  while time.monotonic()<deadline:\n   if process.poll() is not None:raise RuntimeError('private OSD exited: '+self.log_tail())\n   status=self.mon('osd dump');row=next((row for row in status['osds'] if row['osd']==osdid),None)\n   if row and row['up']==1 and row['in']==1:break\n   time.sleep(.2)\n  else:raise RuntimeError('private OSD readiness timeout: '+self.log_tail())\n  print('NATIVE_PRIVATE_CEPH_MEMSTORE_OSD_READY '+str(osdid),flush=True);return osdid\n def log_tail(self):\n  return '\\n'.join(path.read_text(errors='replace')[-2500:] for path in self.root.glob('*.log'))\n def __exit__(self,*args):\n  if self.client:\n   try:self.client.shutdown()\n   except Exception:pass\n  for process in reversed(self.processes):\n   if process.poll() is None:process.terminate()\n   try:process.wait(timeout=8)\n   except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)\n  for log in self.logs:log.close()\n  self.temp.cleanup()\n\n\ndef native_trace(record):\n path=pathlib.Path.cwd()/'checks/native-commands.jsonl'\n if path.parent.is_dir():\n  with path.open('a',encoding='utf8')as stream:stream.write(json.dumps({'at_ns':time.time_ns(),'uid':os.getuid(),**record})+'\\n')\n\nimport copy\n\nclass TracingClient:\n def __init__(self,client):self.real=client;self._records=[]\n @property\n def records(self):return copy.deepcopy(self._records)\n def __getattr__(self,name):return getattr(self.real,name)\n def mon_command(self,command,*args,**kwargs):\n  result=self.real.mon_command(command,*args,**kwargs)\n  self._records.append(('mon',json.loads(command),result[0],result[1],str(result[2])))\n  native_trace({'kind':'real_rados_mon_command','request':json.loads(command),'rc':result[0],'stdout':result[1].decode('utf8','replace'),'stderr':str(result[2])})\n  return result\n def pg_command(self,pgid,command,*args,**kwargs):\n  result=self.real.pg_command(pgid,command,*args,**kwargs)\n  self._records.append(('pg',{'pgid':pgid,**json.loads(command)},result[0],result[1],str(result[2])))\n  native_trace({'kind':'real_rados_pg_command','request':{'pgid':pgid,**json.loads(command)},'rc':result[0],'stdout':result[1].decode('utf8','replace'),'stderr':str(result[2])})\n  return result\n\n_original_command=command\ndef command(name,*args,timeout=20):\n argv=[str(TOOL/'usr/bin'/name),*map(str,args)]\n result=subprocess.run(argv,env=ENV,capture_output=True,text=True,timeout=timeout)\n native_trace({'kind':'real_subprocess','argv':argv,'rc':result.returncode,'stdout':result.stdout,'stderr':result.stderr})\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\n\nclass TopologyCeph(PrivateCeph):\n def start(self,name,*args):\n  process=super().start(name,*args)\n  print('NATIVE_OWNED_PROCESS_START '+json.dumps({'pid':process.pid,'argv':[str(TOOL/'usr/bin'/name),*map(str,args)]}),flush=True)\n  return process\n def __enter__(self):\n  self.parent_identity=(os.geteuid(),os.environ.get('HOME'),os.environ.get('PATH'))\n  super().__enter__()\n  self.client=TracingClient(self.client)\n  try:\n   (self.root/'mgr.a').mkdir()\n   self.config.write_text(self.config.read_text()+'\\n[mgr]\\nmgr data = '+str(self.root/'mgr.a')+'\\nmgr module path = '+str(TOOL/'usr/share/ceph/mgr')+'\\nmgr initial modules = \\nmgr tick period = 1\\n[osd]\\nosd pg stat report interval max = 1\\n')\n   self.manager=self.start('ceph-mgr','-f','-i','a','-c',self.config,'--setuser','1000','--setgroup','1000')\n   self.wait(lambda:self.mon('mgr dump').get('available'),'manager available')\n   self.osds={}\n   for _ in range(3):\n    ident=self.add_osd();self.osds[ident]=self.processes[-1]\n   self.mon('osd set',key='noout')\n   print('NATIVE_TOPOLOGY_READY '+json.dumps({'fsid':self.fsid,'uid':os.getuid(),'pids':[p.pid for p in self.processes],'monport':self.monport}),flush=True)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def wait(self,predicate,label,seconds=25):\n  until=time.monotonic()+seconds;last=None\n  while time.monotonic()<until:\n   if any(p.poll()is not None for p in self.processes if p is self.manager):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: mgr exited '+self.log_tail())\n   try:\n    result=predicate()\n    if result:return result\n   except Exception as error:last=error\n   time.sleep(.25)\n  raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: '+label+' deadline '+str(last)+' '+self.log_tail())\n def pool(self,name='owned',size=2,pg=4):\n  self.mon('osd pool create',pool=name,pg_num=pg,pgp_num=pg,pool_type='replicated')\n  self.mon('osd pool set',pool=name,var='size',val=str(size))\n  self.mon('osd pool set',pool=name,var='min_size',val='1')\n  self.mon('osd pool application enable',pool=name,app='opsforge')\n  pid=next(p['pool']for p in self.mon('osd dump')['pools']if p['pool_name']==name)\n  self.wait_clean(pid,pg)\n  with self.client.open_ioctx(name)as io:\n   for index in range(16):io.write_full('obj-'+str(index),('known-payload-'+str(index)).encode())\n  self.wait_clean(pid,pg)\n  return pid\n def pg_rows(self,pid=None):\n  rows=self.mon('pg dump',dumpcontents=['pgs'])['pg_stats']\n  return [x for x in rows if pid is None or x['pgid'].startswith(str(pid)+'.')]\n def wait_clean(self,pid,pg=4):\n  return self.wait(lambda:(lambda rows:rows if len(rows)==pg and all(set(x['state'].split('+'))=={'active','clean'}for x in rows)else None)(self.pg_rows(pid)),'all owned PG active+clean')\n def stop_osd(self,ident):\n  process=self.osds[ident]\n  if process.poll()is None:process.terminate();process.wait(timeout=8)\n  self.mon('osd down',ids=[str(ident)])\n  self.wait(lambda:next(x for x in self.mon('osd dump')['osds']if x['osd']==ident)['up']==0,'owned OSD down')\n def restart_osd(self,ident):\n  process=self.start('ceph-osd','-f','-i',ident,'-c',self.config,'--osd-data',self.root/('osd.'+str(ident)),'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000');self.osds[ident]=process\n  self.mon('osd in',ids=[str(ident)])\n  self.wait(lambda:next(x for x in self.mon('osd dump')['osds']if x['osd']==ident)['up']==1,'owned OSD restarted')\n def verify_payloads(self,name='owned'):\n  with self.client.open_ioctx(name)as io:\n   for index in range(16):assert io.read('obj-'+str(index))==('known-payload-'+str(index)).encode(),'native payload not recovered'\n def __exit__(self,*args):\n  pids=[p.pid for p in self.processes];root=self.root\n  super().__exit__(*args)\n  assert all(p.poll()is not None for p in self.processes),'owned daemon leaked'\n  assert not root.exists(),'owned directory leaked'\n  assert self.parent_identity==(os.geteuid(),os.environ.get('HOME'),os.environ.get('PATH')),'default process identity/environment changed'\n  print('NATIVE_TOPOLOGY_CLEANED '+json.dumps({'pids':pids,'returncodes':[p.returncode for p in self.processes],'directory_removed':True,'identity_preserved':True}),flush=True)\n\n"
+      }
+    }
+  },
+  {
+    "category": "Ceph",
+    "module": "ceph",
+    "source": "OpsForge 原创教学题",
+    "version": 1,
+    "has_answer": true,
+    "tags": [
+      "MON",
+      "OSD",
+      "PG",
+      "CRUSH",
+      "RBD",
+      "CephFS"
+    ],
+    "id": "basic-ceph",
+    "type": "practice",
+    "level": 1,
+    "title": "Ceph · 基础实操",
+    "intro": "分布式存储依赖数据副本、故障域与恢复能力；检查健康状态再决定操作。",
+    "body": "## 操作任务\n补全report(client)，实际读取status、health detail、osd tree、df，输出{fsid,capacity_warning:bool,unavailable_osds:[id升序],recovery_required:bool,pg_states:[状态名去重升序],raw:{status,health,tree,df四份原生JSON}}。容量告警仅按OSD_NEARFULL/OSD_FULL/OSD_BACKFILLFULL/MON_DISK_LOW/MON_DISK_CRIT/POOL_FULL判断，不能见HEALTH_WARN即认满盘。unavailable_osds来自tree中的down OSD。PG状态含degraded/undersized/recovering/recovery_wait/backfilling/backfill_wait/remapped时recovery_required为真；不能以health总体WARN推断。原生实验保留基线，临时降低自有MON空间告警阈值触发真实MON_DISK_LOW（不填满共享磁盘），恢复阈值后再让自有OSD停止、观察降级并恢复，分别核对真实数据和全部自有PG状态；不能对外部集群操作。\n\n保留原题知识：从 ceph -s 和 ceph health detail 获取概览，再查看 ceph osd tree、ceph df。确认故障域、PG 状态、容量与恢复进度；涉及数据风险的修复前先核实原因和副本状态，避免盲目移除 OSD。\n\n## 提交产物\ntask.py。只查询本题提供的真实rados客户端，不能修改集群或借用报告。\n\n## 验收方法\npython3 checks/check.py；教师启动真实私有MON/MGR和3个memstore OSD，在隔离回环集群执行状态变化、核验实际数据与资源清理。\n\n## 能力边界\n单台宿主的有限原生Ceph协议/命令实操，不证明生产故障域、硬件性能、持久介质可靠性或生产维护授权。所有数据和daemon仅属于本题，不连接默认集群；auth=none仅用于本地隔离题，不能作为Cephx安全证明。\n",
+    "answer": "从 ceph -s 和 ceph health detail 获取概览，再查看 ceph osd tree、ceph df。确认故障域、PG 状态、容量与恢复进度；涉及数据风险的修复前先核实原因和副本状态，避免盲目移除 OSD。",
+    "hints": [
+      "先阅读概念，识别任务中的对象和目标。",
+      "先检查状态，再执行变更，最后再次检查。"
+    ],
+    "minutes": 20,
+    "rubric": [
+      "能解释基本概念",
+      "记录操作和输出",
+      "说明验证结果"
+    ],
+    "related_modules": [
+      "ceph"
+    ],
+    "review_status": "reviewed",
+    "review_note": "会话07作者候选；保持原知识答案，真实Ceph19.2.3单机私有MON/MGR/三memstore OSD有界原生验证；独立复核待会话08/10调度，未计验收完成。",
+    "difficulty": "入门",
+    "topic": "性能容量与安全运维",
+    "question_format": "practice",
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "def report(client):\n    raise NotImplementedError(\"implement live Ceph observation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef report(client):\n    status=mon(client,'status');health=mon(client,'health',detail='detail');tree=mon(client,'osd tree');capacity=mon(client,'df')\n    checks=set(health['checks']);capacity_names={'OSD_NEARFULL','OSD_FULL','OSD_BACKFILLFULL','MON_DISK_LOW','MON_DISK_CRIT','POOL_FULL'}\n    states=sorted(x['state_name']for x in status['pgmap']['pgs_by_state'])\n    recovery=any(set(x.split('+'))&{'degraded','undersized','recovering','recovery_wait','backfilling','backfill_wait','remapped'}for x in states)\n    down=sorted(x['id']for x in tree['nodes']+tree.get('stray',[])if x.get('type')=='osd'and x.get('status')=='down')\n    return {'fsid':status['fsid'],'capacity_warning':bool(checks&capacity_names),'unavailable_osds':down,'recovery_required':recovery,'pg_states':states,'raw':{'status':status,'health':health,'tree':tree,'df':capacity}}\n"
+    },
+    "negative_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef report(client):\n    status=mon(client,'status');health=mon(client,'health',detail='detail');tree=mon(client,'osd tree');capacity=mon(client,'df')\n    checks=set(health['checks']);capacity_names={'OSD_NEARFULL','OSD_FULL','OSD_BACKFILLFULL','MON_DISK_LOW','MON_DISK_CRIT','POOL_FULL'}\n    states=sorted(x['state_name']for x in status['pgmap']['pgs_by_state'])\n    recovery=any(set(x.split('+'))&{'degraded','undersized','recovering','recovery_wait','backfilling','backfill_wait','remapped'}for x in states)\n    down=sorted(x['id']for x in tree['nodes']+tree.get('stray',[])if x.get('type')=='osd'and x.get('status')=='down')\n    return {'fsid':status['fsid'],'capacity_warning':health['status']!='HEALTH_OK','unavailable_osds':down,'recovery_required':recovery,'pg_states':states,'raw':{'status':status,'health':health,'tree':tree,'df':capacity}}\n"
+    },
+    "equivalent_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef report(client):\n    raw={}\n    for label,command,options in [('status','status',{}),('health','health',{'detail':'detail'}),('tree','osd tree',{}),('df','df',{})]:raw[label]=mon(client,command,**options)\n    pg=mon(client,'pg dump',dumpcontents=['pgs'])\n    states=sorted(set(x['state']for x in pg['pg_stats']))\n    bad_capacity=('OSD_NEARFULL','OSD_FULL','OSD_BACKFILLFULL','MON_DISK_LOW','MON_DISK_CRIT','POOL_FULL')\n    return {'fsid':raw['status']['fsid'],'capacity_warning':any(k in raw['health']['checks']for k in bad_capacity),'unavailable_osds':sorted(n['id']for n in raw['tree']['nodes']+raw['tree'].get('stray',[])if n.get('type')=='osd'and n.get('status')=='down'),'recovery_required':any(s in {'degraded','undersized','recovering','recovery_wait','backfilling','backfill_wait','remapped'}for state in states for s in state.split('+')),'pg_states':states,'raw':raw}\n"
+    },
+    "exercise": {
+      "environment": "Linux student UID1000，Ceph Squid19.2.3私有解包工具；显式WSL OpsForge-Validation-20261022；不改PATH/默认账号/集群",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "real private MON/MGR/three memstore OSDs, loopback-only synthetic data; no production or hardware reliability claim"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "python3"
+        ],
+        "python_modules": [
+          "rados"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,json,time,pathlib\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'));sys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ceph_topology_native import TopologyCeph,command\nimport task\nassert os.geteuid()==1000\n\ndef invoke(client,function,*args):\n    offset=len(client.records);result=function(client,*args)\n    return result,client.records[offset:]\n\ndef native_json(value):return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)\n\ndef bound_mon(value,records,prefix,**kw):\n    native=[json.loads(r[3])for r in records if r[0]=='mon'and r[2]==0 and r[1].get('prefix')==prefix and all(r[1].get(k)==v for k,v in kw.items())]\n    assert native and any(native_json(value)==native_json(x)for x in native),'reported JSON was not returned by this operation on real Ceph'\n\ndef same_bool(actual,expected,label):\n    assert type(actual)is bool and actual is expected,label\nwith TopologyCeph()as c:\n    pid=c.pool(size=3)\n    def check(capacity,down,recovery):\n        r,receipts=invoke(c.client,task.report);assert set(r)=={'fsid','capacity_warning','unavailable_osds','recovery_required','pg_states','raw'}\n        assert r['fsid']==c.fsid and r['unavailable_osds']==down\n        same_bool(r['capacity_warning'],capacity,'capacity warning must use actual capacity health code');same_bool(r['recovery_required'],recovery,'PG recovery state must be read independently')\n        assert set(r['raw'])=={'status','health','tree','df'}and r['raw']['status']['fsid']==c.fsid\n        for label,prefix,options in [('status','status',{}),('health','health',{'detail':'detail'}),('tree','osd tree',{}),('df','df',{})]:bound_mon(r['raw'][label],receipts,prefix,**options)\n        assert r['pg_states']==sorted(set(x['state_name']for x in r['raw']['status']['pgmap']['pgs_by_state']))\n        assert r['raw']['df']['stats']['num_osds']==3,'actual capacity observation missing'\n        print('NATIVE_HEALTH_DIAGNOSIS '+json.dumps({k:v for k,v in r.items()if k!='raw'})+' checks='+json.dumps(sorted(r['raw']['health']['checks'])),flush=True)\n        return r\n    c.wait(lambda:len(c.mon('status')['pgmap']['pgs_by_state'])==1 and c.mon('status')['pgmap']['pgs_by_state'][0]['state_name']=='active+clean','status clean')\n    check(False,[],False)\n    command('ceph','--admin-daemon',c.root/'mon.a.asok','config','set','mon_data_avail_warn','100')\n    c.wait(lambda:'MON_DISK_LOW'in c.mon('health',detail='detail')['checks'],'real owned MON capacity warning')\n    check(True,[],False)\n    command('ceph','--admin-daemon',c.root/'mon.a.asok','config','set','mon_data_avail_warn','0')\n    c.wait(lambda:'MON_DISK_LOW'not in c.mon('health',detail='detail')['checks'],'capacity warning recovered')\n    c.stop_osd(0)\n    c.wait(lambda:any(set(x['state_name'].split('+'))&{'degraded','undersized'}for x in c.mon('status')['pgmap']['pgs_by_state']),'status degradation')\n    check(False,[0],True)\n    c.restart_osd(0);c.wait_clean(pid);c.verify_payloads()\n    c.wait(lambda:all(x['state_name']=='active+clean'for x in c.mon('status')['pgmap']['pgs_by_state']),'status recovery complete')\n    check(False,[],False)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED')\n",
+        "checks/ceph_topology_native.py": "\"\"\"Experimental nonroot, private MON/memstore OSD; no question or incident credit.\"\"\"\nimport json,os,pathlib,socket,subprocess,tempfile,time,uuid\nimport rados\nassert os.geteuid()==1000\nTOOL=pathlib.Path('/tmp/opsforge-session07-20261029/native')\nENV={**os.environ,'LD_LIBRARY_PATH':str(TOOL/'usr/lib/x86_64-linux-gnu/ceph')+':'+str(TOOL/'usr/lib/x86_64-linux-gnu')+':'+str(TOOL/'lib/x86_64-linux-gnu'),'PYTHONPATH':str(TOOL/'usr/lib/python3/dist-packages')}\ndef command(name,*args,timeout=20):\n result=subprocess.run([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,capture_output=True,text=True,timeout=timeout)\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\ndef port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\nclass PrivateCeph:\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-session07-ceph-');self.root=pathlib.Path(self.temp.name);self.processes=[];self.logs=[];self.client=None\n  try:\n   self.fsid=str(uuid.uuid4());self.monport=port();self.config=self.root/'ceph.conf';self.monmap=self.root/'monmap';self.mondata=self.root/'mon.a';self.mondata.mkdir()\n   (self.root/'run').mkdir();(self.root/'crash').mkdir()\n   self.config.write_text('''[global]\nplugin dir = {tool}/usr/lib/x86_64-linux-gnu/ceph\nmon cluster log file = {root}/cluster.log\nmon cluster log to file = false\nfsid = {fsid}\nmon initial members = a\nmon host = 127.0.0.1:{port}\nauth cluster required = none\nauth service required = none\nauth client required = none\npublic addr = 127.0.0.1\ncluster addr = 127.0.0.1\nms bind ipv4 = true\nms bind ipv6 = false\nms async op threads = 1\nlog to stderr = true\nlog to file = false\nrun dir = {root}/run\ncrash dir = {root}/crash\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nadmin socket = {root}/$name.asok\npid file = {root}/$name.pid\nkeyring = {root}/$name.keyring\nmon data avail crit = 0\nmon data avail warn = 0\nmon allow pool delete = true\nmon allow pool size one = true\nosd pool default size = 1\nosd pool default min size = 1\nosd pool default pg num = 1\nosd pool default pgp num = 1\nosd pool default pg autoscale mode = off\nosd crush chooseleaf type = 0\nrados mon op timeout = 3\nrados osd op timeout = 3\n[mon.a]\nmon data = {root}/mon.a\nmon addr = 127.0.0.1:{port}\n[osd]\nosd objectstore = memstore\nosd data = {root}/osd.$id\nkeyring = {root}/osd.$id/keyring\nosd memory target = 134217728\nmemstore device bytes = 134217728\nosd op num shards = 1\nosd op num threads per shard = 1\nosd op num shards hdd = 1\nosd op num threads per shard hdd = 1\nosd op num shards ssd = 1\nosd op num threads per shard ssd = 1\nosd recovery max active = 1\nosd max backfills = 1\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\n'''.format(fsid=self.fsid,port=self.monport,root=self.root,tool=TOOL))\n   command('monmaptool','--create','--fsid',self.fsid,'--add','a','127.0.0.1:'+str(self.monport),self.monmap)\n   command('ceph-authtool','--create-keyring',self.root/'mon.keyring','--gen-key','-n','mon.')\n   command('ceph-mon','--mkfs','-i','a','-c',self.config,'--monmap',self.monmap,'--mon-data',self.mondata,'--keyring',self.root/'mon.keyring')\n   monitor=self.start('ceph-mon','-f','-i','a','-c',self.config,'--mon-data',self.mondata,'--setuser','1000','--setgroup','1000')\n   deadline=time.monotonic()+20;last=None\n   while time.monotonic()<deadline:\n    if monitor.poll() is not None:raise RuntimeError('private MON exited before readiness: '+self.log_tail())\n    try:\n     status=json.loads(command('ceph','--admin-daemon',self.root/'mon.a.asok','mon_status',timeout=3))\n     if status.get('state') not in ('leader','peon'):time.sleep(.2);continue\n     assert status['monmap']['fsid']==self.fsid;break\n    except Exception as error:\n     last=error\n     time.sleep(.2)\n   else:raise RuntimeError('private MON readiness failed: '+str(last)+' '+self.log_tail())\n   print('NATIVE_PRIVATE_CEPH_MON_READY '+json.dumps({'fsid':self.fsid,'uid':os.geteuid(),'quorum':status.get('quorum'),'network':'none-loopback-only'}),flush=True)\n   self.client=rados.Rados(conffile=str(self.config),name='client.admin');self.client.connect(timeout=3)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def start(self,name,*args):\n  log=(self.root/(name+'-'+str(len(self.processes))+'.log')).open('wb');self.logs.append(log)\n  process=subprocess.Popen([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,stdin=subprocess.DEVNULL,stdout=log,stderr=log);self.processes.append(process)\n  return process\n def mon(self,prefix,**kwargs):\n  rc,out,err=self.client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kwargs}),b'')\n  if rc:raise RuntimeError('private mon command '+prefix+' failed: '+str(rc)+' '+str(err))\n  try:return json.loads(out)\n  except json.JSONDecodeError:return out.decode().strip()\n def add_osd(self):\n  osduuid=str(uuid.uuid4());created=self.mon('osd create',uuid=osduuid);osdid=int(created['osdid'] if isinstance(created,dict) else created);data=self.root/('osd.'+str(osdid));data.mkdir()\n  command('ceph-osd','--mkfs','--mkkey','-i',osdid,'-c',self.config,'--osd-uuid',osduuid,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  process=self.start('ceph-osd','-f','-i',osdid,'-c',self.config,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  deadline=time.monotonic()+20\n  while time.monotonic()<deadline:\n   if process.poll() is not None:raise RuntimeError('private OSD exited: '+self.log_tail())\n   status=self.mon('osd dump');row=next((row for row in status['osds'] if row['osd']==osdid),None)\n   if row and row['up']==1 and row['in']==1:break\n   time.sleep(.2)\n  else:raise RuntimeError('private OSD readiness timeout: '+self.log_tail())\n  print('NATIVE_PRIVATE_CEPH_MEMSTORE_OSD_READY '+str(osdid),flush=True);return osdid\n def log_tail(self):\n  return '\\n'.join(path.read_text(errors='replace')[-2500:] for path in self.root.glob('*.log'))\n def __exit__(self,*args):\n  if self.client:\n   try:self.client.shutdown()\n   except Exception:pass\n  for process in reversed(self.processes):\n   if process.poll() is None:process.terminate()\n   try:process.wait(timeout=8)\n   except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)\n  for log in self.logs:log.close()\n  self.temp.cleanup()\n\n\ndef native_trace(record):\n path=pathlib.Path.cwd()/'checks/native-commands.jsonl'\n if path.parent.is_dir():\n  with path.open('a',encoding='utf8')as stream:stream.write(json.dumps({'at_ns':time.time_ns(),'uid':os.getuid(),**record})+'\\n')\n\nimport copy\n\nclass TracingClient:\n def __init__(self,client):self.real=client;self._records=[]\n @property\n def records(self):return copy.deepcopy(self._records)\n def __getattr__(self,name):return getattr(self.real,name)\n def mon_command(self,command,*args,**kwargs):\n  result=self.real.mon_command(command,*args,**kwargs)\n  self._records.append(('mon',json.loads(command),result[0],result[1],str(result[2])))\n  native_trace({'kind':'real_rados_mon_command','request':json.loads(command),'rc':result[0],'stdout':result[1].decode('utf8','replace'),'stderr':str(result[2])})\n  return result\n def pg_command(self,pgid,command,*args,**kwargs):\n  result=self.real.pg_command(pgid,command,*args,**kwargs)\n  self._records.append(('pg',{'pgid':pgid,**json.loads(command)},result[0],result[1],str(result[2])))\n  native_trace({'kind':'real_rados_pg_command','request':{'pgid':pgid,**json.loads(command)},'rc':result[0],'stdout':result[1].decode('utf8','replace'),'stderr':str(result[2])})\n  return result\n\n_original_command=command\ndef command(name,*args,timeout=20):\n argv=[str(TOOL/'usr/bin'/name),*map(str,args)]\n result=subprocess.run(argv,env=ENV,capture_output=True,text=True,timeout=timeout)\n native_trace({'kind':'real_subprocess','argv':argv,'rc':result.returncode,'stdout':result.stdout,'stderr':result.stderr})\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\n\nclass TopologyCeph(PrivateCeph):\n def start(self,name,*args):\n  process=super().start(name,*args)\n  print('NATIVE_OWNED_PROCESS_START '+json.dumps({'pid':process.pid,'argv':[str(TOOL/'usr/bin'/name),*map(str,args)]}),flush=True)\n  return process\n def __enter__(self):\n  self.parent_identity=(os.geteuid(),os.environ.get('HOME'),os.environ.get('PATH'))\n  super().__enter__()\n  self.client=TracingClient(self.client)\n  try:\n   (self.root/'mgr.a').mkdir()\n   self.config.write_text(self.config.read_text()+'\\n[mgr]\\nmgr data = '+str(self.root/'mgr.a')+'\\nmgr module path = '+str(TOOL/'usr/share/ceph/mgr')+'\\nmgr initial modules = \\nmgr tick period = 1\\n[osd]\\nosd pg stat report interval max = 1\\n')\n   self.manager=self.start('ceph-mgr','-f','-i','a','-c',self.config,'--setuser','1000','--setgroup','1000')\n   self.wait(lambda:self.mon('mgr dump').get('available'),'manager available')\n   self.osds={}\n   for _ in range(3):\n    ident=self.add_osd();self.osds[ident]=self.processes[-1]\n   self.mon('osd set',key='noout')\n   print('NATIVE_TOPOLOGY_READY '+json.dumps({'fsid':self.fsid,'uid':os.getuid(),'pids':[p.pid for p in self.processes],'monport':self.monport}),flush=True)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def wait(self,predicate,label,seconds=25):\n  until=time.monotonic()+seconds;last=None\n  while time.monotonic()<until:\n   if any(p.poll()is not None for p in self.processes if p is self.manager):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: mgr exited '+self.log_tail())\n   try:\n    result=predicate()\n    if result:return result\n   except Exception as error:last=error\n   time.sleep(.25)\n  raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: '+label+' deadline '+str(last)+' '+self.log_tail())\n def pool(self,name='owned',size=2,pg=4):\n  self.mon('osd pool create',pool=name,pg_num=pg,pgp_num=pg,pool_type='replicated')\n  self.mon('osd pool set',pool=name,var='size',val=str(size))\n  self.mon('osd pool set',pool=name,var='min_size',val='1')\n  self.mon('osd pool application enable',pool=name,app='opsforge')\n  pid=next(p['pool']for p in self.mon('osd dump')['pools']if p['pool_name']==name)\n  self.wait_clean(pid,pg)\n  with self.client.open_ioctx(name)as io:\n   for index in range(16):io.write_full('obj-'+str(index),('known-payload-'+str(index)).encode())\n  self.wait_clean(pid,pg)\n  return pid\n def pg_rows(self,pid=None):\n  rows=self.mon('pg dump',dumpcontents=['pgs'])['pg_stats']\n  return [x for x in rows if pid is None or x['pgid'].startswith(str(pid)+'.')]\n def wait_clean(self,pid,pg=4):\n  return self.wait(lambda:(lambda rows:rows if len(rows)==pg and all(set(x['state'].split('+'))=={'active','clean'}for x in rows)else None)(self.pg_rows(pid)),'all owned PG active+clean')\n def stop_osd(self,ident):\n  process=self.osds[ident]\n  if process.poll()is None:process.terminate();process.wait(timeout=8)\n  self.mon('osd down',ids=[str(ident)])\n  self.wait(lambda:next(x for x in self.mon('osd dump')['osds']if x['osd']==ident)['up']==0,'owned OSD down')\n def restart_osd(self,ident):\n  process=self.start('ceph-osd','-f','-i',ident,'-c',self.config,'--osd-data',self.root/('osd.'+str(ident)),'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000');self.osds[ident]=process\n  self.mon('osd in',ids=[str(ident)])\n  self.wait(lambda:next(x for x in self.mon('osd dump')['osds']if x['osd']==ident)['up']==1,'owned OSD restarted')\n def verify_payloads(self,name='owned'):\n  with self.client.open_ioctx(name)as io:\n   for index in range(16):assert io.read('obj-'+str(index))==('known-payload-'+str(index)).encode(),'native payload not recovered'\n def __exit__(self,*args):\n  pids=[p.pid for p in self.processes];root=self.root\n  super().__exit__(*args)\n  assert all(p.poll()is not None for p in self.processes),'owned daemon leaked'\n  assert not root.exists(),'owned directory leaked'\n  assert self.parent_identity==(os.geteuid(),os.environ.get('HOME'),os.environ.get('PATH')),'default process identity/environment changed'\n  print('NATIVE_TOPOLOGY_CLEANED '+json.dumps({'pids':pids,'returncodes':[p.returncode for p in self.processes],'directory_removed':True,'identity_preserved':True}),flush=True)\n\n"
+      }
+    },
+    "references": [
+      "https://docs.ceph.com/en/squid/rados/operations/monitoring/",
+      "https://docs.ceph.com/en/squid/rados/operations/monitoring-osd-pg/"
+    ]
+  },
+  {
+    "id": "curated-parallel-ceph-039",
+    "module": "ceph",
+    "category": "Ceph",
+    "level": 2,
+    "topic": "架构与数据放置",
+    "title": "Ceph PG stuck告警怎样结合持续时间和状态解释？",
+    "answer": "stuck是状态持续超过阈值的分类，不是独立根因。检查是inactive、unclean还是undersized，并关联OSD、容量和peering日志，验收具体状态收敛。",
+    "type": "practice",
+    "source": "OpsForge 原创编审 2026-10-21；Ceph Squid 官方文档核对",
+    "version": 1,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "会话07作者候选；保持原知识答案，真实Ceph19.2.3单机私有MON/MGR/三memstore OSD有界原生验证；独立复核待会话08/10调度，未计验收完成。 单题修复候选：真实PG路由前刷新librados OSDMap；不更改126冻结源，旧039未完成记录保留，不能重复计数。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n交付diagnose(client,threshold)，threshold为0–86400的整数秒（拒绝bool）。分别查询真实pg dump_stuck的inactive/unclean/undersized分类，按pgid合并，返回{threshold,stuck:[{pgid,state,categories,osd_candidates}],osd_map:原生osd dump,capacity:原生df,peering:{pgid:原生PG query}}；每个stuck PG须用client.pg_command(pgid,JSON{prefix=query,pgid},空bytes,timeout=3)读取当前peering状态/历史与恢复状态，关联OSD map和实际容量，不把stuck本身当根因。pgid升序，categories按inactive/unclean/undersized顺序，osd_candidates是原生up/acting并集升序。stuck是状态持续超过阈值的分类，不是PG独立根因；不得把全部不clean PG无视阈值塞进stuck，也不得自动repair或lost。教师启动真实副本PG、让OSD停止但保持in，在短/长阈值下核对原生命令差异，再恢复OSD并核验全部PG收敛和数据内容。单机原生故障演练不证明生产恢复时限。\n\n保留原题知识：stuck是状态持续超过阈值的分类，不是独立根因。检查是inactive、unclean还是undersized，并关联OSD、容量和peering日志，验收具体状态收敛。\n\n## 提交产物\ntask.py。只查询本题提供的真实rados客户端，不能修改集群或借用报告。\n\n## 验收方法\npython3 checks/check.py；教师启动真实私有MON/MGR和3个memstore OSD，在隔离回环集群执行状态变化、核验实际数据与资源清理。\n\n## 能力边界\n单台宿主的有限原生Ceph协议/命令实操，不证明生产故障域、硬件性能、持久介质可靠性或生产维护授权。所有数据和daemon仅属于本题，不连接默认集群；auth=none仅用于本地隔离题，不能作为Cephx安全证明。\n\n\n提供的透明客户端在pg_command前调用原生wait_for_latest_osdmap，获得当前OSDMap后发送真实PG query，并保留刷新耗时与原始RPC结果。该前置用于本题故障切换后的路由更新；PG状态、peering和容量判断仍须来自实际集群返回。\n",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://docs.ceph.com/en/squid/rados/operations/monitoring/",
+      "https://docs.ceph.com/en/squid/rados/operations/monitoring-osd-pg/"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "K5tJdopUZoXqwPx2jKPcyqk9nff",
+          "L3lcdTIR3o4GJExS5TXcAmjinGe",
+          "EwYHdXCrEo0K86xlDGact31an9e",
+          "Uxupdw64koJDbqxj0OXcYopwncc",
+          "GLHEdFpEvoVlrBxnQeGcQsflnSl",
+          "TcCFdht6goO1u3xJKMWc45iUnTd",
+          "SlPkdyFOIoFTtQx4SzCcsDHEnKh",
+          "Ubotd1Yi3oIeVCxdN8ucppp4nGF",
+          "VIRVdKmUbo7VDNxK9Mrc8RSmnVe",
+          "OY54dN74Hosg3jxfqkuc313Snne",
+          "I1FHdtl2aoQxNGxb8iPcHHmhnYe",
+          "SnAId9u0WoskZSxWck9chIF5nae",
+          "KYhOdgFD6opgtDxXLyic5RWdndd",
+          "Fpe5dWpDLoRJ8YxGwm9cepkwnkc",
+          "WbX5d116vocALjx6KMFcMw6fn1f",
+          "MaY6dM02yodpNhxFcavcEdmunWh",
+          "Ba8Fd1fmLoiikdx3997cJFfinBh",
+          "WEfZdj2J7oi2oVxP5xucPHtknQh",
+          "YakLdTlVAoGVYyxvdHfcueuJnNc",
+          "UPutdKU8xoeZ1mxPjhdczMdynDd",
+          "T9AtdCbANozdQnx3ZiEcKQjbnZ7",
+          "GOgIdmYBpoT9nQxq9MmcoezQncg",
+          "KU53dEjwUom3ukxM92Kc6lunn8f",
+          "AIVbdQGPAoYqFRxzcfwcIuBlnGe",
+          "I1dIdMd2coMgDtxJS4DcbV9bn7g",
+          "G5NkdERDFodwdax9DzNcANunn8f",
+          "C4oEdlDgboWIw5xjxytcCuBknqb",
+          "VziTdwdZSoSQsrxPelmciu9Tnec",
+          "T3ZSdvPxjonRsSxro67cbIJEnqb",
+          "MklodmwlpoIqbCxxenWcWiegnuh",
+          "HONyd3LMSoy4tUxStKccyeovn7c",
+          "MIY1dMjjQoiJIwxe3Ahc4mGznVg",
+          "XB3ydb7DWoUKkwxZTuGc1493nxn",
+          "J0qNd6T98ouiIGxX5JwceTYAnLb",
+          "DIHIdmEYLoeMfPxkzEccQsWDnZT",
+          "MFhydxVpnoWwhqx1DRLcqT3RnNg",
+          "SJwmdrTY7oXuPlxY3HgcBwGLnBb",
+          "IDq7d99Q3oOMYYxhPcrc1YGKnbe",
+          "E5uddEMmsoI5YnxVtM8cQ649n0f",
+          "UJFHdB6t7oq8mDxxPPBcHpULnpd",
+          "OFZcdakOxotOYfxZ7opcK7mLnzc",
+          "HxPddESHNoKKDhxrwRtchwRqnpf",
+          "YkpEdGgaSoFp1dxr1VBcXJlDnig",
+          "JTpSdPvL9oJoBNx1dAhcsDFUnse",
+          "VdXIdYEJyoZzWQxvVegcFEFrnfd",
+          "ZV1odflAuoQt3WxsVsHcEYdRnBf",
+          "EDGldeCVGoNbwmxpidvcOa7wn9R",
+          "VuKIduCUKodrGCxio9ccogZxnoc",
+          "Q9UJdR2llodhDoxHRpmc6irfnid",
+          "BYU7d5sBdow3ebxr3mJcWB3dnOd",
+          "Cl51dJ13boIru2x1e2IcdF3rnig",
+          "V9Djd6Rv6oBnN6x0daYcWDWRngg",
+          "QiQzdcCcdoyjSrxLv44c75hPnFE",
+          "BFZNdX7EDofce8xPGUJc7Z9nnLe"
+        ]
+      }
+    ],
+    "question_format": "project",
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "def diagnose(client,threshold):\n    raise NotImplementedError(\"implement live Ceph observation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef enrich(client,threshold,stuck):\n    osd_map=mon(client,'osd dump');capacity=mon(client,'df');peering={}\n    for row in stuck:\n        rc,data,error=client.pg_command(row['pgid'],json.dumps({'prefix':'query','pgid':row['pgid']}),b'',timeout=3)\n        if rc:raise RuntimeError('native PG query failed: '+str(error))\n        peering[row['pgid']]=json.loads(data)\n    return {'threshold':threshold,'stuck':stuck,'osd_map':osd_map,'capacity':capacity,'peering':peering}\n\ndef diagnose(client,threshold):\n    if type(threshold)is not int or not 0<=threshold<=86400:raise ValueError('threshold seconds')\n    groups={}\n    for category in ('inactive','unclean','undersized'):\n        result=mon(client,'pg dump_stuck',stuckops=[category],threshold=threshold)\n        for row in result['stuck_pg_stats']:\n            entry=groups.setdefault(row['pgid'],{'pgid':row['pgid'],'state':row['state'],'categories':[],'osd_candidates':sorted(set(row['up']+row['acting']))})\n            entry['categories'].append(category)\n    return enrich(client,threshold,[groups[key]for key in sorted(groups)])\n"
+    },
+    "negative_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef enrich(client,threshold,stuck):\n    osd_map=mon(client,'osd dump');capacity=mon(client,'df');peering={}\n    for row in stuck:\n        rc,data,error=client.pg_command(row['pgid'],json.dumps({'prefix':'query','pgid':row['pgid']}),b'',timeout=3)\n        if rc:raise RuntimeError('native PG query failed: '+str(error))\n        peering[row['pgid']]=json.loads(data)\n    return {'threshold':threshold,'stuck':stuck,'osd_map':osd_map,'capacity':capacity,'peering':peering}\n\ndef diagnose(client,threshold):\n    if type(threshold)is not int or not 0<=threshold<=86400:raise ValueError('threshold seconds')\n    groups={}\n    for category in ('inactive','unclean','undersized'):\n        result=mon(client,'pg dump_stuck',stuckops=[category],threshold=0)\n        for row in result['stuck_pg_stats']:\n            entry=groups.setdefault(row['pgid'],{'pgid':row['pgid'],'state':row['state'],'categories':[],'osd_candidates':sorted(set(row['up']+row['acting']))})\n            entry['categories'].append(category)\n    return enrich(client,threshold,[groups[key]for key in sorted(groups)])\n"
+    },
+    "equivalent_files": {
+      "task.py": "import json\n\ndef mon(client,prefix,**kw):\n    rc,data,error=client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kw}),b'')\n    if rc:raise RuntimeError('native monitor command failed: '+prefix+' '+str(rc)+' '+str(error))\n    return json.loads(data)\ndef enrich(client,threshold,stuck):\n    osd_map=mon(client,'osd dump');capacity=mon(client,'df');peering={}\n    for row in stuck:\n        rc,data,error=client.pg_command(row['pgid'],json.dumps({'prefix':'query','pgid':row['pgid']}),b'',timeout=3)\n        if rc:raise RuntimeError('native PG query failed: '+str(error))\n        peering[row['pgid']]=json.loads(data)\n    return {'threshold':threshold,'stuck':stuck,'osd_map':osd_map,'capacity':capacity,'peering':peering}\n\ndef diagnose(client,threshold):\n    if type(threshold)is not int or not 0<=threshold<=86400:raise ValueError('threshold seconds')\n    result=mon(client,'pg dump_stuck',stuckops=['inactive','unclean','undersized'],threshold=threshold)\n    categorized={}\n    for category in ('inactive','unclean','undersized'):\n        categorized[category]={x['pgid']for x in mon(client,'pg dump_stuck',stuckops=[category],threshold=threshold)['stuck_pg_stats']}\n    return enrich(client,threshold,[{'pgid':x['pgid'],'state':x['state'],'categories':[k for k,v in categorized.items()if x['pgid']in v],'osd_candidates':sorted(set(x['up'])|set(x['acting']))}for x in sorted(result['stuck_pg_stats'],key=lambda x:x['pgid'])])\n"
+    },
+    "exercise": {
+      "environment": "Linux student UID1000，Ceph Squid19.2.3私有解包工具；显式WSL OpsForge-Validation-20261022；不改PATH/默认账号/集群",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "real private MON/MGR/three memstore OSDs, loopback-only synthetic data; no production or hardware reliability claim"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "python3"
+        ],
+        "python_modules": [
+          "rados"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,json,time,pathlib\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'));sys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ceph_topology_native import TopologyCeph,command\nimport task\nassert os.geteuid()==1000\n\ndef invoke(client,function,*args):\n    offset=len(client.records);result=function(client,*args)\n    return result,client.records[offset:]\n\ndef native_json(value):return json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)\n\ndef bound_mon(value,records,prefix,**kw):\n    native=[json.loads(r[3])for r in records if r[0]=='mon'and r[2]==0 and r[1].get('prefix')==prefix and all(r[1].get(k)==v for k,v in kw.items())]\n    assert native and any(native_json(value)==native_json(x)for x in native),'reported JSON was not returned by this operation on real Ceph'\n\ndef same_bool(actual,expected,label):\n    assert type(actual)is bool and actual is expected,label\nwith TopologyCeph()as c:\n    pid=c.pool(size=3);c.stop_osd(0)\n    c.wait(lambda:any('undersized'in x['state']or'degraded'in x['state']for x in c.pg_rows(pid)),'actual degraded PG')\n    time.sleep(2)\n    def check(threshold):\n        r,receipts=invoke(c.client,task.diagnose,threshold);assert set(r)=={'threshold','stuck','osd_map','capacity','peering'}and r['threshold']==threshold\n        bound_mon(r['osd_map'],receipts,'osd dump');bound_mon(r['capacity'],receipts,'df')\n        assert r['osd_map']['fsid']==c.fsid and r['capacity']['stats']['num_osds']==3\n        assert set(r['peering'])=={x['pgid']for x in r['stuck']}\n        for pgid,data in r['peering'].items():\n            native=[json.loads(x[3])for x in receipts if x[0]=='pg'and x[2]==0 and x[1].get('pgid')==pgid and x[1].get('prefix')=='query']\n            assert native and any(native_json(data)==native_json(x)for x in native)and data['info']['pgid']==pgid and isinstance(data['recovery_state'],list),'native PG peering proof missing or forged'\n        expected={}\n        for category in ('inactive','unclean','undersized'):\n            for row in c.mon('pg dump_stuck',stuckops=[category],threshold=threshold)['stuck_pg_stats']:\n                e=expected.setdefault(row['pgid'],{'pgid':row['pgid'],'state':row['state'],'categories':[],'osd_candidates':sorted(set(row['up']+row['acting']))});e['categories'].append(category)\n        assert r['stuck']==[expected[k]for k in sorted(expected)],'must preserve real PG state, native stuck threshold and cause candidates'\n        print('NATIVE_STUCK_THRESHOLD '+json.dumps({'threshold':r['threshold'],'stuck':r['stuck'],'osd_epoch':r['osd_map']['epoch'],'peering_pgs':sorted(r['peering'])}),flush=True);return r\n    short=check(1);long=check(3600)\n    assert short['stuck']and not long['stuck'],'native threshold contrast unavailable'\n    assert any('unclean'in row['categories']for row in short['stuck'])\n    c.restart_osd(0);c.wait_clean(pid);c.verify_payloads();time.sleep(1);check(1)\n    assert task.diagnose(c.client,1)['stuck']==[],'restored PGs must leave stuck list'\n    for invalid in (-1,True,86401):\n        try:task.diagnose(c.client,invalid)\n        except ValueError:pass\n        else:raise AssertionError('invalid threshold accepted')\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED')\n",
+        "checks/ceph_topology_native.py": "\"\"\"Experimental nonroot, private MON/memstore OSD; no question or incident credit.\"\"\"\nimport json,os,pathlib,socket,subprocess,tempfile,time,uuid\nimport rados\nassert os.geteuid()==1000\nTOOL=pathlib.Path('/tmp/opsforge-session07-20261029/native')\nENV={**os.environ,'LD_LIBRARY_PATH':str(TOOL/'usr/lib/x86_64-linux-gnu/ceph')+':'+str(TOOL/'usr/lib/x86_64-linux-gnu')+':'+str(TOOL/'lib/x86_64-linux-gnu'),'PYTHONPATH':str(TOOL/'usr/lib/python3/dist-packages')}\ndef command(name,*args,timeout=20):\n result=subprocess.run([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,capture_output=True,text=True,timeout=timeout)\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\ndef port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\nclass PrivateCeph:\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-session07-ceph-');self.root=pathlib.Path(self.temp.name);self.processes=[];self.logs=[];self.client=None\n  try:\n   self.fsid=str(uuid.uuid4());self.monport=port();self.config=self.root/'ceph.conf';self.monmap=self.root/'monmap';self.mondata=self.root/'mon.a';self.mondata.mkdir()\n   (self.root/'run').mkdir();(self.root/'crash').mkdir()\n   self.config.write_text('''[global]\nplugin dir = {tool}/usr/lib/x86_64-linux-gnu/ceph\nmon cluster log file = {root}/cluster.log\nmon cluster log to file = false\nfsid = {fsid}\nmon initial members = a\nmon host = 127.0.0.1:{port}\nauth cluster required = none\nauth service required = none\nauth client required = none\npublic addr = 127.0.0.1\ncluster addr = 127.0.0.1\nms bind ipv4 = true\nms bind ipv6 = false\nms async op threads = 1\nlog to stderr = true\nlog to file = false\nrun dir = {root}/run\ncrash dir = {root}/crash\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nadmin socket = {root}/$name.asok\npid file = {root}/$name.pid\nkeyring = {root}/$name.keyring\nmon data avail crit = 0\nmon data avail warn = 0\nmon allow pool delete = true\nmon allow pool size one = true\nosd pool default size = 1\nosd pool default min size = 1\nosd pool default pg num = 1\nosd pool default pgp num = 1\nosd pool default pg autoscale mode = off\nosd crush chooseleaf type = 0\nrados mon op timeout = 3\nrados osd op timeout = 3\n[mon.a]\nmon data = {root}/mon.a\nmon addr = 127.0.0.1:{port}\n[osd]\nosd objectstore = memstore\nosd data = {root}/osd.$id\nkeyring = {root}/osd.$id/keyring\nosd memory target = 134217728\nmemstore device bytes = 134217728\nosd op num shards = 1\nosd op num threads per shard = 1\nosd op num shards hdd = 1\nosd op num threads per shard hdd = 1\nosd op num shards ssd = 1\nosd op num threads per shard ssd = 1\nosd recovery max active = 1\nosd max backfills = 1\nosd class dir = {tool}/usr/lib/x86_64-linux-gnu/rados-classes\nerasure code dir = {tool}/usr/lib/x86_64-linux-gnu/ceph/erasure-code\n'''.format(fsid=self.fsid,port=self.monport,root=self.root,tool=TOOL))\n   command('monmaptool','--create','--fsid',self.fsid,'--add','a','127.0.0.1:'+str(self.monport),self.monmap)\n   command('ceph-authtool','--create-keyring',self.root/'mon.keyring','--gen-key','-n','mon.')\n   command('ceph-mon','--mkfs','-i','a','-c',self.config,'--monmap',self.monmap,'--mon-data',self.mondata,'--keyring',self.root/'mon.keyring')\n   monitor=self.start('ceph-mon','-f','-i','a','-c',self.config,'--mon-data',self.mondata,'--setuser','1000','--setgroup','1000')\n   deadline=time.monotonic()+20;last=None\n   while time.monotonic()<deadline:\n    if monitor.poll() is not None:raise RuntimeError('private MON exited before readiness: '+self.log_tail())\n    try:\n     status=json.loads(command('ceph','--admin-daemon',self.root/'mon.a.asok','mon_status',timeout=3))\n     if status.get('state') not in ('leader','peon'):time.sleep(.2);continue\n     assert status['monmap']['fsid']==self.fsid;break\n    except Exception as error:\n     last=error\n     time.sleep(.2)\n   else:raise RuntimeError('private MON readiness failed: '+str(last)+' '+self.log_tail())\n   print('NATIVE_PRIVATE_CEPH_MON_READY '+json.dumps({'fsid':self.fsid,'uid':os.geteuid(),'quorum':status.get('quorum'),'network':'none-loopback-only'}),flush=True)\n   self.client=rados.Rados(conffile=str(self.config),name='client.admin');self.client.connect(timeout=3)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def start(self,name,*args):\n  log=(self.root/(name+'-'+str(len(self.processes))+'.log')).open('wb');self.logs.append(log)\n  process=subprocess.Popen([str(TOOL/'usr/bin'/name),*map(str,args)],env=ENV,stdin=subprocess.DEVNULL,stdout=log,stderr=log);self.processes.append(process)\n  return process\n def mon(self,prefix,**kwargs):\n  rc,out,err=self.client.mon_command(json.dumps({'prefix':prefix,'format':'json',**kwargs}),b'')\n  if rc:raise RuntimeError('private mon command '+prefix+' failed: '+str(rc)+' '+str(err))\n  try:return json.loads(out)\n  except json.JSONDecodeError:return out.decode().strip()\n def add_osd(self):\n  osduuid=str(uuid.uuid4());created=self.mon('osd create',uuid=osduuid);osdid=int(created['osdid'] if isinstance(created,dict) else created);data=self.root/('osd.'+str(osdid));data.mkdir()\n  command('ceph-osd','--mkfs','--mkkey','-i',osdid,'-c',self.config,'--osd-uuid',osduuid,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  process=self.start('ceph-osd','-f','-i',osdid,'-c',self.config,'--osd-data',data,'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000')\n  deadline=time.monotonic()+20\n  while time.monotonic()<deadline:\n   if process.poll() is not None:raise RuntimeError('private OSD exited: '+self.log_tail())\n   status=self.mon('osd dump');row=next((row for row in status['osds'] if row['osd']==osdid),None)\n   if row and row['up']==1 and row['in']==1:break\n   time.sleep(.2)\n  else:raise RuntimeError('private OSD readiness timeout: '+self.log_tail())\n  print('NATIVE_PRIVATE_CEPH_MEMSTORE_OSD_READY '+str(osdid),flush=True);return osdid\n def log_tail(self):\n  return '\\n'.join(path.read_text(errors='replace')[-2500:] for path in self.root.glob('*.log'))\n def __exit__(self,*args):\n  if self.client:\n   try:self.client.shutdown()\n   except Exception:pass\n  for process in reversed(self.processes):\n   if process.poll() is None:process.terminate()\n   try:process.wait(timeout=8)\n   except subprocess.TimeoutExpired:process.kill();process.wait(timeout=3)\n  for log in self.logs:log.close()\n  self.temp.cleanup()\n\n\ndef native_trace(record):\n path=pathlib.Path.cwd()/'checks/native-commands.jsonl'\n if path.parent.is_dir():\n  with path.open('a',encoding='utf8')as stream:stream.write(json.dumps({'at_ns':time.time_ns(),'uid':os.getuid(),**record})+'\\n')\n\nimport copy\n\nclass TracingClient:\n def __init__(self,client):self.real=client;self._records=[]\n @property\n def records(self):return copy.deepcopy(self._records)\n def __getattr__(self,name):return getattr(self.real,name)\n def mon_command(self,command,*args,**kwargs):\n  result=self.real.mon_command(command,*args,**kwargs)\n  self._records.append(('mon',json.loads(command),result[0],result[1],str(result[2])))\n  native_trace({'kind':'real_rados_mon_command','request':json.loads(command),'rc':result[0],'stdout':result[1].decode('utf8','replace'),'stderr':str(result[2])})\n  return result\n def pg_command(self,pgid,command,*args,**kwargs):\n  refreshed=time.monotonic_ns();self.real.wait_for_latest_osdmap()\n  native_trace({'kind':'real_wait_for_latest_osdmap','elapsed_ns':time.monotonic_ns()-refreshed})\n  result=self.real.pg_command(pgid,command,*args,**kwargs)\n  self._records.append(('pg',{'pgid':pgid,**json.loads(command)},result[0],result[1],str(result[2])))\n  native_trace({'kind':'real_rados_pg_command','request':{'pgid':pgid,**json.loads(command)},'rc':result[0],'stdout':result[1].decode('utf8','replace'),'stderr':str(result[2])})\n  return result\n\n_original_command=command\ndef command(name,*args,timeout=20):\n argv=[str(TOOL/'usr/bin'/name),*map(str,args)]\n result=subprocess.run(argv,env=ENV,capture_output=True,text=True,timeout=timeout)\n native_trace({'kind':'real_subprocess','argv':argv,'rc':result.returncode,'stdout':result.stdout,'stderr':result.stderr})\n if result.returncode:raise RuntimeError(name+' private command failed: '+result.stdout[-1000:]+result.stderr[-3000:])\n return result.stdout\n\nclass TopologyCeph(PrivateCeph):\n def start(self,name,*args):\n  process=super().start(name,*args)\n  print('NATIVE_OWNED_PROCESS_START '+json.dumps({'pid':process.pid,'argv':[str(TOOL/'usr/bin'/name),*map(str,args)]}),flush=True)\n  return process\n def __enter__(self):\n  self.parent_identity=(os.geteuid(),os.environ.get('HOME'),os.environ.get('PATH'))\n  super().__enter__()\n  self.client=TracingClient(self.client)\n  try:\n   (self.root/'mgr.a').mkdir()\n   self.config.write_text(self.config.read_text()+'\\n[mgr]\\nmgr data = '+str(self.root/'mgr.a')+'\\nmgr module path = '+str(TOOL/'usr/share/ceph/mgr')+'\\nmgr initial modules = \\nmgr tick period = 1\\n[osd]\\nosd pg stat report interval max = 1\\n')\n   self.manager=self.start('ceph-mgr','-f','-i','a','-c',self.config,'--setuser','1000','--setgroup','1000')\n   self.wait(lambda:self.mon('mgr dump').get('available'),'manager available')\n   self.osds={}\n   for _ in range(3):\n    ident=self.add_osd();self.osds[ident]=self.processes[-1]\n   self.mon('osd set',key='noout')\n   print('NATIVE_TOPOLOGY_READY '+json.dumps({'fsid':self.fsid,'uid':os.getuid(),'pids':[p.pid for p in self.processes],'monport':self.monport}),flush=True)\n   return self\n  except BaseException:self.__exit__(None,None,None);raise\n def wait(self,predicate,label,seconds=25):\n  until=time.monotonic()+seconds;last=None\n  while time.monotonic()<until:\n   if any(p.poll()is not None for p in self.processes if p is self.manager):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: mgr exited '+self.log_tail())\n   try:\n    result=predicate()\n    if result:return result\n   except Exception as error:last=error\n   time.sleep(.25)\n  raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: '+label+' deadline '+str(last)+' '+self.log_tail())\n def pool(self,name='owned',size=2,pg=4):\n  self.mon('osd pool create',pool=name,pg_num=pg,pgp_num=pg,pool_type='replicated')\n  self.mon('osd pool set',pool=name,var='size',val=str(size))\n  self.mon('osd pool set',pool=name,var='min_size',val='1')\n  self.mon('osd pool application enable',pool=name,app='opsforge')\n  pid=next(p['pool']for p in self.mon('osd dump')['pools']if p['pool_name']==name)\n  self.wait_clean(pid,pg)\n  with self.client.open_ioctx(name)as io:\n   for index in range(16):io.write_full('obj-'+str(index),('known-payload-'+str(index)).encode())\n  self.wait_clean(pid,pg)\n  return pid\n def pg_rows(self,pid=None):\n  rows=self.mon('pg dump',dumpcontents=['pgs'])['pg_stats']\n  return [x for x in rows if pid is None or x['pgid'].startswith(str(pid)+'.')]\n def wait_clean(self,pid,pg=4):\n  return self.wait(lambda:(lambda rows:rows if len(rows)==pg and all(set(x['state'].split('+'))=={'active','clean'}for x in rows)else None)(self.pg_rows(pid)),'all owned PG active+clean')\n def stop_osd(self,ident):\n  process=self.osds[ident]\n  if process.poll()is None:process.terminate();process.wait(timeout=8)\n  self.mon('osd down',ids=[str(ident)])\n  self.wait(lambda:next(x for x in self.mon('osd dump')['osds']if x['osd']==ident)['up']==0,'owned OSD down')\n def restart_osd(self,ident):\n  process=self.start('ceph-osd','-f','-i',ident,'-c',self.config,'--osd-data',self.root/('osd.'+str(ident)),'--osd-objectstore','memstore','--setuser','1000','--setgroup','1000');self.osds[ident]=process\n  self.mon('osd in',ids=[str(ident)])\n  self.wait(lambda:next(x for x in self.mon('osd dump')['osds']if x['osd']==ident)['up']==1,'owned OSD restarted')\n def verify_payloads(self,name='owned'):\n  with self.client.open_ioctx(name)as io:\n   for index in range(16):assert io.read('obj-'+str(index))==('known-payload-'+str(index)).encode(),'native payload not recovered'\n def __exit__(self,*args):\n  pids=[p.pid for p in self.processes];root=self.root\n  super().__exit__(*args)\n  assert all(p.poll()is not None for p in self.processes),'owned daemon leaked'\n  assert not root.exists(),'owned directory leaked'\n  assert self.parent_identity==(os.geteuid(),os.environ.get('HOME'),os.environ.get('PATH')),'default process identity/environment changed'\n  print('NATIVE_TOPOLOGY_CLEANED '+json.dumps({'pids':pids,'returncodes':[p.returncode for p in self.processes],'directory_removed':True,'identity_preserved':True}),flush=True)\n\n"
+      }
+    }
+  }
+]

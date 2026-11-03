@@ -1,0 +1,70 @@
+[
+  {
+    "id": "curated-parallel-linux-086",
+    "module": "linux",
+    "category": "Linux 基础",
+    "level": 3,
+    "topic": "时间时区与区域设置",
+    "title": "解析chrony跟踪数据并定位扩大时钟偏移",
+    "answer": "```python\nimport math,re\n\ndef _field(text,name,pattern):\n    match=re.search(pattern,text,re.I|re.M)\n    if not match:raise ValueError(\"missing or invalid chrony field: \"+name)\n    return match\n\ndef assess_drift(samples,max_offset_seconds=0.1):\n    if not isinstance(samples,list) or not samples:raise ValueError(\"at least one tracking sample required\")\n    if not isinstance(max_offset_seconds,(int,float)) or isinstance(max_offset_seconds,bool) or not math.isfinite(max_offset_seconds) or max_offset_seconds<=0:\n        raise ValueError(\"positive finite offset limit required\")\n    parsed=[]\n    for text in samples:\n        if not isinstance(text,str):raise TypeError(\"tracking samples must be text\")\n        leap=_field(text,\"Leap status\",r\"^Leap status\\s*:\\s*(.+?)\\s*$\").group(1)\n        stratum=int(_field(text,\"Stratum\",r\"^Stratum\\s*:\\s*(\\d+)\\s*$\").group(1))\n        current=_field(text,\"System time\",r\"^System time\\s*:\\s*([+-]?[0-9.eE+-]+)\\s+seconds\\s+(fast|slow)\\s+of\\s+NTP time\\s*$\")\n        offset=float(current.group(1))*(1 if current.group(2).lower()==\"fast\" else -1)\n        if not math.isfinite(offset):raise ValueError(\"nonfinite system offset\")\n        parsed.append({\"offset_seconds\":offset,\"stratum\":stratum,\"leap_status\":leap})\n    current=parsed[-1];trend=\"stable\"\n    if len(parsed)>1 and abs(current[\"offset_seconds\"])>abs(parsed[-2][\"offset_seconds\"])+1e-9:trend=\"worsening\"\n    synchronized=current[\"leap_status\"].lower()==\"normal\" and 1<=current[\"stratum\"]<=15\n    if not synchronized:status=\"unsynchronised\"\n    elif abs(current[\"offset_seconds\"])>max_offset_seconds:status=\"offset_out_of_tolerance\"\n    else:status=\"healthy\"\n    return {**current,\"trend\":trend,\"status\":status,\n        \"next\":\"inspect chronyc sources/tracking and restore host time synchronization before changing certificate validity or keys\" if status!=\"healthy\" or trend==\"worsening\" else \"continue monitoring offset and source freshness\"}\n```\n\n原题知识说明：\n关联请求时间戳与可信外部时间，检查同步源可达性、选源状态和漂移，不把证书问题当既定根因。先隔离漂移节点或切到健康实例；按时间敏感服务要求选择受控校时方式，避免突然回拨破坏排序。恢复后验证偏移稳定在窗口内和签名请求成功，追查时间源或守护进程故障。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "关联请求时间戳与可信外部时间，检查同步源可达性、选源状态和漂移，不把证书问题当既定根因。",
+      "先隔离漂移节点或切到健康实例；按时间敏感服务要求选择受控校时方式，避免突然回拨破坏排序。",
+      "恢复后验证偏移稳定在窗口内和签名请求成功，追查时间源或守护进程故障。"
+    ],
+    "references": [],
+    "incident_signature": "linux-clocksource-drift-signature-window",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-linux-086",
+      "original_title": "同一批主机开始拒绝有时效签名的请求，证书正常，chrony 显示时间偏移持续扩大。如何处理？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现assess_drift(samples,max_offset_seconds)：解析多次chronyc tracking输出中的Stratum、Leap status和System time fast/slow方向，计算带符号UTC偏移、趋势及同步状态；按容差输出诊断。偏移超限或持续扩大时优先修复主机时间源，不轮换仍有效的证书。拒绝缺字段、非有限值和无效容差。\n\n## 提交产物\ntask.py\n\n## 验收方法\n以chrony输出快照验证偏移符号、增长趋势、容差和未同步状态；不改宿主时钟。\n\n## 能力边界\n使用chronyc tracking格式的离线观测快照，验证系统时钟相对NTP时间偏移逐次扩大、fast/slow符号方向、未同步状态与安全处置建议。该合同不修改时钟、chrony配置或证书。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import math,re\n\ndef _field(text,name,pattern):\n    match=re.search(pattern,text,re.I|re.M)\n    if not match:raise ValueError(\"missing or invalid chrony field: \"+name)\n    return match\n\ndef assess_drift(samples,max_offset_seconds=0.1):\n    if not isinstance(samples,list) or not samples:raise ValueError(\"at least one tracking sample required\")\n    if not isinstance(max_offset_seconds,(int,float)) or isinstance(max_offset_seconds,bool) or not math.isfinite(max_offset_seconds) or max_offset_seconds<=0:\n        raise ValueError(\"positive finite offset limit required\")\n    parsed=[]\n    for text in samples:\n        if not isinstance(text,str):raise TypeError(\"tracking samples must be text\")\n        leap=_field(text,\"Leap status\",r\"^Leap status\\s*:\\s*(.+?)\\s*$\").group(1)\n        stratum=int(_field(text,\"Stratum\",r\"^Stratum\\s*:\\s*(\\d+)\\s*$\").group(1))\n        current=_field(text,\"System time\",r\"^System time\\s*:\\s*([+-]?[0-9.eE+-]+)\\s+seconds\\s+(fast|slow)\\s+of\\s+NTP time\\s*$\")\n        offset=float(current.group(1))*(1 if current.group(2).lower()==\"fast\" else -1)\n        if not math.isfinite(offset):raise ValueError(\"nonfinite system offset\")\n        parsed.append({\"offset_seconds\":offset,\"stratum\":stratum,\"leap_status\":leap})\n    current=parsed[-1];trend=\"stable\"\n    if len(parsed)>1 and abs(current[\"offset_seconds\"])>abs(parsed[-2][\"offset_seconds\"])+1e-9:trend=\"worsening\"\n    synchronized=current[\"leap_status\"].lower()==\"normal\" and 1<=current[\"stratum\"]<=15\n    if not synchronized:status=\"unsynchronised\"\n    elif abs(current[\"offset_seconds\"])>max_offset_seconds:status=\"offset_out_of_tolerance\"\n    else:status=\"healthy\"\n    return {**current,\"trend\":trend,\"status\":status,\n        \"next\":\"inspect chronyc sources/tracking and restore host time synchronization before changing certificate validity or keys\" if status!=\"healthy\" or trend==\"worsening\" else \"continue monitoring offset and source freshness\"}\n"
+    },
+    "negative_files": {
+      "task.py": "import math,re\n\ndef _field(text,name,pattern):\n    match=re.search(pattern,text,re.I|re.M)\n    if not match:raise ValueError(\"missing or invalid chrony field: \"+name)\n    return match\n\ndef assess_drift(samples,max_offset_seconds=0.1):\n    if not isinstance(samples,list) or not samples:raise ValueError(\"at least one tracking sample required\")\n    if not isinstance(max_offset_seconds,(int,float)) or isinstance(max_offset_seconds,bool) or not math.isfinite(max_offset_seconds) or max_offset_seconds<=0:\n        raise ValueError(\"positive finite offset limit required\")\n    parsed=[]\n    for text in samples:\n        if not isinstance(text,str):raise TypeError(\"tracking samples must be text\")\n        leap=_field(text,\"Leap status\",r\"^Leap status\\s*:\\s*(.+?)\\s*$\").group(1)\n        stratum=int(_field(text,\"Stratum\",r\"^Stratum\\s*:\\s*(\\d+)\\s*$\").group(1))\n        current=_field(text,\"System time\",r\"^System time\\s*:\\s*([+-]?[0-9.eE+-]+)\\s+seconds\\s+(fast|slow)\\s+of\\s+NTP time\\s*$\")\n        offset=float(current.group(1))\n        if not math.isfinite(offset):raise ValueError(\"nonfinite system offset\")\n        parsed.append({\"offset_seconds\":offset,\"stratum\":stratum,\"leap_status\":leap})\n    current=parsed[-1];trend=\"stable\"\n    if len(parsed)>1 and abs(current[\"offset_seconds\"])>abs(parsed[-2][\"offset_seconds\"])+1e-9:trend=\"worsening\"\n    synchronized=current[\"leap_status\"].lower()==\"normal\" and 1<=current[\"stratum\"]<=15\n    if not synchronized:status=\"unsynchronised\"\n    elif abs(current[\"offset_seconds\"])>max_offset_seconds:status=\"offset_out_of_tolerance\"\n    else:status=\"healthy\"\n    return {**current,\"trend\":trend,\"status\":status,\n        \"next\":\"inspect chronyc sources/tracking and restore host time synchronization before changing certificate validity or keys\" if status!=\"healthy\" or trend==\"worsening\" else \"continue monitoring offset and source freshness\"}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现assess_drift(samples,max_offset_seconds)：解析多次chronyc tracking输出中的Stratum、Leap status和System time fast/slow方向，计算带符号UTC偏移、趋势及同步状态；按容差输出诊断。偏移超限或持续扩大时优先修复主机时间源，不轮换仍有效的证书。拒绝缺字段、非有限值和无效容差。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "使用chronyc tracking格式的离线观测快照，验证系统时钟相对NTP时间偏移逐次扩大、fast/slow符号方向、未同步状态与安全处置建议。该合同不修改时钟、chrony配置或证书。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'));task=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED: assess chrony UTC offset trend',flush=True)\ndef sample(value,direction='fast',leap='Normal',stratum=3):\n return f'Stratum : {stratum}\\nSystem time : {value} seconds {direction} of NTP time\\nLeap status : {leap}\\n'\nrows=[sample('0.005','fast'),sample('0.120','slow'),sample('0.350','slow')]\nresult=task.assess_drift(rows,max_offset_seconds=.1)\nassert result['status']=='offset_out_of_tolerance' and result['trend']=='worsening' and result['offset_seconds']==-.35,result\nassert 'before changing certificate' in result['next']\nprint('NATIVE_OPERATION_ENTERED: UTC offset grew while signed requests were rejected',flush=True)\nassert task.assess_drift([sample('0.050','slow')],.1)['offset_seconds']==-.05\nassert task.assess_drift([sample('0.002','fast')],.1)['status']=='healthy'\nassert task.assess_drift([sample('0.100','fast')],.1)['status']=='healthy'\nassert task.assess_drift([sample('0.001','fast','Not synchronised')],.1)['status']=='unsynchronised'\nfor bad in ([],[sample('NaN')]):\n try:task.assess_drift(bad,.1)\n except ValueError:pass\n else:raise AssertionError('invalid chrony evidence accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "linux"
+    ]
+  }
+]

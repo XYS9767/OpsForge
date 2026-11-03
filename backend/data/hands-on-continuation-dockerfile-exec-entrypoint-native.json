@@ -1,0 +1,72 @@
+[
+  {
+    "id": "curated-dockerfile-expansion-082",
+    "module": "dockerfile",
+    "category": "Dockerfile",
+    "topic": "运行入口与信号",
+    "level": 4,
+    "type": "code",
+    "title": "用exec入口转发容器停止信号并保持参数边界",
+    "body": "## 操作任务\n实现write_entrypoint(path)：原子写入带set -eu与exec \"$@\"的POSIX入口脚本，确保可执行；拒绝符号链接和非普通文件。用真实父子进程复现sh为PID1时SIGTERM未传给业务子进程，再证明exec形式让业务进程直接收到SIGTERM，且参数含空格时不拆分。\n\n## 提交产物\ntask.py\n\n## 验收方法\n真实Linux shell与子进程观察SIGTERM；验证exec入口的PID信号、退出码、含空格参数和符号链接拒绝。\n\n## 能力边界\n临时Linux进程与文件系统内实测PID1样式shell子进程未收到SIGTERM；exec入口由同一PID直接承载业务进程，信号终止码为SIGTERM且参数保真。不构建镜像。",
+    "answer": "```python\nimport os,pathlib,tempfile\n\ndef write_entrypoint(path):\n    path=pathlib.Path(path)\n    if path.exists() and (path.is_symlink() or not path.is_file()):\n        raise ValueError(\"target must be a regular file\")\n    data=b'#!/bin/sh\\nset -eu\\nexec \"$@\"\\n'\n    fd,tmp=tempfile.mkstemp(prefix=\".\"+path.name+\".\",dir=path.parent)\n    try:\n        with os.fdopen(fd,\"wb\") as stream:\n            stream.write(data);stream.flush();os.fsync(stream.fileno())\n        os.chmod(tmp,0o755);os.replace(tmp,path);tmp=None\n    finally:\n        if tmp is not None and os.path.exists(tmp):os.unlink(tmp)\n    return path\n```\n\n原题知识说明：\n在隔离环境发送标准停止信号，观察父子进程是否收到及业务排空日志。若包装器未转发信号，使用正确 exec/信号处理机制并验证退出码和在途请求；不要仅增大宽限期。灰度验证停止耗时和错误率后推广，异常则回退旧入口/镜像。",
+    "rubric": [
+      "在隔离环境发送标准停止信号，观察父子进程是否收到及业务排空日志"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.docker.com/reference/dockerfile/",
+      "https://docs.docker.com/build/building/best-practices/"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "dockerfile-expansion",
+    "incident_signature": "终止超时",
+    "exercise_mode": "tabletop",
+    "language": "python",
+    "has_answer": true,
+    "conversion": {
+      "original_id": "curated-dockerfile-expansion-082",
+      "original_title": "发布替换时容器总等到宽限期被 SIGKILL，进程树显示 sh 为 PID1、业务为子进程。如何验证根因？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,pathlib,tempfile\n\ndef write_entrypoint(path):\n    path=pathlib.Path(path)\n    if path.exists() and (path.is_symlink() or not path.is_file()):\n        raise ValueError(\"target must be a regular file\")\n    data=b'#!/bin/sh\\nset -eu\\nexec \"$@\"\\n'\n    fd,tmp=tempfile.mkstemp(prefix=\".\"+path.name+\".\",dir=path.parent)\n    try:\n        with os.fdopen(fd,\"wb\") as stream:\n            stream.write(data);stream.flush();os.fsync(stream.fileno())\n        os.chmod(tmp,0o755);os.replace(tmp,path);tmp=None\n    finally:\n        if tmp is not None and os.path.exists(tmp):os.unlink(tmp)\n    return path\n"
+    },
+    "negative_files": {
+      "task.py": "import os,pathlib,tempfile\n\ndef write_entrypoint(path):\n    path=pathlib.Path(path)\n    if path.exists() and (path.is_symlink() or not path.is_file()):\n        raise ValueError(\"target must be a regular file\")\n    data=b'#!/bin/sh\\nset -eu\\n\"$@\"\\n'\n    fd,tmp=tempfile.mkstemp(prefix=\".\"+path.name+\".\",dir=path.parent)\n    try:\n        with os.fdopen(fd,\"wb\") as stream:\n            stream.write(data);stream.flush();os.fsync(stream.fileno())\n        os.chmod(tmp,0o755);os.replace(tmp,path);tmp=None\n    finally:\n        if tmp is not None and os.path.exists(tmp):os.unlink(tmp)\n    return path\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现write_entrypoint(path)：原子写入带set -eu与exec \"$@\"的POSIX入口脚本，确保可执行；拒绝符号链接和非普通文件。用真实父子进程复现sh为PID1时SIGTERM未传给业务子进程，再证明exec形式让业务进程直接收到SIGTERM，且参数含空格时不拆分。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "临时Linux进程与文件系统内实测PID1样式shell子进程未收到SIGTERM；exec入口由同一PID直接承载业务进程，信号终止码为SIGTERM且参数保真。不构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 20,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib,subprocess,tempfile,os,signal,time\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'));task=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED: generate exec-form entrypoint',flush=True)\nwith tempfile.TemporaryDirectory(prefix='pid1 exec entry ') as d:\n root=pathlib.Path(d);parent=subprocess.Popen(['/bin/sh','-c','sleep 30 & echo $!; wait'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,start_new_session=True)\n child=int(parent.stdout.readline().strip())\n try:\n  parent.send_signal(signal.SIGTERM);parent.wait(timeout=3)\n  try:os.kill(child,0)\n  except ProcessLookupError:raise AssertionError('shell unexpectedly forwarded SIGTERM')\n  print('NATIVE_OPERATION_ENTERED: shell PID 1 left child alive after SIGTERM',flush=True)\n finally:\n  if parent.poll() is None:parent.kill();parent.wait(timeout=3)\n  try:os.kill(child,signal.SIGKILL)\n  except ProcessLookupError:pass\n entry=task.write_entrypoint(root/'entrypoint.sh');assert entry.stat().st_mode & 0o111\n assert entry.read_bytes()==b'#!/bin/sh\\nset -eu\\nexec \"$@\"\\n'\n proc=subprocess.Popen([str(entry),'/usr/bin/python3','-c','import sys;print(sys.argv[1])','hello world'],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n out,err=proc.communicate(timeout=5);assert proc.returncode==0 and out=='hello world\\n',(proc.returncode,out,err)\n proc=subprocess.Popen([str(entry),'/bin/sleep','30']);time.sleep(.2);proc.send_signal(signal.SIGTERM);assert proc.wait(timeout=3)==-signal.SIGTERM\n link=root/'link';link.symlink_to(root/'entrypoint.sh')\n try:task.write_entrypoint(link)\n except ValueError:pass\n else:raise AssertionError('symlink target accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "dockerfile"
+    ]
+  }
+]

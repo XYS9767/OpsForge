@@ -1,0 +1,75 @@
+[
+  {
+    "id": "curated-dockerfile-expansion-084",
+    "module": "dockerfile",
+    "category": "Dockerfile",
+    "topic": "身份、文件与权限",
+    "level": 4,
+    "type": "code",
+    "title": "非root缓存故障：实际DAC、只读根与卷覆盖的定向权限修复",
+    "body": "## 操作任务\n实现prepare_cache(path,uid=10001,gid=10001)，仅对批准的现有真实缓存目录设置UID/GID和0750，返回path、uid、gid、mode；拒绝缺失或符号链接路径和无效身份，不修改应用代码、根目录或其他配置，不使用777或让应用以root运行。准备动作仅由隔离环境初始化身份执行，业务写入始终UID/GID10001。验证普通可写根、只读根不带写卷、只读根带覆盖缓存卷三种情况，明确目录属主不能克服只读挂载。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Linux私有mount namespace和普通UID10001进程；基于实际内核DAC、只读bind挂载及专用写卷覆盖验证，不启动Docker、不构建或拉取镜像，不声称已验证OCI运行器或生产发布回退。仅自有临时目录，mount传播private；初始化显式root子进程，默认身份不变，应用进程实际降至10001且清空补充组。原214故障是否核销依独立证据审查，工具和复测不另外计题。",
+    "answer": "```python\nimport argparse,os,pathlib\n\ndef prepare_cache(path,uid=10001,gid=10001):\n    path=pathlib.Path(path)\n    if path.is_symlink() or not path.is_dir():raise ValueError(\"cache path must be an existing real directory\")\n    if uid<=0 or gid<0:raise ValueError(\"invalid application identity\")\n    os.chown(path,uid,gid,follow_symlinks=False)\n    os.chmod(path,0o750,follow_symlinks=False)\n    result=path.stat(follow_symlinks=False)\n    return {\"path\":str(path),\"uid\":result.st_uid,\"gid\":result.st_gid,\"mode\":oct(result.st_mode & 0o777)}\n\nif __name__=='__main__':\n    parser=argparse.ArgumentParser();parser.add_argument('path');args=parser.parse_args()\n    print(prepare_cache(args.path))\n```\n\n原题知识说明：\n定位应用实际需要的写路径，在镜像或部署支持的初始化方式中仅赋予该目录合适 UID/GID 和权限，程序代码保持只读。验证普通运行、只读根及挂载场景；不能全盘 chmod777 或恢复 root 作为最终方案，先回退发布保护业务。",
+    "rubric": [
+      "定位应用实际需要的写路径，在镜像或部署支持的初始化方式中仅赋予该目录合适 UID/GID 和权限，程序代码保持只读"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.docker.com/engine/containers/run/#filesystem-mounts"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "dockerfile-expansion",
+    "incident_signature": "用户权限",
+    "exercise_mode": "tabletop",
+    "related_modules": [
+      "dockerfile"
+    ],
+    "language": "python",
+    "has_answer": true,
+    "conversion": {
+      "original_id": "curated-dockerfile-expansion-084",
+      "original_title": "运行身份从 root 改为10001后只在写 /var/cache/app 时失败，目录属 root 且0755。如何处理？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import argparse,os,pathlib\n\ndef prepare_cache(path,uid=10001,gid=10001):\n    path=pathlib.Path(path)\n    if path.is_symlink() or not path.is_dir():raise ValueError(\"cache path must be an existing real directory\")\n    if uid<=0 or gid<0:raise ValueError(\"invalid application identity\")\n    os.chown(path,uid,gid,follow_symlinks=False)\n    os.chmod(path,0o750,follow_symlinks=False)\n    result=path.stat(follow_symlinks=False)\n    return {\"path\":str(path),\"uid\":result.st_uid,\"gid\":result.st_gid,\"mode\":oct(result.st_mode & 0o777)}\n\nif __name__=='__main__':\n    parser=argparse.ArgumentParser();parser.add_argument('path');args=parser.parse_args()\n    print(prepare_cache(args.path))\n"
+    },
+    "negative_files": {
+      "task.py": "import argparse,os,pathlib\n\ndef prepare_cache(path,uid=10001,gid=10001):\n    path=pathlib.Path(path)\n    if path.is_symlink() or not path.is_dir():raise ValueError(\"cache path must be an existing real directory\")\n    if uid<=0 or gid<0:raise ValueError(\"invalid application identity\")\n    os.chown(path,uid,gid,follow_symlinks=False)\n    os.chmod(path,0o777,follow_symlinks=False)\n    result=path.stat(follow_symlinks=False)\n    return {\"path\":str(path),\"uid\":result.st_uid,\"gid\":result.st_gid,\"mode\":oct(result.st_mode & 0o777)}\n\nif __name__=='__main__':\n    parser=argparse.ArgumentParser();parser.add_argument('path');args=parser.parse_args()\n    print(prepare_cache(args.path))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现prepare_cache(path,uid=10001,gid=10001)，仅对批准的现有真实缓存目录设置UID/GID和0750，返回path、uid、gid、mode；拒绝缺失或符号链接路径和无效身份，不修改应用代码、根目录或其他配置，不使用777或让应用以root运行。准备动作仅由隔离环境初始化身份执行，业务写入始终UID/GID10001。验证普通可写根、只读根不带写卷、只读根带覆盖缓存卷三种情况，明确目录属主不能克服只读挂载。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Linux私有mount namespace和普通UID10001进程；基于实际内核DAC、只读bind挂载及专用写卷覆盖验证，不启动Docker、不构建或拉取镜像，不声称已验证OCI运行器或生产发布回退。仅自有临时目录，mount传播private；初始化显式root子进程，默认身份不变，应用进程实际降至10001且清空补充组。原214故障是否核销依独立证据审查，工具和复测不另外计题。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "unshare",
+          "mount",
+          "umount"
+        ],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/cache_worker.py": "import errno,hashlib,json,os,pathlib,subprocess,sys,tempfile\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert os.getuid()==0 and os.readlink('/proc/self/ns/mnt')!=sys.argv[1]\ndef run(*args):return subprocess.run(args,check=True,capture_output=True,text=True,timeout=5)\ndef app(path):\n def identity():os.setgroups([]);os.setgid(10001);os.setuid(10001)\n source=\"import errno,json,os,sys;\"+\"\\ntry:\\n fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600);os.write(fd,b'app-data');os.close(fd);print(json.dumps(dict(uid=os.getuid(),gid=os.getgid(),ok=True)))\\nexcept OSError as e:print(json.dumps(dict(uid=os.getuid(),gid=os.getgid(),ok=False,errno=e.errno)))\"\n p=subprocess.run([sys.executable,'-I','-B','-c',source,str(path)],preexec_fn=identity,capture_output=True,text=True,timeout=5);assert p.returncode==0,p.stderr;r=json.loads(p.stdout);assert r['uid']==r['gid']==10001;return r\nwith tempfile.TemporaryDirectory(prefix='opsforge-own-cache-ns-') as name:\n outer=pathlib.Path(name);outer.chmod(0o755);vfs=outer/'root';cache=vfs/'var/cache/app';cache.mkdir(parents=True);code=vfs/'app';code.mkdir();program=code/'main.py';program.write_text('print(\"immutable application\")\\n');program.chmod(0o644);program_sha=hashlib.sha256(program.read_bytes()).hexdigest();unrelated=vfs/'etc';unrelated.mkdir();config=unrelated/'config';config.write_text('keep');baseline=(config.stat().st_uid,config.stat().st_gid,config.stat().st_mode,config.read_bytes());mounted=[]\n try:\n  assert cache.stat().st_uid==0 and cache.stat().st_mode&0o777==0o755\n  failure=app(cache/'ordinary');assert not failure['ok'] and failure['errno']==errno.EACCES\n  print('NATIVE_CACHE_ROOT0755_ACTUAL_UID10001_EACCES',flush=True)\n  print('STUDENT_OPERATION_ENTERED:prepare_only_owned_cache_dac_ro_and_volume',flush=True)\n  result=task.prepare_cache(cache);assert result['uid']==result['gid']==10001 and result['mode']=='0o750'\n  assert app(cache/'ordinary')['ok'] and not app(program)['ok'];assert (cache/'ordinary').read_bytes()==b'app-data'\n  task.prepare_cache(cache);assert app(cache/'idempotent')['ok']\n  run('mount','--bind',str(vfs),str(vfs));mounted.append(vfs);run('mount','-o','remount,bind,ro',str(vfs))\n  assert os.statvfs(vfs).f_flag&os.ST_RDONLY\n  read_only=app(cache/'readonly');assert not read_only['ok'] and read_only['errno']==errno.EROFS\n  print('NATIVE_CACHE_CORRECT_OWNER_CANNOT_OVERRIDE_ACTUAL_READONLY_ROOT',flush=True)\n  backing=outer/'volume';backing.mkdir();assert backing.stat().st_uid==0\n  run('mount','--bind',str(backing),str(cache));mounted.append(cache)\n  hidden=app(cache/'volume-write');assert not hidden['ok'] and hidden['errno']==errno.EACCES\n  task.prepare_cache(cache);assert cache.stat().st_uid==backing.stat().st_uid==10001 and cache.stat().st_mode&0o777==0o750\n  recovered=app(cache/'volume-write');assert recovered['ok'] and (backing/'volume-write').read_bytes()==b'app-data'\n  assert not (cache/'ordinary').exists() and os.statvfs(vfs).f_flag&os.ST_RDONLY and not (os.statvfs(cache).f_flag&os.ST_RDONLY)\n  task.prepare_cache(cache);assert app(cache/'volume-again')['ok'] and not app(program)['ok']\n  assert baseline==(config.stat().st_uid,config.stat().st_gid,config.stat().st_mode,config.read_bytes()) and hashlib.sha256(program.read_bytes()).hexdigest()==program_sha\n  link=outer/'symlink';link.symlink_to(cache,target_is_directory=True)\n  for invalid in [link,outer/'missing']:\n   try:task.prepare_cache(invalid)\n   except ValueError:pass\n   else:raise AssertionError('symlink or missing directory accepted')\n  print('NATIVE_CACHE_VOLUME_MASKS_IMAGE_OWNER_TARGETED_750_REPAIR_ACTUAL_UID10001_WRITES_CODE_STAYS_READONLY',flush=True)\n  run('umount',str(cache));mounted.pop();assert (cache/'ordinary').read_bytes()==b'app-data'\n  print('NATIVE_CACHE_BIND_REMOVAL_REVEALS_PRESERVED_ORIGINAL_CACHE_NO_IMAGE_OR_DOCKER_ENGINE_CLAIM',flush=True)\n finally:\n  for path in reversed(mounted):run('umount',str(path))\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n",
+        "checks/check.py": "import os,pathlib,subprocess,sys\nassert os.getuid()==0\nprint('NATIVE_LINUX_READY',flush=True)\nbefore=os.readlink('/proc/self/ns/mnt')\np=subprocess.run(['unshare','--mount','--propagation','private','--',sys.executable,'-I','-B','checks/cache_worker.py',before],capture_output=True,text=True,timeout=30)\nprint(p.stdout,flush=True);assert p.returncode==0,p.stdout+p.stderr\nassert os.readlink('/proc/self/ns/mnt')==before\nassert 'NATIVE_CACHE_VOLUME_MASKS_IMAGE_OWNER_TARGETED_750_REPAIR_ACTUAL_UID10001_WRITES_CODE_STAYS_READONLY' in p.stdout\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "case"
+  }
+]

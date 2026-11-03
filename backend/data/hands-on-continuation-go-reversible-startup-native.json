@@ -1,0 +1,76 @@
+[
+  {
+    "id": "curated-advanced-go-012",
+    "module": "go",
+    "category": "Go 运维开发",
+    "level": 5,
+    "topic": "语言类型与接口",
+    "title": "Go分阶段启动实操：占用端口失败、订阅排空、逆序关闭与原始错误保留",
+    "body": "## 操作任务\n提交package exercise的task.go，实现Factory func(context.Context)(io.Closer,error)、Start(ctx,factories)(*Service,error)、Service.Ready() bool和Close() error。先校验非nil ctx、非空工厂列表及全部非nil工厂，按顺序各调用一次。取消、获取失败或nil资源/nil错误均不得返回半就绪Service，已获取资源及本次非nil部分资源按逆序关闭；errors.Is须同时识别原失败和清理错误。每步调用前及返回后检查取消；成功后由调用方显式Close，不要求后台自动监听ctx。Ready仅全部完成后true，Close开始即false，Close并发幂等且错误稳定。工厂负责响应其执行中的ctx、停止工作并等待退出，资源内部幂等或事务协调不由编排器猜测。\n\n## 提交产物\ntask.go\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Go编译执行，真实loopback TCP传输资源与端口占用、真实订阅goroutine排空及关闭后同地址重绑；依赖接口的每阶段错误、部分资源和取消路径独立验证。DB仅为测试中的传输句柄，不冒称真实数据库或消息平台集成；不处理不可逆外部事务，不自动重试，不声称生产回退或竞态检测器已通过。离线标准库、普通student、自有短生命周期端口，默认身份不变，无镜像构建。",
+    "answer": "```go\npackage exercise\nimport(\"context\";\"errors\";\"io\";\"sync\";\"sync/atomic\")\ntype Factory func(context.Context)(io.Closer,error)\ntype Service struct{resources []io.Closer;ready atomic.Bool;once sync.Once;err error}\nfunc(s *Service)Ready()bool{return s!=nil&&s.ready.Load()}\nfunc(s *Service)Close()error{if s==nil{return nil};s.once.Do(func(){s.ready.Store(false);for i:=len(s.resources)-1;i>=0;i--{s.err=errors.Join(s.err,s.resources[i].Close())}});return s.err}\nfunc Start(ctx context.Context,factories []Factory)(*Service,error){\n if ctx==nil||len(factories)==0{return nil,errors.New(\"dependencies required\")};for _,f:=range factories{if f==nil{return nil,errors.New(\"nil factory\")}}\n s:=&Service{}\n for _,f:=range factories{\n  if err:=ctx.Err();err!=nil{return nil,errors.Join(err,s.Close())}\n  resource,err:=f(ctx)\n  if resource!=nil{s.resources=append(s.resources,resource)}\n  if err==nil&&resource==nil{err=errors.New(\"nil acquired resource\")}\n  if err==nil{err=ctx.Err()}\n  if err!=nil{return nil,errors.Join(err,s.Close())}\n }\n s.ready.Store(true);return s,nil\n}\n```\n\n原题知识说明：\n交付显式启动依赖图和每个资源的获取、可用、关闭状态，避免把会失败的网络初始化藏在无法返回error的包init中。构造阶段按依赖顺序获取资源，任一阶段失败就逆序释放已经获得的资源，且清理失败要附带报告而非覆盖最初错误。对已启动的订阅和后台任务，必须先停止接受工作并等待退出，再关闭其依赖；Ready只在所有必需阶段完成后发布。验收在每个边界注入连接失败、取消和端口占用，证明不会留下订阅、句柄或半就绪实例，也不会重复执行外部初始化动作。回退运行已验证制品时先完成失败实例清理，若某外部动作不可逆则进入人工接管状态，不能只调用recover继续对外服务。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "指出机制特有的兼容或失败边界",
+      "交付可操作的接口合同与验收矩阵",
+      "定义失败处置及回退限制"
+    ],
+    "references": [
+      "https://pkg.go.dev/io#Closer",
+      "https://pkg.go.dev/errors#Join",
+      "https://pkg.go.dev/sync#Once",
+      "https://pkg.go.dev/context"
+    ],
+    "related_modules": [
+      "go"
+    ],
+    "language": "go",
+    "conversion": {
+      "original_id": "curated-advanced-go-012",
+      "original_title": "Go服务启动需要依次取得数据库、消息订阅和监听端口，怎样交付可失败且可逆的初始化合同？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.go": "package exercise\nimport(\"context\";\"io\")\ntype Factory func(context.Context)(io.Closer,error)\ntype Service struct{}\nfunc(*Service)Ready()bool{panic(\"NotImplementedError\")}\nfunc(*Service)Close()error{panic(\"NotImplementedError\")}\nfunc Start(context.Context,[]Factory)(*Service,error){panic(\"NotImplementedError\")}\n"
+    },
+    "solution_files": {
+      "task.go": "package exercise\nimport(\"context\";\"errors\";\"io\";\"sync\";\"sync/atomic\")\ntype Factory func(context.Context)(io.Closer,error)\ntype Service struct{resources []io.Closer;ready atomic.Bool;once sync.Once;err error}\nfunc(s *Service)Ready()bool{return s!=nil&&s.ready.Load()}\nfunc(s *Service)Close()error{if s==nil{return nil};s.once.Do(func(){s.ready.Store(false);for i:=len(s.resources)-1;i>=0;i--{s.err=errors.Join(s.err,s.resources[i].Close())}});return s.err}\nfunc Start(ctx context.Context,factories []Factory)(*Service,error){\n if ctx==nil||len(factories)==0{return nil,errors.New(\"dependencies required\")};for _,f:=range factories{if f==nil{return nil,errors.New(\"nil factory\")}}\n s:=&Service{}\n for _,f:=range factories{\n  if err:=ctx.Err();err!=nil{return nil,errors.Join(err,s.Close())}\n  resource,err:=f(ctx)\n  if resource!=nil{s.resources=append(s.resources,resource)}\n  if err==nil&&resource==nil{err=errors.New(\"nil acquired resource\")}\n  if err==nil{err=ctx.Err()}\n  if err!=nil{return nil,errors.Join(err,s.Close())}\n }\n s.ready.Store(true);return s,nil\n}\n"
+    },
+    "negative_files": {
+      "task.go": "package exercise\nimport(\"context\";\"errors\";\"io\";\"sync\";\"sync/atomic\")\ntype Factory func(context.Context)(io.Closer,error)\ntype Service struct{resources []io.Closer;ready atomic.Bool;once sync.Once;err error}\nfunc(s *Service)Ready()bool{return s!=nil&&s.ready.Load()}\nfunc(s *Service)Close()error{if s==nil{return nil};s.once.Do(func(){s.ready.Store(false);for i:=0;i<len(s.resources);i++{s.err=errors.Join(s.err,s.resources[i].Close())}});return s.err}\nfunc Start(ctx context.Context,factories []Factory)(*Service,error){\n if ctx==nil||len(factories)==0{return nil,errors.New(\"dependencies required\")};for _,f:=range factories{if f==nil{return nil,errors.New(\"nil factory\")}}\n s:=&Service{}\n for _,f:=range factories{\n  if err:=ctx.Err();err!=nil{return nil,errors.Join(err,s.Close())}\n  resource,err:=f(ctx)\n  if resource!=nil{s.resources=append(s.resources,resource)}\n  if err==nil&&resource==nil{err=errors.New(\"nil acquired resource\")}\n  if err==nil{err=ctx.Err()}\n  if err!=nil{return nil,errors.Join(err,s.Close())}\n }\n s.ready.Store(true);return s,nil\n}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "提交package exercise的task.go，实现Factory func(context.Context)(io.Closer,error)、Start(ctx,factories)(*Service,error)、Service.Ready() bool和Close() error。先校验非nil ctx、非空工厂列表及全部非nil工厂，按顺序各调用一次。取消、获取失败或nil资源/nil错误均不得返回半就绪Service，已获取资源及本次非nil部分资源按逆序关闭；errors.Is须同时识别原失败和清理错误。每步调用前及返回后检查取消；成功后由调用方显式Close，不要求后台自动监听ctx。Ready仅全部完成后true，Close开始即false，Close并发幂等且错误稳定。工厂负责响应其执行中的ctx、停止工作并等待退出，资源内部幂等或事务协调不由编排器猜测。",
+      "deliverables": [
+        "task.go"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Go编译执行，真实loopback TCP传输资源与端口占用、真实订阅goroutine排空及关闭后同地址重绑；依赖接口的每阶段错误、部分资源和取消路径独立验证。DB仅为测试中的传输句柄，不冒称真实数据库或消息平台集成；不处理不可逆外部事务，不自动重试，不声称生产回退或竞态检测器已通过。离线标准库、普通student、自有短生命周期端口，默认身份不变，无镜像构建。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "go"
+        ],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/task_test.go": "package exercise\nimport(\"context\";\"errors\";\"io\";\"net\";\"reflect\";\"sync\";\"sync/atomic\";\"testing\";\"time\")\ntype closer func()error\nfunc(c closer)Close()error{return c()}\nfunc TestBoundariesAndOriginalError(t *testing.T){\n for boundary:=0;boundary<3;boundary++{\n  primary:=errors.New(\"acquire-original\");cleanup:=errors.New(\"cleanup-extra\");events:=[]int{};calls:=0;fs:=[]Factory{}\n  for i:=0;i<3;i++{n:=i;fs=append(fs,func(context.Context)(io.Closer,error){calls++;r:=closer(func()error{events=append(events,n);return cleanup});if n==boundary{return r,primary};return r,nil})}\n  s,err:=Start(context.Background(),fs);want:=[]int{};for i:=boundary;i>=0;i--{want=append(want,i)}\n  if s!=nil||!errors.Is(err,primary)||!errors.Is(err,cleanup)||calls!=boundary+1||!reflect.DeepEqual(events,want){t.Fatal(\"partial acquisition, original error or reverse release lost\",boundary,s,err,calls,events)}\n }\n}\nfunc TestValidationCancellationAndNil(t *testing.T){\n calls:=0;f:=Factory(func(context.Context)(io.Closer,error){calls++;return closer(func()error{return nil}),nil})\n for _,item:=range []struct{ctx context.Context;fs []Factory}{{nil,[]Factory{f}},{context.Background(),nil},{context.Background(),[]Factory{f,nil}}}{s,err:=Start(item.ctx,item.fs);if s!=nil||err==nil||calls!=0{t.Fatal(\"invalid dependencies acquired resources\")}}\n ctx,cancel:=context.WithCancel(context.Background());cancel();s,err:=Start(ctx,[]Factory{f});if s!=nil||!errors.Is(err,context.Canceled)||calls!=0{t.Fatal(\"pre-cancel acquired resource\")}\n ctx,cancel=context.WithCancel(context.Background());closed:=0\n fs:=[]Factory{func(context.Context)(io.Closer,error){cancel();return closer(func()error{closed++;return nil}),nil},f};s,err=Start(ctx,fs)\n if s!=nil||!errors.Is(err,context.Canceled)||closed!=1||calls!=0{t.Fatal(\"cancellation between acquire and ready leaked resource\",s,err,closed,calls)}\n s,err=Start(context.Background(),[]Factory{func(context.Context)(io.Closer,error){return nil,nil}});if s!=nil||err==nil{t.Fatal(\"nil successful acquisition accepted\")}\n}\nfunc TestOwnedTransportSubscriptionOccupiedPortAndRecovery(t *testing.T){\n blocker,err:=net.Listen(\"tcp\",\"127.0.0.1:0\");if err!=nil{t.Fatal(err)};defer blocker.Close();occupied:=blocker.Addr().String();dbAddress:=\"\";events:=[]string{};var subscriptionDone <-chan struct{};var original error\n db:=Factory(func(context.Context)(io.Closer,error){l,e:=net.Listen(\"tcp\",\"127.0.0.1:0\");if e!=nil{return nil,e};dbAddress=l.Addr().String();return closer(func()error{select{case <-subscriptionDone:default:t.Fatal(\"dependency closed before subscriber stopped\")};events=append(events,\"db-transport\");return l.Close()}),nil})\n sub:=Factory(func(context.Context)(io.Closer,error){stop:=make(chan struct{});done:=make(chan struct{});subscriptionDone=done;go func(){defer close(done);<-stop}();return closer(func()error{close(stop);select{case <-done:case <-time.After(time.Second):t.Fatal(\"subscriber did not drain\")};events=append(events,\"subscription\");return nil}),nil})\n listen:=Factory(func(context.Context)(io.Closer,error){l,e:=net.Listen(\"tcp\",occupied);original=e;return l,e})\n // A typed nil net.Listener is not returned through io.Closer on failure.\n listen=func(context.Context)(io.Closer,error){l,e:=net.Listen(\"tcp\",occupied);original=e;if e!=nil{return nil,e};return l,nil}\n service,err:=Start(context.Background(),[]Factory{db,sub,listen});if service!=nil||original==nil||!errors.Is(err,original)||!reflect.DeepEqual(events,[]string{\"subscription\",\"db-transport\"}){t.Fatal(\"actual bind failure did not clean dependents\",service,err,events)}\n reopened,err:=net.Listen(\"tcp\",dbAddress);if err!=nil{t.Fatal(\"owned DB transport socket leaked\",err)};reopened.Close()\n t.Log(\"NATIVE_GO_REAL_OCCUPIED_PORT_REJECTED_SUBSCRIBER_DRAINED_BEFORE_DB_TRANSPORT_AND_SOCKET_REBOUND\")\n events=nil;listenerAddress:=\"\";listen=func(context.Context)(io.Closer,error){l,e:=net.Listen(\"tcp\",\"127.0.0.1:0\");if e!=nil{return nil,e};listenerAddress=l.Addr().String();return closer(func()error{events=append(events,\"listener\");return l.Close()}),nil}\n service,err=Start(context.Background(),[]Factory{db,sub,listen});if err!=nil||!service.Ready(){t.Fatal(\"complete startup not ready\",err)}\n if err=service.Close();err!=nil||service.Ready()||!reflect.DeepEqual(events,[]string{\"listener\",\"subscription\",\"db-transport\"}){t.Fatal(\"successful shutdown dependency order\",err,events)}\n if err=service.Close();err!=nil||len(events)!=3{t.Fatal(\"shutdown repeated side effects\")}\n for _,address:=range []string{dbAddress,listenerAddress}{l,e:=net.Listen(\"tcp\",address);if e!=nil{t.Fatal(\"successful shutdown leaked socket\",address,e)};l.Close()}\n t.Log(\"NATIVE_GO_READY_ONLY_AFTER_ALL_STAGES_ORDERED_IDEMPOTENT_CLOSE_NO_TRANSPORT_HANDLE_LEAK\")\n}\nfunc TestConcurrentCloseExactlyOnce(t *testing.T){\n var n atomic.Int32;sentinel:=errors.New(\"close-failed\");s,err:=Start(context.Background(),[]Factory{func(context.Context)(io.Closer,error){return closer(func()error{n.Add(1);return sentinel}),nil}});if err!=nil{t.Fatal(err)}\n var wg sync.WaitGroup;for i:=0;i<12;i++{wg.Add(1);go func(){defer wg.Done();if !errors.Is(s.Close(),sentinel){t.Error(\"cleanup error lost\")}}()};wg.Wait();if n.Load()!=1||s.Ready(){t.Fatal(\"concurrent duplicate close\",n.Load())}\n}\n",
+        "checks/check.py": "import os,pathlib,subprocess,sys,tempfile\nassert os.getuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED:go_owned_resource_staged_startup_and_reverse_cleanup',flush=True)\nenv={**os.environ,'GOCACHE':'/tmp/opsforge-go-cache','GOMODCACHE':'/tmp/opsforge-go-modcache','GOTOOLCHAIN':'local','GOPROXY':'off','GOSUMDB':'off','CGO_ENABLED':'0','GOMAXPROCS':'2','GOMEMLIMIT':'384MiB'}\nwith tempfile.TemporaryDirectory(prefix='opsforge-go-reversible-') as name:\n root=pathlib.Path(name);(root/'go.mod').write_text('module opsforge.local/exercise\\n\\ngo 1.23\\n');(root/'task.go').write_bytes(pathlib.Path('task.go').read_bytes());(root/'task_test.go').write_bytes(pathlib.Path('checks/task_test.go').read_bytes())\n p=subprocess.run(['go','test','-vet=off','-v','-count=1','-timeout=8s','./...'],cwd=root,env=env,capture_output=True,text=True,timeout=55)\n assert p.returncode==0,'Go staged startup failed: '+p.stdout+p.stderr\n for marker in ['NATIVE_GO_REAL_OCCUPIED_PORT_REJECTED_SUBSCRIBER_DRAINED_BEFORE_DB_TRANSPORT_AND_SOCKET_REBOUND','NATIVE_GO_READY_ONLY_AFTER_ALL_STAGES_ORDERED_IDEMPOTENT_CLOSE_NO_TRANSPORT_HANDLE_LEAK']:\n  assert marker in p.stdout;print(marker,flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "case"
+  }
+]

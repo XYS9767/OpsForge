@@ -1,0 +1,144 @@
+[
+  {
+    "id": "curated-parallel-zabbix-104",
+    "module": "zabbix",
+    "category": "Zabbix",
+    "level": 4,
+    "topic": "监控协议与检查工具",
+    "title": "SNMP流量回绕：区分可约束增量、多次回绕歧义和计数重置",
+    "answer": "```python\nfrom fractions import Fraction\ndef analyze_counter(before,after,interval_seconds,link_bps,width):\n    if type(width) is not int or width not in (32,64):raise ValueError(\"Counter32 or Counter64 required\")\n    if any(type(v) is not int or v<=0 for v in (interval_seconds,link_bps)):raise ValueError(\"positive integer interval and link rate required\")\n    modulus=1<<width\n    for sample in (before,after):\n        if not isinstance(sample,dict):raise ValueError(\"snapshot object required\")\n        for name in (\"counter\",\"uptime\",\"discontinuity\"):\n            if type(sample.get(name)) is not int or sample[name]<0:raise ValueError(\"nonnegative integer fields required\")\n        if sample[\"counter\"]>=modulus:raise ValueError(\"counter outside declared width\")\n    if after[\"uptime\"]<before[\"uptime\"] or after[\"discontinuity\"]!=before[\"discontinuity\"]:\n        return {\"status\":\"discontinuity\",\"delta_octets\":None,\"action\":\"collect a new baseline; do not repair this difference as a wrap\"}\n    delta=(after[\"counter\"]-before[\"counter\"])%modulus\n    maximum=(link_bps*interval_seconds)//8\n    if delta>maximum:\n        return {\"status\":\"inconsistent_sample\",\"delta_octets\":None,\"action\":\"verify identity, interval and link capacity\"}\n    if delta+modulus<=maximum:\n        return {\"status\":\"ambiguous_wrap_count\",\"delta_octets\":None,\"action\":\"collect ifHCInOctets with a bounded interval; missing historic wraps cannot be inferred\"}\n    rate=Fraction(delta*8,interval_seconds)\n    return {\"status\":\"bounded_rate\",\"delta_octets\":delta,\"rate_bps_numerator\":rate.numerator,\"rate_bps_denominator\":rate.denominator}\n```\n\n原题知识说明：\n对照原始SNMP样本可见ifInOctets回绕，采样间隔内还可能多次回绕；普通差值无法恢复真实增量，变速预处理遇到计数下降会丢弃该次差值。确认设备支持后改采ifHCInOctets等64位计数，并核对接口标识与bytes转bits预处理。缩短间隔只能缓解32位回绕风险，不能可靠恢复已丢信息；验收需覆盖高负载和设备重启。文字桌面演练，未执行生产操作。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "对照原始SNMP样本可见ifInOctets回绕，采样间隔内还可能多次回绕；普通差值无法恢复真实增量，变速预处理遇到计数下降会丢弃该次差值。",
+      "确认设备支持后改采ifHCInOctets等64位计数，并核对接口标识与bytes转bits预处理。",
+      "缩短间隔只能缓解32位回绕风险，不能可靠恢复已丢信息；验收需覆盖高负载和设备重启。"
+    ],
+    "references": [
+      "https://www.rfc-editor.org/rfc/rfc2863.html",
+      "https://www.zabbix.com/documentation/7.0/en/manual/config/items/itemtypes/snmp"
+    ],
+    "incident_signature": "zabbix-snmp32-counter-wrap-rate-gaps",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-zabbix-104",
+      "original_title": "高速端口流量图周期性掉零，设备未重启且32位octet计数跨越上限，如何定位？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现analyze_counter(before,after,interval_seconds,link_bps,width)，snapshot含非负int的counter、uptime、discontinuity，width仅32/64，counter须小于2**width；时长和链路线速为正int且非bool。题定同一接口、间隔内线速恒定、没有sysUpTime自身回绕；uptime下降或ifCounterDiscontinuityTime变化时返回status=discontinuity、delta_octets=None。否则令d=(after-before) mod 2**width、最大字节数M=floor(link_bps*秒/8)：d>M为inconsistent_sample；d+2**width<=M为ambiguous_wrap_count，不可伪造真实增量，建议ifHCInOctets；仅剩一种可能时返回bounded_rate、精确delta_octets及约分后的rate_bps_numerator/denominator。失败状态都不输出速率。不得把每次下降都当一次回绕，也不能凭两样本恢复多个完整周期；不修改输入。\n\n## 提交产物\ntask.py\n\n## 验收方法\n独立离线Python合同检查Counter32/64边界、不可辨识情况或脱敏engineID冲突；无真实SNMP/Zabbix运行。\n\n## 能力边界\n离线SNMP观测证据分析与有限数学合同，Python真实执行；不发送SNMP报文、不连接Zabbix、不更改设备或Proxy、不证明历史流量已补回或实际设备故障恢复。本题不增加已运行故障场景计数。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "from fractions import Fraction\ndef analyze_counter(before,after,interval_seconds,link_bps,width):\n    if type(width) is not int or width not in (32,64):raise ValueError(\"Counter32 or Counter64 required\")\n    if any(type(v) is not int or v<=0 for v in (interval_seconds,link_bps)):raise ValueError(\"positive integer interval and link rate required\")\n    modulus=1<<width\n    for sample in (before,after):\n        if not isinstance(sample,dict):raise ValueError(\"snapshot object required\")\n        for name in (\"counter\",\"uptime\",\"discontinuity\"):\n            if type(sample.get(name)) is not int or sample[name]<0:raise ValueError(\"nonnegative integer fields required\")\n        if sample[\"counter\"]>=modulus:raise ValueError(\"counter outside declared width\")\n    if after[\"uptime\"]<before[\"uptime\"] or after[\"discontinuity\"]!=before[\"discontinuity\"]:\n        return {\"status\":\"discontinuity\",\"delta_octets\":None,\"action\":\"collect a new baseline; do not repair this difference as a wrap\"}\n    delta=(after[\"counter\"]-before[\"counter\"])%modulus\n    maximum=(link_bps*interval_seconds)//8\n    if delta>maximum:\n        return {\"status\":\"inconsistent_sample\",\"delta_octets\":None,\"action\":\"verify identity, interval and link capacity\"}\n    if delta+modulus<=maximum:\n        return {\"status\":\"ambiguous_wrap_count\",\"delta_octets\":None,\"action\":\"collect ifHCInOctets with a bounded interval; missing historic wraps cannot be inferred\"}\n    rate=Fraction(delta*8,interval_seconds)\n    return {\"status\":\"bounded_rate\",\"delta_octets\":delta,\"rate_bps_numerator\":rate.numerator,\"rate_bps_denominator\":rate.denominator}\n"
+    },
+    "negative_files": {
+      "task.py": "from fractions import Fraction\ndef analyze_counter(before,after,interval_seconds,link_bps,width):\n    if type(width) is not int or width not in (32,64):raise ValueError(\"Counter32 or Counter64 required\")\n    if any(type(v) is not int or v<=0 for v in (interval_seconds,link_bps)):raise ValueError(\"positive integer interval and link rate required\")\n    modulus=1<<width\n    for sample in (before,after):\n        if not isinstance(sample,dict):raise ValueError(\"snapshot object required\")\n        for name in (\"counter\",\"uptime\",\"discontinuity\"):\n            if type(sample.get(name)) is not int or sample[name]<0:raise ValueError(\"nonnegative integer fields required\")\n        if sample[\"counter\"]>=modulus:raise ValueError(\"counter outside declared width\")\n    if after[\"uptime\"]<before[\"uptime\"] or after[\"discontinuity\"]!=before[\"discontinuity\"]:\n        return {\"status\":\"discontinuity\",\"delta_octets\":None,\"action\":\"collect a new baseline; do not repair this difference as a wrap\"}\n    delta=(after[\"counter\"]-before[\"counter\"])%modulus\n    maximum=(link_bps*interval_seconds)//8\n    if delta>maximum:\n        return {\"status\":\"inconsistent_sample\",\"delta_octets\":None,\"action\":\"verify identity, interval and link capacity\"}\n    if False:\n        return {\"status\":\"ambiguous_wrap_count\",\"delta_octets\":None,\"action\":\"collect ifHCInOctets with a bounded interval; missing historic wraps cannot be inferred\"}\n    rate=Fraction(delta*8,interval_seconds)\n    return {\"status\":\"bounded_rate\",\"delta_octets\":delta,\"rate_bps_numerator\":rate.numerator,\"rate_bps_denominator\":rate.denominator}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现analyze_counter(before,after,interval_seconds,link_bps,width)，snapshot含非负int的counter、uptime、discontinuity，width仅32/64，counter须小于2**width；时长和链路线速为正int且非bool。题定同一接口、间隔内线速恒定、没有sysUpTime自身回绕；uptime下降或ifCounterDiscontinuityTime变化时返回status=discontinuity、delta_octets=None。否则令d=(after-before) mod 2**width、最大字节数M=floor(link_bps*秒/8)：d>M为inconsistent_sample；d+2**width<=M为ambiguous_wrap_count，不可伪造真实增量，建议ifHCInOctets；仅剩一种可能时返回bounded_rate、精确delta_octets及约分后的rate_bps_numerator/denominator。失败状态都不输出速率。不得把每次下降都当一次回绕，也不能凭两样本恢复多个完整周期；不修改输入。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "离线SNMP观测证据分析与有限数学合同，Python真实执行；不发送SNMP报文、不连接Zabbix、不更改设备或Proxy、不证明历史流量已补回或实际设备故障恢复。本题不增加已运行故障场景计数。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 20,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,sys,copy,json\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as exc:raise AssertionError('valid SNMP evidence was rejected') from exc\ndef rejects(fn,*args):\n try:fn(*args)\n except ValueError:return\n raise AssertionError('invalid evidence was accepted')\ndef snap(counter,uptime=1000,discontinuity=0):return {'counter':counter,'uptime':uptime,'discontinuity':discontinuity}\nbefore=snap((1<<32)-10);after=snap(10,1100);old=copy.deepcopy((before,after))\nr=student(task.analyze_counter,before,after,1,1000,32)\nassert r=={'status':'bounded_rate','delta_octets':20,'rate_bps_numerator':160,'rate_bps_denominator':1},r\nassert (before,after)==old\n# Equal observed delta is compatible with additional complete wraps at this rate.\nr=student(task.analyze_counter,snap(100),snap(200,7000),60,10_000_000_000,32)\nassert r['status']=='ambiguous_wrap_count' and r['delta_octets'] is None and 'ifHCInOctets' in r['action'],r\nr=student(task.analyze_counter,snap((1<<32)+100),snap((1<<32)+200,7000),60,10_000_000_000,64)\nassert r=={'status':'bounded_rate','delta_octets':100,'rate_bps_numerator':40,'rate_bps_denominator':3},r\n# Boundary at exactly delta+modulus is ambiguous, not uniquely recoverable.\nassert student(task.analyze_counter,snap(0),snap(0,1001),8,1<<32,32)['status']=='ambiguous_wrap_count'\nfor a,b in [(snap(999),snap(1,10)),(snap(999),snap(1,1100,22))]:\n r=student(task.analyze_counter,a,b,1,1_000_000_000,32);assert r['status']=='discontinuity' and r['delta_octets'] is None,r\nassert student(task.analyze_counter,snap(0),snap(200,1100),1,1000,32)['status']=='inconsistent_sample'\nfor seconds,rate,width in [(0,1000,32),(1,0,32),(True,1000,32),(1,1000,16)]:rejects(task.analyze_counter,before,after,seconds,rate,width)\nfor invalid in [snap(-1),snap(1<<32),snap(True),{'counter':10,'uptime':1}]:rejects(task.analyze_counter,invalid,after,1,1000,32)\njson.dumps(r)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "zabbix"
+    ]
+  },
+  {
+    "id": "curated-parallel-zabbix-105",
+    "module": "zabbix",
+    "category": "Zabbix",
+    "level": 4,
+    "topic": "监控协议与检查工具",
+    "title": "SNMPv3克隆身份预检：按engineID关联多地址并隔离凭据",
+    "answer": "```python\nimport ipaddress,re\ndef audit_engines(rows):\n    if not isinstance(rows,list):raise ValueError(\"one finite observation batch required\")\n    groups={};seen=set()\n    for row in rows:\n        if not isinstance(row,dict):raise ValueError(\"observation object required\")\n        if not isinstance(row.get(\"address\"),str):raise ValueError(\"IP literal text required\")\n        try:address=str(ipaddress.ip_address(row.get(\"address\")))\n        except ValueError as exc:raise ValueError(\"IP literal required\") from exc\n        if address in seen:raise ValueError(\"one authoritative sample per address\")\n        seen.add(address);engine=row.get(\"engine_id\")\n        if not isinstance(engine,str):raise ValueError(\"hex engine ID required\")\n        engine=engine.lower().removeprefix(\"0x\")\n        if not re.fullmatch(r\"[0-9a-f]{10,64}\",engine) or len(engine)%2 or set(engine) in ({'0'},{'f'}):raise ValueError(\"engine ID must contain 5 to 32 non-reserved octets\")\n        if any(type(row.get(k)) is not int or not 0<=row[k]<(1<<31) for k in (\"engine_boots\",\"engine_time\")):raise ValueError(\"invalid authoritative engine timing\")\n        groups.setdefault(engine,[]).append((address,row[\"engine_boots\"],row[\"engine_time\"]))\n    result=[]\n    for engine,samples in sorted(groups.items()):\n        if len(samples)>1:\n            result.append({\"engine_id\":engine,\"addresses\":sorted(s[0] for s in samples),\n                \"state_mismatch\":len({(s[1],s[2]) for s in samples})>1,\n                \"action\":\"assign vendor-supported unique engine IDs; review localized SNMPv3 keys and refresh supported poller cache; verify both devices continuously and after reboot\"})\n    return {\"duplicate_engines\":result,\"credentials_exported\":False,\"devices_changed\":False}\n```\n\n原题知识说明：\n证据显示两个IP返回相同msgAuthoritativeEngineID，却有不同engineBoots和engineTime，Proxy对相同引擎身份的USM状态发生冲突。按设备厂商流程为每台设备设置唯一engineID，必要时重新生成与引擎ID绑定的SNMPv3用户密钥；随后按Zabbix版本支持方式刷新SNMP缓存并连续验证两台设备。保留原始协议字段但不记录明文凭据，验收包含设备重启后的轮询，不能只靠反复重启Proxy暂时清缓存。文字桌面演练，未执行生产操作。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021-supplement",
+    "hints": [],
+    "rubric": [
+      "证据显示两个IP返回相同msgAuthoritativeEngineID，却有不同engineBoots和engineTime，Proxy对相同引擎身份的USM状态发生冲突",
+      "按设备厂商流程为每台设备设置唯一engineID，必要时重新生成与引擎ID绑定的SNMPv3用户密钥；随后按Zabbix版本支持方式刷新SNMP缓存并连续验证两台设备",
+      "保留原始协议字段但不记录明文凭据，验收包含设备重启后的轮询，不能只靠反复重启Proxy暂时清缓存"
+    ],
+    "references": [
+      "https://www.zabbix.com/documentation/7.0/en/manual/config/items/itemtypes/snmp",
+      "https://www.rfc-editor.org/rfc/rfc3411.html"
+    ],
+    "incident_signature": "zabbix-cloned-snmpv3-engineid-usm-state-collision",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-zabbix-105",
+      "original_title": "两台克隆设备分别可SNMPv3查询，但同一Proxy轮询时交替报时间窗错误，engineID相同，如何恢复？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现audit_engines(rows)，同一观测批次每个IP恰一条记录，含address、engine_id、engine_boots、engine_time，可另含凭据等私有字段。IP只允许字面量，engine_id接受可选0x前缀及大小写十六进制，规范为小写无前缀的5..32字节（不得全00或全ff）；boots/time为[0,2**31)非bool整数。按规范engineID聚合多IP碰撞，duplicate_engines按engineID排序，项含engine_id、按文本排序addresses、state_mismatch（boots/time对不唯一）、action（厂商支持的唯一ID、审查本地化密钥、受支持缓存刷新及连续/重启复验）。返回credentials_exported=False、devices_changed=False；不返回原始行或任何密钥字段。同ID即便时间状态相同也保留重复身份预警，不凭单次查询成功排除问题；唯一ID批次无碰撞。非法长度/时序/IP或重复地址ValueError，不修改输入，也不执行设备变更。\n\n## 提交产物\ntask.py\n\n## 验收方法\n独立离线Python合同检查Counter32/64边界、不可辨识情况或脱敏engineID冲突；无真实SNMP/Zabbix运行。\n\n## 能力边界\n离线SNMP观测证据分析与有限数学合同，Python真实执行；不发送SNMP报文、不连接Zabbix、不更改设备或Proxy、不证明历史流量已补回或实际设备故障恢复。本题不增加已运行故障场景计数。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import ipaddress,re\ndef audit_engines(rows):\n    if not isinstance(rows,list):raise ValueError(\"one finite observation batch required\")\n    groups={};seen=set()\n    for row in rows:\n        if not isinstance(row,dict):raise ValueError(\"observation object required\")\n        if not isinstance(row.get(\"address\"),str):raise ValueError(\"IP literal text required\")\n        try:address=str(ipaddress.ip_address(row.get(\"address\")))\n        except ValueError as exc:raise ValueError(\"IP literal required\") from exc\n        if address in seen:raise ValueError(\"one authoritative sample per address\")\n        seen.add(address);engine=row.get(\"engine_id\")\n        if not isinstance(engine,str):raise ValueError(\"hex engine ID required\")\n        engine=engine.lower().removeprefix(\"0x\")\n        if not re.fullmatch(r\"[0-9a-f]{10,64}\",engine) or len(engine)%2 or set(engine) in ({'0'},{'f'}):raise ValueError(\"engine ID must contain 5 to 32 non-reserved octets\")\n        if any(type(row.get(k)) is not int or not 0<=row[k]<(1<<31) for k in (\"engine_boots\",\"engine_time\")):raise ValueError(\"invalid authoritative engine timing\")\n        groups.setdefault(engine,[]).append((address,row[\"engine_boots\"],row[\"engine_time\"]))\n    result=[]\n    for engine,samples in sorted(groups.items()):\n        if len(samples)>1:\n            result.append({\"engine_id\":engine,\"addresses\":sorted(s[0] for s in samples),\n                \"state_mismatch\":len({(s[1],s[2]) for s in samples})>1,\n                \"action\":\"assign vendor-supported unique engine IDs; review localized SNMPv3 keys and refresh supported poller cache; verify both devices continuously and after reboot\"})\n    return {\"duplicate_engines\":result,\"credentials_exported\":False,\"devices_changed\":False}\n"
+    },
+    "negative_files": {
+      "task.py": "import ipaddress,re\ndef audit_engines(rows):\n    if not isinstance(rows,list):raise ValueError(\"one finite observation batch required\")\n    groups={};seen=set()\n    for row in rows:\n        if not isinstance(row,dict):raise ValueError(\"observation object required\")\n        if not isinstance(row.get(\"address\"),str):raise ValueError(\"IP literal text required\")\n        try:address=str(ipaddress.ip_address(row.get(\"address\")))\n        except ValueError as exc:raise ValueError(\"IP literal required\") from exc\n        if address in seen:raise ValueError(\"one authoritative sample per address\")\n        seen.add(address);engine=row.get(\"engine_id\")\n        if not isinstance(engine,str):raise ValueError(\"hex engine ID required\")\n        engine=engine.lower().removeprefix(\"0x\")\n        if not re.fullmatch(r\"[0-9a-f]{10,64}\",engine) or len(engine)%2 or set(engine) in ({'0'},{'f'}):raise ValueError(\"engine ID must contain 5 to 32 non-reserved octets\")\n        if any(type(row.get(k)) is not int or not 0<=row[k]<(1<<31) for k in (\"engine_boots\",\"engine_time\")):raise ValueError(\"invalid authoritative engine timing\")\n        groups.setdefault(address,[]).append((address,row[\"engine_boots\"],row[\"engine_time\"]))\n    result=[]\n    for engine,samples in sorted(groups.items()):\n        if len(samples)>1:\n            result.append({\"engine_id\":engine,\"addresses\":sorted(s[0] for s in samples),\n                \"state_mismatch\":len({(s[1],s[2]) for s in samples})>1,\n                \"action\":\"assign vendor-supported unique engine IDs; review localized SNMPv3 keys and refresh supported poller cache; verify both devices continuously and after reboot\"})\n    return {\"duplicate_engines\":result,\"credentials_exported\":False,\"devices_changed\":False}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现audit_engines(rows)，同一观测批次每个IP恰一条记录，含address、engine_id、engine_boots、engine_time，可另含凭据等私有字段。IP只允许字面量，engine_id接受可选0x前缀及大小写十六进制，规范为小写无前缀的5..32字节（不得全00或全ff）；boots/time为[0,2**31)非bool整数。按规范engineID聚合多IP碰撞，duplicate_engines按engineID排序，项含engine_id、按文本排序addresses、state_mismatch（boots/time对不唯一）、action（厂商支持的唯一ID、审查本地化密钥、受支持缓存刷新及连续/重启复验）。返回credentials_exported=False、devices_changed=False；不返回原始行或任何密钥字段。同ID即便时间状态相同也保留重复身份预警，不凭单次查询成功排除问题；唯一ID批次无碰撞。非法长度/时序/IP或重复地址ValueError，不修改输入，也不执行设备变更。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "离线SNMP观测证据分析与有限数学合同，Python真实执行；不发送SNMP报文、不连接Zabbix、不更改设备或Proxy、不证明历史流量已补回或实际设备故障恢复。本题不增加已运行故障场景计数。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 20,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,sys,copy,json\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as exc:raise AssertionError('valid SNMP evidence was rejected') from exc\ndef rejects(fn,*args):\n try:fn(*args)\n except ValueError:return\n raise AssertionError('invalid evidence was accepted')\nrows=[{'address':'192.0.2.10','engine_id':'0x8000000001','engine_boots':4,'engine_time':50,'auth_password':'MUST_NOT_LEAK_A'},\n {'address':'192.0.2.11','engine_id':'8000000001','engine_boots':9,'engine_time':800,'privacy_key':'MUST_NOT_LEAK_B'},\n {'address':'2001:db8::1','engine_id':'8000000002','engine_boots':2,'engine_time':90}]\nbefore=copy.deepcopy(rows);r=student(task.audit_engines,rows)\nassert r['credentials_exported'] is False and r['devices_changed'] is False and len(r['duplicate_engines'])==1,r\nentry=r['duplicate_engines'][0]\nassert entry['engine_id']=='8000000001' and entry['addresses']==['192.0.2.10','192.0.2.11'] and entry['state_mismatch'] is True,entry\nassert 'unique engine IDs' in entry['action'] and 'keys' in entry['action'] and 'reboot' in entry['action']\nassert not any(secret in json.dumps(r) for secret in ['MUST_NOT_LEAK_A','MUST_NOT_LEAK_B','auth_password','privacy_key'])\nassert rows==before,'input evidence mutated'\nfixed=copy.deepcopy(rows);fixed[1]['engine_id']='8000000003'\nassert student(task.audit_engines,fixed)['duplicate_engines']==[]\nsame=copy.deepcopy(rows[:2]);same[1]['engine_boots']=4;same[1]['engine_time']=50\nr=student(task.audit_engines,same);assert len(r['duplicate_engines'])==1 and r['duplicate_engines'][0]['state_mismatch'] is False\nassert student(task.audit_engines,[])['duplicate_engines']==[]\nfor changed in [{'engine_id':'ff'},{'engine_id':'z'*10},{'engine_id':'a'*11},{'engine_id':'0'*10},{'engine_id':'f'*10},{'engine_time':-1},{'engine_boots':True},{'address':'example.test'},{'address':123}]:\n rejects(task.audit_engines,[{**rows[0],**changed}])\nrejects(task.audit_engines,[rows[0],rows[0]])\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "zabbix"
+    ]
+  }
+]

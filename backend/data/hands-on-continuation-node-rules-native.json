@@ -1,0 +1,531 @@
+[
+  {
+    "id": "curated-parallel-node_exporter-018",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 1,
+    "topic": "CPU内存与系统状态指标",
+    "title": "原生PromQL并列归一化1/5/15分钟load，不能对负载gauge取rate",
+    "answer": "```yaml\ngroups:\n- name: continuation_018\n  interval: 1m\n  rules:\n  - record: node:load1_per_cpu:ratio\n    expr: node_load1 / on(instance,job) count by(instance,job) (node_cpu_seconds_total{mode=\"idle\"})\n  - record: node:load5_per_cpu:ratio\n    expr: node_load5 / on(instance,job) count by(instance,job) (node_cpu_seconds_total{mode=\"idle\"})\n  - record: node:load15_per_cpu:ratio\n    expr: node_load15 / on(instance,job) count by(instance,job) (node_cpu_seconds_total{mode=\"idle\"})\n```\n\n原题说明：\n它们是不同平滑窗口的负载值，短窗高于长窗可提示最近压力上升。需要结合CPU数量、任务状态和IO证据；负载不是CPU百分比，也不能简单将其乘100。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "实际官方promtool3.5规则引擎验证；采集值为明确的受控样本，不宣称已验证真实主机collector或生产告警。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它们是不同平滑窗口的负载值，短窗高于长窗可提示最近压力上升。",
+      "需要结合CPU数量、任务状态和IO证据；负载不是CPU百分比，也不能简单将其乘100。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/",
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "yaml",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-018",
+      "original_title": "node_load1、node_load5、node_load15应怎样联合观察？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n生成node:load1_per_cpu:ratio、node:load5_per_cpu:ratio、node:load15_per_cpu:ratio：各load gauge除以同instance/job当前idle样本代表的CPU数，保留instance/job，不固定核数、不混入user模式。三窗口并列提供变化背景，不把结果当CPU利用率或I/O根因。\n\n## 提交产物\nrules.yaml，保留group名、1m间隔及给定record名，填写expr。\n\n## 验收方法\npython3 checks/check.py实际调用官方promtool test rules验证完整标签、数值及缺测/时间边界。\n\n## 能力边界\n实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+    "files": {
+      "rules.yaml": "groups:\n- name: continuation_018\n  interval: 1m\n  rules: []\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: continuation_018\n  interval: 1m\n  rules:\n  - record: node:load1_per_cpu:ratio\n    expr: node_load1 / on(instance,job) count by(instance,job) (node_cpu_seconds_total{mode=\"idle\"})\n  - record: node:load5_per_cpu:ratio\n    expr: node_load5 / on(instance,job) count by(instance,job) (node_cpu_seconds_total{mode=\"idle\"})\n  - record: node:load15_per_cpu:ratio\n    expr: node_load15 / on(instance,job) count by(instance,job) (node_cpu_seconds_total{mode=\"idle\"})\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: continuation_018\n  interval: 1m\n  rules:\n  - record: node:load1_per_cpu:ratio\n    expr: rate(node_load1[3m]) / on(instance,job) count by(instance,job) (node_cpu_seconds_total{mode=\"idle\"})\n  - record: node:load5_per_cpu:ratio\n    expr: rate(node_load5[3m]) / on(instance,job) count by(instance,job) (node_cpu_seconds_total{mode=\"idle\"})\n  - record: node:load15_per_cpu:ratio\n    expr: rate(node_load15[3m]) / on(instance,job) count by(instance,job) (node_cpu_seconds_total{mode=\"idle\"})\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "现有promtool3.5，明确受控node_exporter样本",
+      "operation": "生成node:load1_per_cpu:ratio、node:load5_per_cpu:ratio、node:load15_per_cpu:ratio：各load gauge除以同instance/job当前idle样本代表的CPU数，保留instance/job，不固定核数、不混入user模式。三窗口并列提供变化背景，不把结果当CPU利用率或I/O根因。",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "verification": "官方promtool实际计算，不按expr文本相等判断",
+      "validation_scope": "实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+      "validation_kind": "native_promql_engine"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "promtool"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac",
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,pathlib,subprocess,tempfile,yaml\nassert os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n result={}\n for key,value in node.value:\n  key=loader.construct_object(key,deep=deep)\n  if key in result:raise ValueError('duplicate YAML key')\n  result[key]=loader.construct_object(value,deep=deep)\n return result\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndata=yaml.load(pathlib.Path('rules.yaml').read_text(encoding='utf8'),Loader=Strict)\nassert isinstance(data,dict) and set(data)=={'groups'} and len(data['groups'])==1\ngroup=data['groups'][0]\nif not group.get('rules'):raise NotImplementedError('implement recording rules')\nprint('STUDENT_OPERATION_ENTERED:promtool-rule-engine',flush=True)\nassert set(group)==set(['interval', 'name', 'rules']) and group[\"name\"]=='continuation_018' and group[\"interval\"]==\"1m\"\nassert len(group[\"rules\"])==3 and {rule.get(\"record\") for rule in group[\"rules\"]}==set(['node:load15_per_cpu:ratio', 'node:load1_per_cpu:ratio', 'node:load5_per_cpu:ratio'])\nfor rule in group[\"rules\"]:assert set(rule)=={\"record\",\"expr\"} and isinstance(rule[\"expr\"],str) and rule[\"expr\"]\nfixture={'rule_files': [], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'node_cpu_seconds_total{instance=\"two\",job=\"node\",cpu=\"0\",mode=\"idle\"}', 'values': '0+30x5'}, {'series': 'node_cpu_seconds_total{instance=\"two\",job=\"node\",cpu=\"1\",mode=\"idle\"}', 'values': '0+30x5'}, {'series': 'node_cpu_seconds_total{instance=\"two\",job=\"node\",cpu=\"0\",mode=\"user\"}', 'values': '0+30x5'}, {'series': 'node_load1{instance=\"two\",job=\"node\"}', 'values': '4+0x5'}, {'series': 'node_load5{instance=\"two\",job=\"node\"}', 'values': '2+0x5'}, {'series': 'node_load15{instance=\"two\",job=\"node\"}', 'values': '1+0x5'}, {'series': 'node_cpu_seconds_total{instance=\"four\",job=\"node\",cpu=\"0\",mode=\"idle\"}', 'values': '0+30x5'}, {'series': 'node_cpu_seconds_total{instance=\"four\",job=\"node\",cpu=\"1\",mode=\"idle\"}', 'values': '0+30x5'}, {'series': 'node_cpu_seconds_total{instance=\"four\",job=\"node\",cpu=\"2\",mode=\"idle\"}', 'values': '0+30x5'}, {'series': 'node_cpu_seconds_total{instance=\"four\",job=\"node\",cpu=\"3\",mode=\"idle\"}', 'values': '0+30x5'}, {'series': 'node_cpu_seconds_total{instance=\"four\",job=\"node\",cpu=\"0\",mode=\"user\"}', 'values': '0+30x5'}, {'series': 'node_load1{instance=\"four\",job=\"node\"}', 'values': '2+0x5'}, {'series': 'node_load5{instance=\"four\",job=\"node\"}', 'values': '4+0x5'}, {'series': 'node_load15{instance=\"four\",job=\"node\"}', 'values': '8+0x5'}], 'promql_expr_test': [{'expr': 'node:load1_per_cpu:ratio', 'eval_time': '5m', 'exp_samples': [{'labels': 'node:load1_per_cpu:ratio{instance=\"two\",job=\"node\"}', 'value': 2.0}, {'labels': 'node:load1_per_cpu:ratio{instance=\"four\",job=\"node\"}', 'value': 0.5}]}, {'expr': 'node:load5_per_cpu:ratio', 'eval_time': '5m', 'exp_samples': [{'labels': 'node:load5_per_cpu:ratio{instance=\"two\",job=\"node\"}', 'value': 1.0}, {'labels': 'node:load5_per_cpu:ratio{instance=\"four\",job=\"node\"}', 'value': 1.0}]}, {'expr': 'node:load15_per_cpu:ratio', 'eval_time': '5m', 'exp_samples': [{'labels': 'node:load15_per_cpu:ratio{instance=\"two\",job=\"node\"}', 'value': 0.5}, {'labels': 'node:load15_per_cpu:ratio{instance=\"four\",job=\"node\"}', 'value': 2.0}]}]}]}\nfixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\nversion=subprocess.run(['promtool','--version'],capture_output=True,text=True,timeout=3)\nif version.returncode or '3.5.' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: promtool3.5 required')\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf8')\n result=subprocess.run(['promtool','test','rules',str(path)],capture_output=True,text=True,timeout=8)\n assert result.returncode==0,'native PromQL behavior differs: '+(result.stdout+result.stderr)[-6000:]\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-node_exporter-019",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 1,
+    "topic": "CPU内存与系统状态指标",
+    "title": "原生PromQL区分Dirty与Writeback现存字节，不把缺测补成正常零值",
+    "answer": "```yaml\ngroups:\n- name: continuation_019\n  interval: 1m\n  rules:\n  - record: node:dirty_memory:ratio\n    expr: (node_memory_Dirty_bytes / on(instance,job) node_memory_MemTotal_bytes)\n      and on(instance,job) (node_memory_MemTotal_bytes > 0)\n  - record: node:writeback_memory:ratio\n    expr: (node_memory_Writeback_bytes / on(instance,job) node_memory_MemTotal_bytes)\n      and on(instance,job) (node_memory_MemTotal_bytes > 0)\n  - record: node:pending_write_memory:ratio\n    expr: ((node_memory_Dirty_bytes + on(instance,job) node_memory_Writeback_bytes)\n      / on(instance,job) node_memory_MemTotal_bytes) and on(instance,job) (node_memory_MemTotal_bytes\n      > 0)\n```\n\n原题说明：\nDirty是待回写的脏页，Writeback是正在回写的页。持续增长结合IO延迟可提示刷写跟不上，但短时波动可能正常。两者不是应用匿名内存泄漏的直接计数。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "实际官方promtool3.5规则引擎验证；采集值为明确的受控样本，不宣称已验证真实主机collector或生产告警。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "Dirty是待回写的脏页，Writeback是正在回写的页。",
+      "持续增长结合IO延迟可提示刷写跟不上，但短时波动可能正常。",
+      "两者不是应用匿名内存泄漏的直接计数。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/",
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "yaml",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-019",
+      "original_title": "node_memory_Dirty_bytes与Writeback_bytes分别指什么？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n分别记录node:dirty_memory:ratio与node:writeback_memory:ratio，并以两者现存字节之和记录node:pending_write_memory:ratio，分母同instance/job MemTotal。使用gauge当前值而非rate；分母<=0或缺失时不输出，任一分量缺失时总pending不输出；保留instance/job，不用全局vector(0)伪装健康。\n\n## 提交产物\nrules.yaml，保留group名、1m间隔及给定record名，填写expr。\n\n## 验收方法\npython3 checks/check.py实际调用官方promtool test rules验证完整标签、数值及缺测/时间边界。\n\n## 能力边界\n实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+    "files": {
+      "rules.yaml": "groups:\n- name: continuation_019\n  interval: 1m\n  rules: []\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: continuation_019\n  interval: 1m\n  rules:\n  - record: node:dirty_memory:ratio\n    expr: (node_memory_Dirty_bytes / on(instance,job) node_memory_MemTotal_bytes)\n      and on(instance,job) (node_memory_MemTotal_bytes > 0)\n  - record: node:writeback_memory:ratio\n    expr: (node_memory_Writeback_bytes / on(instance,job) node_memory_MemTotal_bytes)\n      and on(instance,job) (node_memory_MemTotal_bytes > 0)\n  - record: node:pending_write_memory:ratio\n    expr: ((node_memory_Dirty_bytes + on(instance,job) node_memory_Writeback_bytes)\n      / on(instance,job) node_memory_MemTotal_bytes) and on(instance,job) (node_memory_MemTotal_bytes\n      > 0)\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: continuation_019\n  interval: 1m\n  rules:\n  - record: node:dirty_memory:ratio\n    expr: (rate(node_memory_Dirty_bytes[3m]) / on(instance,job) node_memory_MemTotal_bytes)\n      and on(instance,job) (node_memory_MemTotal_bytes > 0)\n  - record: node:writeback_memory:ratio\n    expr: (rate(node_memory_Writeback_bytes[3m]) / on(instance,job) node_memory_MemTotal_bytes)\n      and on(instance,job) (node_memory_MemTotal_bytes > 0)\n  - record: node:pending_write_memory:ratio\n    expr: ((rate(node_memory_Dirty_bytes[3m]) + on(instance,job) rate(node_memory_Writeback_bytes[3m]))\n      / on(instance,job) node_memory_MemTotal_bytes) and on(instance,job) (node_memory_MemTotal_bytes\n      > 0)\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "现有promtool3.5，明确受控node_exporter样本",
+      "operation": "分别记录node:dirty_memory:ratio与node:writeback_memory:ratio，并以两者现存字节之和记录node:pending_write_memory:ratio，分母同instance/job MemTotal。使用gauge当前值而非rate；分母<=0或缺失时不输出，任一分量缺失时总pending不输出；保留instance/job，不用全局vector(0)伪装健康。",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "verification": "官方promtool实际计算，不按expr文本相等判断",
+      "validation_scope": "实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+      "validation_kind": "native_promql_engine"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "promtool"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac",
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,pathlib,subprocess,tempfile,yaml\nassert os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n result={}\n for key,value in node.value:\n  key=loader.construct_object(key,deep=deep)\n  if key in result:raise ValueError('duplicate YAML key')\n  result[key]=loader.construct_object(value,deep=deep)\n return result\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndata=yaml.load(pathlib.Path('rules.yaml').read_text(encoding='utf8'),Loader=Strict)\nassert isinstance(data,dict) and set(data)=={'groups'} and len(data['groups'])==1\ngroup=data['groups'][0]\nif not group.get('rules'):raise NotImplementedError('implement recording rules')\nprint('STUDENT_OPERATION_ENTERED:promtool-rule-engine',flush=True)\nassert set(group)==set(['interval', 'name', 'rules']) and group[\"name\"]=='continuation_019' and group[\"interval\"]==\"1m\"\nassert len(group[\"rules\"])==3 and {rule.get(\"record\") for rule in group[\"rules\"]}==set(['node:dirty_memory:ratio', 'node:pending_write_memory:ratio', 'node:writeback_memory:ratio'])\nfor rule in group[\"rules\"]:assert set(rule)=={\"record\",\"expr\"} and isinstance(rule[\"expr\"],str) and rule[\"expr\"]\nfixture={'rule_files': [], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'node_memory_MemTotal_bytes{instance=\"a\",job=\"node\"}', 'values': '1000+0x5'}, {'series': 'node_memory_Dirty_bytes{instance=\"a\",job=\"node\"}', 'values': '100+0x5'}, {'series': 'node_memory_Writeback_bytes{instance=\"a\",job=\"node\"}', 'values': '50+0x5'}, {'series': 'node_memory_MemTotal_bytes{instance=\"zero\",job=\"node\"}', 'values': '0+0x5'}, {'series': 'node_memory_Dirty_bytes{instance=\"zero\",job=\"node\"}', 'values': '0+0x5'}, {'series': 'node_memory_Writeback_bytes{instance=\"zero\",job=\"node\"}', 'values': '10+0x5'}, {'series': 'node_memory_MemTotal_bytes{instance=\"missing\",job=\"node\"}', 'values': '1000+0x5'}, {'series': 'node_memory_Dirty_bytes{instance=\"missing\",job=\"node\"}', 'values': '200+0x5'}], 'promql_expr_test': [{'expr': 'node:dirty_memory:ratio', 'eval_time': '5m', 'exp_samples': [{'labels': 'node:dirty_memory:ratio{instance=\"a\",job=\"node\"}', 'value': 0.1}, {'labels': 'node:dirty_memory:ratio{instance=\"missing\",job=\"node\"}', 'value': 0.2}]}, {'expr': 'node:writeback_memory:ratio', 'eval_time': '5m', 'exp_samples': [{'labels': 'node:writeback_memory:ratio{instance=\"a\",job=\"node\"}', 'value': 0.05}]}, {'expr': 'node:pending_write_memory:ratio', 'eval_time': '5m', 'exp_samples': [{'labels': 'node:pending_write_memory:ratio{instance=\"a\",job=\"node\"}', 'value': 0.15}]}]}]}\nfixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\nversion=subprocess.run(['promtool','--version'],capture_output=True,text=True,timeout=3)\nif version.returncode or '3.5.' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: promtool3.5 required')\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf8')\n result=subprocess.run(['promtool','test','rules',str(path)],capture_output=True,text=True,timeout=8)\n assert result.returncode==0,'native PromQL behavior differs: '+(result.stdout+result.stderr)[-6000:]\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-node_exporter-022",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 1,
+    "topic": "CPU内存与系统状态指标",
+    "title": "原生PromQL计算Slab中不可回收部分，不能用进程RSS或MemTotal替代分母",
+    "answer": "```yaml\ngroups:\n- name: continuation_022\n  interval: 1m\n  rules:\n  - record: node:slab_unreclaimable:ratio\n    expr: (node_memory_SUnreclaim_bytes / on(instance,job) node_memory_Slab_bytes)\n      and on(instance,job) (node_memory_Slab_bytes > 0)\n```\n\n原题说明：\nSUnreclaim主要指不可直接回收的内核slab内存，进程RSS指用户映射驻留页。应分别查内核对象和进程映射，不能把全部内核增长归到某个应用的RSS泄漏。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "实际官方promtool3.5规则引擎验证；采集值为明确的受控样本，不宣称已验证真实主机collector或生产告警。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "SUnreclaim主要指不可直接回收的内核slab内存，进程RSS指用户映射驻留页。",
+      "应分别查内核对象和进程映射，不能把全部内核增长归到某个应用的RSS泄漏。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/",
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "yaml",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-022",
+      "original_title": "SUnreclaim增长与进程RSS增长的诊断方向为何不同？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n记录node:slab_unreclaimable:ratio=SUnreclaim/Slab，按instance/job匹配，Slab<=0或必要字段缺失时无结果。它表达内核Slab组成，不等于应用RSS或主机全部内存占比，不自动推出进程泄漏结论。\n\n## 提交产物\nrules.yaml，保留group名、1m间隔及给定record名，填写expr。\n\n## 验收方法\npython3 checks/check.py实际调用官方promtool test rules验证完整标签、数值及缺测/时间边界。\n\n## 能力边界\n实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+    "files": {
+      "rules.yaml": "groups:\n- name: continuation_022\n  interval: 1m\n  rules: []\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: continuation_022\n  interval: 1m\n  rules:\n  - record: node:slab_unreclaimable:ratio\n    expr: (node_memory_SUnreclaim_bytes / on(instance,job) node_memory_Slab_bytes)\n      and on(instance,job) (node_memory_Slab_bytes > 0)\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: continuation_022\n  interval: 1m\n  rules:\n  - record: node:slab_unreclaimable:ratio\n    expr: (node_memory_SUnreclaim_bytes / on(instance,job) node_memory_MemTotal_bytes)\n      and on(instance,job) (node_memory_MemTotal_bytes > 0)\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "现有promtool3.5，明确受控node_exporter样本",
+      "operation": "记录node:slab_unreclaimable:ratio=SUnreclaim/Slab，按instance/job匹配，Slab<=0或必要字段缺失时无结果。它表达内核Slab组成，不等于应用RSS或主机全部内存占比，不自动推出进程泄漏结论。",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "verification": "官方promtool实际计算，不按expr文本相等判断",
+      "validation_scope": "实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+      "validation_kind": "native_promql_engine"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "promtool"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac",
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,pathlib,subprocess,tempfile,yaml\nassert os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n result={}\n for key,value in node.value:\n  key=loader.construct_object(key,deep=deep)\n  if key in result:raise ValueError('duplicate YAML key')\n  result[key]=loader.construct_object(value,deep=deep)\n return result\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndata=yaml.load(pathlib.Path('rules.yaml').read_text(encoding='utf8'),Loader=Strict)\nassert isinstance(data,dict) and set(data)=={'groups'} and len(data['groups'])==1\ngroup=data['groups'][0]\nif not group.get('rules'):raise NotImplementedError('implement recording rules')\nprint('STUDENT_OPERATION_ENTERED:promtool-rule-engine',flush=True)\nassert set(group)==set(['interval', 'name', 'rules']) and group[\"name\"]=='continuation_022' and group[\"interval\"]==\"1m\"\nassert len(group[\"rules\"])==1 and {rule.get(\"record\") for rule in group[\"rules\"]}==set(['node:slab_unreclaimable:ratio'])\nfor rule in group[\"rules\"]:assert set(rule)=={\"record\",\"expr\"} and isinstance(rule[\"expr\"],str) and rule[\"expr\"]\nfixture={'rule_files': [], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'node_memory_Slab_bytes{instance=\"a\",job=\"node\"}', 'values': '100+0x5'}, {'series': 'node_memory_SUnreclaim_bytes{instance=\"a\",job=\"node\"}', 'values': '20+0x5'}, {'series': 'node_memory_MemTotal_bytes{instance=\"a\",job=\"node\"}', 'values': '1000+0x5'}, {'series': 'node_memory_Slab_bytes{instance=\"b\",job=\"node\"}', 'values': '80+0x5'}, {'series': 'node_memory_SUnreclaim_bytes{instance=\"b\",job=\"node\"}', 'values': '40+0x5'}, {'series': 'node_memory_MemTotal_bytes{instance=\"b\",job=\"node\"}', 'values': '2000+0x5'}, {'series': 'node_memory_Slab_bytes{instance=\"zero\",job=\"node\"}', 'values': '0+0x5'}, {'series': 'node_memory_SUnreclaim_bytes{instance=\"zero\",job=\"node\"}', 'values': '0+0x5'}, {'series': 'node_memory_MemTotal_bytes{instance=\"zero\",job=\"node\"}', 'values': '500+0x5'}], 'promql_expr_test': [{'expr': 'node:slab_unreclaimable:ratio', 'eval_time': '5m', 'exp_samples': [{'labels': 'node:slab_unreclaimable:ratio{instance=\"a\",job=\"node\"}', 'value': 0.2}, {'labels': 'node:slab_unreclaimable:ratio{instance=\"b\",job=\"node\"}', 'value': 0.5}]}]}]}\nfixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\nversion=subprocess.run(['promtool','--version'],capture_output=True,text=True,timeout=3)\nif version.returncode or '3.5.' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: promtool3.5 required')\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf8')\n result=subprocess.run(['promtool','test','rules',str(path)],capture_output=True,text=True,timeout=8)\n assert result.returncode==0,'native PromQL behavior differs: '+(result.stdout+result.stderr)[-6000:]\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-node_exporter-027",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 1,
+    "topic": "文件系统与磁盘指标",
+    "title": "原生PromQL区分当前磁盘在途请求与三分钟峰值，不能对gauge取rate",
+    "answer": "```yaml\ngroups:\n- name: continuation_027\n  interval: 1m\n  rules:\n  - record: node:disk_inflight:count\n    expr: node_disk_io_now\n  - record: node:disk_inflight_peak3m:count\n    expr: max_over_time(node_disk_io_now[3m])\n```\n\n原题说明：\nio_now表示当前进行中的IO数量，是瞬时量；累计完成请求需取rate。对io_now求rate得到的是并发变化速度，不能当IOPS。应按需要观察当前队列或平均水平。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "实际官方promtool3.5规则引擎验证；采集值为明确的受控样本，不宣称已验证真实主机collector或生产告警。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "io_now表示当前进行中的IO数量，是瞬时量；累计完成请求需取rate。",
+      "对io_now求rate得到的是并发变化速度，不能当IOPS。",
+      "应按需要观察当前队列或平均水平。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/",
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "yaml",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-027",
+      "original_title": "node_disk_io_now与IO计数器为何查询方式不同？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n记录node:disk_inflight:count为当前node_disk_io_now，node:disk_inflight_peak3m:count为最近3分钟峰值；保留instance/job/device。队列下降或清零不是累计计数器重置，不用rate；当前值不能用峰值代替，否则排空后仍误报在途请求。\n\n## 提交产物\nrules.yaml，保留group名、1m间隔及给定record名，填写expr。\n\n## 验收方法\npython3 checks/check.py实际调用官方promtool test rules验证完整标签、数值及缺测/时间边界。\n\n## 能力边界\n实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+    "files": {
+      "rules.yaml": "groups:\n- name: continuation_027\n  interval: 1m\n  rules: []\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: continuation_027\n  interval: 1m\n  rules:\n  - record: node:disk_inflight:count\n    expr: node_disk_io_now\n  - record: node:disk_inflight_peak3m:count\n    expr: max_over_time(node_disk_io_now[3m])\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: continuation_027\n  interval: 1m\n  rules:\n  - record: node:disk_inflight:count\n    expr: rate(node_disk_io_now[3m])\n  - record: node:disk_inflight_peak3m:count\n    expr: max_over_time(node_disk_io_now[3m])\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "现有promtool3.5，明确受控node_exporter样本",
+      "operation": "记录node:disk_inflight:count为当前node_disk_io_now，node:disk_inflight_peak3m:count为最近3分钟峰值；保留instance/job/device。队列下降或清零不是累计计数器重置，不用rate；当前值不能用峰值代替，否则排空后仍误报在途请求。",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "verification": "官方promtool实际计算，不按expr文本相等判断",
+      "validation_scope": "实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+      "validation_kind": "native_promql_engine"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "promtool"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac",
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,pathlib,subprocess,tempfile,yaml\nassert os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n result={}\n for key,value in node.value:\n  key=loader.construct_object(key,deep=deep)\n  if key in result:raise ValueError('duplicate YAML key')\n  result[key]=loader.construct_object(value,deep=deep)\n return result\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndata=yaml.load(pathlib.Path('rules.yaml').read_text(encoding='utf8'),Loader=Strict)\nassert isinstance(data,dict) and set(data)=={'groups'} and len(data['groups'])==1\ngroup=data['groups'][0]\nif not group.get('rules'):raise NotImplementedError('implement recording rules')\nprint('STUDENT_OPERATION_ENTERED:promtool-rule-engine',flush=True)\nassert set(group)==set(['interval', 'name', 'rules']) and group[\"name\"]=='continuation_027' and group[\"interval\"]==\"1m\"\nassert len(group[\"rules\"])==2 and {rule.get(\"record\") for rule in group[\"rules\"]}==set(['node:disk_inflight:count', 'node:disk_inflight_peak3m:count'])\nfor rule in group[\"rules\"]:assert set(rule)=={\"record\",\"expr\"} and isinstance(rule[\"expr\"],str) and rule[\"expr\"]\nfixture={'rule_files': [], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'node_disk_io_now{instance=\"a\",job=\"node\",device=\"vda\"}', 'values': '0 4 1 0 7 0'}, {'series': 'node_disk_io_now{instance=\"b\",job=\"node\",device=\"nvme0n1\"}', 'values': '2+0x5'}], 'promql_expr_test': [{'expr': 'node:disk_inflight:count', 'eval_time': '3m', 'exp_samples': [{'labels': 'node:disk_inflight:count{instance=\"a\",job=\"node\",device=\"vda\"}', 'value': 0}, {'labels': 'node:disk_inflight:count{instance=\"b\",job=\"node\",device=\"nvme0n1\"}', 'value': 2}]}, {'expr': 'node:disk_inflight_peak3m:count', 'eval_time': '3m', 'exp_samples': [{'labels': 'node:disk_inflight_peak3m:count{instance=\"a\",job=\"node\",device=\"vda\"}', 'value': 4}, {'labels': 'node:disk_inflight_peak3m:count{instance=\"b\",job=\"node\",device=\"nvme0n1\"}', 'value': 2}]}, {'expr': 'node:disk_inflight:count', 'eval_time': '5m', 'exp_samples': [{'labels': 'node:disk_inflight:count{instance=\"a\",job=\"node\",device=\"vda\"}', 'value': 0}, {'labels': 'node:disk_inflight:count{instance=\"b\",job=\"node\",device=\"nvme0n1\"}', 'value': 2}]}, {'expr': 'node:disk_inflight_peak3m:count', 'eval_time': '5m', 'exp_samples': [{'labels': 'node:disk_inflight_peak3m:count{instance=\"a\",job=\"node\",device=\"vda\"}', 'value': 7}, {'labels': 'node:disk_inflight_peak3m:count{instance=\"b\",job=\"node\",device=\"nvme0n1\"}', 'value': 2}]}]}]}\nfixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\nversion=subprocess.run(['promtool','--version'],capture_output=True,text=True,timeout=3)\nif version.returncode or '3.5.' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: promtool3.5 required')\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf8')\n result=subprocess.run(['promtool','test','rules',str(path)],capture_output=True,text=True,timeout=8)\n assert result.returncode==0,'native PromQL behavior differs: '+(result.stdout+result.stderr)[-6000:]\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-node_exporter-029",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 1,
+    "topic": "文件系统与磁盘指标",
+    "title": "原生PromQL区分加权I/O时间的平均在途数与忙碌时间比例",
+    "answer": "```yaml\ngroups:\n- name: continuation_029\n  interval: 1m\n  rules:\n  - record: node:disk_average_inflight:count\n    expr: rate(node_disk_io_time_weighted_seconds_total[3m])\n  - record: node:disk_busy_time:ratio\n    expr: rate(node_disk_io_time_seconds_total[3m])\n```\n\n原题说明：\n加权IO时间累计同时进行请求的时间权重，可帮助估算平均在途请求；io_time主要累计有IO的时间。二者物理含义不同，设备记账细节还依内核版本，需按官方字段解释。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "实际官方promtool3.5规则引擎验证；采集值为明确的受控样本，不宣称已验证真实主机collector或生产告警。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "加权IO时间累计同时进行请求的时间权重，可帮助估算平均在途请求；io_time主要累计有IO的时间。",
+      "二者物理含义不同，设备记账细节还依内核版本，需按官方字段解释。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/",
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "yaml",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-029",
+      "original_title": "weighted_io_time与io_time为什么不能互换？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\nnode:disk_average_inflight:count取weighted_seconds_total最近3分钟rate，node:disk_busy_time:ratio取io_time_seconds_total最近3分钟rate，保留instance/job/device。平均在途数可大于1，不能clamp到100%；两者不可互换，不把busy比例单独当SSD饱和证明。\n\n## 提交产物\nrules.yaml，保留group名、1m间隔及给定record名，填写expr。\n\n## 验收方法\npython3 checks/check.py实际调用官方promtool test rules验证完整标签、数值及缺测/时间边界。\n\n## 能力边界\n实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+    "files": {
+      "rules.yaml": "groups:\n- name: continuation_029\n  interval: 1m\n  rules: []\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: continuation_029\n  interval: 1m\n  rules:\n  - record: node:disk_average_inflight:count\n    expr: rate(node_disk_io_time_weighted_seconds_total[3m])\n  - record: node:disk_busy_time:ratio\n    expr: rate(node_disk_io_time_seconds_total[3m])\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: continuation_029\n  interval: 1m\n  rules:\n  - record: node:disk_average_inflight:count\n    expr: rate(node_disk_io_time_seconds_total[3m])\n  - record: node:disk_busy_time:ratio\n    expr: rate(node_disk_io_time_seconds_total[3m])\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "现有promtool3.5，明确受控node_exporter样本",
+      "operation": "node:disk_average_inflight:count取weighted_seconds_total最近3分钟rate，node:disk_busy_time:ratio取io_time_seconds_total最近3分钟rate，保留instance/job/device。平均在途数可大于1，不能clamp到100%；两者不可互换，不把busy比例单独当SSD饱和证明。",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "verification": "官方promtool实际计算，不按expr文本相等判断",
+      "validation_scope": "实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+      "validation_kind": "native_promql_engine"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "promtool"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac",
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,pathlib,subprocess,tempfile,yaml\nassert os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n result={}\n for key,value in node.value:\n  key=loader.construct_object(key,deep=deep)\n  if key in result:raise ValueError('duplicate YAML key')\n  result[key]=loader.construct_object(value,deep=deep)\n return result\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndata=yaml.load(pathlib.Path('rules.yaml').read_text(encoding='utf8'),Loader=Strict)\nassert isinstance(data,dict) and set(data)=={'groups'} and len(data['groups'])==1\ngroup=data['groups'][0]\nif not group.get('rules'):raise NotImplementedError('implement recording rules')\nprint('STUDENT_OPERATION_ENTERED:promtool-rule-engine',flush=True)\nassert set(group)==set(['interval', 'name', 'rules']) and group[\"name\"]=='continuation_029' and group[\"interval\"]==\"1m\"\nassert len(group[\"rules\"])==2 and {rule.get(\"record\") for rule in group[\"rules\"]}==set(['node:disk_average_inflight:count', 'node:disk_busy_time:ratio'])\nfor rule in group[\"rules\"]:assert set(rule)=={\"record\",\"expr\"} and isinstance(rule[\"expr\"],str) and rule[\"expr\"]\nfixture={'rule_files': [], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'node_disk_io_time_weighted_seconds_total{instance=\"a\",job=\"node\",device=\"vda\"}', 'values': '0+600x5'}, {'series': 'node_disk_io_time_seconds_total{instance=\"a\",job=\"node\",device=\"vda\"}', 'values': '0+30x5'}, {'series': 'node_disk_io_time_weighted_seconds_total{instance=\"a\",job=\"node\",device=\"nvme0n1\"}', 'values': '0+60x5'}, {'series': 'node_disk_io_time_seconds_total{instance=\"a\",job=\"node\",device=\"nvme0n1\"}', 'values': '0+60x5'}], 'promql_expr_test': [{'expr': 'node:disk_average_inflight:count', 'eval_time': '5m', 'exp_samples': [{'labels': 'node:disk_average_inflight:count{instance=\"a\",job=\"node\",device=\"vda\"}', 'value': 10.0}, {'labels': 'node:disk_average_inflight:count{instance=\"a\",job=\"node\",device=\"nvme0n1\"}', 'value': 1.0}]}, {'expr': 'node:disk_busy_time:ratio', 'eval_time': '5m', 'exp_samples': [{'labels': 'node:disk_busy_time:ratio{instance=\"a\",job=\"node\",device=\"vda\"}', 'value': 0.5}, {'labels': 'node:disk_busy_time:ratio{instance=\"a\",job=\"node\",device=\"nvme0n1\"}', 'value': 1.0}]}]}]}\nfixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\nversion=subprocess.run(['promtool','--version'],capture_output=True,text=True,timeout=3)\nif version.returncode or '3.5.' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: promtool3.5 required')\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf8')\n result=subprocess.run(['promtool','test','rules',str(path)],capture_output=True,text=True,timeout=8)\n assert result.returncode==0,'native PromQL behavior differs: '+(result.stdout+result.stderr)[-6000:]\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-node_exporter-032",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 1,
+    "topic": "文件系统与磁盘指标",
+    "title": "原生PromQL写入风险：空间充足但只读仍报警，采集错误不伪装容量耗尽",
+    "answer": "```yaml\ngroups:\n- name: continuation_032\n  interval: 1m\n  rules:\n  - record: node:filesystem_write_risk:flag\n    expr: ((node_filesystem_readonly == 1) or ((node_filesystem_avail_bytes / node_filesystem_size_bytes\n      < 0.1) and on(instance,job,device,mountpoint,fstype) (node_filesystem_size_bytes\n      > 0) and on(instance,job,device,mountpoint,fstype) (node_filesystem_readonly\n      == 0) and on(instance,job,device,mountpoint,fstype) (node_filesystem_device_error\n      == 0))) * 0 + 1\n```\n\n原题说明：\n它标识采集视图中的只读状态，可与预期可写挂载清单比较。只读根或归档卷可能是设计，不能对所有只读卷统一告警。还要监控采集失败，因为缺失不等于读写正常。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "实际官方promtool3.5规则引擎验证；采集值为明确的受控样本，不宣称已验证真实主机collector或生产告警。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它标识采集视图中的只读状态，可与预期可写挂载清单比较。",
+      "只读根或归档卷可能是设计，不能对所有只读卷统一告警。",
+      "还要监控采集失败，因为缺失不等于读写正常。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/",
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "yaml",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-032",
+      "original_title": "node_filesystem_readonly应该怎样参与写入可用性告警？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n记录node:filesystem_write_risk:flag，仅风险挂载输出1：readonly=1，或readonly=0且device_error=0、size>0并avail/size<0.1。保留instance/job/device/mountpoint/fstype；健康、无有效分母和容量采集错误不输出空间耗尽结论。不因avail充足而漏掉明确只读状态。\n\n## 提交产物\nrules.yaml，保留group名、1m间隔及给定record名，填写expr。\n\n## 验收方法\npython3 checks/check.py实际调用官方promtool test rules验证完整标签、数值及缺测/时间边界。\n\n## 能力边界\n实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+    "files": {
+      "rules.yaml": "groups:\n- name: continuation_032\n  interval: 1m\n  rules: []\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: continuation_032\n  interval: 1m\n  rules:\n  - record: node:filesystem_write_risk:flag\n    expr: ((node_filesystem_readonly == 1) or ((node_filesystem_avail_bytes / node_filesystem_size_bytes\n      < 0.1) and on(instance,job,device,mountpoint,fstype) (node_filesystem_size_bytes\n      > 0) and on(instance,job,device,mountpoint,fstype) (node_filesystem_readonly\n      == 0) and on(instance,job,device,mountpoint,fstype) (node_filesystem_device_error\n      == 0))) * 0 + 1\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: continuation_032\n  interval: 1m\n  rules:\n  - record: node:filesystem_write_risk:flag\n    expr: (((node_filesystem_avail_bytes / node_filesystem_size_bytes < 0.1) and on(instance,job,device,mountpoint,fstype)\n      (node_filesystem_size_bytes > 0) and on(instance,job,device,mountpoint,fstype)\n      (node_filesystem_readonly == 0) and on(instance,job,device,mountpoint,fstype)\n      (node_filesystem_device_error == 0))) * 0 + 1\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "现有promtool3.5，明确受控node_exporter样本",
+      "operation": "记录node:filesystem_write_risk:flag，仅风险挂载输出1：readonly=1，或readonly=0且device_error=0、size>0并avail/size<0.1。保留instance/job/device/mountpoint/fstype；健康、无有效分母和容量采集错误不输出空间耗尽结论。不因avail充足而漏掉明确只读状态。",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "verification": "官方promtool实际计算，不按expr文本相等判断",
+      "validation_scope": "实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+      "validation_kind": "native_promql_engine"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "promtool"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac",
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,pathlib,subprocess,tempfile,yaml\nassert os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n result={}\n for key,value in node.value:\n  key=loader.construct_object(key,deep=deep)\n  if key in result:raise ValueError('duplicate YAML key')\n  result[key]=loader.construct_object(value,deep=deep)\n return result\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndata=yaml.load(pathlib.Path('rules.yaml').read_text(encoding='utf8'),Loader=Strict)\nassert isinstance(data,dict) and set(data)=={'groups'} and len(data['groups'])==1\ngroup=data['groups'][0]\nif not group.get('rules'):raise NotImplementedError('implement recording rules')\nprint('STUDENT_OPERATION_ENTERED:promtool-rule-engine',flush=True)\nassert set(group)==set(['interval', 'name', 'rules']) and group[\"name\"]=='continuation_032' and group[\"interval\"]==\"1m\"\nassert len(group[\"rules\"])==1 and {rule.get(\"record\") for rule in group[\"rules\"]}==set(['node:filesystem_write_risk:flag'])\nfor rule in group[\"rules\"]:assert set(rule)=={\"record\",\"expr\"} and isinstance(rule[\"expr\"],str) and rule[\"expr\"]\nfixture={'rule_files': [], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'node_filesystem_avail_bytes{instance=\"ro\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '900+0x5'}, {'series': 'node_filesystem_size_bytes{instance=\"ro\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '1000+0x5'}, {'series': 'node_filesystem_readonly{instance=\"ro\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '1+0x5'}, {'series': 'node_filesystem_device_error{instance=\"ro\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '0+0x5'}, {'series': 'node_filesystem_avail_bytes{instance=\"low\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '50+0x5'}, {'series': 'node_filesystem_size_bytes{instance=\"low\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '1000+0x5'}, {'series': 'node_filesystem_readonly{instance=\"low\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '0+0x5'}, {'series': 'node_filesystem_device_error{instance=\"low\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '0+0x5'}, {'series': 'node_filesystem_avail_bytes{instance=\"good\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '500+0x5'}, {'series': 'node_filesystem_size_bytes{instance=\"good\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '1000+0x5'}, {'series': 'node_filesystem_readonly{instance=\"good\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '0+0x5'}, {'series': 'node_filesystem_device_error{instance=\"good\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '0+0x5'}, {'series': 'node_filesystem_avail_bytes{instance=\"error\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '0+0x5'}, {'series': 'node_filesystem_size_bytes{instance=\"error\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '1000+0x5'}, {'series': 'node_filesystem_readonly{instance=\"error\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '0+0x5'}, {'series': 'node_filesystem_device_error{instance=\"error\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '1+0x5'}, {'series': 'node_filesystem_avail_bytes{instance=\"zero\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '0+0x5'}, {'series': 'node_filesystem_size_bytes{instance=\"zero\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '0+0x5'}, {'series': 'node_filesystem_readonly{instance=\"zero\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '0+0x5'}, {'series': 'node_filesystem_device_error{instance=\"zero\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'values': '0+0x5'}], 'promql_expr_test': [{'expr': 'node:filesystem_write_risk:flag', 'eval_time': '5m', 'exp_samples': [{'labels': 'node:filesystem_write_risk:flag{instance=\"ro\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'value': 1}, {'labels': 'node:filesystem_write_risk:flag{instance=\"low\",job=\"node\",device=\"/dev/vda1\",mountpoint=\"/data\",fstype=\"ext4\"}', 'value': 1}]}]}]}\nfixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\nversion=subprocess.run(['promtool','--version'],capture_output=True,text=True,timeout=3)\nif version.returncode or '3.5.' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: promtool3.5 required')\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf8')\n result=subprocess.run(['promtool','test','rules',str(path)],capture_output=True,text=True,timeout=8)\n assert result.returncode==0,'native PromQL behavior differs: '+(result.stdout+result.stderr)[-6000:]\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-node_exporter-044",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 1,
+    "topic": "CPU内存与系统状态指标",
+    "title": "原生PromQL以评估时刻减boot_time，未来或无效开机时间保持未知",
+    "answer": "```yaml\ngroups:\n- name: continuation_044\n  interval: 1m\n  rules:\n  - record: node:uptime:seconds\n    expr: (time() - node_boot_time_seconds) and on(instance,job) (node_boot_time_seconds\n      > 0) and on(instance,job) (node_boot_time_seconds <= time())\n```\n\n原题说明：\n它表示系统启动时刻，可用time()减它估算启动后时长。墙钟调整可能影响解释，且exporter自身重启不等于主机重启。结合boot ID或平台事件核对。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "实际官方promtool3.5规则引擎验证；采集值为明确的受控样本，不宣称已验证真实主机collector或生产告警。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它表示系统启动时刻，可用time()减它估算启动后时长。",
+      "墙钟调整可能影响解释，且exporter自身重启不等于主机重启。",
+      "结合boot ID或平台事件核对。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/",
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "yaml",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-044",
+      "original_title": "node_boot_time_seconds如何帮助识别主机重启？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n记录node:uptime:seconds=time()-node_boot_time_seconds，保留instance/job；仅正数且不晚于评估时刻的boot_time有效。未来时间、零值或缺测不补0；boot_time是开机时间gauge，不对它取rate，也不把不同job合并。\n\n## 提交产物\nrules.yaml，保留group名、1m间隔及给定record名，填写expr。\n\n## 验收方法\npython3 checks/check.py实际调用官方promtool test rules验证完整标签、数值及缺测/时间边界。\n\n## 能力边界\n实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+    "files": {
+      "rules.yaml": "groups:\n- name: continuation_044\n  interval: 1m\n  rules: []\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: continuation_044\n  interval: 1m\n  rules:\n  - record: node:uptime:seconds\n    expr: (time() - node_boot_time_seconds) and on(instance,job) (node_boot_time_seconds\n      > 0) and on(instance,job) (node_boot_time_seconds <= time())\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: continuation_044\n  interval: 1m\n  rules:\n  - record: node:uptime:seconds\n    expr: rate(node_boot_time_seconds[3m])\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "现有promtool3.5，明确受控node_exporter样本",
+      "operation": "记录node:uptime:seconds=time()-node_boot_time_seconds，保留instance/job；仅正数且不晚于评估时刻的boot_time有效。未来时间、零值或缺测不补0；boot_time是开机时间gauge，不对它取rate，也不把不同job合并。",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "verification": "官方promtool实际计算，不按expr文本相等判断",
+      "validation_scope": "实际promtool3.5计算受控指标样本，不启动node_exporter、不修改主机采集配置，也不将单一指标当作业务故障或性能饱和证明。",
+      "validation_kind": "native_promql_engine"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "promtool"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac",
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,pathlib,subprocess,tempfile,yaml\nassert os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n result={}\n for key,value in node.value:\n  key=loader.construct_object(key,deep=deep)\n  if key in result:raise ValueError('duplicate YAML key')\n  result[key]=loader.construct_object(value,deep=deep)\n return result\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndata=yaml.load(pathlib.Path('rules.yaml').read_text(encoding='utf8'),Loader=Strict)\nassert isinstance(data,dict) and set(data)=={'groups'} and len(data['groups'])==1\ngroup=data['groups'][0]\nif not group.get('rules'):raise NotImplementedError('implement recording rules')\nprint('STUDENT_OPERATION_ENTERED:promtool-rule-engine',flush=True)\nassert set(group)==set(['interval', 'name', 'rules']) and group[\"name\"]=='continuation_044' and group[\"interval\"]==\"1m\"\nassert len(group[\"rules\"])==1 and {rule.get(\"record\") for rule in group[\"rules\"]}==set(['node:uptime:seconds'])\nfor rule in group[\"rules\"]:assert set(rule)=={\"record\",\"expr\"} and isinstance(rule[\"expr\"],str) and rule[\"expr\"]\nfixture={'rule_files': [], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'node_boot_time_seconds{instance=\"a\",job=\"node\"}', 'values': '60+0x10'}, {'series': 'node_boot_time_seconds{instance=\"a\",job=\"other\"}', 'values': '100+0x10'}, {'series': 'node_boot_time_seconds{instance=\"b\",job=\"node\"}', 'values': '300+0x10'}, {'series': 'node_boot_time_seconds{instance=\"future\",job=\"node\"}', 'values': '1000+0x10'}, {'series': 'node_boot_time_seconds{instance=\"zero\",job=\"node\"}', 'values': '0+0x10'}], 'promql_expr_test': [{'expr': 'node:uptime:seconds', 'eval_time': '10m', 'exp_samples': [{'labels': 'node:uptime:seconds{instance=\"a\",job=\"node\"}', 'value': 540}, {'labels': 'node:uptime:seconds{instance=\"a\",job=\"other\"}', 'value': 500}, {'labels': 'node:uptime:seconds{instance=\"b\",job=\"node\"}', 'value': 300}]}]}]}\nfixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\nversion=subprocess.run(['promtool','--version'],capture_output=True,text=True,timeout=3)\nif version.returncode or '3.5.' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: promtool3.5 required')\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf8')\n result=subprocess.run(['promtool','test','rules',str(path)],capture_output=True,text=True,timeout=8)\n assert result.returncode==0,'native PromQL behavior differs: '+(result.stdout+result.stderr)[-6000:]\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

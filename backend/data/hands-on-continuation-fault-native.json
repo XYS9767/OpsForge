@@ -1,0 +1,75 @@
+[
+  {
+    "id": "curated-parallel-linux-091",
+    "module": "linux",
+    "category": "Linux 基础",
+    "level": 3,
+    "topic": "时间时区与区域设置",
+    "title": "真实复现缺失locale导致的UTF8导入失败，并选择已安装locale恢复",
+    "answer": "```python\nimport os,subprocess,sys\nfrom pathlib import Path\ndef import_text(source,target,preferred):\n    available=subprocess.check_output(['locale','-a'],text=True).splitlines()\n    candidates=([preferred] if isinstance(preferred,str) and preferred in available else [])+sorted(available)\n    chosen=None\n    for candidate in dict.fromkeys(candidates):\n        env={**os.environ,'LC_ALL':candidate,'LANG':candidate,'PYTHONUTF8':'0','PYTHONCOERCECLOCALE':'0'}\n        probe=subprocess.run(['locale','charmap'],env=env,capture_output=True,text=True)\n        if probe.returncode==0 and probe.stdout.strip().replace('-','').upper()=='UTF8':chosen=candidate;break\n    if chosen is None:raise RuntimeError('no installed UTF8 locale')\n    env={**os.environ,'LC_ALL':chosen,'LANG':chosen,'PYTHONUTF8':'0','PYTHONCOERCECLOCALE':'0'}\n    code=\"import json,locale,sys; text=open(sys.argv[1],'r').read(); f=open(sys.argv[2],'x',encoding='utf-8'); json.dump({'text':text,'encoding':locale.getencoding()},f,ensure_ascii=False); f.close()\"\n    result=subprocess.run([sys.executable,'-X','utf8=0','-c',code,str(source),str(target)],env=env,capture_output=True,text=True)\n    if result.returncode:raise RuntimeError(result.stderr)\n    return chosen\n```\n\n原题说明：\n确认进程实际环境及 setlocale 失败信息，缺失 locale 可能令程序退回 C 语义或直接拒绝启动。安装发行版对应语言数据或生成所需 locale，使用真实存在且符合输入编码的名称；受控重启读取环境的进程。验证中文、ASCII和非法字节输入，不能只把变量写成 UTF-8 就视为支持。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原故障案例改编；先记录真实UnicodeDecodeError，再验证已安装UTF8 locale修复，证据不代替其他主机验收。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "确认进程实际环境及 setlocale 失败信息，缺失 locale 可能令程序退回 C 语义或直接拒绝启动。",
+      "安装发行版对应语言数据或生成所需 locale，使用真实存在且符合输入编码的名称；受控重启读取环境的进程。",
+      "验证中文、ASCII和非法字节输入，不能只把变量写成 UTF-8 就视为支持。"
+    ],
+    "references": [
+      "https://docs.python.org/3/library/locale.html",
+      "https://docs.python.org/3/using/cmdline.html#envvar-PYTHONCOERCECLOCALE"
+    ],
+    "incident_signature": "linux-missing-locale-multibyte-decoding",
+    "related_modules": [
+      "linux"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-linux-091",
+      "original_title": "系统裁剪后多字节文本导入失败，LC_ALL 指定 UTF-8 名称而 locale -a 中没有它。如何修复？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现 import_text(source,target,preferred)。先用真实locale -a发现已安装项，用locale charmap确认UTF8；首选名称只有已安装且实际为UTF8时才能使用，否则选一个已安装的UTF8项。通过独立子进程，用其locale默认编码读取UTF8文本，独占写入UTF8 JSON文件，包含text及locale.getencoding()返回的encoding；返回所选locale名。关闭Python UTF8 mode/coercion，不能靠隐式强制UTF8掩盖坏locale。不能安装/生成locale，不能修改父进程os.environ；无可用UTF8项或导入失败抛RuntimeError，源文件不变。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py，关闭Python自动UTF8回退并实际执行失败和恢复两路。\n\n## 能力边界\n只使用当前镜像已安装locale，不改系统配置，不宣称任意应用或发行版已经恢复。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement import_text\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,subprocess,sys\nfrom pathlib import Path\ndef import_text(source,target,preferred):\n    available=subprocess.check_output(['locale','-a'],text=True).splitlines()\n    candidates=([preferred] if isinstance(preferred,str) and preferred in available else [])+sorted(available)\n    chosen=None\n    for candidate in dict.fromkeys(candidates):\n        env={**os.environ,'LC_ALL':candidate,'LANG':candidate,'PYTHONUTF8':'0','PYTHONCOERCECLOCALE':'0'}\n        probe=subprocess.run(['locale','charmap'],env=env,capture_output=True,text=True)\n        if probe.returncode==0 and probe.stdout.strip().replace('-','').upper()=='UTF8':chosen=candidate;break\n    if chosen is None:raise RuntimeError('no installed UTF8 locale')\n    env={**os.environ,'LC_ALL':chosen,'LANG':chosen,'PYTHONUTF8':'0','PYTHONCOERCECLOCALE':'0'}\n    code=\"import json,locale,sys; text=open(sys.argv[1],'r').read(); f=open(sys.argv[2],'x',encoding='utf-8'); json.dump({'text':text,'encoding':locale.getencoding()},f,ensure_ascii=False); f.close()\"\n    result=subprocess.run([sys.executable,'-X','utf8=0','-c',code,str(source),str(target)],env=env,capture_output=True,text=True)\n    if result.returncode:raise RuntimeError(result.stderr)\n    return chosen\n"
+    },
+    "negative_files": {
+      "task.py": "import os,subprocess,sys\nfrom pathlib import Path\ndef import_text(source,target,preferred):\n    available=subprocess.check_output(['locale','-a'],text=True).splitlines()\n    candidates=([preferred] if isinstance(preferred,str) and preferred in available else [])+sorted(available)\n    chosen=None\n    for candidate in dict.fromkeys(candidates):\n        env={**os.environ,'LC_ALL':candidate,'LANG':candidate,'PYTHONUTF8':'0','PYTHONCOERCECLOCALE':'0'}\n        probe=subprocess.run(['locale','charmap'],env=env,capture_output=True,text=True)\n        if probe.returncode==0 and probe.stdout.strip().replace('-','').upper()=='UTF8':chosen=candidate;break\n    chosen=preferred\n    if chosen is None:raise RuntimeError('no installed UTF8 locale')\n    env={**os.environ,'LC_ALL':chosen,'LANG':chosen,'PYTHONUTF8':'0','PYTHONCOERCECLOCALE':'0'}\n    code=\"import json,locale,sys; text=open(sys.argv[1],'r').read(); f=open(sys.argv[2],'x',encoding='utf-8'); json.dump({'text':text,'encoding':locale.getencoding()},f,ensure_ascii=False); f.close()\"\n    result=subprocess.run([sys.executable,'-X','utf8=0','-c',code,str(source),str(target)],env=env,capture_output=True,text=True)\n    if result.returncode:raise RuntimeError(result.stderr)\n    return chosen\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，locale命令和至少一个已安装UTF8 locale，Python3.11+",
+      "operation": "实现 import_text(source,target,preferred)。先用真实locale -a发现已安装项，用locale charmap确认UTF8；首选名称只有已安装且实际为UTF8时才能使用，否则选一个已安装的UTF8项。通过独立子进程，用其locale默认编码读取UTF8文本，独占写入UTF8 JSON文件，包含text及locale.getencoding()返回的encoding；返回所选locale名。关闭Python UTF8 mode/coercion，不能靠隐式强制UTF8掩盖坏locale。不能安装/生成locale，不能修改父进程os.environ；无可用UTF8项或导入失败抛RuntimeError，源文件不变。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实失败与现有locale恢复，父环境和源数据不变"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "locale"
+        ],
+        "features": [
+          "linux:nonroot_dac",
+          "locale:c_utf8"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import sys,os,pathlib,tempfile,secrets,subprocess,json\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith tempfile.TemporaryDirectory() as directory:\n root=pathlib.Path(directory);source=root/'input.txt';payload='中文导入-'+secrets.token_hex(12)+'\\n';source.write_bytes(payload.encode('utf8'))\n missing='OpsForge_Missing_'+secrets.token_hex(8)\n bad_env={**os.environ,'LC_ALL':missing,'LANG':'C','PYTHONUTF8':'0','PYTHONCOERCECLOCALE':'0'}\n failed=subprocess.run([sys.executable,'-X','utf8=0','-c','import sys;open(sys.argv[1]).read()',str(source)],env=bad_env,capture_output=True,text=True)\n assert failed.returncode!=0 and 'UnicodeDecodeError' in failed.stderr,'fault was not actually reproduced'\n print('NATIVE_FAULT_REPRODUCED:UnicodeDecodeError',flush=True)\n available=subprocess.check_output(['locale','-a'],text=True).splitlines();original_env=dict(os.environ)\n try:\n  os.environ['LC_ALL']='C';before=dict(os.environ)\n  for index,preferred in enumerate([missing,'C']):\n   target=root/('result-'+str(index)+'.json')\n   print('STUDENT_OPERATION_ENTERED:import_text',flush=True)\n   try:chosen=task.import_text(source,target,preferred)\n   except Exception as error:raise AssertionError('UTF8 import repair did not complete') from error\n   assert chosen in available,'selected a locale that is not installed'\n   charmap=subprocess.check_output(['locale','charmap'],env={**before,'LC_ALL':chosen},text=True).strip()\n   assert charmap.replace('-','').upper()=='UTF8','selected locale is not UTF8'\n   record=json.loads(target.read_text(encoding='utf8'))\n   assert record['text']==payload and record['encoding'].replace('-','').upper()=='UTF8','import succeeded through coercion instead of a real UTF8 locale'\n   assert dict(os.environ)==before,'repair leaked a global environment change'\n   assert source.read_bytes()==payload.encode('utf8'),'input changed'\n  invalid=root/'invalid';invalid.write_bytes(b'\\xff');output=root/'invalid.json'\n  try:task.import_text(invalid,output,missing)\n  except RuntimeError:pass\n  else:raise AssertionError('malformed UTF8 data was silently accepted')\n  assert not output.exists(),'failed import left a successful-looking output'\n finally:os.environ.clear();os.environ.update(original_env)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

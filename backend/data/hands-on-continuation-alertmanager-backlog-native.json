@@ -1,0 +1,67 @@
+[
+  {
+    "id": "curated-advanced-alertmanager-021",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 5,
+    "topic": "通知可观测性与投递可靠性",
+    "title": "通知渠道恢复后的当前状态对账与分批补发",
+    "answer": "```python\nfrom datetime import datetime\nimport hashlib,json\n\ndef recover(records,now,batch_size,accepted_keys=()):\n    if not isinstance(now,datetime) or now.tzinfo is None:raise ValueError('aware now required')\n    if isinstance(batch_size,bool) or not isinstance(batch_size,int) or not 1<=batch_size<=100:raise ValueError('invalid batch size')\n    accepted=set(accepted_keys);seen=set();active=[];history=[];manual=[]\n    priority={'critical':0,'warning':1,'info':2}\n    for row in records:\n        required={'fingerprint','state','severity','changed_at','last_attempt'}\n        if not isinstance(row,dict) or not required.issubset(row):raise ValueError('incomplete record')\n        fp=row['fingerprint'];state=row['state'];severity=row['severity'];changed=row['changed_at'];attempt=row['last_attempt']\n        if not isinstance(fp,str) or not fp or fp in seen:raise ValueError('duplicate or empty fingerprint')\n        seen.add(fp)\n        if state not in ('firing','resolved','unknown') or severity not in priority:raise ValueError('invalid state')\n        if not isinstance(changed,datetime) or changed.tzinfo is None or not isinstance(attempt,datetime) or attempt.tzinfo is None:raise ValueError('aware timestamps required')\n        if changed>now or attempt>now:raise ValueError('future timestamp')\n        if state=='unknown':manual.append({'fingerprint':fp,'reason':'current state unknown'});continue\n        stable=hashlib.sha256((fp+'|'+state+'|'+changed.isoformat()).encode()).hexdigest()\n        if stable in accepted:continue\n        event={'fingerprint':fp,'idempotency_key':stable,'kind':'current' if state=='firing' else 'historical_recovery','severity':severity,'changed_at':changed.isoformat()}\n        (active if state=='firing' else history).append(event)\n    active.sort(key=lambda x:(priority[x['severity']],x['changed_at'],x['fingerprint']))\n    history.sort(key=lambda x:(priority[x['severity']],x['changed_at'],x['fingerprint']))\n    selected=(active+history)[:batch_size]\n    return {'send':selected,'deferred':len(active)+len(history)-len(selected),'manual_review':sorted(manual,key=lambda x:x['fingerprint'])}\n```\n\n原题知识说明：\n交付实时告警状态、通知尝试与接收端事件的三方对账。定义通知失败期间仍活动、已经恢复和状态不明三类，不把历史发送失败记录直接等同待发送当前告警。恢复时按当前状态与渠道限额分批同步，必要时发送明确标记的汇总事件；关键仍活动问题优先。验收部分恢复、限流和渠道回执丢失，检查无重复工单与伪新故障。若无法确定真实状态，交人工核对而非清空记录；回退渠道配置仍需保留失败窗口的审计说明。已经恢复事件的补发须显式标记历史，不以当前firing形式重新注入。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "给出题设要求的具体交付物与关键机制",
+      "用可观察结果验证约束和失败分支",
+      "明确停止条件及回退或恢复边界"
+    ],
+    "references": [],
+    "body": "## 操作任务\n实现recover(records,now,batch_size,accepted_keys=())，依据实时状态把通知积压区分为仍活动、已恢复和状态不明。critical活动通知优先，已恢复通知只能输出historical_recovery汇总，unknown进入人工核对；受批次上限约束，并用状态变更版本生成稳定幂等键供接收端去重。拒绝重复指纹、无时区/未来时间和非法批次。\n\n## 提交产物\ntask.py\n\n## 验收方法\n隔离Linux原生Python断言优先级、已恢复历史标记、未知状态人工队列、稳定幂等键、批次限额及非法输入。\n\n## 能力边界\n本地纯函数验证对账和分批决策，不连接第三方渠道、不宣称接收端幂等存储或状态快照的新鲜度已被验证；unknown必须人工核对。",
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-alertmanager-021",
+      "original_title": "为第三方通知服务长时间故障交付积压处置方案，要求恢复后不会把过期故障全当当前事故重放。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "from datetime import datetime\nimport hashlib,json\n\ndef recover(records,now,batch_size,accepted_keys=()):\n    if not isinstance(now,datetime) or now.tzinfo is None:raise ValueError('aware now required')\n    if isinstance(batch_size,bool) or not isinstance(batch_size,int) or not 1<=batch_size<=100:raise ValueError('invalid batch size')\n    accepted=set(accepted_keys);seen=set();active=[];history=[];manual=[]\n    priority={'critical':0,'warning':1,'info':2}\n    for row in records:\n        required={'fingerprint','state','severity','changed_at','last_attempt'}\n        if not isinstance(row,dict) or not required.issubset(row):raise ValueError('incomplete record')\n        fp=row['fingerprint'];state=row['state'];severity=row['severity'];changed=row['changed_at'];attempt=row['last_attempt']\n        if not isinstance(fp,str) or not fp or fp in seen:raise ValueError('duplicate or empty fingerprint')\n        seen.add(fp)\n        if state not in ('firing','resolved','unknown') or severity not in priority:raise ValueError('invalid state')\n        if not isinstance(changed,datetime) or changed.tzinfo is None or not isinstance(attempt,datetime) or attempt.tzinfo is None:raise ValueError('aware timestamps required')\n        if changed>now or attempt>now:raise ValueError('future timestamp')\n        if state=='unknown':manual.append({'fingerprint':fp,'reason':'current state unknown'});continue\n        stable=hashlib.sha256((fp+'|'+state+'|'+changed.isoformat()).encode()).hexdigest()\n        if stable in accepted:continue\n        event={'fingerprint':fp,'idempotency_key':stable,'kind':'current' if state=='firing' else 'historical_recovery','severity':severity,'changed_at':changed.isoformat()}\n        (active if state=='firing' else history).append(event)\n    active.sort(key=lambda x:(priority[x['severity']],x['changed_at'],x['fingerprint']))\n    history.sort(key=lambda x:(priority[x['severity']],x['changed_at'],x['fingerprint']))\n    selected=(active+history)[:batch_size]\n    return {'send':selected,'deferred':len(active)+len(history)-len(selected),'manual_review':sorted(manual,key=lambda x:x['fingerprint'])}\n"
+    },
+    "negative_files": {
+      "task.py": "from datetime import datetime\nimport hashlib,json\n\ndef recover(records,now,batch_size,accepted_keys=()):\n    if not isinstance(now,datetime) or now.tzinfo is None:raise ValueError('aware now required')\n    if isinstance(batch_size,bool) or not isinstance(batch_size,int) or not 1<=batch_size<=100:raise ValueError('invalid batch size')\n    accepted=set(accepted_keys);seen=set();active=[];history=[];manual=[]\n    priority={'critical':0,'warning':1,'info':2}\n    for row in records:\n        required={'fingerprint','state','severity','changed_at','last_attempt'}\n        if not isinstance(row,dict) or not required.issubset(row):raise ValueError('incomplete record')\n        fp=row['fingerprint'];state=row['state'];severity=row['severity'];changed=row['changed_at'];attempt=row['last_attempt']\n        if not isinstance(fp,str) or not fp or fp in seen:raise ValueError('duplicate or empty fingerprint')\n        seen.add(fp)\n        if state not in ('firing','resolved','unknown') or severity not in priority:raise ValueError('invalid state')\n        if not isinstance(changed,datetime) or changed.tzinfo is None or not isinstance(attempt,datetime) or attempt.tzinfo is None:raise ValueError('aware timestamps required')\n        if changed>now or attempt>now:raise ValueError('future timestamp')\n        if state=='unknown':manual.append({'fingerprint':fp,'reason':'current state unknown'});continue\n        stable=hashlib.sha256((fp+'|'+state+'|'+changed.isoformat()).encode()).hexdigest()\n        if stable in accepted:continue\n        event={'fingerprint':fp,'idempotency_key':stable,'kind':'current' if state=='firing' else 'historical_recovery','severity':severity,'changed_at':changed.isoformat()}\n        (active if state=='firing' else history).append(event)\n    active.sort(key=lambda x:(priority[x['severity']],x['changed_at'],x['fingerprint']))\n    history.sort(key=lambda x:(priority[x['severity']],x['changed_at'],x['fingerprint']))\n    selected=(active+history)\n    return {'send':selected,'deferred':len(active)+len(history)-len(selected),'manual_review':sorted(manual,key=lambda x:x['fingerprint'])}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现recover(records,now,batch_size,accepted_keys=())，依据实时状态把通知积压区分为仍活动、已恢复和状态不明。critical活动通知优先，已恢复通知只能输出historical_recovery汇总，unknown进入人工核对；受批次上限约束，并用状态变更版本生成稳定幂等键供接收端去重。拒绝重复指纹、无时区/未来时间和非法批次。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "本地纯函数验证对账和分批决策，不连接第三方渠道、不宣称接收端幂等存储或状态快照的新鲜度已被验证；unknown必须人工核对。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: notification backlog reconciliation',flush=True)\nfrom datetime import datetime,timezone,timedelta\nnow=datetime(2026,10,26,12,tzinfo=timezone.utc)\ndef row(fp,state,sev,mins):\n changed=now-timedelta(minutes=mins);return {'fingerprint':fp,'state':state,'severity':sev,'changed_at':changed,'last_attempt':changed}\nrecords=[row('low','firing','info',30),row('resolved-old','resolved','critical',120),row('critical','firing','critical',20),row('unknown','unknown','warning',5),row('warning','firing','warning',10)]\nresult=task.recover(records,now,2);assert [x['fingerprint'] for x in result['send']]==['critical','warning'];assert result['deferred']==2;assert result['manual_review']==[{'fingerprint':'unknown','reason':'current state unknown'}]\nhistory=task.recover([records[1]],now,2)['send'][0];assert history['kind']=='historical_recovery' and history['severity']=='critical'\nassert task.recover([records[1]],now,2,[history['idempotency_key']])['send']==[]\nrepeat=task.recover(records,now,2);assert repeat==result\nfor invalid,size in [(records,0),(records,101),(records,True),([row('future','firing','critical',-1)],2)]:\n try:task.recover(invalid,now,size)\n except ValueError:pass\n else:raise AssertionError('invalid recovery input accepted')\ntry:task.recover([row('dupe','firing','critical',1),row('dupe','resolved','critical',2)],now,3)\nexcept ValueError:pass\nelse:raise AssertionError('duplicate fingerprint accepted')\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

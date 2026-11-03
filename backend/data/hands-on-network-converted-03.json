@@ -1,0 +1,462 @@
+[
+  {
+    "id": "curated-network-completion-004",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 3,
+    "topic": "分别验证权威与递归 DNS 回包角色",
+    "title": "分别验证权威与递归 DNS 回包角色",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,name,role):\n    import secrets\n    if role not in ('authority','recursive'):raise ValueError('bad role')\n    labels=name.rstrip('.').encode('ascii').split(b'.')\n    if any(not 1<=len(x)<=63 for x in labels):raise ValueError('bad name')\n    wire=b''.join(bytes([len(x)])+x for x in labels)+b'\\0'\n    if len(wire)>255:raise ValueError('bad name')\n    ident=secrets.randbelow(65536);query=struct.pack('!HHHHHH',ident,0x100 if role=='recursive' else 0,1,0,0,0)+wire+b'\\0\\1\\0\\1'\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);data=sock.recv(65535)\n    if len(data)<len(query) or data[:2]!=query[:2]:raise ValueError('bad reply')\n    flags,qd,an,ns,ar=struct.unpack('!HHHHH',data[2:12]);aa=bool(flags&0x400);ra=bool(flags&0x80)\n    if flags&0x820f!=0x8000 or qd!=1 or ns or ar or data[12:len(query)]!=query[12:] or (role=='authority' and not aa) or (role=='recursive' and not ra):raise ValueError('invalid role response')\n    pos=len(query);addresses=[]\n    for _ in range(an):\n        if pos+16>len(data) or data[pos:pos+2]!=b'\\xc0\\x0c':raise ValueError('short A')\n        kind,cls,ttl,length=struct.unpack('!HHIH',data[pos+2:pos+12])\n        if (kind,cls,length)!=(1,1,4):raise ValueError('unsupported RR')\n        addresses.append(socket.inet_ntoa(data[pos+12:pos+16]));pos+=16\n    if pos!=len(data):raise ValueError('trailing bytes')\n    return {'role':role,'aa':aa,'ra':ra,'addresses':addresses}\n```\n\n实现说明：实现execute(host,port,name,role)，role只允许authority/recursive；对同一A问题发实际UDP查询，authority清RD，recursive置RD。要求回包匹配问题/事务，QR=1、TC=0、RCODE=0；authority回答须AA=1，recursive回答须RA=1。解析本实验的单一问题、压缩owner A/IN回答，返回{role,aa,ra,addresses}，保持多个A地址。角色错误与短RR拒绝；权威服务不能因为返回地址就假定它可递归。\n\n原理补充（原题保留）：\n权威服务器回答其负责区域的数据，递归解析器代客户端查询并缓存结果。分别查询能区分权威记录未更新与递归缓存尚未过期；还要检查委派和客户端实际使用的解析器。公共解析器结果正确并不证明内网分域解析也正确。 典型未命中缓存的递归解析会向根、顶级域及相应权威服务器逐步获取委派和答案，再按TTL缓存；应用也可能有自己的解析缓存。",
+    "type": "code",
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,name,role)，role只允许authority/recursive；对同一A问题发实际UDP查询，authority清RD，recursive置RD。要求回包匹配问题/事务，QR=1、TC=0、RCODE=0；authority回答须AA=1，recursive回答须RA=1。解析本实验的单一问题、压缩owner A/IN回答，返回{role,aa,ra,addresses}，保持多个A地址。角色错误与短RR拒绝；权威服务不能因为返回地址就假定它可递归。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：一律RD=1并仅提取地址，会混淆权威与递归角色；测试用相同地址但不同AA/RA组合暴露错误。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+      "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb"
+    ],
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "GLdGdyB0yoKfbLxwYvVceYhin0e",
+        "question": "56、dns的工作原理"
+      }
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "GLdGdyB0yoKfbLxwYvVceYhin0e"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "So6cdw8pmotPZcxBLO8cdr6nnHX",
+          "RMEadd7OKotlXRxlCpCcTTxznwd"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,name,role):\n    import secrets\n    if role not in ('authority','recursive'):raise ValueError('bad role')\n    labels=name.rstrip('.').encode('ascii').split(b'.')\n    if any(not 1<=len(x)<=63 for x in labels):raise ValueError('bad name')\n    wire=b''.join(bytes([len(x)])+x for x in labels)+b'\\0'\n    if len(wire)>255:raise ValueError('bad name')\n    ident=secrets.randbelow(65536);query=struct.pack('!HHHHHH',ident,0x100 if role=='recursive' else 0,1,0,0,0)+wire+b'\\0\\1\\0\\1'\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);data=sock.recv(65535)\n    if len(data)<len(query) or data[:2]!=query[:2]:raise ValueError('bad reply')\n    flags,qd,an,ns,ar=struct.unpack('!HHHHH',data[2:12]);aa=bool(flags&0x400);ra=bool(flags&0x80)\n    if flags&0x820f!=0x8000 or qd!=1 or ns or ar or data[12:len(query)]!=query[12:] or (role=='authority' and not aa) or (role=='recursive' and not ra):raise ValueError('invalid role response')\n    pos=len(query);addresses=[]\n    for _ in range(an):\n        if pos+16>len(data) or data[pos:pos+2]!=b'\\xc0\\x0c':raise ValueError('short A')\n        kind,cls,ttl,length=struct.unpack('!HHIH',data[pos+2:pos+12])\n        if (kind,cls,length)!=(1,1,4):raise ValueError('unsupported RR')\n        addresses.append(socket.inet_ntoa(data[pos+12:pos+16]));pos+=16\n    if pos!=len(data):raise ValueError('trailing bytes')\n    return {'role':role,'aa':aa,'ra':ra,'addresses':addresses}\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,name,role):\n    labels=name.split('.');wire=b''.join(bytes([len(x)])+x.encode() for x in labels)+b'\\0';query=struct.pack('!HHHHHH',1,0x100,1,0,0,0)+wire+b'\\0\\1\\0\\1'\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);data=sock.recv(65535)\n    flags=struct.unpack('!H',data[2:4])[0];addresses=[socket.inet_ntoa(data[p+12:p+16]) for p in range(len(query),len(data),16)]\n    return {'role':role,'aa':bool(flags&0x400),'ra':bool(flags&0x80),'addresses':addresses}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,name,role)，role只允许authority/recursive；对同一A问题发实际UDP查询，authority清RD，recursive置RD。要求回包匹配问题/事务，QR=1、TC=0、RCODE=0；authority回答须AA=1，recursive回答须RA=1。解析本实验的单一问题、压缩owner A/IN回答，返回{role,aa,ra,addresses}，保持多个A地址。角色错误与短RR拒绝；权威服务不能因为返回地址就假定它可递归。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "一律RD=1并仅提取地址，会混淆权威与递归角色；测试用相同地址但不同AA/RA组合暴露错误。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\nfor role,flags,want_error in [('authority',0x8400,False),('recursive',0x8180,False),('authority',0x8180,True),('recursive',0x8100,True),('authority',0x8403,True)]:\n    def handler(sock,query,peer):\n        assert bool(struct.unpack('!H',query[2:4])[0]&0x100)==(role=='recursive')\n        answer=query[:2]+struct.pack('!HHHHH',flags,1,2,0,0)+query[12:]\n        for addr in ['192.0.2.10','192.0.2.11']:answer+=b'\\xc0\\x0c'+struct.pack('!HHIH',1,1,10,4)+socket.inet_aton(addr)\n        sock.sendto(answer,peer)\n    with udp_server(handler) as endpoint:\n        if want_error:\n            try:task.execute(*endpoint,'api.example',role)\n            except ValueError:pass\n            else:raise AssertionError('wrong DNS role accepted')\n        else:assert task.execute(*endpoint,'api.example',role)=={'role':role,'aa':bool(flags&0x400),'ra':bool(flags&0x80),'addresses':['192.0.2.10','192.0.2.11']}\n\nfor kind in ['short','wrong-id']:\n    def handler(sock,query,peer):\n        response=query[:2]+struct.pack('!HHHHH',0x8400,1,1,0,0)+query[12:]+b'\\xc0\\x0c'+struct.pack('!HHIH',1,1,10,4)+socket.inet_aton('192.0.2.1')\n        response=response[:-1] if kind=='short' else bytes([response[0]^255])+response[1:]\n        sock.sendto(response,peer)\n    with udp_server(handler) as endpoint:\n        try:task.execute(*endpoint,'api.example','authority')\n        except ValueError:pass\n        else:raise AssertionError(kind+' reply accepted')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|curated-network-completion-004|分别验证权威与递归 DNS 回包角色",
+    "conversion": {
+      "original_id": "curated-network-completion-004",
+      "original_type": "interview",
+      "original_title": "权威 DNS 与递归解析器分别负责什么，排查时为什么要分开查询？",
+      "original_source": "OpsForge 原创网络专题题",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-network-completion-006",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 3,
+    "topic": "独立发出 PTR 查询并处理不存在的反向记录",
+    "title": "独立发出 PTR 查询并处理不存在的反向记录",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,address):\n    import ipaddress,secrets\n    name=ipaddress.ip_address(address).reverse_pointer;wire=b''.join(bytes([len(x)])+x.encode() for x in name.split('.'))+b'\\0';ident=secrets.randbelow(65536);query=struct.pack('!HHHHHH',ident,0x100,1,0,0,0)+wire+b'\\0\\x0c\\0\\1'\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);data=sock.recv(65535)\n    if len(data)<len(query) or data[:2]!=query[:2] or data[12:len(query)]!=query[12:]:raise ValueError('bad DNS')\n    flags,qd,an,ns,ar=struct.unpack('!HHHHH',data[2:12]);rcode=flags&15\n    if not flags&0x8000 or flags&0x200 or qd!=1 or rcode not in (0,3):raise ValueError('DNS failure')\n    if rcode==3:return []\n    def read_name(pos):\n        labels=[];seen=set();end=None\n        while True:\n            if pos>=len(data) or pos in seen:raise ValueError('invalid name')\n            seen.add(pos);n=data[pos]\n            if n&0xc0==0xc0:\n                if pos+1>=len(data):raise ValueError('short pointer')\n                if end is None:end=pos+2\n                pos=((n&63)<<8)|data[pos+1];continue\n            if n&0xc0:raise ValueError('invalid label')\n            pos+=1\n            if n==0:return '.'.join(labels).lower()+'.',end if end is not None else pos\n            if pos+n>len(data):raise ValueError('short label')\n            labels.append(data[pos:pos+n].decode('ascii'));pos+=n\n    pos=len(query);out=[]\n    for _ in range(an):\n        _,pos=read_name(pos)\n        if pos+10>len(data):raise ValueError('short RR')\n        kind,cls,ttl,size=struct.unpack('!HHIH',data[pos:pos+10]);pos+=10;end=pos+size\n        if end>len(data):raise ValueError('short RDATA')\n        if (kind,cls)==(12,1):\n            target,consumed=read_name(pos)\n            if consumed!=end:raise ValueError('bad PTR length')\n            out.append(target)\n        pos=end\n    return out\n```\n\n实现说明：实现execute(host,port,address)，用ipaddress为合法IPv4/IPv6构造reverse_pointer，发送PTR/IN UDP查询。成功回答返回规范小写带尾点的PTR名称列表；NXDOMAIN返回空列表，SERVFAIL拒绝；必须核对事务与原问题，解析名称压缩并检测循环/短RDATA。正向记录存在不意味着反向记录存在，不能把输入IP对应的A记录或缓存主机名当PTR。平台分别检查IPv4 in-addr.arpa与IPv6 ip6.arpa的真实请求。\n\n原理补充（原题保留）：\n不会自动保证。PTR 位于反向区域，可能由不同组织或运营商管理；正向和反向需要分别配置和验证。PTR 存在也不能证明请求身份可信，不应将反向名称当成强认证依据。邮件等场景还可能要求正反向一致。",
+    "type": "code",
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,address)，用ipaddress为合法IPv4/IPv6构造reverse_pointer，发送PTR/IN UDP查询。成功回答返回规范小写带尾点的PTR名称列表；NXDOMAIN返回空列表，SERVFAIL拒绝；必须核对事务与原问题，解析名称压缩并检测循环/短RDATA。正向记录存在不意味着反向记录存在，不能把输入IP对应的A记录或缓存主机名当PTR。平台分别检查IPv4 in-addr.arpa与IPv6 ip6.arpa的真实请求。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：只按IPv4点分段翻转会生成错误IPv6反向名；将SERVFAIL当不存在也会掩盖故障。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,address):\n    import ipaddress,secrets\n    name=ipaddress.ip_address(address).reverse_pointer;wire=b''.join(bytes([len(x)])+x.encode() for x in name.split('.'))+b'\\0';ident=secrets.randbelow(65536);query=struct.pack('!HHHHHH',ident,0x100,1,0,0,0)+wire+b'\\0\\x0c\\0\\1'\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);data=sock.recv(65535)\n    if len(data)<len(query) or data[:2]!=query[:2] or data[12:len(query)]!=query[12:]:raise ValueError('bad DNS')\n    flags,qd,an,ns,ar=struct.unpack('!HHHHH',data[2:12]);rcode=flags&15\n    if not flags&0x8000 or flags&0x200 or qd!=1 or rcode not in (0,3):raise ValueError('DNS failure')\n    if rcode==3:return []\n    def read_name(pos):\n        labels=[];seen=set();end=None\n        while True:\n            if pos>=len(data) or pos in seen:raise ValueError('invalid name')\n            seen.add(pos);n=data[pos]\n            if n&0xc0==0xc0:\n                if pos+1>=len(data):raise ValueError('short pointer')\n                if end is None:end=pos+2\n                pos=((n&63)<<8)|data[pos+1];continue\n            if n&0xc0:raise ValueError('invalid label')\n            pos+=1\n            if n==0:return '.'.join(labels).lower()+'.',end if end is not None else pos\n            if pos+n>len(data):raise ValueError('short label')\n            labels.append(data[pos:pos+n].decode('ascii'));pos+=n\n    pos=len(query);out=[]\n    for _ in range(an):\n        _,pos=read_name(pos)\n        if pos+10>len(data):raise ValueError('short RR')\n        kind,cls,ttl,size=struct.unpack('!HHIH',data[pos:pos+10]);pos+=10;end=pos+size\n        if end>len(data):raise ValueError('short RDATA')\n        if (kind,cls)==(12,1):\n            target,consumed=read_name(pos)\n            if consumed!=end:raise ValueError('bad PTR length')\n            out.append(target)\n        pos=end\n    return out\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,address):\n    name='.'.join(reversed(address.split('.')))+'.in-addr.arpa';wire=b''.join(bytes([len(x)])+x.encode() for x in name.split('.'))+b'\\0';query=struct.pack('!HHHHHH',1,0x100,1,0,0,0)+wire+b'\\0\\x0c\\0\\1'\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);data=sock.recv(65535)\n    if data[3]&15:return []\n    pos=len(query)+12;labels=[]\n    while data[pos]:n=data[pos];pos+=1;labels.append(data[pos:pos+n].decode());pos+=n\n    return ['.'.join(labels).lower()+'.']\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,address)，用ipaddress为合法IPv4/IPv6构造reverse_pointer，发送PTR/IN UDP查询。成功回答返回规范小写带尾点的PTR名称列表；NXDOMAIN返回空列表，SERVFAIL拒绝；必须核对事务与原问题，解析名称压缩并检测循环/短RDATA。正向记录存在不意味着反向记录存在，不能把输入IP对应的A记录或缓存主机名当PTR。平台分别检查IPv4 in-addr.arpa与IPv6 ip6.arpa的真实请求。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "只按IPv4点分段翻转会生成错误IPv6反向名；将SERVFAIL当不存在也会掩盖故障。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\nimport ipaddress\nfor address,rcode,kind in [('192.0.2.9',0,'normal'),('2001:db8::1',0,'normal'),('192.0.2.10',3,'empty'),('192.0.2.11',2,'error'),('192.0.2.12',0,'loop')]:\n    def handler(sock,query,peer):\n        reverse=ipaddress.ip_address(address).reverse_pointer;wire=b''.join(bytes([len(x)])+x.encode() for x in reverse.split('.'))+b'\\0';assert query[12:]==wire+b'\\0\\x0c\\0\\1'\n        response=query[:2]+struct.pack('!HHHHH',0x8180|rcode,1,0 if rcode else 1,0,0)+query[12:]\n        if rcode==0:\n            rdata=b'\\x04MAIL\\x07example\\0'\n            if kind=='loop':rdata=struct.pack('!H',0xc000|(len(response)+12))\n            response+=b'\\xc0\\x0c'+struct.pack('!HHIH',12,1,60,len(rdata))+rdata\n        sock.sendto(response,peer)\n    with udp_server(handler) as endpoint:\n        if kind in ('error','loop'):\n            try:task.execute(*endpoint,address)\n            except ValueError:pass\n            else:raise AssertionError('invalid PTR accepted')\n        else:assert task.execute(*endpoint,address)==([] if rcode else ['mail.example.'])\n\ndef compressed(sock,query,peer):\n    head=query[:2]+struct.pack('!HHHHH',0x8180,1,2,0,0)+query[12:];target=b'\\x04mail\\x07example\\0';pointer=len(head)+12\n    response=head+b'\\xc0\\x0c'+struct.pack('!HHIH',12,1,60,len(target))+target+b'\\xc0\\x0c'+struct.pack('!HHIH',12,1,60,2)+struct.pack('!H',0xc000|pointer)\n    sock.sendto(response,peer)\nwith udp_server(compressed) as endpoint:assert task.execute(*endpoint,'192.0.2.9')==['mail.example.','mail.example.']\ntry:task.execute('127.0.0.1',1,'not-an-IP')\nexcept ValueError:pass\nelse:raise AssertionError('bad address accepted')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|curated-network-completion-006|独立发出 PTR 查询并处理不存在的反向记录",
+    "conversion": {
+      "original_id": "curated-network-completion-006",
+      "original_type": "interview",
+      "original_title": "正向 A/AAAA 记录更新后，PTR 会自动同步吗？",
+      "original_source": "OpsForge 原创网络专题题",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "src-330c480d170a1068",
+    "title": "验证 DNS 多地址并不等于服务健康检查",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(dns_host,dns_port,name,service_port):\n    import ipaddress,http.client,secrets\n    labels=name.rstrip('.').encode('ascii').split(b'.')\n    if any(not 1<=len(x)<=63 for x in labels):raise ValueError('bad name')\n    wire=b''.join(bytes([len(x)])+x for x in labels)+b'\\0';ident=secrets.randbelow(65536);query=struct.pack('!HHHHHH',ident,0x100,1,0,0,0)+wire+b'\\0\\1\\0\\1'\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as s:s.settimeout(2);s.connect((dns_host,dns_port));s.send(query);data=s.recv(65535)\n    if len(data)<len(query) or data[:2]!=query[:2] or data[12:len(query)]!=query[12:]:raise ValueError('bad DNS')\n    flags,qd,an,ns,ar=struct.unpack('!HHHHH',data[2:12]);pos=len(query);addresses=[]\n    if flags&0x820f!=0x8000 or (qd,ns,ar)!=(1,0,0):raise ValueError('unsupported DNS')\n    for _ in range(an):\n        if pos+16>len(data) or data[pos:pos+2]!=b'\\xc0\\x0c' or struct.unpack('!HH',data[pos+2:pos+6])!=(1,1) or data[pos+10:pos+12]!=b'\\0\\4':raise ValueError('bad A record')\n        address=str(ipaddress.IPv4Address(data[pos+12:pos+16]));pos+=16\n        if not ipaddress.ip_address(address).is_loopback:raise ValueError('lab refuses non-loopback destination')\n        if address not in addresses:addresses.append(address)\n    if pos!=len(data):raise ValueError('trailing bytes')\n    attempts=[]\n    for address in addresses:\n        attempts.append(address);conn=http.client.HTTPConnection(address,service_port,timeout=.3)\n        try:\n            conn.request('GET','/health');res=conn.getresponse();body=res.read()\n            if res.status==200:return {'selected':address,'body':body,'attempts':attempts}\n        except (OSError,http.client.HTTPException):pass\n        finally:conn.close()\n    raise ConnectionError('no healthy endpoint')\n```\n\n实现说明：实现execute(dns_host,dns_port,name,service_port)，向回环DNS发A查询并解析多个压缩owner A/IN回答，去重保持顺序。仅允许所有地址为IPv4回环地址（在连接前完整校验）；依次GET /health，HTTP200返回{selected,body,attempts}，连接错误或非200继续，所有失败报ConnectionError。每个HTTP连接超时0.3秒，关闭所有连接。测试返回坏地址或503优先的DNS答案，确认客户端真正访问下一个节点；不能把DNS第一条记录当作可用节点。\n\n原理补充（原题保留）：\nDNS 负载均衡返回不同地址以分散客户端到多个入口，适合跨区域或多站点流量引导。它不直接代理请求，受解析器缓存、TTL 和客户端行为影响，不能保证即时切换或严格按请求均匀分流。需要健康检测与后端容量设计。",
+    "category": "网络与DNS",
+    "difficulty": "入门",
+    "section": "负载均衡器",
+    "type": "code",
+    "has_answer": true,
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "sources": [
+      "README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "HTTP",
+    "original_title": "什么是DNS负载均衡？它的优点是什么？什么时候使用它？",
+    "module": "network",
+    "topic": "验证 DNS 多地址并不等于服务健康检查",
+    "level": 3,
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(dns_host,dns_port,name,service_port)，向回环DNS发A查询并解析多个压缩owner A/IN回答，去重保持顺序。仅允许所有地址为IPv4回环地址（在连接前完整校验）；依次GET /health，HTTP200返回{selected,body,attempts}，连接错误或非200继续，所有失败报ConnectionError。每个HTTP连接超时0.3秒，关闭所有连接。测试返回坏地址或503优先的DNS答案，确认客户端真正访问下一个节点；不能把DNS第一条记录当作可用节点。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：DNS返回多地址但不负责本题HTTP健康；仅访问第一条会在一个坏节点时放弃后续健康节点。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+        "block_ids": [
+          "W6dHdvyxVoa2RVxCApccw4ifnSb",
+          "RpRodnQ1iojnOsxJaC3cyKOFnOh",
+          "Wr2EdWPZsoovhqxky9BcN9Fkn5c",
+          "WAKLdYBxCoD3wXxN78HckMuKnSf",
+          "Ike6d6LWmoVOmZxSQWkcUHBynie",
+          "NREIdFh3xo1BoLxgaOUc8p5onvJ",
+          "XE1ndE8t5o13uSxFm6Oc0gbpnmc"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(dns_host,dns_port,name,service_port):\n    import ipaddress,http.client,secrets\n    labels=name.rstrip('.').encode('ascii').split(b'.')\n    if any(not 1<=len(x)<=63 for x in labels):raise ValueError('bad name')\n    wire=b''.join(bytes([len(x)])+x for x in labels)+b'\\0';ident=secrets.randbelow(65536);query=struct.pack('!HHHHHH',ident,0x100,1,0,0,0)+wire+b'\\0\\1\\0\\1'\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as s:s.settimeout(2);s.connect((dns_host,dns_port));s.send(query);data=s.recv(65535)\n    if len(data)<len(query) or data[:2]!=query[:2] or data[12:len(query)]!=query[12:]:raise ValueError('bad DNS')\n    flags,qd,an,ns,ar=struct.unpack('!HHHHH',data[2:12]);pos=len(query);addresses=[]\n    if flags&0x820f!=0x8000 or (qd,ns,ar)!=(1,0,0):raise ValueError('unsupported DNS')\n    for _ in range(an):\n        if pos+16>len(data) or data[pos:pos+2]!=b'\\xc0\\x0c' or struct.unpack('!HH',data[pos+2:pos+6])!=(1,1) or data[pos+10:pos+12]!=b'\\0\\4':raise ValueError('bad A record')\n        address=str(ipaddress.IPv4Address(data[pos+12:pos+16]));pos+=16\n        if not ipaddress.ip_address(address).is_loopback:raise ValueError('lab refuses non-loopback destination')\n        if address not in addresses:addresses.append(address)\n    if pos!=len(data):raise ValueError('trailing bytes')\n    attempts=[]\n    for address in addresses:\n        attempts.append(address);conn=http.client.HTTPConnection(address,service_port,timeout=.3)\n        try:\n            conn.request('GET','/health');res=conn.getresponse();body=res.read()\n            if res.status==200:return {'selected':address,'body':body,'attempts':attempts}\n        except (OSError,http.client.HTTPException):pass\n        finally:conn.close()\n    raise ConnectionError('no healthy endpoint')\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(dns_host,dns_port,name,service_port):\n    import http.client\n    wire=b''.join(bytes([len(x)])+x.encode() for x in name.split('.'))+b'\\0';query=struct.pack('!HHHHHH',1,0x100,1,0,0,0)+wire+b'\\0\\1\\0\\1'\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as s:s.settimeout(2);s.connect((dns_host,dns_port));s.send(query);data=s.recv(65535)\n    address=socket.inet_ntoa(data[len(query)+12:len(query)+16]);conn=http.client.HTTPConnection(address,service_port,timeout=.3)\n    try:conn.request('GET','/health');res=conn.getresponse();return {'selected':address,'body':res.read(),'attempts':[address]}\n    finally:conn.close()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(dns_host,dns_port,name,service_port)，向回环DNS发A查询并解析多个压缩owner A/IN回答，去重保持顺序。仅允许所有地址为IPv4回环地址（在连接前完整校验）；依次GET /health，HTTP200返回{selected,body,attempts}，连接错误或非200继续，所有失败报ConnectionError。每个HTTP连接超时0.3秒，关闭所有连接。测试返回坏地址或503优先的DNS答案，确认客户端真正访问下一个节点；不能把DNS第一条记录当作可用节点。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "DNS返回多地址但不负责本题HTTP健康；仅访问第一条会在一个坏节点时放弃后续健康节点。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\ndef dns(addresses):\n    def handler(sock,query,peer):\n        response=query[:2]+struct.pack('!HHHHH',0x8180,1,len(addresses),0,0)+query[12:]\n        for address in addresses:response+=b'\\xc0\\x0c'+struct.pack('!HHIH',1,1,30,4)+socket.inet_aton(address)\n        sock.sendto(response,peer)\n    return handler\ndef healthy(c):\n    data=b''\n    while b'\\r\\n\\r\\n' not in data:data+=c.recv(4096)\n    assert data.startswith(b'GET /health HTTP/1.1\\r\\n');c.sendall(b'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\n\\r\\nok')\nwith tcp_server(healthy) as service:\n    with udp_server(dns(['127.0.0.2','127.0.0.2','127.0.0.1'])) as endpoint:assert task.execute(*endpoint,'api.example',service[1])=={'selected':'127.0.0.1','body':b'ok','attempts':['127.0.0.2','127.0.0.1']}\nwith udp_server(dns(['192.0.2.1'])) as endpoint:\n    try:task.execute(*endpoint,'api.example',80)\n    except ValueError:pass\n    else:raise AssertionError('external connection allowed')\nwith udp_server(dns([])) as endpoint:\n    try:task.execute(*endpoint,'api.example',1)\n    except ConnectionError:pass\n    else:raise AssertionError('empty DNS treated as healthy')\n\n# Same TCP port on two different loopback addresses: first is alive but 503.\nwith tcp_server(healthy) as good:\n    bad=socket.socket();bad.bind(('127.0.0.2',good[1]));bad.listen();bad.settimeout(2);seen=[];errors=[]\n    def unavailable():\n        try:\n            conn,_=bad.accept()\n            with conn:\n                conn.settimeout(2);data=b''\n                while b'\\r\\n\\r\\n' not in data:data+=conn.recv(4096)\n                seen.append(data);conn.sendall(b'HTTP/1.1 503 Busy\\r\\nContent-Length: 4\\r\\n\\r\\nbusy')\n        except Exception as exc:errors.append(exc)\n    thread=threading.Thread(target=unavailable,daemon=True);thread.start()\n    try:\n        with udp_server(dns(['127.0.0.2','127.0.0.1'])) as endpoint:assert task.execute(*endpoint,'api.example',good[1])=={'selected':'127.0.0.1','body':b'ok','attempts':['127.0.0.2','127.0.0.1']}\n    finally:thread.join(3);bad.close()\n    assert not thread.is_alive() and not errors and len(seen)==1\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|src-330c480d170a1068|验证 DNS 多地址并不等于服务健康检查",
+    "conversion": {
+      "original_id": "src-330c480d170a1068",
+      "original_type": "source",
+      "original_title": "什么是DNS负载均衡？它的优点是什么？什么时候使用它？",
+      "original_source": "README.md",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-network-completion-016",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 3,
+    "topic": "构建并实测服务器完整中间证书链",
+    "title": "构建并实测服务器完整中间证书链",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(leaf_file,intermediate_file,root_file,key_file,output_file,openssl):\n    import subprocess,tempfile,os\n    def run(*args):return subprocess.run([str(openssl),*map(str,args)],capture_output=True,check=True,timeout=10).stdout\n    run('verify','-CAfile',root_file,'-untrusted',intermediate_file,'-purpose','sslserver',leaf_file)\n    cert_public=run('x509','-in',leaf_file,'-pubkey','-noout').strip();key_public=run('pkey','-in',key_file,'-pubout').strip()\n    if cert_public!=key_public:raise ValueError('certificate and key mismatch')\n    leaf=pathlib.Path(leaf_file).read_bytes().rstrip()+b'\\n';inter=pathlib.Path(intermediate_file).read_bytes().rstrip()+b'\\n'\n    output=pathlib.Path(output_file);fd,tmp=tempfile.mkstemp(prefix='chain-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'wb') as stream:stream.write(leaf+inter)\n        os.replace(tmp,output)\n    finally:\n        if os.path.exists(tmp):os.unlink(tmp)\n    return str(output)\n```\n\n实现说明：实现execute(leaf_file,intermediate_file,root_file,key_file,output_file,openssl)，这些参数均为隔离目录文件路径，openssl是受信工具路径。先用openssl verify验证leaf可经intermediate链到root且用途sslserver，再比较leaf证书公钥与key私钥导出的公钥；所有检查通过后原子替换output为leaf PEM+intermediate PEM（不含根证书），失败保持已有output不变。返回输出路径字符串。验收会用产物启动真实回环TLS服务器，客户端仅信任root，必须通过主机名localhost验证。初始素材是临时CA/中间CA/leaf及匹配私钥，禁止修改系统信任库。\n\n原理补充（原题保留）：\n客户端通常本地信任根，需要把服务证书经中间证书连接到信任锚。服务器漏发中间链时，某些缓存过中间证书的客户端能访问，另一些会失败。应核对服务证书、顺序、域名和用途；发送根证书本身不会让客户端自动信任它。",
+    "type": "code",
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(leaf_file,intermediate_file,root_file,key_file,output_file,openssl)，这些参数均为隔离目录文件路径，openssl是受信工具路径。先用openssl verify验证leaf可经intermediate链到root且用途sslserver，再比较leaf证书公钥与key私钥导出的公钥；所有检查通过后原子替换output为leaf PEM+intermediate PEM（不含根证书），失败保持已有output不变。返回输出路径字符串。验收会用产物启动真实回环TLS服务器，客户端仅信任root，必须通过主机名localhost验证。初始素材是临时CA/中间CA/leaf及匹配私钥，禁止修改系统信任库。\n\n## 提交产物\ntask.py中的execute函数与调用后生成的fullchain.pem证书链；平台从函数生成的工件加载TLS服务。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：只部署leaf文件时，客户端即使信任根CA也找不到中间CA；未经校验直接覆盖还会破坏现有可用链。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(leaf_file,intermediate_file,root_file,key_file,output_file,openssl):\n    import subprocess,tempfile,os\n    def run(*args):return subprocess.run([str(openssl),*map(str,args)],capture_output=True,check=True,timeout=10).stdout\n    run('verify','-CAfile',root_file,'-untrusted',intermediate_file,'-purpose','sslserver',leaf_file)\n    cert_public=run('x509','-in',leaf_file,'-pubkey','-noout').strip();key_public=run('pkey','-in',key_file,'-pubout').strip()\n    if cert_public!=key_public:raise ValueError('certificate and key mismatch')\n    leaf=pathlib.Path(leaf_file).read_bytes().rstrip()+b'\\n';inter=pathlib.Path(intermediate_file).read_bytes().rstrip()+b'\\n'\n    output=pathlib.Path(output_file);fd,tmp=tempfile.mkstemp(prefix='chain-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'wb') as stream:stream.write(leaf+inter)\n        os.replace(tmp,output)\n    finally:\n        if os.path.exists(tmp):os.unlink(tmp)\n    return str(output)\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(leaf_file,intermediate_file,root_file,key_file,output_file,openssl):\n    pathlib.Path(output_file).write_bytes(pathlib.Path(leaf_file).read_bytes());return str(output_file)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(leaf_file,intermediate_file,root_file,key_file,output_file,openssl)，这些参数均为隔离目录文件路径，openssl是受信工具路径。先用openssl verify验证leaf可经intermediate链到root且用途sslserver，再比较leaf证书公钥与key私钥导出的公钥；所有检查通过后原子替换output为leaf PEM+intermediate PEM（不含根证书），失败保持已有output不变。返回输出路径字符串。验收会用产物启动真实回环TLS服务器，客户端仅信任root，必须通过主机名localhost验证。初始素材是临时CA/中间CA/leaf及匹配私钥，禁止修改系统信任库。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "只部署leaf文件时，客户端即使信任根CA也找不到中间CA；未经校验直接覆盖还会破坏现有可用链。"
+      ],
+      "generated_artifacts": [
+        "fullchain.pem"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\nimport ssl,subprocess\nopenssl=os.environ.get('OPSFORGE_OPENSSL','openssl')\ndef run(*args):return subprocess.run([openssl,*map(str,args)],capture_output=True,check=True,timeout=15).stdout\npathlib.Path('root.cnf').write_text('[req]\\nprompt=no\\ndistinguished_name=dn\\nx509_extensions=ext\\n[dn]\\nCN=LabRoot\\n[ext]\\nbasicConstraints=critical,CA:TRUE,pathlen:1\\nkeyUsage=critical,keyCertSign,cRLSign\\n',encoding='ascii')\nrun('req','-new','-x509','-newkey','rsa:2048','-nodes','-days','1','-config','root.cnf','-keyout','root.key','-out','root.pem')\ndef issue(name,cn,parent,key,extensions,serial):\n    pathlib.Path(name+'.cnf').write_text('[req]\\nprompt=no\\ndistinguished_name=dn\\n[dn]\\nCN='+cn+'\\n',encoding='ascii')\n    pathlib.Path(name+'.ext').write_text(extensions,encoding='ascii')\n    run('req','-new','-newkey','rsa:2048','-nodes','-config',name+'.cnf','-keyout',name+'.key','-out',name+'.csr')\n    run('x509','-req','-in',name+'.csr','-CA',parent,'-CAkey',key,'-set_serial',str(serial),'-days','1','-extfile',name+'.ext','-out',name+'.pem')\nissue('inter','LabIntermediate','root.pem','root.key','basicConstraints=critical,CA:TRUE,pathlen:0\\nkeyUsage=critical,keyCertSign,cRLSign\\n',2)\nissue('leaf','localhost','inter.pem','inter.key','basicConstraints=critical,CA:FALSE\\nkeyUsage=critical,digitalSignature,keyEncipherment\\nextendedKeyUsage=serverAuth\\nsubjectAltName=DNS:localhost\\n',3)\npathlib.Path('server-chain.pem').write_bytes(pathlib.Path('leaf.pem').read_bytes()+pathlib.Path('inter.pem').read_bytes())\n\noutput=pathlib.Path('fullchain.pem');output.write_text('old-chain')\nassert task.execute('leaf.pem','inter.pem','root.pem','leaf.key',output,openssl)==str(output)\ncontext=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(str(output),'leaf.key');context.maximum_version=ssl.TLSVersion.TLSv1_2\ndef handler(conn):\n    with context.wrap_socket(conn,server_side=True) as tls:tls.sendall(b'verified-chain')\nclient=ssl.create_default_context(cafile='root.pem');client.maximum_version=ssl.TLSVersion.TLSv1_2\nwith tcp_server(handler) as endpoint:\n    with socket.create_connection(endpoint,timeout=2) as raw:\n        with client.wrap_socket(raw,server_hostname='localhost') as tls:assert recv_exact(tls,14)==b'verified-chain'\nassert output.read_bytes().count(b'-----BEGIN CERTIFICATE-----')==2\nsnapshot=output.read_bytes()\nfor intermediate,key in [('inter.pem','root.key'),('root.pem','leaf.key')]:\n    try:task.execute('leaf.pem',intermediate,'root.pem',key,output,openssl)\n    except (ValueError,subprocess.CalledProcessError):pass\n    else:raise AssertionError('invalid chain/key accepted')\n    assert output.read_bytes()==snapshot and not list(pathlib.Path('.').glob('chain-*'))\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "openssl"
+        ]
+      }
+    },
+    "case_signature": "network-converted|curated-network-completion-016|构建并实测服务器完整中间证书链",
+    "conversion": {
+      "original_id": "curated-network-completion-016",
+      "original_type": "interview",
+      "original_title": "服务器为什么通常需要发送中间证书，而不需要把根证书当作唯一证明？",
+      "original_source": "OpsForge 原创网络专题题",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-network-completion-019",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 3,
+    "topic": "区分 mTLS 客户端身份与应用授权",
+    "title": "区分 mTLS 客户端身份与应用授权",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,ca_file,cert_file,key_file):\n    import ssl,http.client\n    if (cert_file is None)!=(key_file is None):raise ValueError('certificate and key required together')\n    context=ssl.create_default_context(cafile=str(ca_file))\n    if cert_file is not None:context.load_cert_chain(str(cert_file),str(key_file))\n    with socket.create_connection((host,port),timeout=2) as raw:\n        with context.wrap_socket(raw,server_hostname='localhost') as tls:\n            tls.sendall(b'GET /admin HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n');response=http.client.HTTPResponse(tls)\n            try:response.begin();return {'status':response.status,'body':response.read()}\n            finally:response.close()\n```\n\n实现说明：实现execute(host,port,ca_file,cert_file,key_file)，用CA验证localhost服务端证书，并在cert_file/key_file都提供时加载客户端证书链参与mTLS。两项必须同时给出或都为None。完成握手后GET /admin，返回{status,body}；合法客户端身份但权限不足的403要如实返回，不可当握手失败或擅自成功。未提供客户端证书、提供不受信任证书时必须传播TLS/连接错误，不降级为明文或关闭验证。测试使用临时CA签发两种不同CN客户端，服务端仅允许一个身份访问。\n\n原理补充（原题保留）：\nmTLS 证明双方在给定信任体系中持有相应证书私钥，但业务仍需把身份映射为资源和动作权限。证书轮换、撤销和授权更新都要验证。不能仅凭证书来自同一 CA 就授予所有租户权限，也不能把 TLS 失败统一归因于密码错误。",
+    "type": "code",
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,ca_file,cert_file,key_file)，用CA验证localhost服务端证书，并在cert_file/key_file都提供时加载客户端证书链参与mTLS。两项必须同时给出或都为None。完成握手后GET /admin，返回{status,body}；合法客户端身份但权限不足的403要如实返回，不可当握手失败或擅自成功。未提供客户端证书、提供不受信任证书时必须传播TLS/连接错误，不降级为明文或关闭验证。测试使用临时CA签发两种不同CN客户端，服务端仅允许一个身份访问。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：握手成功只证明证书身份通过；把合法身份收到的403改成200会绕过应用授权结果。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,ca_file,cert_file,key_file):\n    import ssl,http.client\n    if (cert_file is None)!=(key_file is None):raise ValueError('certificate and key required together')\n    context=ssl.create_default_context(cafile=str(ca_file))\n    if cert_file is not None:context.load_cert_chain(str(cert_file),str(key_file))\n    with socket.create_connection((host,port),timeout=2) as raw:\n        with context.wrap_socket(raw,server_hostname='localhost') as tls:\n            tls.sendall(b'GET /admin HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n');response=http.client.HTTPResponse(tls)\n            try:response.begin();return {'status':response.status,'body':response.read()}\n            finally:response.close()\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,ca_file,cert_file,key_file):\n    import ssl,http.client\n    context=ssl.create_default_context(cafile=str(ca_file));context.load_cert_chain(str(cert_file),str(key_file))\n    with socket.create_connection((host,port),timeout=2) as raw:\n        with context.wrap_socket(raw,server_hostname='localhost') as tls:\n            tls.sendall(b'GET /admin HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n');r=http.client.HTTPResponse(tls);r.begin();body=r.read()\n            return {'status':200,'body':body}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,ca_file,cert_file,key_file)，用CA验证localhost服务端证书，并在cert_file/key_file都提供时加载客户端证书链参与mTLS。两项必须同时给出或都为None。完成握手后GET /admin，返回{status,body}；合法客户端身份但权限不足的403要如实返回，不可当握手失败或擅自成功。未提供客户端证书、提供不受信任证书时必须传播TLS/连接错误，不降级为明文或关闭验证。测试使用临时CA签发两种不同CN客户端，服务端仅允许一个身份访问。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "握手成功只证明证书身份通过；把合法身份收到的403改成200会绕过应用授权结果。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\nimport ssl,subprocess\nopenssl=os.environ.get('OPSFORGE_OPENSSL','openssl')\ndef run(*args):return subprocess.run([openssl,*map(str,args)],capture_output=True,check=True,timeout=15).stdout\npathlib.Path('root.cnf').write_text('[req]\\nprompt=no\\ndistinguished_name=dn\\nx509_extensions=ext\\n[dn]\\nCN=LabRoot\\n[ext]\\nbasicConstraints=critical,CA:TRUE,pathlen:1\\nkeyUsage=critical,keyCertSign,cRLSign\\n',encoding='ascii')\nrun('req','-new','-x509','-newkey','rsa:2048','-nodes','-days','1','-config','root.cnf','-keyout','root.key','-out','root.pem')\ndef issue(name,cn,parent,key,extensions,serial):\n    pathlib.Path(name+'.cnf').write_text('[req]\\nprompt=no\\ndistinguished_name=dn\\n[dn]\\nCN='+cn+'\\n',encoding='ascii')\n    pathlib.Path(name+'.ext').write_text(extensions,encoding='ascii')\n    run('req','-new','-newkey','rsa:2048','-nodes','-config',name+'.cnf','-keyout',name+'.key','-out',name+'.csr')\n    run('x509','-req','-in',name+'.csr','-CA',parent,'-CAkey',key,'-set_serial',str(serial),'-days','1','-extfile',name+'.ext','-out',name+'.pem')\nissue('inter','LabIntermediate','root.pem','root.key','basicConstraints=critical,CA:TRUE,pathlen:0\\nkeyUsage=critical,keyCertSign,cRLSign\\n',2)\nissue('leaf','localhost','inter.pem','inter.key','basicConstraints=critical,CA:FALSE\\nkeyUsage=critical,digitalSignature,keyEncipherment\\nextendedKeyUsage=serverAuth\\nsubjectAltName=DNS:localhost\\n',3)\npathlib.Path('server-chain.pem').write_bytes(pathlib.Path('leaf.pem').read_bytes()+pathlib.Path('inter.pem').read_bytes())\n\nfor serial,name in enumerate(['allowed','denied'],4):\n    issue(name,name,'inter.pem','inter.key','basicConstraints=critical,CA:FALSE\\nkeyUsage=critical,digitalSignature\\nextendedKeyUsage=clientAuth\\n',serial)\n    pathlib.Path(name+'-chain.pem').write_bytes(pathlib.Path(name+'.pem').read_bytes()+pathlib.Path('inter.pem').read_bytes())\ncontext=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain('server-chain.pem','leaf.key');context.load_verify_locations('root.pem');context.verify_mode=ssl.CERT_REQUIRED;context.maximum_version=ssl.TLSVersion.TLSv1_2\nobserved=[]\ndef handler(conn):\n    try:\n        with context.wrap_socket(conn,server_side=True) as tls:\n            name=dict(item for group in tls.getpeercert()['subject'] for item in group)['commonName'];observed.append(name);request=b''\n            while b'\\r\\n\\r\\n' not in request:request+=tls.recv(4096)\n            assert request.startswith(b'GET /admin HTTP/1.1\\r\\n');status=200 if name=='allowed' else 403;body=b'admin' if status==200 else b'forbidden';tls.sendall(('HTTP/1.1 '+str(status)+' Result\\r\\nContent-Length: '+str(len(body))+'\\r\\n\\r\\n').encode()+body)\n    except (ssl.SSLError,ConnectionError):pass\nfor name,status,body in [('allowed',200,b'admin'),('denied',403,b'forbidden')]:\n    with tcp_server(handler) as endpoint:assert task.execute(*endpoint,'root.pem',name+'-chain.pem',name+'.key')=={'status':status,'body':body}\nassert observed==['allowed','denied']\nwith tcp_server(handler) as endpoint:\n    try:task.execute(*endpoint,'root.pem',None,None)\n    except (ssl.SSLError,ConnectionError):pass\n    else:raise AssertionError('missing client identity accepted')\ntry:task.execute('127.0.0.1',1,'root.pem','allowed-chain.pem',None)\nexcept ValueError:pass\nelse:raise AssertionError('partial client identity accepted')\n\nrun('req','-new','-x509','-newkey','rsa:2048','-nodes','-days','1','-config','root.cnf','-keyout','untrusted.key','-out','untrusted.pem')\nbefore=list(observed)\nwith tcp_server(handler) as endpoint:\n    try:task.execute(*endpoint,'root.pem','untrusted.pem','untrusted.key')\n    except (ssl.SSLError,ConnectionError):pass\n    else:raise AssertionError('untrusted client identity accepted')\nassert observed==before\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "openssl"
+        ]
+      }
+    },
+    "case_signature": "network-converted|curated-network-completion-019|区分 mTLS 客户端身份与应用授权",
+    "conversion": {
+      "original_id": "curated-network-completion-019",
+      "original_type": "interview",
+      "original_title": "mTLS 已通过，是否意味着客户端有权调用所有接口？",
+      "original_source": "OpsForge 原创网络专题题",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-network-completion-037",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 4,
+    "topic": "修复 NXDOMAIN 负缓存期限并验证域名恢复",
+    "title": "修复 NXDOMAIN 负缓存期限并验证域名恢复",
+    "answer": "```python\nimport socket,struct,json,pathlib,time\ndef execute(host,port,name,cache,now):\n    import secrets\n    key=name.rstrip('.').lower();old=cache.get(key)\n    if old is not None and now<old:return {'status':'nxdomain','source':'cache','ttl':old-now}\n    labels=key.encode('ascii').split(b'.')\n    if any(not 1<=len(label)<=63 for label in labels):raise ValueError('invalid name')\n    wire=b''.join(bytes([len(label)])+label for label in labels)+b'\\0'\n    if len(wire)>255:raise ValueError('invalid name')\n    xid=secrets.randbelow(65536);query=struct.pack('!HHHHHH',xid,0x100,1,0,0,0)+wire+b'\\0\\1\\0\\1'\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);data=sock.recv(65535)\n    if len(data)<len(query) or data[:2]!=query[:2] or data[12:len(query)]!=query[12:]:raise ValueError('invalid reply')\n    flags,qd,an,ns,ar=struct.unpack('!HHHHH',data[2:12]);rcode=flags&15\n    if not flags&0x8000 or flags&0x200 or qd!=1 or rcode not in (0,3) or ar:raise ValueError('DNS failure')\n    def name_end(pos):\n        seen=set();end=None;wire_len=1\n        while True:\n            if pos>=len(data) or pos in seen:raise ValueError('bad compressed name')\n            seen.add(pos);size=data[pos]\n            if size&0xc0==0xc0:\n                if pos+1>=len(data):raise ValueError('short pointer')\n                if end is None:end=pos+2\n                pos=((size&63)<<8)|data[pos+1];continue\n            if size&0xc0:raise ValueError('bad label')\n            pos+=1\n            if size==0:return end if end is not None else pos\n            wire_len+=size+1\n            if pos+size>len(data) or wire_len>255:raise ValueError('invalid name size')\n            pos+=size\n    pos=len(query);answers=[];negative=[]\n    for index in range(an+ns):\n        pos=name_end(pos)\n        if pos+10>len(data):raise ValueError('short RR')\n        kind,cls,ttl,size=struct.unpack('!HHIH',data[pos:pos+10]);pos+=10;end=pos+size\n        if end>len(data):raise ValueError('short RDATA')\n        if index<an and (kind,cls,size)==(1,1,4):answers.append(socket.inet_ntoa(data[pos:end]))\n        elif index>=an and (kind,cls)==(6,1):\n            p=name_end(pos);p=name_end(p)\n            if p+20!=end:raise ValueError('SOA fields invalid')\n            minimum=struct.unpack('!IIIII',data[p:end])[-1];negative.append(min(ttl,minimum))\n        pos=end\n    if pos!=len(data):raise ValueError('trailing data')\n    if rcode==0:\n        if len(answers)!=1:raise ValueError('expected one A answer')\n        cache.pop(key,None);return {'status':'ok','source':'dns','address':answers[0]}\n    ttl=min(negative) if negative else 0\n    if ttl:cache[key]=now+ttl\n    else:cache.pop(key,None)\n    return {'status':'nxdomain','source':'dns','ttl':ttl}\n```\n\n实现说明：实现execute(host,port,name,cache,now)。cache为共享字典，只存负缓存；now为单调时钟。若名称未到期，返回{status:\"nxdomain\",source:\"cache\",ttl:剩余秒}且不得查询；否则向指定UDP端点发A请求。NXDOMAIN时解析authority中的SOA，负缓存TTL取min(SOA RR TTL, SOA MINIMUM)；无SOA或TTL=0则不保存。NOERROR单A答案返回{status:\"ok\",source:\"dns\",address}并清除旧负缓存；SERVFAIL、错ID、截断/压缩循环拒绝且不新建缓存。SOA含MNAME、RNAME及5个uint32，名称可压缩。验收先NXDOMAIN、期间权威已建记录但缓存仍有效、到期后真实重查并恢复，另覆盖零TTL/无SOA/错误响应。不得直接清空所有客户缓存掩盖问题。\n\n原理补充（原题保留）：\n分别查询权威与受影响递归解析器，检查 SOA 提供的负缓存相关 TTL 和查询时序，确认此前 NXDOMAIN 被缓存。等待合法缓存到期或按受控机制处理对应缓存，并检查应用自己的缓存。不要反复改正确的权威地址；恢复验证覆盖不同解析器及实际业务访问。",
+    "type": "code",
+    "source": "OpsForge 原网络题实质改编；保留原理与来源",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-completion-20261021",
+    "body": "## 环境与初始材料\nPython 3.11+，隔离本地工作区。验收只绑定127.0.0.1随机高位端口，不访问外网、不修改宿主网络配置。初始task.py是骨架；平台注入本地服务端与故障素材。\n\n## 操作任务\n实现execute(host,port,name,cache,now)。cache为共享字典，只存负缓存；now为单调时钟。若名称未到期，返回{status:\"nxdomain\",source:\"cache\",ttl:剩余秒}且不得查询；否则向指定UDP端点发A请求。NXDOMAIN时解析authority中的SOA，负缓存TTL取min(SOA RR TTL, SOA MINIMUM)；无SOA或TTL=0则不保存。NOERROR单A答案返回{status:\"ok\",source:\"dns\",address}并清除旧负缓存；SERVFAIL、错ID、截断/压缩循环拒绝且不新建缓存。SOA含MNAME、RNAME及5个uint32，名称可压缩。验收先NXDOMAIN、期间权威已建记录但缓存仍有效、到期后真实重查并恢复，另覆盖零TTL/无SOA/错误响应。不得直接清空所有客户缓存掩盖问题。\n\n## 提交产物\ntask.py中的execute函数；通过真实回环套接字产生/读取协议字节并按任务返回结果。不得提交纯说明、硬编码结果或以字典模拟网络。\n\n## 验收方法\n平台执行python3 checks/check.py，真实回环服务提供正常与异常响应，全部断言通过返回0。超时必须受限，连接应关闭；初始骨架和典型错误实现均必须失败。验收脚本由平台注入，不要作为作答文件提交。\n\n失败示例：只读取SOA MINIMUM或永久复用已存在条目，会在RR TTL更短或域名已恢复时继续错误返回NXDOMAIN；不能清除无关名称的缓存。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [
+      "https://www.rfc-editor.org/info/rfc2308/"
+    ],
+    "incident_signature": "network-dns-negative-cache-after-record-creation",
+    "exercise_mode": "tabletop",
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(*args,**kwargs):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,name,cache,now):\n    import secrets\n    key=name.rstrip('.').lower();old=cache.get(key)\n    if old is not None and now<old:return {'status':'nxdomain','source':'cache','ttl':old-now}\n    labels=key.encode('ascii').split(b'.')\n    if any(not 1<=len(label)<=63 for label in labels):raise ValueError('invalid name')\n    wire=b''.join(bytes([len(label)])+label for label in labels)+b'\\0'\n    if len(wire)>255:raise ValueError('invalid name')\n    xid=secrets.randbelow(65536);query=struct.pack('!HHHHHH',xid,0x100,1,0,0,0)+wire+b'\\0\\1\\0\\1'\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);data=sock.recv(65535)\n    if len(data)<len(query) or data[:2]!=query[:2] or data[12:len(query)]!=query[12:]:raise ValueError('invalid reply')\n    flags,qd,an,ns,ar=struct.unpack('!HHHHH',data[2:12]);rcode=flags&15\n    if not flags&0x8000 or flags&0x200 or qd!=1 or rcode not in (0,3) or ar:raise ValueError('DNS failure')\n    def name_end(pos):\n        seen=set();end=None;wire_len=1\n        while True:\n            if pos>=len(data) or pos in seen:raise ValueError('bad compressed name')\n            seen.add(pos);size=data[pos]\n            if size&0xc0==0xc0:\n                if pos+1>=len(data):raise ValueError('short pointer')\n                if end is None:end=pos+2\n                pos=((size&63)<<8)|data[pos+1];continue\n            if size&0xc0:raise ValueError('bad label')\n            pos+=1\n            if size==0:return end if end is not None else pos\n            wire_len+=size+1\n            if pos+size>len(data) or wire_len>255:raise ValueError('invalid name size')\n            pos+=size\n    pos=len(query);answers=[];negative=[]\n    for index in range(an+ns):\n        pos=name_end(pos)\n        if pos+10>len(data):raise ValueError('short RR')\n        kind,cls,ttl,size=struct.unpack('!HHIH',data[pos:pos+10]);pos+=10;end=pos+size\n        if end>len(data):raise ValueError('short RDATA')\n        if index<an and (kind,cls,size)==(1,1,4):answers.append(socket.inet_ntoa(data[pos:end]))\n        elif index>=an and (kind,cls)==(6,1):\n            p=name_end(pos);p=name_end(p)\n            if p+20!=end:raise ValueError('SOA fields invalid')\n            minimum=struct.unpack('!IIIII',data[p:end])[-1];negative.append(min(ttl,minimum))\n        pos=end\n    if pos!=len(data):raise ValueError('trailing data')\n    if rcode==0:\n        if len(answers)!=1:raise ValueError('expected one A answer')\n        cache.pop(key,None);return {'status':'ok','source':'dns','address':answers[0]}\n    ttl=min(negative) if negative else 0\n    if ttl:cache[key]=now+ttl\n    else:cache.pop(key,None)\n    return {'status':'nxdomain','source':'dns','ttl':ttl}\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,struct,json,pathlib,time\ndef execute(host,port,name,cache,now):\n    key=name.rstrip('.').lower()\n    if key in cache:return {'status':'nxdomain','source':'cache','ttl':cache[key]-now}\n    wire=b''.join(bytes([len(x)])+x.encode() for x in key.split('.'))+b'\\0';query=struct.pack('!HHHHHH',1,0x100,1,0,0,0)+wire+b'\\0\\1\\0\\1'\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as sock:sock.settimeout(2);sock.connect((host,port));sock.send(query);data=sock.recv(65535)\n    if data[3]&15==3:\n        ttl=struct.unpack('!I',data[-4:])[0];cache[key]=now+ttl;return {'status':'nxdomain','source':'dns','ttl':ttl}\n    return {'status':'ok','source':'dns','address':socket.inet_ntoa(data[-4:])}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,name,cache,now)。cache为共享字典，只存负缓存；now为单调时钟。若名称未到期，返回{status:\"nxdomain\",source:\"cache\",ttl:剩余秒}且不得查询；否则向指定UDP端点发A请求。NXDOMAIN时解析authority中的SOA，负缓存TTL取min(SOA RR TTL, SOA MINIMUM)；无SOA或TTL=0则不保存。NOERROR单A答案返回{status:\"ok\",source:\"dns\",address}并清除旧负缓存；SERVFAIL、错ID、截断/压缩循环拒绝且不新建缓存。SOA含MNAME、RNAME及5个uint32，名称可压缩。验收先NXDOMAIN、期间权威已建记录但缓存仍有效、到期后真实重查并恢复，另覆盖零TTL/无SOA/错误响应。不得直接清空所有客户缓存掩盖问题。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "真实127.0.0.1回环服务与协议工件断言，非外网和生产网络",
+      "failure_examples": [
+        "只读取SOA MINIMUM或永久复用已存在条目，会在RR TTL更短或域名已恢复时继续错误返回NXDOMAIN；不能清除无关名称的缓存。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,os,socket,struct,json,pathlib,time,threading,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef recv_exact(conn,n):\n    out=b''\n    while len(out)<n:\n        part=conn.recv(n-len(out))\n        if not part:raise EOFError('truncated stream')\n        out+=part\n    return out\n@contextlib.contextmanager\ndef tcp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_STREAM);server.bind(('127.0.0.1',0));server.listen();server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[];connections=[]\n    def worker():\n        while not stop.is_set():\n            try:conn,_=server.accept()\n            except socket.timeout:continue\n            except OSError:break\n            connections.append(conn);conn.settimeout(2)\n            try:\n                with conn:handler(conn)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start()\n    succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\n@contextlib.contextmanager\ndef udp_server(handler):\n    server=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);server.bind(('127.0.0.1',0));server.settimeout(.1)\n    endpoint=server.getsockname();stop=threading.Event();errors=[]\n    def worker():\n        while not stop.is_set():\n            try:data,peer=server.recvfrom(65535)\n            except socket.timeout:continue\n            except OSError:break\n            try:handler(server,data,peer)\n            except Exception as exc:errors.append(exc)\n            break\n    thread=threading.Thread(target=worker,daemon=True);thread.start();succeeded=False\n    try:yield endpoint;succeeded=True\n    finally:\n        stop.set();server.close();thread.join(3)\n        if succeeded:\n            assert not thread.is_alive(),'server leaked'\n            if errors:raise errors[0]\ndef response(kind='negative',ttl=20,minimum=3):\n    def handler(sock,query,peer):\n        rcode=3 if kind in ('negative','no-soa','short','loop') else 2 if kind=='servfail' else 0\n        an=1 if kind=='positive' else 0;ns=1 if kind in ('negative','short','loop') else 0\n        data=query[:2]+struct.pack('!HHHHH',0x8180|rcode,1,an,ns,0)+query[12:]\n        if kind=='positive':data+=b'\\xc0\\x0c'+struct.pack('!HHIH',1,1,60,4)+socket.inet_aton('192.0.2.8')\n        if ns:\n            rdata=b'\\x02ns\\xc0\\x0c'+b'\\x04host\\xc0\\x0c'+struct.pack('!IIIII',1,600,60,86400,minimum)\n            if kind=='short':rdata=rdata[:-1]\n            if kind=='loop':rdata=struct.pack('!H',0xc000|(len(data)+12))+rdata[2:]\n            data+=b'\\xc0\\x0c'+struct.pack('!HHIH',6,1,ttl,len(rdata))+rdata\n        sock.sendto(data,peer)\n    return handler\ncache={'unrelated.example':999}\nwith udp_server(response()) as endpoint:assert task.execute(*endpoint,'New.example',cache,100)=={'status':'nxdomain','source':'dns','ttl':3}\nassert task.execute('127.0.0.1',1,'new.example.',cache,102)=={'status':'nxdomain','source':'cache','ttl':1}\nwith udp_server(response('positive')) as endpoint:assert task.execute(*endpoint,'new.example',cache,103)=={'status':'ok','source':'dns','address':'192.0.2.8'}\nassert cache=={'unrelated.example':999}\nwith udp_server(response(ttl=1,minimum=20)) as endpoint:assert task.execute(*endpoint,'new.example',cache,200)['ttl']==1\nassert cache['new.example']==201\nfor kind in ['negative','no-soa']:\n    with udp_server(response(kind,minimum=0)) as endpoint:assert task.execute(*endpoint,'new.example',cache,201)['ttl']==0\n    assert 'new.example' not in cache\nfor kind in ['servfail','short','loop']:\n    before=cache.copy()\n    with udp_server(response(kind)) as endpoint:\n        try:task.execute(*endpoint,'new.example',cache,300)\n        except ValueError:pass\n        else:raise AssertionError(kind+' accepted')\n    assert cache==before\n\ndef wrong_id(sock,query,peer):\n    response=bytes([query[0]^255])+query[1:2]+struct.pack('!HHHHH',0x8183,1,0,0,0)+query[12:];sock.sendto(response,peer)\nbefore=cache.copy()\nwith udp_server(wrong_id) as endpoint:\n    try:task.execute(*endpoint,'new.example',cache,400)\n    except ValueError:pass\n    else:raise AssertionError('wrong transaction accepted')\nassert cache==before\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "network-converted|curated-network-completion-037|修复 NXDOMAIN 负缓存期限并验证域名恢复",
+    "conversion": {
+      "original_id": "curated-network-completion-037",
+      "original_type": "case",
+      "original_title": "新域名已在权威 DNS 正确返回 A 记录，但部分用户持续 NXDOMAIN，故障前曾查询过未创建名称。如何排查？",
+      "original_source": "OpsForge 原创网络专题题",
+      "preserve_history": true
+    }
+  }
+]

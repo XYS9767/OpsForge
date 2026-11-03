@@ -1,0 +1,61 @@
+[
+  {
+    "id": "src-8f563cfec7152262",
+    "title": "如何将 cpu_user_seconds 转换为 cpu 使用百分比？",
+    "answer": "rate先将累计用户CPU秒转换为每秒CPU秒；单核口径为100*sum by(instance)(rate(cpu_user_seconds{job=\"app\"}[2m]))，允许超过100%。分配CPU口径再除以同instance且大于0的核数。2m是求率窗口，不能再除以120秒。先rate再sum可识别各进程计数器重置。缺失/非正核数不产生分配口径，不伪造0。",
+    "category": "Prometheus",
+    "difficulty": "入门",
+    "section": "虚拟机",
+    "type": "code",
+    "has_answer": true,
+    "source": "README.md",
+    "sources": [
+      "README.md"
+    ],
+    "level": 1,
+    "body": "## 环境与材料\n真实Prometheus 3.5.0 promtool；cpu_user_seconds在本题明确定义为每进程累计用户CPU秒。opsforge_allocated_cpu_cores是题设辅助配额核数，不假定真实exporter存在该指标。\n\n## 操作任务\n交付两条记录规则：process:user_cpu_one_core_percent, process:user_cpu_allocation_percent。第一条统计job=app、按instance聚合的单核用户CPU百分比，允许多个进程合计超过100%；第二条除以同主机有效核数。核数缺失或非正不输出分配口径。覆盖计数器重置和其他job隔离，禁止rate后再次除以时间窗。\n\n## 产物\nrules.json，组名node-semantics、interval=1m；记录名和顺序保持不变。\n\n## 验收方法\n真实promtool规则解析与多组原生PromQL求值，绝对误差1e-9；参考、未完成、错误、提前退出及合法替代。未声明实际主机CPU压力或采集器原生命名保证。",
+    "version": 2,
+    "related_modules": [
+      "prometheus"
+    ],
+    "review_status": "reviewed",
+    "review_note": "作者候选，待独审及会话10登记；纠正原答案重复除以时间窗口的量纲错误。",
+    "question_format": "project",
+    "files": {
+      "rules.json": "{\n  \"groups\": [\n    {\n      \"name\": \"node-semantics\",\n      \"interval\": \"1m\",\n      \"rules\": [\n        {\n          \"record\": \"process:user_cpu_one_core_percent\",\n          \"expr\": \"vector(0)\"\n        },\n        {\n          \"record\": \"process:user_cpu_allocation_percent\",\n          \"expr\": \"vector(0)\"\n        }\n      ]\n    }\n  ]\n}\n"
+    },
+    "solution_files": {
+      "rules.json": "{\n  \"groups\": [\n    {\n      \"name\": \"node-semantics\",\n      \"interval\": \"1m\",\n      \"rules\": [\n        {\n          \"record\": \"process:user_cpu_one_core_percent\",\n          \"expr\": \"100 * sum by(instance) (rate(cpu_user_seconds{job=\\\"app\\\"}[2m]))\"\n        },\n        {\n          \"record\": \"process:user_cpu_allocation_percent\",\n          \"expr\": \"100 * sum by(instance) (rate(cpu_user_seconds{job=\\\"app\\\"}[2m])) / on(instance) (opsforge_allocated_cpu_cores > 0)\"\n        }\n      ]\n    }\n  ]\n}\n"
+    },
+    "negative_files": {
+      "rules.json": "{\n  \"groups\": [\n    {\n      \"name\": \"node-semantics\",\n      \"interval\": \"1m\",\n      \"rules\": [\n        {\n          \"record\": \"process:user_cpu_one_core_percent\",\n          \"expr\": \"100 * sum by(instance) (rate(cpu_user_seconds{job=\\\"app\\\"}[2m])) / 120\"\n        },\n        {\n          \"record\": \"process:user_cpu_allocation_percent\",\n          \"expr\": \"100 * sum by(instance) (rate(cpu_user_seconds{job=\\\"app\\\"}[2m])) / on(instance) (opsforge_allocated_cpu_cores > 0)\"\n        }\n      ]\n    }\n  ]\n}\n"
+    },
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/"
+    ],
+    "exercise": {
+      "kind": "configuration",
+      "environment": "UID1000, pinned native Prometheus 3.5.0 promtool, controlled counter samples",
+      "deliverables": [
+        "rules.json"
+      ],
+      "verification": "native promtool check/test rules; dimensional correctness, aggregation, counter reset, allocation and scope"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "/tmp/opsforge-prometheus-3.5.0/prometheus-3.5.0.linux-amd64/promtool"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import hashlib,json,pathlib,subprocess,tempfile,os\nPROM='/tmp/opsforge-prometheus-3.5.0/prometheus-3.5.0.linux-amd64/promtool'\nassert os.getuid()==1000\nassert hashlib.sha256(pathlib.Path(PROM).read_bytes()).hexdigest()=='e59210d5474e2c811a4460fb1593d708b94d58107ae62e9d44e88029bb7e5805'\ndef unique(pairs):\n out={}\n for k,v in pairs:\n  assert k not in out,'duplicate JSON key'\n  out[k]=v\n return out\nrules=json.loads(pathlib.Path('rules.json').read_text(),object_pairs_hook=unique)\nassert set(rules)=={'groups'} and len(rules['groups'])==1\nassert rules['groups'][0]['name']=='node-semantics' and rules['groups'][0]['interval']=='1m'\nassert [r.get('record')for r in rules['groups'][0]['rules']]==['process:user_cpu_one_core_percent', 'process:user_cpu_allocation_percent']\nfor r in rules['groups'][0]['rules']:assert set(r)=={'record','expr'} and isinstance(r['expr'],str)\n\nwith tempfile.TemporaryDirectory(prefix='opsforge-session01-promrules-')as td:\n root=pathlib.Path(td);(root/'rules.json').write_text(json.dumps(rules));(root/'tests.json').write_text(json.dumps({'rule_files':['rules.json'],'evaluation_interval':'1m','tests':[{'interval': '1m', 'input_series': [{'series': 'cpu_user_seconds{instance=\"n1\",job=\"app\",process=\"p0\"}', 'values': '0 30 60'}, {'series': 'opsforge_allocated_cpu_cores{instance=\"n1\"}', 'values': '4 4 4'}, {'series': 'cpu_user_seconds{instance=\"n1\",job=\"other\"}', 'values': '0 600 1200'}], 'promql_expr_test': [{'expr': 'abs(process:user_cpu_one_core_percent - 50) < bool 1e-9', 'eval_time': '2m', 'exp_samples': [{'labels': '{instance=\"n1\"}', 'value': 1}]}, {'expr': 'abs(process:user_cpu_allocation_percent - 12.5) < bool 1e-9', 'eval_time': '2m', 'exp_samples': [{'labels': '{instance=\"n1\"}', 'value': 1}]}]}, {'interval': '1m', 'input_series': [{'series': 'cpu_user_seconds{instance=\"n1\",job=\"app\",process=\"p0\"}', 'values': '0 60 120'}, {'series': 'cpu_user_seconds{instance=\"n1\",job=\"app\",process=\"p1\"}', 'values': '0 60 120'}, {'series': 'opsforge_allocated_cpu_cores{instance=\"n1\"}', 'values': '4 4 4'}, {'series': 'cpu_user_seconds{instance=\"n1\",job=\"other\"}', 'values': '0 600 1200'}], 'promql_expr_test': [{'expr': 'abs(process:user_cpu_one_core_percent - 200) < bool 1e-9', 'eval_time': '2m', 'exp_samples': [{'labels': '{instance=\"n1\"}', 'value': 1}]}, {'expr': 'abs(process:user_cpu_allocation_percent - 50.0) < bool 1e-9', 'eval_time': '2m', 'exp_samples': [{'labels': '{instance=\"n1\"}', 'value': 1}]}]}, {'interval': '1m', 'input_series': [{'series': 'cpu_user_seconds{instance=\"n2\",job=\"app\",process=\"p0\"}', 'values': '0 120 30'}, {'series': 'opsforge_allocated_cpu_cores{instance=\"n2\"}', 'values': '2 2 2'}, {'series': 'cpu_user_seconds{instance=\"n2\",job=\"other\"}', 'values': '0 600 1200'}], 'promql_expr_test': [{'expr': 'abs(process:user_cpu_one_core_percent - 50) < bool 1e-9', 'eval_time': '2m', 'exp_samples': [{'labels': '{instance=\"n2\"}', 'value': 1}]}, {'expr': 'abs(process:user_cpu_allocation_percent - 25.0) < bool 1e-9', 'eval_time': '2m', 'exp_samples': [{'labels': '{instance=\"n2\"}', 'value': 1}]}]}, {'interval': '1m', 'input_series': [{'series': 'cpu_user_seconds{instance=\"n2\",job=\"app\",process=\"p0\"}', 'values': '0 0 0'}, {'series': 'opsforge_allocated_cpu_cores{instance=\"n2\"}', 'values': '1 1 1'}, {'series': 'cpu_user_seconds{instance=\"n2\",job=\"other\"}', 'values': '0 600 1200'}], 'promql_expr_test': [{'expr': 'abs(process:user_cpu_one_core_percent - 0) < bool 1e-9', 'eval_time': '2m', 'exp_samples': [{'labels': '{instance=\"n2\"}', 'value': 1}]}, {'expr': 'abs(process:user_cpu_allocation_percent - 0.0) < bool 1e-9', 'eval_time': '2m', 'exp_samples': [{'labels': '{instance=\"n2\"}', 'value': 1}]}]}, {'interval': '1m', 'input_series': [{'series': 'cpu_user_seconds{instance=\"n3\",job=\"app\",process=\"p0\"}', 'values': '0 30 60'}, {'series': 'opsforge_allocated_cpu_cores{instance=\"n3\"}', 'values': '0 0 0'}, {'series': 'cpu_user_seconds{instance=\"n3\",job=\"other\"}', 'values': '0 600 1200'}], 'promql_expr_test': [{'expr': 'abs(process:user_cpu_one_core_percent - 50) < bool 1e-9', 'eval_time': '2m', 'exp_samples': [{'labels': '{instance=\"n3\"}', 'value': 1}]}, {'expr': 'process:user_cpu_allocation_percent', 'eval_time': '2m', 'exp_samples': []}]}]}))\n p=subprocess.run([PROM,'check','rules',str(root/'rules.json')],capture_output=True,text=True,timeout=10)\n print('NATIVE_RULE_CHECK:'+json.dumps({'argv':p.args,'exit_code':p.returncode,'stdout':p.stdout,'stderr':p.stderr}),flush=True);assert p.returncode==0,'native rule syntax rejected'\n p=subprocess.run([PROM,'test','rules',str(root/'tests.json')],cwd=root,capture_output=True,text=True,timeout=15)\n print('NATIVE_RULE_TEST:'+json.dumps({'argv':p.args,'exit_code':p.returncode,'stdout':p.stdout,'stderr':p.stderr}),flush=True);assert p.returncode==0,'native PromQL semantic checks failed'\nprint('OWNED_RULE_CLEANUP:'+json.dumps({'directory_removed':not root.exists(),'child_processes_reaped':True,'uid':os.getuid(),'controlled_metric_inputs':True,'physical_fault_or_grafana_render_claim':False}),flush=True)\n"
+      }
+    }
+  }
+]

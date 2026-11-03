@@ -1,0 +1,150 @@
+[
+  {
+    "id": "curated-advanced-alertmanager-001",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 4,
+    "topic": "告警身份与生命周期",
+    "title": "真实显式EndsAt到期：resolve_timeout不延长租约，刷新保持原告警身份",
+    "answer": "```python\nimport copy,datetime\ndef refresh(alert,now,ttl):\n    if not isinstance(now,datetime.datetime) or now.tzinfo is None or type(ttl) not in (int,float) or not .5<=ttl<=5:raise ValueError('aware clock and bounded TTL required')\n    result=copy.deepcopy(alert)\n    result['endsAt']=(now+datetime.timedelta(seconds=ttl)).isoformat()\n    return result\n```\n\n原题知识说明：\nresolve_timeout主要用于没有提供EndsAt的告警，Prometheus发送的告警通常包含EndsAt，因此不能靠该参数延长其生命周期。应检查原始载荷、刷新时间和源规则状态，区分源已经恢复与发送中断导致到期。若希望延迟恢复，应在支持的规则或业务语义层设计，而不是篡改接收端时间。验收有EndsAt、无EndsAt及停止刷新三种来源，记录真实恢复通知时刻。改大默认值会延长部分自定义告警残留，必须同步评估陈旧告警而非只观察Prometheus。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-alertmanager-001",
+      "original_title": "把resolve_timeout从5分钟改为30分钟后，Prometheus告警仍按原时刻恢复，为什么这个参数没有预期效果？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现refresh(alert,now,ttl)，深拷贝alert只改endsAt为aware now+ttl的isoformat，保留startsAt/labels/annotations及原输入；now必须带时区、ttl精确int/float且0.5..5秒，否则ValueError。真实Alertmanager先用resolve_timeout30s与显式endsAt1s证明仍提早恢复，然后连续显式刷新同一告警超过初始到期，不能更改全局超时或产生新StartsAt。停止刷新后必须再次真实恢复。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Alertmanager0.28 API和Webhook生命周期；夹具模拟自定义告警发送方，不运行Prometheus。证明显式EndsAt不受全局resolve_timeout延长，发送刷新协议须保持身份；不宣称完整重启持久发送协议已完成。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy,datetime\ndef refresh(alert,now,ttl):\n    if not isinstance(now,datetime.datetime) or now.tzinfo is None or type(ttl) not in (int,float) or not .5<=ttl<=5:raise ValueError('aware clock and bounded TTL required')\n    result=copy.deepcopy(alert)\n    result['endsAt']=(now+datetime.timedelta(seconds=ttl)).isoformat()\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "import copy,datetime\ndef refresh(alert,now,ttl):\n    if not isinstance(now,datetime.datetime) or now.tzinfo is None or type(ttl) not in (int,float) or not .5<=ttl<=5:raise ValueError('aware clock and bounded TTL required')\n    result=copy.deepcopy(alert)\n    pass\n    return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现refresh(alert,now,ttl)，深拷贝alert只改endsAt为aware now+ttl的isoformat，保留startsAt/labels/annotations及原输入；now必须带时区、ttl精确int/float且0.5..5秒，否则ValueError。真实Alertmanager先用resolve_timeout30s与显式endsAt1s证明仍提早恢复，然后连续显式刷新同一告警超过初始到期，不能更改全局超时或产生新StartsAt。停止刷新后必须再次真实恢复。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Alertmanager0.28 API和Webhook生命周期；夹具模拟自定义告警发送方，不运行Prometheus。证明显式EndsAt不受全局resolve_timeout延长，发送刷新协议须保持身份；不宣称完整重启持久发送协议已完成。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "alertmanager"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/alertmanager_native.py": "\"\"\"Private Alertmanager0.28 HTTP/gossip peers on loopback; no external destinations.\"\"\"\nimport os,json,pathlib,shutil,subprocess,socket,tempfile,time,urllib.request,urllib.error,contextlib\nimport yaml\n\n\ndef free_port():\n    for _ in range(100):\n        with socket.socket() as tcp:\n            tcp.bind(('127.0.0.1',0));port=tcp.getsockname()[1]\n            try:\n                with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as udp:udp.bind(('127.0.0.1',port))\n                return port\n            except OSError:pass\n    raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private ports unavailable')\n\n\nclass Alertmanager:\n    def __init__(self,config=None,mesh=False,peers=(),advertise=None,cluster_options=()):\n        self.config=config or {'route':{'receiver':'sink','group_wait':'1h'},'receivers':[{'name':'sink'}]}\n        self.port=free_port();self.cluster_port=free_port() if mesh else None;self.peers=peers;self.advertise=advertise;self.cluster_options=tuple(cluster_options)\n        self.base='http://127.0.0.1:'+str(self.port);self.proc=None\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-am-');self.root=pathlib.Path(self.temp.name);self.log=(self.root/'server.log').open('wb')\n        try:\n            version=subprocess.check_output(['alertmanager','--version'],stderr=subprocess.STDOUT,text=True,timeout=3)\n            if '0.28.' not in version:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Alertmanager0.28 required')\n            path=self.root/'config.yaml';path.write_text(yaml.safe_dump(self.config,sort_keys=False),encoding='utf8')\n            args=['alertmanager','--config.file='+str(path),'--storage.path='+str(self.root/'state'),'--web.listen-address=127.0.0.1:'+str(self.port),'--log.level=error']\n            args+=['--cluster.listen-address=' if self.cluster_port is None else '--cluster.listen-address=127.0.0.1:'+str(self.cluster_port)]\n            if self.cluster_port is not None:\n                args+=['--cluster.advertise-address=127.0.0.1:'+str(self.advertise or self.cluster_port),'--cluster.settle-timeout=100ms']\n                args+=['--cluster.peer='+peer for peer in self.peers]\n                args+=list(self.cluster_options)\n            self.proc=subprocess.Popen(args,cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'64MiB'})\n            self.wait(lambda:self.request('/-/ready') is not None,'HTTP readiness')\n            print('NATIVE_ALERTMANAGER_READY:0.28',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,path,data=None,method=None):\n        request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data).encode(),headers={'Content-Type':'application/json'},method=method)\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        with opener.open(request,timeout=1) as response:\n            raw=response.read()\n            return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n    def wait(self,predicate,description,seconds=6):\n        deadline=time.monotonic()+seconds\n        while time.monotonic()<deadline:\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Alertmanager exited: '+(self.root/'server.log').read_text(errors='replace')[-2000:])\n            try:\n                value=predicate()\n                if value:return value\n            except (OSError,urllib.error.URLError):pass\n            time.sleep(.03)\n        raise AssertionError('native Alertmanager deadline: '+description)\n    def __exit__(self,*args):\n        if self.proc is not None:\n            if self.proc.poll() is None:self.proc.terminate()\n            try:self.proc.wait(timeout=3)\n            except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=2)\n        if getattr(self,'log',None):self.log.close()\n        self.temp.cleanup()\n\n\ndef members(document):\n    cluster=document['cluster'];names={cluster.get('name','')}\n    names.update(peer.get('name','') for peer in cluster.get('peers',[]));names.discard('');return names\n\n\n@contextlib.contextmanager\ndef pair():\n    with Alertmanager(mesh=True) as first,Alertmanager(mesh=True,peers=['127.0.0.1:'+str(first.cluster_port)]) as second:\n        first.wait(lambda:len(members(first.request('/api/v2/status')))>=2,'first gossip peer list')\n        second.wait(lambda:len(members(second.request('/api/v2/status')))>=2,'second gossip peer list')\n        print('NATIVE_ALERTMANAGER_GOSSIP_READY:2-members',flush=True);yield first,second\n",
+        "checks/check.py": "import os,sys,pathlib,json,datetime,time,threading,http.server,copy\nimport yaml\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom alertmanager_native import Alertmanager\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nseen=[]\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_POST(self):\n  seen.append((time.monotonic(),self.path,json.loads(self.rfile.read(int(self.headers['Content-Length'])))))\n  self.send_response(200);self.end_headers()\n def log_message(self,*args):pass\nhook=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=hook.serve_forever,daemon=True);thread.start()\nbase='http://127.0.0.1:'+str(hook.server_port)\ndef receiver(name):return dict(name=name,webhook_configs=[dict(url=base+'/'+name,send_resolved=True)])\ntry:\n config={'global':{'resolve_timeout':'30s'},'route':dict(receiver='private',group_by=['alertname','tenant'],group_wait='100ms',group_interval='200ms',repeat_interval='1h'),'receivers':[receiver('private')]}\n with Alertmanager(config) as am:\n  now=datetime.datetime.now(datetime.timezone.utc);alert=dict(labels=dict(alertname='ExplicitLease',tenant='a'),annotations=dict(summary='original identity'),startsAt=(now-datetime.timedelta(seconds=1)).isoformat(),endsAt=(now+datetime.timedelta(seconds=1)).isoformat())\n  am.request('/api/v2/alerts',[alert],'POST')\n  def status(value):return [payload for _,_,payload in seen if payload['status']==value]\n  am.wait(lambda:status('firing'),'first explicit lease notification')\n  fingerprint=status('firing')[0]['alerts'][0]['fingerprint'];started=time.monotonic()\n  am.wait(lambda:status('resolved'),'explicit EndsAt expiry despite resolve_timeout30s',4)\n  assert time.monotonic()-started<4 and len(status('resolved'))==1\n  print('NATIVE_ALERTMANAGER_EXPLICIT_ENDSAT_EXPIRED_LONG_BEFORE_GLOBAL_RESOLVE_TIMEOUT',flush=True)\n  print('STUDENT_OPERATION_ENTERED:refresh_explicit_end_without_new_alert_identity',flush=True)\n  original=copy.deepcopy(alert);first_resolves=len(status('resolved'));until=time.monotonic()+2.2;refreshes=0\n  while time.monotonic()<until:\n   now=datetime.datetime.now(datetime.timezone.utc)\n   try:renewed=task.refresh(alert,now,1.2)\n   except Exception as error:raise AssertionError('student explicit lease refresh failed') from error\n   expected=copy.deepcopy(alert);expected['endsAt']=(now+datetime.timedelta(seconds=1.2)).isoformat()\n   assert renewed==expected and alert==original,'refresh changed identity/StartsAt or failed to renew explicit expiry'\n   am.request('/api/v2/alerts',[renewed],'POST');refreshes+=1;time.sleep(.3)\n  assert refreshes>=4 and len(status('resolved'))==first_resolves,'continuously refreshed lease falsely resolved'\n  assert len(status('firing'))>=2 and all(row['fingerprint']==fingerprint and datetime.datetime.fromisoformat(row['startsAt'].replace('Z','+00:00'))==datetime.datetime.fromisoformat(alert['startsAt']) and row['labels']==alert['labels'] for payload in status('firing') for row in payload['alerts'])\n  am.wait(lambda:len(status('resolved'))>first_resolves,'stopped refresh expires by its explicit lease',4)\n  assert am.request('/api/v2/status')['config']['original'].find('resolve_timeout: 30s')>=0\n  assert alert==original\n print('NATIVE_ALERTMANAGER_REFRESH_RETAINS_IDENTITY_STOPPING_REFRESH_RESOLVES',flush=True)\nfinally:hook.shutdown();hook.server_close();thread.join(2)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "alertmanager"
+    ]
+  },
+  {
+    "id": "curated-advanced-alertmanager-002",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 4,
+    "topic": "路由匹配与通知分组",
+    "title": "真实静默路由不自动兜底：保留mute，仅允许继续匹配后续值班路由",
+    "answer": "```python\nimport copy\ndef repair(config):\n    result=copy.deepcopy(config)\n    result['route']['routes'][0]['continue']=True\n    return result\n```\n\n原题知识说明：\n静音控制通知发送，不会自动让已匹配节点变成不匹配。该节点仍可能终止后续同级匹配，所以后面的值班接收器不会仅因前者静音而被选择。应把路由选择与时间激活两层分开分析，为互补值班路由设置明确继续匹配与时间条件。用工作时间、非工作时间及边界时刻验证最终接收器集合，确认既不漏报也不重复。根路由默认receiver不是所有静音场景的自动备胎；回退时保留原树结构与样例，避免加一个兜底节点就产生全量双投。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-alertmanager-002",
+      "original_title": "第一条匹配路由处于mute时间段，且continue=false；后面的值班路由为何没有自动兜底？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现repair(config)，深拷贝且只把route.routes[0].continue设为True。第一条critical路由全天mute，continue=false仍阻断兄弟pager；修复后同一critical由后续pager送达，原mute接收器仍不通知，warning默认路径保持。不删除时间窗口或改matcher/receiver顺序，不改原配置；平台同一进程真实重载后验证。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Alertmanager0.28路由匹配、全天UTC时间窗口和回环Webhook；没有系统时钟修改或外部渠道投递。与单纯路由排序/双渠道重复不同，mute影响通知而不自动改变继续匹配语义。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef repair(config):\n    result=copy.deepcopy(config)\n    result['route']['routes'][0]['continue']=True\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef repair(config):\n    result=copy.deepcopy(config)\n    result['route']['routes'][0]['continue']=False\n    return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现repair(config)，深拷贝且只把route.routes[0].continue设为True。第一条critical路由全天mute，continue=false仍阻断兄弟pager；修复后同一critical由后续pager送达，原mute接收器仍不通知，warning默认路径保持。不删除时间窗口或改matcher/receiver顺序，不改原配置；平台同一进程真实重载后验证。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Alertmanager0.28路由匹配、全天UTC时间窗口和回环Webhook；没有系统时钟修改或外部渠道投递。与单纯路由排序/双渠道重复不同，mute影响通知而不自动改变继续匹配语义。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "alertmanager"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/alertmanager_native.py": "\"\"\"Private Alertmanager0.28 HTTP/gossip peers on loopback; no external destinations.\"\"\"\nimport os,json,pathlib,shutil,subprocess,socket,tempfile,time,urllib.request,urllib.error,contextlib\nimport yaml\n\n\ndef free_port():\n    for _ in range(100):\n        with socket.socket() as tcp:\n            tcp.bind(('127.0.0.1',0));port=tcp.getsockname()[1]\n            try:\n                with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as udp:udp.bind(('127.0.0.1',port))\n                return port\n            except OSError:pass\n    raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private ports unavailable')\n\n\nclass Alertmanager:\n    def __init__(self,config=None,mesh=False,peers=(),advertise=None,cluster_options=()):\n        self.config=config or {'route':{'receiver':'sink','group_wait':'1h'},'receivers':[{'name':'sink'}]}\n        self.port=free_port();self.cluster_port=free_port() if mesh else None;self.peers=peers;self.advertise=advertise;self.cluster_options=tuple(cluster_options)\n        self.base='http://127.0.0.1:'+str(self.port);self.proc=None\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-am-');self.root=pathlib.Path(self.temp.name);self.log=(self.root/'server.log').open('wb')\n        try:\n            version=subprocess.check_output(['alertmanager','--version'],stderr=subprocess.STDOUT,text=True,timeout=3)\n            if '0.28.' not in version:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Alertmanager0.28 required')\n            path=self.root/'config.yaml';path.write_text(yaml.safe_dump(self.config,sort_keys=False),encoding='utf8')\n            args=['alertmanager','--config.file='+str(path),'--storage.path='+str(self.root/'state'),'--web.listen-address=127.0.0.1:'+str(self.port),'--log.level=error']\n            args+=['--cluster.listen-address=' if self.cluster_port is None else '--cluster.listen-address=127.0.0.1:'+str(self.cluster_port)]\n            if self.cluster_port is not None:\n                args+=['--cluster.advertise-address=127.0.0.1:'+str(self.advertise or self.cluster_port),'--cluster.settle-timeout=100ms']\n                args+=['--cluster.peer='+peer for peer in self.peers]\n                args+=list(self.cluster_options)\n            self.proc=subprocess.Popen(args,cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'64MiB'})\n            self.wait(lambda:self.request('/-/ready') is not None,'HTTP readiness')\n            print('NATIVE_ALERTMANAGER_READY:0.28',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,path,data=None,method=None):\n        request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data).encode(),headers={'Content-Type':'application/json'},method=method)\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        with opener.open(request,timeout=1) as response:\n            raw=response.read()\n            return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n    def wait(self,predicate,description,seconds=6):\n        deadline=time.monotonic()+seconds\n        while time.monotonic()<deadline:\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Alertmanager exited: '+(self.root/'server.log').read_text(errors='replace')[-2000:])\n            try:\n                value=predicate()\n                if value:return value\n            except (OSError,urllib.error.URLError):pass\n            time.sleep(.03)\n        raise AssertionError('native Alertmanager deadline: '+description)\n    def __exit__(self,*args):\n        if self.proc is not None:\n            if self.proc.poll() is None:self.proc.terminate()\n            try:self.proc.wait(timeout=3)\n            except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=2)\n        if getattr(self,'log',None):self.log.close()\n        self.temp.cleanup()\n\n\ndef members(document):\n    cluster=document['cluster'];names={cluster.get('name','')}\n    names.update(peer.get('name','') for peer in cluster.get('peers',[]));names.discard('');return names\n\n\n@contextlib.contextmanager\ndef pair():\n    with Alertmanager(mesh=True) as first,Alertmanager(mesh=True,peers=['127.0.0.1:'+str(first.cluster_port)]) as second:\n        first.wait(lambda:len(members(first.request('/api/v2/status')))>=2,'first gossip peer list')\n        second.wait(lambda:len(members(second.request('/api/v2/status')))>=2,'second gossip peer list')\n        print('NATIVE_ALERTMANAGER_GOSSIP_READY:2-members',flush=True);yield first,second\n",
+        "checks/check.py": "import os,sys,pathlib,json,datetime,time,threading,http.server,copy\nimport yaml\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom alertmanager_native import Alertmanager\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nseen=[]\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_POST(self):\n  seen.append((time.monotonic(),self.path,json.loads(self.rfile.read(int(self.headers['Content-Length'])))))\n  self.send_response(200);self.end_headers()\n def log_message(self,*args):pass\nhook=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=hook.serve_forever,daemon=True);thread.start()\nbase='http://127.0.0.1:'+str(hook.server_port)\ndef receiver(name):return dict(name=name,webhook_configs=[dict(url=base+'/'+name,send_resolved=True)])\ntry:\n config=dict(route=dict(receiver='default',group_by=['alertname','tenant'],group_wait='100ms',group_interval='200ms',repeat_interval='1h',routes=[dict(receiver='muted',matchers=['severity=\"critical\"'],mute_time_intervals=['all-day'],**{'continue':False}),dict(receiver='pager',matchers=['severity=\"critical\"'])]),receivers=[receiver(n) for n in ('default','muted','pager')],time_intervals=[dict(name='all-day',time_intervals=[dict(times=[dict(start_time='00:00',end_time='24:00')],location='UTC')])])\n original=copy.deepcopy(config)\n now=datetime.datetime.now(datetime.timezone.utc)\n def alert(name,severity):return dict(labels=dict(alertname=name,tenant='a',severity=severity),annotations=dict(summary='kept'),startsAt=now.isoformat(),endsAt=(now+datetime.timedelta(minutes=2)).isoformat())\n critical=alert('CriticalMuted','critical');control=alert('DefaultControl','warning')\n with Alertmanager(config) as am:\n  pid=am.proc.pid;am.request('/api/v2/alerts',[critical,control],'POST')\n  am.wait(lambda:any(path=='/default' for _,path,_ in seen),'unrelated default route proves notification delivery ready')\n  time.sleep(.6)\n  assert not any(path in ('/pager','/muted') for _,path,_ in seen),'muted first match unexpectedly fell through'\n  active=am.request('/api/v2/alerts');assert any(row['labels']==critical['labels'] for row in active)\n  print('NATIVE_ALERTMANAGER_MUTED_MATCH_CONTINUE_FALSE_STOPS_SIBLING_FALLBACK',flush=True)\n  print('STUDENT_OPERATION_ENTERED:continue_after_muted_match_preserve_mute_and_default',flush=True)\n  try:fixed=task.repair(config)\n  except Exception as error:raise AssertionError('student muted route continuation failed') from error\n  expected=copy.deepcopy(original);expected['route']['routes'][0]['continue']=True\n  assert fixed==expected and config==original,'mute removed, routing scope broadened or original config changed'\n  (am.root/'config.yaml').write_text(yaml.safe_dump(fixed,sort_keys=False));am.request('/-/reload',{},'POST')\n  am.wait(lambda:any(path=='/pager' for _,path,_ in seen),'same critical alert delivered to later sibling')\n  assert am.proc.pid==pid and am.proc.poll() is None\n  assert not any(path=='/muted' for _,path,_ in seen)\n  rows=[row for _,path,payload in seen if path=='/pager' for row in payload['alerts']]\n  assert rows and all(row['labels']==critical['labels'] and row['annotations']==critical['annotations'] for row in rows)\n  assert all(row['labels']==control['labels'] for _,path,payload in seen if path=='/default' for row in payload['alerts'])\n print('NATIVE_ALERTMANAGER_RELOAD_DELIVERS_LATER_SIBLING_MUTE_AND_DEFAULT_PRESERVED',flush=True)\nfinally:hook.shutdown();hook.server_close();thread.join(2)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "alertmanager"
+    ]
+  }
+]

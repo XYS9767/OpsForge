@@ -1,0 +1,269 @@
+[
+  {
+    "id": "curated-parallel-mysql-092",
+    "module": "mysql",
+    "category": "MySQL",
+    "level": 3,
+    "topic": "SQL与数据建模",
+    "title": "MySQL 实操：恢复级联误删订单并阻止再次级联删除",
+    "answer": "### restore_customer.sql\n```sql\nINSERT INTO customers SELECT id,name FROM customers_backup WHERE id=1;\n```\n\n### restore_orders.sql\n```sql\nINSERT INTO orders SELECT id,customer_id,amount FROM orders_backup WHERE customer_id=1;\n```\n\n### constraint.sql\n```sql\nALTER TABLE orders DROP FOREIGN KEY fk_orders_customer, ADD CONSTRAINT fk_orders_customer_guard FOREIGN KEY(customer_id) REFERENCES customers(id) ON DELETE RESTRICT ON UPDATE CASCADE;\n```\n\n原理：桌面推演，未在生产执行。暂停同类删除并保留事务和审计证据，核对外键级联链与受影响订单范围；从隔离恢复副本提取需补回的数据并评审引用关系。由开发修订删除流程或约束，验收父记录删除的预期行为及订单对账。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；MySQL 8.4 官方手册核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-data-20261021",
+    "body": "## 环境与初始材料\nMySQL 8.4 LTS、InnoDB。initial.sql 是公开初始材料；平台验收脚本自动创建独立临时数据库实例，监听随机回环端口并在结束后关闭。不得连接现有业务数据库。学员只提交 SQL 文件，不需要另开 Kubernetes 或自行搭建数据库。\n\n## 操作任务\n误删 customers.id=1 导致该客户订单被 ON DELETE CASCADE 一起删除。备份表保留误删前资料，但它也包含其他客户已合法删除的旧订单900，且客户2的订单20在备份后已更新金额为88.75。只恢复客户1及其订单，不得覆盖其他正确变更或复活其他客户的旧删除。\n随后将订单外键改为：有订单的客户不能删除；空客户仍可删除；原有 ON UPDATE CASCADE 必须保留。用一个 ALTER 删除旧约束 fk_orders_customer 并添加新名称 fk_orders_customer_guard，最终只保留这一条外键；不能用关闭外键检查绕过。新名称避免同一 ALTER 中复用旧外键名称触发1826，整体在同一DDL中替换。\n\n## 产物\n提交 restore_customer.sql、restore_orders.sql、constraint.sql，每个文件一条 SQL，按该顺序执行。前两项恢复指定事件的数据，第三项修改实际外键约束。参考初始材料已包含事故重现步骤，验收平台自行装载，不在业务库执行。\n\n## 验收方法\n运行 python3 checks/check.py。真实 MySQL 先生成备份、更新无关订单、重现级联删除；运行产物后比较全部客户和订单的事故前快照。追加随机订单避免只补公开两行。再尝试删除有订单客户，必须报1451；删除空客户应成功；更改客户主键应继续级联更新订单外键。错误继续 CASCADE 会失败，NO ACTION 与 RESTRICT 的等价方案可通过。\n\n## 边界\n本题只用小型隔离数据验证 SQL 行为与数据完整性，不验证生产负载、线上 DDL 时延或连接池厂商实现。不得直接在生产运行示例。缺少原生 MySQL 或驱动属于环境能力缺失，不能当作答案错误。\n",
+    "hints": [],
+    "rubric": [
+      "识别题设具体根因并提供对应证据",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://dev.mysql.com/doc/refman/8.4/en/create-table-foreign-keys.html"
+    ],
+    "incident_signature": "mysql:foreign-key-cascade-unexpected-delete",
+    "related_modules": [
+      "mysql"
+    ],
+    "files": {
+      "initial.sql": "CREATE TABLE customers(id INT PRIMARY KEY,name VARCHAR(30) NOT NULL) ENGINE=InnoDB;\nCREATE TABLE orders(id INT PRIMARY KEY,customer_id INT NOT NULL,amount DECIMAL(12,2) NOT NULL,CONSTRAINT fk_orders_customer FOREIGN KEY(customer_id) REFERENCES customers(id) ON DELETE CASCADE ON UPDATE CASCADE) ENGINE=InnoDB;\nCREATE TABLE customers_backup(id INT PRIMARY KEY,name VARCHAR(30) NOT NULL) ENGINE=InnoDB;\nCREATE TABLE orders_backup(id INT PRIMARY KEY,customer_id INT NOT NULL,amount DECIMAL(12,2) NOT NULL) ENGINE=InnoDB;\nINSERT INTO customers VALUES(1,'deleted-customer'),(2,'keep-new-value'),(3,'empty-customer');\nINSERT INTO orders VALUES(10,1,19.50),(11,1,4.00),(20,2,8.25);\nINSERT INTO customers_backup SELECT * FROM customers;\nINSERT INTO orders_backup SELECT * FROM orders;\nINSERT INTO orders_backup VALUES(900,2,111.00);\nUPDATE orders SET amount=88.75 WHERE id=20;\nDELETE FROM customers WHERE id=1;\n",
+      "restore_customer.sql": "SELECT 1;",
+      "restore_orders.sql": "SELECT 1;",
+      "constraint.sql": "SELECT 1;"
+    },
+    "solution_files": {
+      "restore_customer.sql": "INSERT INTO customers SELECT id,name FROM customers_backup WHERE id=1;",
+      "restore_orders.sql": "INSERT INTO orders SELECT id,customer_id,amount FROM orders_backup WHERE customer_id=1;",
+      "constraint.sql": "ALTER TABLE orders DROP FOREIGN KEY fk_orders_customer, ADD CONSTRAINT fk_orders_customer_guard FOREIGN KEY(customer_id) REFERENCES customers(id) ON DELETE RESTRICT ON UPDATE CASCADE;"
+    },
+    "negative_files": {
+      "restore_customer.sql": "INSERT INTO customers SELECT id,name FROM customers_backup WHERE id=1;",
+      "restore_orders.sql": "INSERT INTO orders SELECT id,customer_id,amount FROM orders_backup WHERE customer_id=1;",
+      "constraint.sql": "ALTER TABLE orders DROP FOREIGN KEY fk_orders_customer, ADD CONSTRAINT fk_orders_customer_guard FOREIGN KEY(customer_id) REFERENCES customers(id) ON DELETE CASCADE ON UPDATE CASCADE;"
+    },
+    "equivalent_files": {
+      "restore_customer.sql": "INSERT INTO customers SELECT id,name FROM customers_backup WHERE id=1;",
+      "restore_orders.sql": "INSERT INTO orders SELECT id,customer_id,amount FROM orders_backup WHERE customer_id=1;",
+      "constraint.sql": "ALTER TABLE orders DROP FOREIGN KEY fk_orders_customer, ADD CONSTRAINT fk_orders_customer_guard FOREIGN KEY(customer_id) REFERENCES customers(id) ON DELETE NO ACTION ON UPDATE CASCADE;"
+    },
+    "exercise": {
+      "kind": "native-mysql-sql",
+      "environment": "isolated-ephemeral-mysql-8.4",
+      "deliverables": [
+        "restore_customer.sql",
+        "restore_orders.sql",
+        "constraint.sql"
+      ],
+      "verification": "真实MySQL执行、完整结果和边界数据断言；参考/初始/错误/等价四路",
+      "capability_gap": [
+        "交付实验镜像尚待组装验证；不表示已部署可用",
+        "非生产数据量验收"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "mysqld"
+        ],
+        "python_modules": [
+          "pymysql",
+          "cryptography"
+        ],
+        "features": [
+          "mysqld:v8.4"
+        ]
+      },
+      "test_files": {
+        "checks/mysql_fixture.py": "import pathlib,os,sys,subprocess,tempfile,socket,time,threading,ctypes,shutil,secrets,contextlib,signal\nimport pymysql\ndef rss(pid):\n class PMC(ctypes.Structure):\n  _fields_=[('cb',ctypes.c_ulong),('faults',ctypes.c_ulong),*[(x,ctypes.c_size_t) for x in ['peak','working','pagedpeak','paged','nonpagedpeak','nonpaged','pagefile','peakpagefile']]]\n k=ctypes.windll.kernel32;p=ctypes.windll.psapi;k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p];p.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n h=k.OpenProcess(0x410,False,pid)\n if not h:raise OSError('cannot monitor child')\n try:\n  x=PMC();x.cb=ctypes.sizeof(x)\n  if not p.GetProcessMemoryInfo(h,ctypes.byref(x),x.cb):raise OSError('RSS unavailable')\n  return x.working\n finally:k.CloseHandle(h)\ndef constrain(proc):\n k=ctypes.windll.kernel32;k.GetProcessAffinityMask.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p];k.SetProcessAffinityMask.argtypes=[ctypes.c_void_p,ctypes.c_size_t]\n available=ctypes.c_size_t();system=ctypes.c_size_t()\n assert k.GetProcessAffinityMask(int(proc._handle),ctypes.byref(available),ctypes.byref(system))\n cpus=[1<<i for i in range(available.value.bit_length()) if available.value&(1<<i)][:2];assert cpus and k.SetProcessAffinityMask(int(proc._handle),sum(cpus))\ndef child_job(proc):\n class BASIC(ctypes.Structure):\n  _fields_=[('PerProcessUserTimeLimit',ctypes.c_longlong),('PerJobUserTimeLimit',ctypes.c_longlong),('LimitFlags',ctypes.c_ulong),('MinimumWorkingSetSize',ctypes.c_size_t),('MaximumWorkingSetSize',ctypes.c_size_t),('ActiveProcessLimit',ctypes.c_ulong),('Affinity',ctypes.c_size_t),('PriorityClass',ctypes.c_ulong),('SchedulingClass',ctypes.c_ulong)]\n class IO(ctypes.Structure):_fields_=[(n,ctypes.c_ulonglong) for n in ['ReadOperationCount','WriteOperationCount','OtherOperationCount','ReadTransferCount','WriteTransferCount','OtherTransferCount']]\n class EXTENDED(ctypes.Structure):_fields_=[('BasicLimitInformation',BASIC),('IoInfo',IO),('ProcessMemoryLimit',ctypes.c_size_t),('JobMemoryLimit',ctypes.c_size_t),('PeakProcessMemoryUsed',ctypes.c_size_t),('PeakJobMemoryUsed',ctypes.c_size_t)]\n k=ctypes.windll.kernel32;k.CreateJobObjectW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p];k.CreateJobObjectW.restype=ctypes.c_void_p;k.SetInformationJobObject.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_void_p,ctypes.c_ulong];k.AssignProcessToJobObject.argtypes=[ctypes.c_void_p,ctypes.c_void_p];k.CloseHandle.argtypes=[ctypes.c_void_p]\n job=k.CreateJobObjectW(None,None);assert job\n limits=EXTENDED();limits.BasicLimitInformation.LimitFlags=0x2000|0x100|0x8;limits.BasicLimitInformation.ActiveProcessLimit=1;limits.ProcessMemoryLimit=384*1048576\n if not k.SetInformationJobObject(job,9,ctypes.byref(limits),ctypes.sizeof(limits)) or not k.AssignProcessToJobObject(job,int(proc._handle)):\n  proc.kill();proc.wait(timeout=4);k.CloseHandle(job);raise RuntimeError('unable to enforce single-process memory-limited Windows job')\n return job\n\ndef linux_child_guard(expected_parent):\n if not sys.platform.startswith('linux'):raise OSError('ENVIRONMENT_UNAVAILABLE: isolated mysqld requires Windows Job or Linux parent-death signal')\n libc=ctypes.CDLL(None,use_errno=True)\n libc.prctl.restype=ctypes.c_int\n libc.prctl.argtypes=[ctypes.c_int,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong]\n # Set before exec; then close the race where our parent exited before prctl.\n if libc.prctl(1,int(signal.SIGKILL),0,0,0)!=0:raise OSError(ctypes.get_errno(),'ENVIRONMENT_UNAVAILABLE: PR_SET_PDEATHSIG failed')\n observed=ctypes.c_int()\n if libc.prctl(2,ctypes.addressof(observed),0,0,0)!=0 or observed.value!=signal.SIGKILL:raise OSError('ENVIRONMENT_UNAVAILABLE: parent-death signal verification failed')\n if os.getppid()!=expected_parent:os.kill(os.getpid(),signal.SIGKILL)\n\n@contextlib.contextmanager\ndef process(args,root,name,limit=35):\n log=(root/(name+'.log')).open('wb');job=None;stop=threading.Event();stat={'peak_rss':0};proc=None;thread=None\n try:\n  expected_parent=os.getpid()\n  kw={'creationflags':subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name=='nt' else {'start_new_session':True,'preexec_fn':lambda:linux_child_guard(expected_parent)}\n  try:proc=subprocess.Popen(args,stdout=log,stderr=log,cwd=root,**kw)\n  except subprocess.SubprocessError as exc:raise FileNotFoundError('ENVIRONMENT_UNAVAILABLE: Linux mysqld parent-death guard could not be established') from exc\n  if os.name=='nt':constrain(proc);job=child_job(proc)\n  start=time.monotonic()\n  def kill():\n   if proc.poll() is None:\n    if os.name=='nt':proc.kill()\n    else:os.killpg(proc.pid,signal.SIGKILL)\n  def monitor():\n   while not stop.wait(.03):\n    if proc.poll() is not None:return\n    try:\n     if os.name=='nt':memory=rss(proc.pid)\n     else:\n      fields=pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines()\n      rss_line=next((x for x in fields if x.startswith('VmRSS:')),None)\n      if rss_line is None:\n       state=next((x.split()[1] for x in fields if x.startswith('State:')),None)\n       if state in ('Z','X','x') or proc.poll() is not None:return\n       # Linux can release mm before the task state becomes Z; allow only a bounded exit transition.\n       for _ in range(30):\n        if stop.wait(.01) or proc.poll() is not None:return\n        try:current=pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines()\n        except FileNotFoundError:return\n        state=next((x.split()[1] for x in current if x.startswith('State:')),None)\n        if state in ('Z','X','x'):return\n        rss_line=next((x for x in current if x.startswith('VmRSS:')),None)\n        if rss_line is not None:break\n       if rss_line is None:raise OSError('ENVIRONMENT_UNAVAILABLE: MySQL VmRSS unavailable for 300ms')\n      memory=int(rss_line.split()[1])*1024\n     stat['peak_rss']=max(stat['peak_rss'],memory)\n     if memory>384*1048576 or time.monotonic()-start>limit:raise RuntimeError('384MiB RSS / wall-time limit')\n    except Exception as exc:\n     if proc.poll() is None:stat['guard_error']=repr(exc);kill()\n     return\n  thread=threading.Thread(target=monitor,daemon=True);thread.start()\n  yield proc\n finally:\n  stop.set()\n  if proc is not None:\n   if proc.poll() is None:\n    if os.name=='nt':proc.terminate()\n    else:os.killpg(proc.pid,signal.SIGTERM)\n   try:proc.wait(timeout=5)\n   except subprocess.TimeoutExpired:\n    if os.name=='nt':proc.kill()\n    else:os.killpg(proc.pid,signal.SIGKILL)\n    proc.wait(timeout=4)\n  if thread:thread.join(timeout=2)\n  if job:ctypes.windll.kernel32.CloseHandle(job)\n  log.close()\n  if proc:print(name,'PID',proc.pid,'stopped',proc.poll() is not None,'peak RSS',stat['peak_rss'])\n  if stat.get('guard_error'):raise RuntimeError(stat)\n\ndef execute(conn,query,args=None):\n with conn.cursor() as c:c.execute(query,args);return c.fetchall()\n\n@contextlib.contextmanager\ndef fixture():\n exe=shutil.which('mysqld');assert exe,'mysqld unavailable'\n version=subprocess.check_output([exe,'--no-defaults','--version'],timeout=4).decode(errors='replace')\n if '8.4.' not in version or 'MariaDB' in version:raise FileNotFoundError('requires real MySQL 8.4 LTS, not MariaDB/SQLite')\n if os.name!='nt' and os.geteuid()==0:raise FileNotFoundError('MySQL lab must run as isolated nonroot user')\n base=pathlib.Path(exe).resolve().parent.parent\n with tempfile.TemporaryDirectory(prefix='trusted-mysql-native-') as d:\n  root=pathlib.Path(d).resolve();exports=root/'exports';exports.mkdir()\n  flags=[exe,'--no-defaults']+(['--no-monitor','--console'] if os.name=='nt' else [])\n  flags+=['--basedir='+str(base),'--datadir='+str(root/'data'),'--innodb-buffer-pool-size=64M','--performance-schema=OFF','--innodb-redo-log-capacity=16M','--innodb-log-buffer-size=4M','--skip-log-bin','--mysqlx=OFF','--max-connections=8','--table-open-cache=32','--table-open-cache-instances=1','--table-definition-cache=400','--thread-cache-size=0','--innodb-read-io-threads=1','--innodb-write-io-threads=1','--innodb-purge-threads=1','--tmp-table-size=1M','--max-heap-table-size=1M','--local-infile=OFF','--secure-file-priv='+str(exports)]\n  if os.name=='nt':flags+=['--plugin-dir='+str(base/'lib/plugin')]\n  with process(flags+['--initialize-insecure','--skip-networking'],root,'initialize') as p:\n   p.wait(timeout=30)\n   assert p.returncode==0,(root/'initialize.log').read_text(errors='replace')[-2500:]\n  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]\n  try:\n   with process(flags+['--bind-address=127.0.0.1','--port='+str(port),'--socket='+str(root/'mysql.sock'),'--pid-file='+str(root/'mysql.pid'),'--max-execution-time=1200'],root,'server') as p:\n    rootconn=None\n    try:\n     deadline=time.monotonic()+12\n     while rootconn is None:\n      try:rootconn=pymysql.connect(host='127.0.0.1',port=port,user='root',charset='utf8mb4',autocommit=True,connect_timeout=1,read_timeout=3,write_timeout=3,local_infile=False)\n      except pymysql.Error:\n       assert p.poll() is None and time.monotonic()<deadline,(root/'server.log').read_text(errors='replace')[-2500:]\n       time.sleep(.1)\n     assert int((root/'mysql.pid').read_text().strip())==p.pid,'server escaped monitored PID'\n     execute(rootconn,\"CREATE DATABASE training CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci\")\n     execute(rootconn,'USE training')\n     secret=secrets.token_hex(24)\n     execute(rootconn,\"CREATE USER 'student'@'127.0.0.1' IDENTIFIED BY %s\",(secret,))\n     def learner(privileges):\n      execute(rootconn,\"GRANT \"+privileges+\" ON training.* TO 'student'@'127.0.0.1'\")\n      return pymysql.connect(host='127.0.0.1',port=port,user='student',password=secret,database='training',charset='utf8mb4',autocommit=True,connect_timeout=2,read_timeout=3,write_timeout=3,local_infile=False)\n     yield rootconn,learner\n    finally:\n     if rootconn:\n      try:execute(rootconn,'SHUTDOWN')\n      except pymysql.Error:pass\n      rootconn.close()\n     try:p.wait(timeout=5)\n     except subprocess.TimeoutExpired:pass\n  finally:\n   with socket.socket() as s:assert s.connect_ex(('127.0.0.1',port))!=0,'owned MySQL port remained open'\n",
+        "checks/check.py": "import pathlib,secrets,datetime,sys\nsys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))\nfrom decimal import Decimal\nfrom mysql_fixture import fixture,execute\n\nwith fixture() as (admin,learner):\n execute(admin,'CREATE TABLE customers(id INT PRIMARY KEY,name VARCHAR(30) NOT NULL) ENGINE=InnoDB')\n execute(admin,'CREATE TABLE orders(id INT PRIMARY KEY,customer_id INT NOT NULL,amount DECIMAL(12,2) NOT NULL,CONSTRAINT fk_orders_customer FOREIGN KEY(customer_id) REFERENCES customers(id) ON DELETE CASCADE ON UPDATE CASCADE) ENGINE=InnoDB')\n execute(admin,'CREATE TABLE customers_backup(id INT PRIMARY KEY,name VARCHAR(30) NOT NULL) ENGINE=InnoDB')\n execute(admin,'CREATE TABLE orders_backup(id INT PRIMARY KEY,customer_id INT NOT NULL,amount DECIMAL(12,2) NOT NULL) ENGINE=InnoDB')\n for row in [(1,'deleted-customer'),(2,'keep-new-value'),(3,'empty-customer')]:execute(admin,'INSERT INTO customers VALUES(%s,%s)',row)\n data=[(10,1,Decimal('19.50')),(11,1,Decimal('4.00')),(20,2,Decimal('8.25'))]+[(i,secrets.choice([1,2]),Decimal(secrets.randbelow(100000))/100) for i in range(21,35)]\n for row in data:execute(admin,'INSERT INTO orders VALUES(%s,%s,%s)',row)\n execute(admin,'INSERT INTO customers_backup SELECT * FROM customers');execute(admin,'INSERT INTO orders_backup SELECT * FROM orders')\n execute(admin,'INSERT INTO orders_backup VALUES(900,2,111.00)')\n execute(admin,'UPDATE orders SET amount=88.75 WHERE id=20')\n before_customers=execute(admin,'SELECT * FROM customers ORDER BY id');before_orders=execute(admin,'SELECT * FROM orders ORDER BY id')\n execute(admin,'DELETE FROM customers WHERE id=1')\n assert execute(admin,'SELECT COUNT(*) FROM orders WHERE customer_id=1')==((0,),)\n client=learner('SELECT,INSERT,CREATE,ALTER,REFERENCES')\n try:\n  for name in ['restore_customer.sql','restore_orders.sql','constraint.sql']:execute(client,pathlib.Path(name).read_text(encoding='utf-8'))\n finally:client.close()\n assert execute(admin,'SELECT * FROM customers ORDER BY id')==before_customers\n assert execute(admin,'SELECT * FROM orders ORDER BY id')==before_orders,'restore lost customer only; preserve post-backup updates and omit unrelated old deletions'\n rules=execute(admin,\"SELECT CONSTRAINT_NAME,UPDATE_RULE,DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA='training' AND TABLE_NAME='orders'\")\n assert len(rules)==1 and rules[0][0:2]==('fk_orders_customer_guard','CASCADE') and rules[0][2] in ['RESTRICT','NO ACTION'],rules\n for uid in [1,2]:\n  try:execute(admin,'DELETE FROM customers WHERE id=%s',(uid,))\n  except Exception as exc:assert exc.args[0]==1451,exc\n  else:raise AssertionError('parent with orders can still be deleted')\n assert execute(admin,'SELECT * FROM orders ORDER BY id')==before_orders\n execute(admin,'DELETE FROM customers WHERE id=3');assert execute(admin,'SELECT COUNT(*) FROM customers WHERE id=3')==((0,),)\n execute(admin,'UPDATE customers SET id=101 WHERE id=1')\n expected=tuple((oid,101 if customer==1 else customer,amount) for oid,customer,amount in before_orders)\n assert execute(admin,'SELECT * FROM orders ORDER BY id')==expected,'existing ON UPDATE CASCADE behavior must remain'\nprint('native cascade incident restored only affected parent/orders; protected current edits and old unrelated deletions; future DELETE restricted; UPDATE cascade retained')\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_mysql_cascade_delete_scoped_restore_preserve_unrelated_writes_and_change_delete_policy",
+    "conversion": {
+      "original_id": "curated-parallel-mysql-092",
+      "original_version": 1,
+      "original_type": "case",
+      "original_title": "删除一个客户后，其全部订单消失；外键定义为ON DELETE CASCADE，如何处置？",
+      "theory_retained": true,
+      "absorbed_unpublished_drafts": []
+    }
+  },
+  {
+    "id": "curated-parallel-mysql-094",
+    "module": "mysql",
+    "category": "MySQL",
+    "level": 4,
+    "topic": "事务与锁",
+    "title": "MySQL 实操：取消范围间隙阻塞但保留行锁与禁止脏读",
+    "answer": "### session.sql\n```sql\nSET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;\n```\n\n原理：桌面推演，未在生产执行。核对索引范围、隔离级别和data_locks，证实next-key或gap锁覆盖目标插入区间。结束持锁事务，评估缩短范围或采用满足业务一致性的隔离方案；两连接验证既有行更新与区间插入，不以插入值不存在否定锁冲突。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；MySQL 8.4 官方手册核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-data-20261021",
+    "body": "## 环境与初始材料\nMySQL 8.4 LTS、InnoDB。initial.sql 是公开初始材料；平台验收脚本自动创建独立临时数据库实例，监听随机回环端口并在结束后关闭。不得连接现有业务数据库。学员只提交 SQL 文件，不需要另开 Kubernetes 或自行搭建数据库。\n\n## 操作任务\n后台处理器对 prices 的 price 10..20 范围执行 FOR UPDATE，现有 RR 会使其他连接插入价格15也等待。业务明确接受两次读取之间出现新行，但要求已选中行仍受写锁保护、禁止脏读。修复该处理器连接的会话隔离配置，使连续多个事务都满足这些条件。不得修改全局配置、删除索引或取消 FOR UPDATE，也不能切到 READ UNCOMMITTED。\n\n## 产物\n提交 session.sql，一条会话初始化 SQL，平台在新连接上执行一次后连续开启两个事务。SQL 不得提交/回滚业务事务来绕过锁。公开表与索引见 initial.sql。\n\n## 验收方法\n运行 python3 checks/check.py。真实双连接先重现 RR 下插入间隙锁超时1205，再应用产物。处理器持有范围锁时，新插入15/16必须成功，但另一连接修改已锁行必须继续1205；重复第二事务确认设置持续生效。最后另一连接写入未提交777，处理器必须仍看到30，排除READ UNCOMMITTED误解。只修改超时时间不能解决原始间隙阻塞；验收不推论所有生产事务都应改RC。\n\n## 边界\n本题只用小型隔离数据验证 SQL 行为与数据完整性，不验证生产负载、线上 DDL 时延或连接池厂商实现。不得直接在生产运行示例。缺少原生 MySQL 或驱动属于环境能力缺失，不能当作答案错误。\n",
+    "hints": [],
+    "rubric": [
+      "识别题设具体根因并提供对应证据",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://dev.mysql.com/doc/refman/8.4/en/innodb-transaction-isolation-levels.html",
+      "https://dev.mysql.com/doc/refman/8.4/en/innodb-locking.html"
+    ],
+    "incident_signature": "mysql:rr-gap-lock-blocks-insert",
+    "related_modules": [
+      "mysql"
+    ],
+    "files": {
+      "initial.sql": "CREATE TABLE prices(id INT PRIMARY KEY,price INT NOT NULL,KEY ix_price(price)) ENGINE=InnoDB;\nINSERT INTO prices VALUES(1,10),(2,20),(3,30);\n",
+      "session.sql": "SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ;"
+    },
+    "solution_files": {
+      "session.sql": "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED;"
+    },
+    "negative_files": {
+      "session.sql": "SET SESSION TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;"
+    },
+    "equivalent_files": {
+      "session.sql": "SET @@session.transaction_isolation='READ-COMMITTED';"
+    },
+    "exercise": {
+      "kind": "native-mysql-sql",
+      "environment": "isolated-ephemeral-mysql-8.4",
+      "deliverables": [
+        "session.sql"
+      ],
+      "verification": "真实MySQL执行、完整结果和边界数据断言；参考/初始/错误/等价四路",
+      "capability_gap": [
+        "交付实验镜像尚待组装验证；不表示已部署可用",
+        "非生产数据量验收"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "mysqld"
+        ],
+        "python_modules": [
+          "pymysql",
+          "cryptography"
+        ],
+        "features": [
+          "mysqld:v8.4"
+        ]
+      },
+      "test_files": {
+        "checks/mysql_fixture.py": "import pathlib,os,sys,subprocess,tempfile,socket,time,threading,ctypes,shutil,secrets,contextlib,signal\nimport pymysql\ndef rss(pid):\n class PMC(ctypes.Structure):\n  _fields_=[('cb',ctypes.c_ulong),('faults',ctypes.c_ulong),*[(x,ctypes.c_size_t) for x in ['peak','working','pagedpeak','paged','nonpagedpeak','nonpaged','pagefile','peakpagefile']]]\n k=ctypes.windll.kernel32;p=ctypes.windll.psapi;k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p];p.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n h=k.OpenProcess(0x410,False,pid)\n if not h:raise OSError('cannot monitor child')\n try:\n  x=PMC();x.cb=ctypes.sizeof(x)\n  if not p.GetProcessMemoryInfo(h,ctypes.byref(x),x.cb):raise OSError('RSS unavailable')\n  return x.working\n finally:k.CloseHandle(h)\ndef constrain(proc):\n k=ctypes.windll.kernel32;k.GetProcessAffinityMask.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p];k.SetProcessAffinityMask.argtypes=[ctypes.c_void_p,ctypes.c_size_t]\n available=ctypes.c_size_t();system=ctypes.c_size_t()\n assert k.GetProcessAffinityMask(int(proc._handle),ctypes.byref(available),ctypes.byref(system))\n cpus=[1<<i for i in range(available.value.bit_length()) if available.value&(1<<i)][:2];assert cpus and k.SetProcessAffinityMask(int(proc._handle),sum(cpus))\ndef child_job(proc):\n class BASIC(ctypes.Structure):\n  _fields_=[('PerProcessUserTimeLimit',ctypes.c_longlong),('PerJobUserTimeLimit',ctypes.c_longlong),('LimitFlags',ctypes.c_ulong),('MinimumWorkingSetSize',ctypes.c_size_t),('MaximumWorkingSetSize',ctypes.c_size_t),('ActiveProcessLimit',ctypes.c_ulong),('Affinity',ctypes.c_size_t),('PriorityClass',ctypes.c_ulong),('SchedulingClass',ctypes.c_ulong)]\n class IO(ctypes.Structure):_fields_=[(n,ctypes.c_ulonglong) for n in ['ReadOperationCount','WriteOperationCount','OtherOperationCount','ReadTransferCount','WriteTransferCount','OtherTransferCount']]\n class EXTENDED(ctypes.Structure):_fields_=[('BasicLimitInformation',BASIC),('IoInfo',IO),('ProcessMemoryLimit',ctypes.c_size_t),('JobMemoryLimit',ctypes.c_size_t),('PeakProcessMemoryUsed',ctypes.c_size_t),('PeakJobMemoryUsed',ctypes.c_size_t)]\n k=ctypes.windll.kernel32;k.CreateJobObjectW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p];k.CreateJobObjectW.restype=ctypes.c_void_p;k.SetInformationJobObject.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_void_p,ctypes.c_ulong];k.AssignProcessToJobObject.argtypes=[ctypes.c_void_p,ctypes.c_void_p];k.CloseHandle.argtypes=[ctypes.c_void_p]\n job=k.CreateJobObjectW(None,None);assert job\n limits=EXTENDED();limits.BasicLimitInformation.LimitFlags=0x2000|0x100|0x8;limits.BasicLimitInformation.ActiveProcessLimit=1;limits.ProcessMemoryLimit=384*1048576\n if not k.SetInformationJobObject(job,9,ctypes.byref(limits),ctypes.sizeof(limits)) or not k.AssignProcessToJobObject(job,int(proc._handle)):\n  proc.kill();proc.wait(timeout=4);k.CloseHandle(job);raise RuntimeError('unable to enforce single-process memory-limited Windows job')\n return job\n\ndef linux_child_guard(expected_parent):\n if not sys.platform.startswith('linux'):raise OSError('ENVIRONMENT_UNAVAILABLE: isolated mysqld requires Windows Job or Linux parent-death signal')\n libc=ctypes.CDLL(None,use_errno=True)\n libc.prctl.restype=ctypes.c_int\n libc.prctl.argtypes=[ctypes.c_int,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong]\n # Set before exec; then close the race where our parent exited before prctl.\n if libc.prctl(1,int(signal.SIGKILL),0,0,0)!=0:raise OSError(ctypes.get_errno(),'ENVIRONMENT_UNAVAILABLE: PR_SET_PDEATHSIG failed')\n observed=ctypes.c_int()\n if libc.prctl(2,ctypes.addressof(observed),0,0,0)!=0 or observed.value!=signal.SIGKILL:raise OSError('ENVIRONMENT_UNAVAILABLE: parent-death signal verification failed')\n if os.getppid()!=expected_parent:os.kill(os.getpid(),signal.SIGKILL)\n\n@contextlib.contextmanager\ndef process(args,root,name,limit=35):\n log=(root/(name+'.log')).open('wb');job=None;stop=threading.Event();stat={'peak_rss':0};proc=None;thread=None\n try:\n  expected_parent=os.getpid()\n  kw={'creationflags':subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name=='nt' else {'start_new_session':True,'preexec_fn':lambda:linux_child_guard(expected_parent)}\n  try:proc=subprocess.Popen(args,stdout=log,stderr=log,cwd=root,**kw)\n  except subprocess.SubprocessError as exc:raise FileNotFoundError('ENVIRONMENT_UNAVAILABLE: Linux mysqld parent-death guard could not be established') from exc\n  if os.name=='nt':constrain(proc);job=child_job(proc)\n  start=time.monotonic()\n  def kill():\n   if proc.poll() is None:\n    if os.name=='nt':proc.kill()\n    else:os.killpg(proc.pid,signal.SIGKILL)\n  def monitor():\n   while not stop.wait(.03):\n    if proc.poll() is not None:return\n    try:\n     if os.name=='nt':memory=rss(proc.pid)\n     else:\n      fields=pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines()\n      rss_line=next((x for x in fields if x.startswith('VmRSS:')),None)\n      if rss_line is None:\n       state=next((x.split()[1] for x in fields if x.startswith('State:')),None)\n       if state in ('Z','X','x') or proc.poll() is not None:return\n       # Linux can release mm before the task state becomes Z; allow only a bounded exit transition.\n       for _ in range(30):\n        if stop.wait(.01) or proc.poll() is not None:return\n        try:current=pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines()\n        except FileNotFoundError:return\n        state=next((x.split()[1] for x in current if x.startswith('State:')),None)\n        if state in ('Z','X','x'):return\n        rss_line=next((x for x in current if x.startswith('VmRSS:')),None)\n        if rss_line is not None:break\n       if rss_line is None:raise OSError('ENVIRONMENT_UNAVAILABLE: MySQL VmRSS unavailable for 300ms')\n      memory=int(rss_line.split()[1])*1024\n     stat['peak_rss']=max(stat['peak_rss'],memory)\n     if memory>384*1048576 or time.monotonic()-start>limit:raise RuntimeError('384MiB RSS / wall-time limit')\n    except Exception as exc:\n     if proc.poll() is None:stat['guard_error']=repr(exc);kill()\n     return\n  thread=threading.Thread(target=monitor,daemon=True);thread.start()\n  yield proc\n finally:\n  stop.set()\n  if proc is not None:\n   if proc.poll() is None:\n    if os.name=='nt':proc.terminate()\n    else:os.killpg(proc.pid,signal.SIGTERM)\n   try:proc.wait(timeout=5)\n   except subprocess.TimeoutExpired:\n    if os.name=='nt':proc.kill()\n    else:os.killpg(proc.pid,signal.SIGKILL)\n    proc.wait(timeout=4)\n  if thread:thread.join(timeout=2)\n  if job:ctypes.windll.kernel32.CloseHandle(job)\n  log.close()\n  if proc:print(name,'PID',proc.pid,'stopped',proc.poll() is not None,'peak RSS',stat['peak_rss'])\n  if stat.get('guard_error'):raise RuntimeError(stat)\n\ndef execute(conn,query,args=None):\n with conn.cursor() as c:c.execute(query,args);return c.fetchall()\n\n@contextlib.contextmanager\ndef fixture():\n exe=shutil.which('mysqld');assert exe,'mysqld unavailable'\n version=subprocess.check_output([exe,'--no-defaults','--version'],timeout=4).decode(errors='replace')\n if '8.4.' not in version or 'MariaDB' in version:raise FileNotFoundError('requires real MySQL 8.4 LTS, not MariaDB/SQLite')\n if os.name!='nt' and os.geteuid()==0:raise FileNotFoundError('MySQL lab must run as isolated nonroot user')\n base=pathlib.Path(exe).resolve().parent.parent\n with tempfile.TemporaryDirectory(prefix='trusted-mysql-native-') as d:\n  root=pathlib.Path(d).resolve();exports=root/'exports';exports.mkdir()\n  flags=[exe,'--no-defaults']+(['--no-monitor','--console'] if os.name=='nt' else [])\n  flags+=['--basedir='+str(base),'--datadir='+str(root/'data'),'--innodb-buffer-pool-size=64M','--performance-schema=OFF','--innodb-redo-log-capacity=16M','--innodb-log-buffer-size=4M','--skip-log-bin','--mysqlx=OFF','--max-connections=8','--table-open-cache=32','--table-open-cache-instances=1','--table-definition-cache=400','--thread-cache-size=0','--innodb-read-io-threads=1','--innodb-write-io-threads=1','--innodb-purge-threads=1','--tmp-table-size=1M','--max-heap-table-size=1M','--local-infile=OFF','--secure-file-priv='+str(exports)]\n  if os.name=='nt':flags+=['--plugin-dir='+str(base/'lib/plugin')]\n  with process(flags+['--initialize-insecure','--skip-networking'],root,'initialize') as p:\n   p.wait(timeout=30)\n   assert p.returncode==0,(root/'initialize.log').read_text(errors='replace')[-2500:]\n  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]\n  try:\n   with process(flags+['--bind-address=127.0.0.1','--port='+str(port),'--socket='+str(root/'mysql.sock'),'--pid-file='+str(root/'mysql.pid'),'--max-execution-time=1200'],root,'server') as p:\n    rootconn=None\n    try:\n     deadline=time.monotonic()+12\n     while rootconn is None:\n      try:rootconn=pymysql.connect(host='127.0.0.1',port=port,user='root',charset='utf8mb4',autocommit=True,connect_timeout=1,read_timeout=3,write_timeout=3,local_infile=False)\n      except pymysql.Error:\n       assert p.poll() is None and time.monotonic()<deadline,(root/'server.log').read_text(errors='replace')[-2500:]\n       time.sleep(.1)\n     assert int((root/'mysql.pid').read_text().strip())==p.pid,'server escaped monitored PID'\n     execute(rootconn,\"CREATE DATABASE training CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci\")\n     execute(rootconn,'USE training')\n     secret=secrets.token_hex(24)\n     execute(rootconn,\"CREATE USER 'student'@'127.0.0.1' IDENTIFIED BY %s\",(secret,))\n     def learner(privileges):\n      execute(rootconn,\"GRANT \"+privileges+\" ON training.* TO 'student'@'127.0.0.1'\")\n      return pymysql.connect(host='127.0.0.1',port=port,user='student',password=secret,database='training',charset='utf8mb4',autocommit=True,connect_timeout=2,read_timeout=3,write_timeout=3,local_infile=False)\n     yield rootconn,learner\n    finally:\n     if rootconn:\n      try:execute(rootconn,'SHUTDOWN')\n      except pymysql.Error:pass\n      rootconn.close()\n     try:p.wait(timeout=5)\n     except subprocess.TimeoutExpired:pass\n  finally:\n   with socket.socket() as s:assert s.connect_ex(('127.0.0.1',port))!=0,'owned MySQL port remained open'\n",
+        "checks/check.py": "import pathlib,secrets,datetime,sys\nsys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))\nfrom decimal import Decimal\nfrom mysql_fixture import fixture,execute\n\nwith fixture() as (admin,learner):\n execute(admin,'CREATE TABLE prices(id INT PRIMARY KEY,price INT NOT NULL,KEY ix_price(price)) ENGINE=InnoDB')\n execute(admin,'INSERT INTO prices VALUES(1,10),(2,20),(3,30)')\n block=learner('SELECT,INSERT,UPDATE');other=learner('SELECT,INSERT,UPDATE')\n try:\n  for conn in [block,other]:execute(conn,'SET SESSION innodb_lock_wait_timeout=1')\n  # Reproduce the original RR gap lock before applying learner SQL.\n  execute(block,'SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ');execute(block,'START TRANSACTION')\n  execute(block,'SELECT id,price FROM prices FORCE INDEX(ix_price) WHERE price BETWEEN 10 AND 20 FOR UPDATE')\n  try:execute(other,'INSERT INTO prices VALUES(90,15)')\n  except Exception as exc:assert exc.args[0]==1205,exc\n  else:raise AssertionError('fixture failed to reproduce RR gap lock')\n  execute(block,'ROLLBACK')\n  execute(block,pathlib.Path('session.sql').read_text(encoding='utf-8'))\n  for phase in range(2):\n   execute(block,'START TRANSACTION')\n   rows=execute(block,'SELECT id,price FROM prices FORCE INDEX(ix_price) WHERE price BETWEEN 10 AND 20 FOR UPDATE');assert (1,10) in rows and (2,20) in rows\n   execute(other,'INSERT INTO prices VALUES(%s,%s)',(100+phase,15+phase))\n   try:execute(other,'UPDATE prices SET price=11 WHERE id=1')\n   except Exception as exc:assert exc.args[0]==1205,exc\n   else:raise AssertionError('existing row protection was lost')\n   execute(block,'COMMIT')\n  # RC must still reject dirty data, unlike READ UNCOMMITTED.\n  execute(other,'START TRANSACTION');execute(other,'UPDATE prices SET price=777 WHERE id=3')\n  assert execute(block,'SELECT price FROM prices WHERE id=3')==((30,),),'dirty reads are not allowed'\n  execute(other,'ROLLBACK')\n  assert execute(admin,'SELECT id,price FROM prices ORDER BY id')==((1,10),(2,20),(3,30),(100,15),(101,16))\n finally:\n  for conn in [block,other]:\n   try:execute(conn,'ROLLBACK')\n   finally:conn.close()\nprint('native RR gap lock reproduced; two transactions permit distinct-range inserts while preserving row locks and rejecting dirty reads')\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_mysql_rr_gap_lock_to_rc_permitted_phantoms_preserve_row_locks_no_dirty_reads",
+    "conversion": {
+      "original_id": "curated-parallel-mysql-094",
+      "original_version": 1,
+      "original_type": "case",
+      "original_title": "RR事务对非唯一范围做FOR UPDATE后，另一会话插入不存在的新值也阻塞，根因是什么？",
+      "theory_retained": true,
+      "absorbed_unpublished_drafts": []
+    }
+  },
+  {
+    "id": "curated-parallel-mysql-045",
+    "module": "mysql",
+    "category": "MySQL",
+    "level": 2,
+    "topic": "事务与锁",
+    "title": "MySQL 实操：立即报告行锁竞争并取得独占锁",
+    "answer": "### lock.sql\n```sql\nSELECT id,balance FROM accounts WHERE id=@target_id FOR UPDATE NOWAIT;\n```\n\n原理：受支持的锁定读使用NOWAIT会遇锁立即返回错误；锁等待超时仍可能等待且作用范围不同。确认语句和版本支持，检查错误码，调用方要有明确重试与失败路径。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；MySQL 8.4 官方手册核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-data-20261021",
+    "body": "## 环境与初始材料\nMySQL 8.4 LTS、InnoDB。initial.sql 是公开初始材料；平台验收脚本自动创建独立临时数据库实例，监听随机回环端口并在结束后关闭。不得连接现有业务数据库。学员只提交 SQL 文件，不需要另开 Kubernetes 或自行搭建数据库。\n\n## 操作任务\n交互式资金操作不能等待锁队列。编写 lock.sql，在当前事务中读取 @target_id 指向账户的 id/balance 并取得独占行锁。若其他事务已锁定目标，必须立即报告 NOWAIT 锁冲突，不能跳过该行、返回旧值或等待短超时。目标参数由平台提前写入会话变量，不能硬编码样本id。查询不能自行提交事务，锁应由调用者 COMMIT/ROLLBACK 释放。\n\n## 产物\n提交 lock.sql，一条原生 SQL。成功时恰好返回目标一行；忙时应为 MySQL 错误3572。连接和事务由平台建立，不需要用户另开数据库窗口。\n\n## 验收方法\n运行 python3 checks/check.py。真实三个连接分别持锁、执行你的语句、探测独占性。竞争阶段须在1.5秒内报3572（引擎锁等待超时设为2秒），失败后连接仍可使用；释放竞争锁后语句应成功且阻止另一连接 FOR SHARE NOWAIT，证明取得独占而非共享锁。调用者提交后探测更新必须恢复。普通FOR UPDATE会等待超时，FOR SHARE虽可报初始竞争却不能满足后续独占验证。\n\n## 边界\n本题只用小型隔离数据验证 SQL 行为与数据完整性，不验证生产负载、线上 DDL 时延或连接池厂商实现。不得直接在生产运行示例。缺少原生 MySQL 或驱动属于环境能力缺失，不能当作答案错误。\n",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://dev.mysql.com/doc/refman/8.4/en/innodb-locking-reads.html"
+    ],
+    "related_modules": [
+      "mysql"
+    ],
+    "files": {
+      "initial.sql": "CREATE TABLE accounts(id INT PRIMARY KEY,balance DECIMAL(12,2) NOT NULL) ENGINE=InnoDB;\nINSERT INTO accounts VALUES(1,100.00);\nSET @target_id=1;\n",
+      "lock.sql": "SELECT id,balance FROM accounts WHERE id=@target_id FOR UPDATE;"
+    },
+    "solution_files": {
+      "lock.sql": "SELECT id,balance FROM accounts WHERE id=@target_id FOR UPDATE NOWAIT;"
+    },
+    "negative_files": {
+      "lock.sql": "SELECT id,balance FROM accounts WHERE id=@target_id FOR SHARE NOWAIT;"
+    },
+    "equivalent_files": {
+      "lock.sql": "SELECT id,balance FROM accounts WHERE id IN (@target_id) FOR UPDATE NOWAIT;"
+    },
+    "exercise": {
+      "kind": "native-mysql-sql",
+      "environment": "isolated-ephemeral-mysql-8.4",
+      "deliverables": [
+        "lock.sql"
+      ],
+      "verification": "真实MySQL执行、完整结果和边界数据断言；参考/初始/错误/等价四路",
+      "capability_gap": [
+        "交付实验镜像尚待组装验证；不表示已部署可用",
+        "非生产数据量验收"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "mysqld"
+        ],
+        "python_modules": [
+          "pymysql",
+          "cryptography"
+        ],
+        "features": [
+          "mysqld:v8.4"
+        ]
+      },
+      "test_files": {
+        "checks/mysql_fixture.py": "import pathlib,os,sys,subprocess,tempfile,socket,time,threading,ctypes,shutil,secrets,contextlib,signal\nimport pymysql\ndef rss(pid):\n class PMC(ctypes.Structure):\n  _fields_=[('cb',ctypes.c_ulong),('faults',ctypes.c_ulong),*[(x,ctypes.c_size_t) for x in ['peak','working','pagedpeak','paged','nonpagedpeak','nonpaged','pagefile','peakpagefile']]]\n k=ctypes.windll.kernel32;p=ctypes.windll.psapi;k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p];p.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n h=k.OpenProcess(0x410,False,pid)\n if not h:raise OSError('cannot monitor child')\n try:\n  x=PMC();x.cb=ctypes.sizeof(x)\n  if not p.GetProcessMemoryInfo(h,ctypes.byref(x),x.cb):raise OSError('RSS unavailable')\n  return x.working\n finally:k.CloseHandle(h)\ndef constrain(proc):\n k=ctypes.windll.kernel32;k.GetProcessAffinityMask.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p];k.SetProcessAffinityMask.argtypes=[ctypes.c_void_p,ctypes.c_size_t]\n available=ctypes.c_size_t();system=ctypes.c_size_t()\n assert k.GetProcessAffinityMask(int(proc._handle),ctypes.byref(available),ctypes.byref(system))\n cpus=[1<<i for i in range(available.value.bit_length()) if available.value&(1<<i)][:2];assert cpus and k.SetProcessAffinityMask(int(proc._handle),sum(cpus))\ndef child_job(proc):\n class BASIC(ctypes.Structure):\n  _fields_=[('PerProcessUserTimeLimit',ctypes.c_longlong),('PerJobUserTimeLimit',ctypes.c_longlong),('LimitFlags',ctypes.c_ulong),('MinimumWorkingSetSize',ctypes.c_size_t),('MaximumWorkingSetSize',ctypes.c_size_t),('ActiveProcessLimit',ctypes.c_ulong),('Affinity',ctypes.c_size_t),('PriorityClass',ctypes.c_ulong),('SchedulingClass',ctypes.c_ulong)]\n class IO(ctypes.Structure):_fields_=[(n,ctypes.c_ulonglong) for n in ['ReadOperationCount','WriteOperationCount','OtherOperationCount','ReadTransferCount','WriteTransferCount','OtherTransferCount']]\n class EXTENDED(ctypes.Structure):_fields_=[('BasicLimitInformation',BASIC),('IoInfo',IO),('ProcessMemoryLimit',ctypes.c_size_t),('JobMemoryLimit',ctypes.c_size_t),('PeakProcessMemoryUsed',ctypes.c_size_t),('PeakJobMemoryUsed',ctypes.c_size_t)]\n k=ctypes.windll.kernel32;k.CreateJobObjectW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p];k.CreateJobObjectW.restype=ctypes.c_void_p;k.SetInformationJobObject.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_void_p,ctypes.c_ulong];k.AssignProcessToJobObject.argtypes=[ctypes.c_void_p,ctypes.c_void_p];k.CloseHandle.argtypes=[ctypes.c_void_p]\n job=k.CreateJobObjectW(None,None);assert job\n limits=EXTENDED();limits.BasicLimitInformation.LimitFlags=0x2000|0x100|0x8;limits.BasicLimitInformation.ActiveProcessLimit=1;limits.ProcessMemoryLimit=384*1048576\n if not k.SetInformationJobObject(job,9,ctypes.byref(limits),ctypes.sizeof(limits)) or not k.AssignProcessToJobObject(job,int(proc._handle)):\n  proc.kill();proc.wait(timeout=4);k.CloseHandle(job);raise RuntimeError('unable to enforce single-process memory-limited Windows job')\n return job\n\ndef linux_child_guard(expected_parent):\n if not sys.platform.startswith('linux'):raise OSError('ENVIRONMENT_UNAVAILABLE: isolated mysqld requires Windows Job or Linux parent-death signal')\n libc=ctypes.CDLL(None,use_errno=True)\n libc.prctl.restype=ctypes.c_int\n libc.prctl.argtypes=[ctypes.c_int,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong]\n # Set before exec; then close the race where our parent exited before prctl.\n if libc.prctl(1,int(signal.SIGKILL),0,0,0)!=0:raise OSError(ctypes.get_errno(),'ENVIRONMENT_UNAVAILABLE: PR_SET_PDEATHSIG failed')\n observed=ctypes.c_int()\n if libc.prctl(2,ctypes.addressof(observed),0,0,0)!=0 or observed.value!=signal.SIGKILL:raise OSError('ENVIRONMENT_UNAVAILABLE: parent-death signal verification failed')\n if os.getppid()!=expected_parent:os.kill(os.getpid(),signal.SIGKILL)\n\n@contextlib.contextmanager\ndef process(args,root,name,limit=35):\n log=(root/(name+'.log')).open('wb');job=None;stop=threading.Event();stat={'peak_rss':0};proc=None;thread=None\n try:\n  expected_parent=os.getpid()\n  kw={'creationflags':subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name=='nt' else {'start_new_session':True,'preexec_fn':lambda:linux_child_guard(expected_parent)}\n  try:proc=subprocess.Popen(args,stdout=log,stderr=log,cwd=root,**kw)\n  except subprocess.SubprocessError as exc:raise FileNotFoundError('ENVIRONMENT_UNAVAILABLE: Linux mysqld parent-death guard could not be established') from exc\n  if os.name=='nt':constrain(proc);job=child_job(proc)\n  start=time.monotonic()\n  def kill():\n   if proc.poll() is None:\n    if os.name=='nt':proc.kill()\n    else:os.killpg(proc.pid,signal.SIGKILL)\n  def monitor():\n   while not stop.wait(.03):\n    if proc.poll() is not None:return\n    try:\n     if os.name=='nt':memory=rss(proc.pid)\n     else:\n      fields=pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines()\n      rss_line=next((x for x in fields if x.startswith('VmRSS:')),None)\n      if rss_line is None:\n       state=next((x.split()[1] for x in fields if x.startswith('State:')),None)\n       if state in ('Z','X','x') or proc.poll() is not None:return\n       # Linux can release mm before the task state becomes Z; allow only a bounded exit transition.\n       for _ in range(30):\n        if stop.wait(.01) or proc.poll() is not None:return\n        try:current=pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines()\n        except FileNotFoundError:return\n        state=next((x.split()[1] for x in current if x.startswith('State:')),None)\n        if state in ('Z','X','x'):return\n        rss_line=next((x for x in current if x.startswith('VmRSS:')),None)\n        if rss_line is not None:break\n       if rss_line is None:raise OSError('ENVIRONMENT_UNAVAILABLE: MySQL VmRSS unavailable for 300ms')\n      memory=int(rss_line.split()[1])*1024\n     stat['peak_rss']=max(stat['peak_rss'],memory)\n     if memory>384*1048576 or time.monotonic()-start>limit:raise RuntimeError('384MiB RSS / wall-time limit')\n    except Exception as exc:\n     if proc.poll() is None:stat['guard_error']=repr(exc);kill()\n     return\n  thread=threading.Thread(target=monitor,daemon=True);thread.start()\n  yield proc\n finally:\n  stop.set()\n  if proc is not None:\n   if proc.poll() is None:\n    if os.name=='nt':proc.terminate()\n    else:os.killpg(proc.pid,signal.SIGTERM)\n   try:proc.wait(timeout=5)\n   except subprocess.TimeoutExpired:\n    if os.name=='nt':proc.kill()\n    else:os.killpg(proc.pid,signal.SIGKILL)\n    proc.wait(timeout=4)\n  if thread:thread.join(timeout=2)\n  if job:ctypes.windll.kernel32.CloseHandle(job)\n  log.close()\n  if proc:print(name,'PID',proc.pid,'stopped',proc.poll() is not None,'peak RSS',stat['peak_rss'])\n  if stat.get('guard_error'):raise RuntimeError(stat)\n\ndef execute(conn,query,args=None):\n with conn.cursor() as c:c.execute(query,args);return c.fetchall()\n\n@contextlib.contextmanager\ndef fixture():\n exe=shutil.which('mysqld');assert exe,'mysqld unavailable'\n version=subprocess.check_output([exe,'--no-defaults','--version'],timeout=4).decode(errors='replace')\n if '8.4.' not in version or 'MariaDB' in version:raise FileNotFoundError('requires real MySQL 8.4 LTS, not MariaDB/SQLite')\n if os.name!='nt' and os.geteuid()==0:raise FileNotFoundError('MySQL lab must run as isolated nonroot user')\n base=pathlib.Path(exe).resolve().parent.parent\n with tempfile.TemporaryDirectory(prefix='trusted-mysql-native-') as d:\n  root=pathlib.Path(d).resolve();exports=root/'exports';exports.mkdir()\n  flags=[exe,'--no-defaults']+(['--no-monitor','--console'] if os.name=='nt' else [])\n  flags+=['--basedir='+str(base),'--datadir='+str(root/'data'),'--innodb-buffer-pool-size=64M','--performance-schema=OFF','--innodb-redo-log-capacity=16M','--innodb-log-buffer-size=4M','--skip-log-bin','--mysqlx=OFF','--max-connections=8','--table-open-cache=32','--table-open-cache-instances=1','--table-definition-cache=400','--thread-cache-size=0','--innodb-read-io-threads=1','--innodb-write-io-threads=1','--innodb-purge-threads=1','--tmp-table-size=1M','--max-heap-table-size=1M','--local-infile=OFF','--secure-file-priv='+str(exports)]\n  if os.name=='nt':flags+=['--plugin-dir='+str(base/'lib/plugin')]\n  with process(flags+['--initialize-insecure','--skip-networking'],root,'initialize') as p:\n   p.wait(timeout=30)\n   assert p.returncode==0,(root/'initialize.log').read_text(errors='replace')[-2500:]\n  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]\n  try:\n   with process(flags+['--bind-address=127.0.0.1','--port='+str(port),'--socket='+str(root/'mysql.sock'),'--pid-file='+str(root/'mysql.pid'),'--max-execution-time=1200'],root,'server') as p:\n    rootconn=None\n    try:\n     deadline=time.monotonic()+12\n     while rootconn is None:\n      try:rootconn=pymysql.connect(host='127.0.0.1',port=port,user='root',charset='utf8mb4',autocommit=True,connect_timeout=1,read_timeout=3,write_timeout=3,local_infile=False)\n      except pymysql.Error:\n       assert p.poll() is None and time.monotonic()<deadline,(root/'server.log').read_text(errors='replace')[-2500:]\n       time.sleep(.1)\n     assert int((root/'mysql.pid').read_text().strip())==p.pid,'server escaped monitored PID'\n     execute(rootconn,\"CREATE DATABASE training CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci\")\n     execute(rootconn,'USE training')\n     secret=secrets.token_hex(24)\n     execute(rootconn,\"CREATE USER 'student'@'127.0.0.1' IDENTIFIED BY %s\",(secret,))\n     def learner(privileges):\n      execute(rootconn,\"GRANT \"+privileges+\" ON training.* TO 'student'@'127.0.0.1'\")\n      return pymysql.connect(host='127.0.0.1',port=port,user='student',password=secret,database='training',charset='utf8mb4',autocommit=True,connect_timeout=2,read_timeout=3,write_timeout=3,local_infile=False)\n     yield rootconn,learner\n    finally:\n     if rootconn:\n      try:execute(rootconn,'SHUTDOWN')\n      except pymysql.Error:pass\n      rootconn.close()\n     try:p.wait(timeout=5)\n     except subprocess.TimeoutExpired:pass\n  finally:\n   with socket.socket() as s:assert s.connect_ex(('127.0.0.1',port))!=0,'owned MySQL port remained open'\n",
+        "checks/check.py": "import pathlib,secrets,datetime,sys\nsys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))\nfrom decimal import Decimal\nfrom mysql_fixture import fixture,execute\n\nimport time\nwith fixture() as (admin,learner):\n execute(admin,'CREATE TABLE accounts(id INT PRIMARY KEY,balance DECIMAL(12,2) NOT NULL) ENGINE=InnoDB')\n target=secrets.randbelow(10000)+1\n execute(admin,'INSERT INTO accounts VALUES(%s,100.00)',(target,))\n holder=learner('SELECT,UPDATE');client=learner('SELECT,UPDATE');probe=learner('SELECT,UPDATE')\n try:\n  for conn in [holder,client,probe]:execute(conn,'SET SESSION innodb_lock_wait_timeout=2')\n  execute(client,'SET @target_id=%s',(target,))\n  execute(holder,'START TRANSACTION');execute(holder,'SELECT * FROM accounts WHERE id=%s FOR UPDATE',(target,))\n  execute(client,'START TRANSACTION');started=time.monotonic()\n  try:execute(client,pathlib.Path('lock.sql').read_text(encoding='utf-8'))\n  except Exception as exc:assert exc.args[0]==3572,exc\n  else:raise AssertionError('busy row must report NOWAIT conflict, not silently skip or read it')\n  assert time.monotonic()-started<1.5,'conflict waited rather than failing immediately'\n  assert execute(client,'SELECT 1')==((1,),),'failed lock statement must leave connection usable'\n  execute(client,'ROLLBACK');execute(holder,'ROLLBACK')\n  execute(client,'START TRANSACTION')\n  result=execute(client,pathlib.Path('lock.sql').read_text(encoding='utf-8'));assert result==((target,Decimal('100.00')),),result\n  execute(probe,'START TRANSACTION')\n  try:execute(probe,'SELECT * FROM accounts WHERE id=%s FOR SHARE NOWAIT',(target,))\n  except Exception as exc:assert exc.args[0]==3572,exc\n  else:raise AssertionError('claimed row must hold an exclusive lock, not a shared lock')\n  execute(probe,'ROLLBACK');execute(client,'COMMIT')\n  execute(probe,'UPDATE accounts SET balance=balance+1 WHERE id=%s',(target,))\n  assert execute(admin,'SELECT balance FROM accounts WHERE id=%s',(target,))==((Decimal('101.00'),),)\n finally:\n  for conn in [holder,client,probe]:\n   try:execute(conn,'ROLLBACK')\n   finally:conn.close()\nprint('native NOWAIT conflict 3572 immediately; usable failed transaction, exclusive acquisition after release, commit releases lock')\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_mysql_nowait_conflict_not_timeout_exclusive_lock_lifecycle_and_connection_survival",
+    "conversion": {
+      "original_id": "curated-parallel-mysql-045",
+      "original_version": 1,
+      "original_type": "interview",
+      "original_title": "NOWAIT与设置很短锁等待超时有何差别？",
+      "theory_retained": true,
+      "absorbed_unpublished_drafts": [
+        "curated-data-extra-mysql-047: consolidate NOWAIT draft into this original-ID native task"
+      ]
+    }
+  }
+]

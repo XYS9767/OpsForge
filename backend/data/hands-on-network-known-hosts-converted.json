@@ -1,0 +1,107 @@
+[
+  {
+    "id": "curated-feishu-60-029",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 4,
+    "topic": "SSH 主机身份安全轮换",
+    "title": "按批准指纹轮换 known_hosts，保留别名与哈希主机隐私",
+    "answer": "```python\nimport pathlib,json,base64,hashlib,hmac,re,subprocess,tempfile,os\ndef fingerprint(key):\n    fields=key.split()\n    if len(fields)<2 or fields[0]!='ssh-ed25519':raise ValueError('only Ed25519 public keys supported')\n    try:\n        with tempfile.TemporaryDirectory(prefix='.keycheck-',dir='.') as d:\n            p=pathlib.Path(d)/'key.pub';p.write_text(' '.join(fields[:2])+'\\n')\n            r=subprocess.run(['ssh-keygen','-l','-E','sha256','-f',str(p)],capture_output=True,text=True,timeout=3)\n            if r.returncode:raise ValueError('malformed public key')\n            return r.stdout.split()[1]\n    except (IndexError,subprocess.SubprocessError) as e:raise ValueError('key validation failed') from e\ndef aliases(token):\n    if token.startswith('|1|'):\n        parts=token.split('|')\n        try:\n            if len(parts)!=4 or len(base64.b64decode(parts[2],validate=True))!=20 or len(base64.b64decode(parts[3],validate=True))!=20:raise ValueError('invalid hash')\n        except Exception as e:raise ValueError('invalid hashed host') from e\n        return [token]\n    values=token.split(',')\n    if any(not re.fullmatch(r'(?:[A-Za-z0-9.-]+|\\[[A-Za-z0-9.-]+\\]:[1-9][0-9]{0,4})',v) for v in values):raise ValueError('only concrete host names supported')\n    for value in values:\n        if value.startswith('[') and int(value.rsplit(':',1)[1])>65535:raise ValueError('invalid host port')\n    return values\ndef matches(token,host):\n    if not token.startswith('|1|'):return token==host\n    _,_,salt,digest=token.split('|')\n    return hmac.compare_digest(hmac.new(base64.b64decode(salt),host.encode(),hashlib.sha1).digest(),base64.b64decode(digest))\ndef execute(source,manifest,new_key,output):\n    source,manifest,new_key,output=map(pathlib.Path,(source,manifest,new_key,output))\n    if output.resolve() in {p.resolve() for p in (source,manifest,new_key)}:raise ValueError('output must differ from all inputs')\n    approved=json.loads(manifest.read_text())\n    if not isinstance(approved,dict) or not all(isinstance(approved.get(k),str) for k in ['host','ticket','old_fingerprint','new_fingerprint']):raise ValueError('invalid approval fields')\n    if any(ord(ch)<32 or ord(ch)==127 for ch in approved['ticket']):raise ValueError('control character in ticket')\n    host=approved['host']\n    if aliases(host)!=[host] or host.startswith('|') or not isinstance(approved.get('ticket'),str) or not approved['ticket'].strip():raise ValueError('explicit target and approval required')\n    key_lines=[line for line in new_key.read_text().splitlines() if line.strip()]\n    if len(key_lines)!=1:raise ValueError('exactly one new public key required')\n    new=' '.join(key_lines[0].split()[:2]);new_fp=fingerprint(new)\n    if new_fp!=approved['new_fingerprint'] or new_fp==approved['old_fingerprint']:raise ValueError('new key approval mismatch')\n    result=[];count=0\n    for line in source.read_text().splitlines(keepends=True):\n        if not line.strip() or line.lstrip().startswith('#'):result.append(line);continue\n        fields=line.strip().split(None,3)\n        if len(fields)<3:raise ValueError('malformed known_hosts')\n        names=aliases(fields[0]);key=' '.join(fields[1:3]);fp=fingerprint(key)\n        hits=[name for name in names if matches(name,host)]\n        if hits:\n            if len(hits)!=1 or fp!=approved['old_fingerprint']:raise ValueError('ambiguous or unexpected current host key')\n            count+=1\n            remaining=[name for name in names if name not in hits]\n            if remaining:result.append(','.join(remaining)+' '+key+(' '+fields[3] if len(fields)>3 else '')+'\\n')\n            result.append(hits[0]+' '+new+' # approved '+approved['ticket'].strip().replace('\\n',' ')+'\\n')\n        else:result.append(line)\n    if count!=1:raise ValueError('exactly one matching approved old key required')\n    fd,name=tempfile.mkstemp(prefix='.known-hosts-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'w') as stream:stream.write(''.join(result));stream.flush();os.fsync(stream.fileno())\n        os.chmod(name,0o600);os.replace(name,output)\n    finally:\n        if os.path.exists(name):os.unlink(name)\n```\n\n指纹与新钥必须走受信审批，不能因为连接失败就删除全部 known_hosts 或关闭 StrictHostKeyChecking。这里只支持明确列出的 Ed25519、具体名称/哈希格式；其他格式明确拒绝，不能默默按普通文本处理。\n\n原理补充：\n先保存目标名、端口及客户端错误，用SSH详细日志定位失败阶段。解析失败查DNS，TCP拒绝/超时查监听和路径，主机密钥不符需独立核验指纹，Permission denied再查账号、密钥及策略。保留已验证恢复入口，不能把所有故障都用关闭防火墙或清空known_hosts处理。",
+    "type": "code",
+    "source": "飞书《60》技术问题改编并纠错",
+    "source_block_id": "XvfOd6S4ToSGlpx7RK9cge1pnPc",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "feishu-60-reviewed",
+    "body": "## 环境与初始材料\n普通用户 Linux 工作区，Python3 与 ssh-keygen。提供函数骨架、授权清单字段示例；验收在工作区生成3套一次性 Ed25519 教学密钥，以及明文/哈希 known_hosts。测试密钥不用于真实服务，私钥只存在隔离测试工作区，不连 SSH 服务器。\n\n## 操作任务\n实现 task.py 的 execute(source,manifest,new_key,output)。只有 approved.json 明确授权的 host、旧/新 SHA256 指纹及非空工单全部匹配，才能将 known_hosts 中该主机的 Ed25519 公钥替换为 new.pub。支持具体 DNS/IPv4 主机名、[host]:port（端口1～65535，本题不接收IPv6名称） 和 OpenSSH |1| 哈希主机名；同一行其他主机别名保留旧公钥，哈希名不得变成明文。仅允许一个匹配的旧条目；拒绝多行新公钥、含控制字符/非字符串的授权字段、重复、缺失、旧指纹不符、新钥不符、畸形钥、通配符/否定模式和 @cert-authority 等标记。输出与任一输入不得同路径，成功原子替换输出并设0600，失败保留已有输出，回收临时文件。\n\n## 提交产物\ntask.py；函数生成更新后的 known_hosts 文件。输入授权清单示例是字段说明，实际指纹须来自已验证的公钥，不能拿占位值作为批准。\n\n## 验收方法\npython3 checks/check.py 使用原生 ssh-keygen 生成/解析公钥、查询输出目标与无关别名；正常轮换、哈希保持、0600、异常不覆盖、输入保护和临时文件清理全部通过才退出0。本题验收主机身份文件工件，不证明远端确实持有新私钥，批准清单本身的真实性由运维审批渠道负责。\n\n失败示例：同一行包含 app 与 other 两个别名，将整行公钥替换后会错误改变 other 的身份，必须只拆分并更新 app。",
+    "rubric": [
+      "先保存目标名、端口及客户端错误，用SSH详细日志定位失败阶段",
+      "解析失败查DNS，TCP拒绝/超时查监听和路径，主机密钥不符需独立核验指纹，Permission denied再查账号、密钥及策略",
+      "保留已验证恢复入口，不能把所有故障都用关闭防火墙或清空known_hosts处理"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+      "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb"
+    ],
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "XvfOd6S4ToSGlpx7RK9cge1pnPc",
+        "question": "29、一个服务器的ssh无法访问，可能的原因是什么"
+      }
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "XvfOd6S4ToSGlpx7RK9cge1pnPc"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "TYmSdcecNoXlVcxqX9icIkIqnTe",
+          "C90MdZPjPocMxixgN1acPWx9nse",
+          "D2VcdJLb0odjfqxXMXJcRYVAnPb",
+          "NruVdYftnowIx9xsDvwcYNhfnih",
+          "SRoWdZPBzo8iTmx4sBRcpeaIn7i",
+          "F0dYdI3CIob7W5xbNSJcqBqLnTb",
+          "V2BZdwZfIoYrTaxvpKWcIb7OnJd",
+          "OJNHdCPs1oJkKoxP7otcyOw6ncR"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "def execute(source,manifest,new_key,output):\n    raise NotImplementedError\n",
+      "approved.example.json": "{\"host\": \"[app.lab]:2222\", \"old_fingerprint\": \"SHA256:由受信渠道核对\", \"new_fingerprint\": \"SHA256:由受信渠道核对\", \"ticket\": \"CHANGE-42\"}"
+    },
+    "solution_files": {
+      "task.py": "import pathlib,json,base64,hashlib,hmac,re,subprocess,tempfile,os\ndef fingerprint(key):\n    fields=key.split()\n    if len(fields)<2 or fields[0]!='ssh-ed25519':raise ValueError('only Ed25519 public keys supported')\n    try:\n        with tempfile.TemporaryDirectory(prefix='.keycheck-',dir='.') as d:\n            p=pathlib.Path(d)/'key.pub';p.write_text(' '.join(fields[:2])+'\\n')\n            r=subprocess.run(['ssh-keygen','-l','-E','sha256','-f',str(p)],capture_output=True,text=True,timeout=3)\n            if r.returncode:raise ValueError('malformed public key')\n            return r.stdout.split()[1]\n    except (IndexError,subprocess.SubprocessError) as e:raise ValueError('key validation failed') from e\ndef aliases(token):\n    if token.startswith('|1|'):\n        parts=token.split('|')\n        try:\n            if len(parts)!=4 or len(base64.b64decode(parts[2],validate=True))!=20 or len(base64.b64decode(parts[3],validate=True))!=20:raise ValueError('invalid hash')\n        except Exception as e:raise ValueError('invalid hashed host') from e\n        return [token]\n    values=token.split(',')\n    if any(not re.fullmatch(r'(?:[A-Za-z0-9.-]+|\\[[A-Za-z0-9.-]+\\]:[1-9][0-9]{0,4})',v) for v in values):raise ValueError('only concrete host names supported')\n    for value in values:\n        if value.startswith('[') and int(value.rsplit(':',1)[1])>65535:raise ValueError('invalid host port')\n    return values\ndef matches(token,host):\n    if not token.startswith('|1|'):return token==host\n    _,_,salt,digest=token.split('|')\n    return hmac.compare_digest(hmac.new(base64.b64decode(salt),host.encode(),hashlib.sha1).digest(),base64.b64decode(digest))\ndef execute(source,manifest,new_key,output):\n    source,manifest,new_key,output=map(pathlib.Path,(source,manifest,new_key,output))\n    if output.resolve() in {p.resolve() for p in (source,manifest,new_key)}:raise ValueError('output must differ from all inputs')\n    approved=json.loads(manifest.read_text())\n    if not isinstance(approved,dict) or not all(isinstance(approved.get(k),str) for k in ['host','ticket','old_fingerprint','new_fingerprint']):raise ValueError('invalid approval fields')\n    if any(ord(ch)<32 or ord(ch)==127 for ch in approved['ticket']):raise ValueError('control character in ticket')\n    host=approved['host']\n    if aliases(host)!=[host] or host.startswith('|') or not isinstance(approved.get('ticket'),str) or not approved['ticket'].strip():raise ValueError('explicit target and approval required')\n    key_lines=[line for line in new_key.read_text().splitlines() if line.strip()]\n    if len(key_lines)!=1:raise ValueError('exactly one new public key required')\n    new=' '.join(key_lines[0].split()[:2]);new_fp=fingerprint(new)\n    if new_fp!=approved['new_fingerprint'] or new_fp==approved['old_fingerprint']:raise ValueError('new key approval mismatch')\n    result=[];count=0\n    for line in source.read_text().splitlines(keepends=True):\n        if not line.strip() or line.lstrip().startswith('#'):result.append(line);continue\n        fields=line.strip().split(None,3)\n        if len(fields)<3:raise ValueError('malformed known_hosts')\n        names=aliases(fields[0]);key=' '.join(fields[1:3]);fp=fingerprint(key)\n        hits=[name for name in names if matches(name,host)]\n        if hits:\n            if len(hits)!=1 or fp!=approved['old_fingerprint']:raise ValueError('ambiguous or unexpected current host key')\n            count+=1\n            remaining=[name for name in names if name not in hits]\n            if remaining:result.append(','.join(remaining)+' '+key+(' '+fields[3] if len(fields)>3 else '')+'\\n')\n            result.append(hits[0]+' '+new+' # approved '+approved['ticket'].strip().replace('\\n',' ')+'\\n')\n        else:result.append(line)\n    if count!=1:raise ValueError('exactly one matching approved old key required')\n    fd,name=tempfile.mkstemp(prefix='.known-hosts-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'w') as stream:stream.write(''.join(result));stream.flush();os.fsync(stream.fileno())\n        os.chmod(name,0o600);os.replace(name,output)\n    finally:\n        if os.path.exists(name):os.unlink(name)\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib,json,base64,hashlib,hmac,re,subprocess,tempfile,os\ndef fingerprint(key):\n    fields=key.split()\n    if len(fields)<2 or fields[0]!='ssh-ed25519':raise ValueError('only Ed25519 public keys supported')\n    try:\n        with tempfile.TemporaryDirectory(prefix='.keycheck-',dir='.') as d:\n            p=pathlib.Path(d)/'key.pub';p.write_text(' '.join(fields[:2])+'\\n')\n            r=subprocess.run(['ssh-keygen','-l','-E','sha256','-f',str(p)],capture_output=True,text=True,timeout=3)\n            if r.returncode:raise ValueError('malformed public key')\n            return r.stdout.split()[1]\n    except (IndexError,subprocess.SubprocessError) as e:raise ValueError('key validation failed') from e\ndef aliases(token):\n    if token.startswith('|1|'):\n        parts=token.split('|')\n        try:\n            if len(parts)!=4 or len(base64.b64decode(parts[2],validate=True))!=20 or len(base64.b64decode(parts[3],validate=True))!=20:raise ValueError('invalid hash')\n        except Exception as e:raise ValueError('invalid hashed host') from e\n        return [token]\n    values=token.split(',')\n    if any(not re.fullmatch(r'(?:[A-Za-z0-9.-]+|\\[[A-Za-z0-9.-]+\\]:[1-9][0-9]{0,4})',v) for v in values):raise ValueError('only concrete host names supported')\n    for value in values:\n        if value.startswith('[') and int(value.rsplit(':',1)[1])>65535:raise ValueError('invalid host port')\n    return values\ndef matches(token,host):\n    if not token.startswith('|1|'):return token==host\n    _,_,salt,digest=token.split('|')\n    return hmac.compare_digest(hmac.new(base64.b64decode(salt),host.encode(),hashlib.sha1).digest(),base64.b64decode(digest))\ndef execute(source,manifest,new_key,output):\n    source,manifest,new_key,output=map(pathlib.Path,(source,manifest,new_key,output))\n    if output.resolve() in {p.resolve() for p in (source,manifest,new_key)}:raise ValueError('output must differ from all inputs')\n    approved=json.loads(manifest.read_text())\n    if not isinstance(approved,dict) or not all(isinstance(approved.get(k),str) for k in ['host','ticket','old_fingerprint','new_fingerprint']):raise ValueError('invalid approval fields')\n    if any(ord(ch)<32 or ord(ch)==127 for ch in approved['ticket']):raise ValueError('control character in ticket')\n    host=approved['host']\n    if aliases(host)!=[host] or host.startswith('|') or not isinstance(approved.get('ticket'),str) or not approved['ticket'].strip():raise ValueError('explicit target and approval required')\n    key_lines=[line for line in new_key.read_text().splitlines() if line.strip()]\n    if len(key_lines)!=1:raise ValueError('exactly one new public key required')\n    new=' '.join(key_lines[0].split()[:2]);new_fp=fingerprint(new)\n    if new_fp!=approved['new_fingerprint'] or new_fp==approved['old_fingerprint']:raise ValueError('new key approval mismatch')\n    result=[];count=0\n    for line in source.read_text().splitlines(keepends=True):\n        if not line.strip() or line.lstrip().startswith('#'):result.append(line);continue\n        fields=line.strip().split(None,3)\n        if len(fields)<3:raise ValueError('malformed known_hosts')\n        names=aliases(fields[0]);key=' '.join(fields[1:3]);fp=fingerprint(key)\n        hits=[name for name in names if matches(name,host)]\n        if hits:\n            if len(hits)!=1 or fp!=approved['old_fingerprint']:raise ValueError('ambiguous or unexpected current host key')\n            count+=1\n            remaining=[name for name in names if name not in hits]\n            if remaining:result.append(','.join(remaining)+' '+new+'\\n')\n            result.append(hits[0]+' '+new+' # approved '+approved['ticket'].strip().replace('\\n',' ')+'\\n')\n        else:result.append(line)\n    if count!=1:raise ValueError('exactly one matching approved old key required')\n    fd,name=tempfile.mkstemp(prefix='.known-hosts-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'w') as stream:stream.write(''.join(result));stream.flush();os.fsync(stream.fileno())\n        os.chmod(name,0o600);os.replace(name,output)\n    finally:\n        if os.path.exists(name):os.unlink(name)\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 task.py 的 execute(source,manifest,new_key,output)。只有 approved.json 明确授权的 host、旧/新 SHA256 指纹及非空工单全部匹配，才能将 known_hosts 中该主机的 Ed25519 公钥替换为 new.pub。支持具体 DNS/IPv4 主机名、[host]:port（端口1～65535，本题不接收IPv6名称） 和 OpenSSH |1| 哈希主机名；同一行其他主机别名保留旧公钥，哈希名不得变成明文。仅允许一个匹配的旧条目；拒绝重复、缺失、旧指纹不符、新钥不符、畸形钥、通配符/否定模式和 @cert-authority 等标记。输出与任一输入不得同路径，成功原子替换输出并设0600，失败保留已有输出，回收临时文件。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "原生 ssh-keygen 指纹与目标查询，哈希/别名作用域，正常与拒绝路径，文件原子性/权限/清理",
+      "failure_examples": [
+        "整行换钥造成无关别名身份变化"
+      ],
+      "generated_artifacts": [
+        "更新后的 known_hosts"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,json,base64,hmac,hashlib,stat,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef key(name):\n    r=subprocess.run(['ssh-keygen','-q','-t','ed25519','-N','','-f',name],text=True,capture_output=True,timeout=3)\n    assert r.returncode==0,r.stderr\n    pub=pathlib.Path(name+'.pub').read_text();fp=subprocess.check_output(['ssh-keygen','-lf',name+'.pub','-E','sha256'],text=True).split()[1]\n    return ' '.join(pub.split()[:2]),fp\nold,oldfp=key('old');new,newfp=key('new');other,otherfp=key('other')\nhost='[app.lab]:2222';alias='[other.lab]:2222';salt=bytes(range(20))\nhashed='|1|'+base64.b64encode(salt).decode()+'|'+base64.b64encode(hmac.new(salt,host.encode(),hashlib.sha1).digest()).decode()\nmanifest={'host':host,'old_fingerprint':oldfp,'new_fingerprint':newfp,'ticket':'CHANGE-42'}\ndef save_manifest(obj):pathlib.Path('approved.json').write_text(json.dumps(obj))\ndef find(name,file):\n    r=subprocess.run(['ssh-keygen','-F',name,'-f',file],capture_output=True,text=True,timeout=3)\n    return [line for line in r.stdout.splitlines() if line and not line.startswith('#')]\nbase='# approved inventory\\n'+host+','+alias+' '+old+' keep-old-alias\\n'+'unrelated.lab '+other+' untouched\\n'\nfor token in [host+','+alias,hashed]:\n    text=base if token.startswith('[') else '# approved inventory\\n'+token+' '+old+' secret-name\\n'+'unrelated.lab '+other+' untouched\\n'\n    pathlib.Path('known_hosts').write_text(text);save_manifest(manifest)\n    task.execute('known_hosts','approved.json','new.pub','result')\n    actual=pathlib.Path('result').read_text();assert pathlib.Path('known_hosts').read_text()==text\n    records=find(host,'result');assert len(records)==1 and new in records[0] and old not in records[0],records\n    assert 'unrelated.lab '+other+' untouched\\n' in actual\n    assert actual.startswith('# approved inventory\\n')\n    assert stat.S_IMODE(pathlib.Path('result').stat().st_mode)==0o600\n    if token==hashed:assert host not in actual and hashed in actual,'hashed identity leaked'\n    else:assert old in find(alias,'result')[0],'other alias key was overwritten'\n    assert not list(pathlib.Path('.').glob('.known-hosts-*')) and not list(pathlib.Path('.').glob('.keycheck-*'))\ndef reject(text,obj,keyfile='new.pub',out='result'):\n    pathlib.Path('known_hosts').write_text(text);save_manifest(obj)\n    if out=='result':pathlib.Path(out).write_text('KEEP')\n    previous={f:pathlib.Path(f).read_bytes() for f in ['known_hosts','approved.json',keyfile]}\n    try:task.execute('known_hosts','approved.json',keyfile,out)\n    except (ValueError,KeyError):pass\n    else:raise AssertionError('unsafe replacement accepted')\n    for f,content in previous.items():assert pathlib.Path(f).read_bytes()==content\n    if out=='result':assert pathlib.Path(out).read_text()=='KEEP'\n    assert not list(pathlib.Path('.').glob('.known-hosts-*')) and not list(pathlib.Path('.').glob('.keycheck-*'))\nreject(base,{**manifest,'old_fingerprint':otherfp})\nreject(base,{**manifest,'new_fingerprint':otherfp})\nreject(base,{**manifest,'ticket':''})\nreject(base+host+' '+old+'\\n',manifest)\nreject('unrelated.lab '+other+'\\n',manifest)\nreject('*.lab '+old+'\\n',manifest)\nreject('@cert-authority '+host+' '+old+'\\n',manifest)\nreject('|1|bad|bad '+old+'\\n',manifest)\nreject(base,manifest,out='known_hosts')\nreject(base,manifest,out='approved.json')\npathlib.Path('broken.pub').write_text('ssh-ed25519 AAAA broken')\nreject(base,manifest,keyfile='broken.pub')\nreject(base,{**manifest,'ticket':'CHANGE\\rwrong'})\nreject(base,{**manifest,'host':None})\nreject(base,{**manifest,'host':'[app.lab]:99999'})\npathlib.Path('multiple.pub').write_text(new+'\\n'+other+'\\n')\nreject(base,manifest,keyfile='multiple.pub')\nprint('PASS: native key identity validation and scoped atomic known_hosts rotation')\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "ssh-keygen"
+        ]
+      }
+    },
+    "case_signature": "network-ssh-hostkey-rotation|approved-fingerprint-hash-alias-atomicity",
+    "conversion": {
+      "original_id": "curated-feishu-60-029",
+      "original_title": "SSH连接失败怎样按解析、TCP、主机身份和用户认证区分证据？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

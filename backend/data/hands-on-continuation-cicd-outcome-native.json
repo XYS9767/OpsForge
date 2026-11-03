@@ -1,0 +1,71 @@
+[
+  {
+    "id": "curated-parallel-cicd-060",
+    "module": "cicd",
+    "category": "CI/CD 与 GitOps",
+    "level": 5,
+    "topic": "流水线编排与执行",
+    "title": "真实HTTP响应丢失后查询原操作：保留运行中状态，不重放或伪报失败",
+    "answer": "```python\nimport json,re,urllib.request,urllib.error,urllib.parse,http.client\ndef reconcile_submit(base,request_id,digest):\n    parsed=urllib.parse.urlsplit(base)\n    if parsed.scheme!='http' or parsed.hostname!='127.0.0.1' or parsed.path not in ('','/') or parsed.query or parsed.fragment:raise ValueError('private API endpoint')\n    if not isinstance(request_id,str) or not re.fullmatch(r'[a-z0-9_-]{1,40}',request_id) or not isinstance(digest,str) or not re.fullmatch(r'[0-9a-f]{64}',digest):raise ValueError('operation identity')\n    base=base.rstrip('/')\n    def lookup(identity):\n        try:\n            with urllib.request.urlopen(base+'/operations/'+urllib.parse.quote(identity,safe=''),timeout=.5) as response:return json.loads(response.read())\n        except urllib.error.HTTPError as error:\n            code=error.code;error.close()\n            if code==404:return {'id':request_id,'digest':digest,'status':'unknown'}\n            raise\n    request=urllib.request.Request(base+'/operations',data=json.dumps({'id':request_id,'digest':digest}).encode(),headers={'Content-Type':'application/json'},method='POST')\n    try:\n        with urllib.request.urlopen(request,timeout=.5) as response:result=json.loads(response.read())\n    except urllib.error.HTTPError as error:\n        code=error.code;error.close()\n        if code==409:raise ValueError('operation identity conflict') from error\n        raise\n    except (OSError,http.client.HTTPException):\n        result=lookup(request_id)\n    if not isinstance(result,dict) or result.get('id')!=request_id or result.get('digest')!=digest or result.get('status') not in ('queued','running','succeeded','failed','unknown'):raise ValueError('mismatched authoritative operation')\n    return result\n```\n\n原题知识说明：\n状态机增加结果未知，保存外部操作ID并查询实际版本，确认后再推进或补偿。重试带同一幂等键并限制预算，人工接管看到完整证据。验收响应丢失、控制器重启和重复回调，不能产生两次非幂等迁移。",
+    "type": "code",
+    "source": "独立编审：流水线执行与交付治理",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "解释本题机制",
+      "列出对应失败边界与验证"
+    ],
+    "references": [
+      "https://docs.python.org/3.11/library/urllib.request.html",
+      "https://docs.python.org/3.11/library/http.client.html"
+    ],
+    "related_modules": [
+      "cicd"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-cicd-060",
+      "original_title": "设计评审：交付平台如何处理“API超时但发布可能成功”？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现 reconcile_submit(base,request_id,digest)。仅连接本题127.0.0.1私有HTTP API，request_id为1..40小写字母数字下划线连字符，digest为64位小写SHA256。POST /operations一次提交id/digest；若连接/HTTP传输异常导致结果未知，则GET /operations/{原id}核对权威记录，不创建新ID、不重放POST。返回原id/摘要及实际queued/running/succeeded/failed状态；查询404返回unknown，409身份冲突ValueError。核对返回身份/摘要，不把running宣称成功或传输失败当业务失败。每次HTTP调用0.5秒上限。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实私有HTTP在SQLite提交后断开响应，恢复查询读实际记录；不启动远端部署或Jenkins，不证明外部不可逆副作用恰好一次、任意重启恢复或生产API兼容。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json,re,urllib.request,urllib.error,urllib.parse,http.client\ndef reconcile_submit(base,request_id,digest):\n    parsed=urllib.parse.urlsplit(base)\n    if parsed.scheme!='http' or parsed.hostname!='127.0.0.1' or parsed.path not in ('','/') or parsed.query or parsed.fragment:raise ValueError('private API endpoint')\n    if not isinstance(request_id,str) or not re.fullmatch(r'[a-z0-9_-]{1,40}',request_id) or not isinstance(digest,str) or not re.fullmatch(r'[0-9a-f]{64}',digest):raise ValueError('operation identity')\n    base=base.rstrip('/')\n    def lookup(identity):\n        try:\n            with urllib.request.urlopen(base+'/operations/'+urllib.parse.quote(identity,safe=''),timeout=.5) as response:return json.loads(response.read())\n        except urllib.error.HTTPError as error:\n            code=error.code;error.close()\n            if code==404:return {'id':request_id,'digest':digest,'status':'unknown'}\n            raise\n    request=urllib.request.Request(base+'/operations',data=json.dumps({'id':request_id,'digest':digest}).encode(),headers={'Content-Type':'application/json'},method='POST')\n    try:\n        with urllib.request.urlopen(request,timeout=.5) as response:result=json.loads(response.read())\n    except urllib.error.HTTPError as error:\n        code=error.code;error.close()\n        if code==409:raise ValueError('operation identity conflict') from error\n        raise\n    except (OSError,http.client.HTTPException):\n        result=lookup(request_id)\n    if not isinstance(result,dict) or result.get('id')!=request_id or result.get('digest')!=digest or result.get('status') not in ('queued','running','succeeded','failed','unknown'):raise ValueError('mismatched authoritative operation')\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "import json,re,urllib.request,urllib.error,urllib.parse,http.client\ndef reconcile_submit(base,request_id,digest):\n    parsed=urllib.parse.urlsplit(base)\n    if parsed.scheme!='http' or parsed.hostname!='127.0.0.1' or parsed.path not in ('','/') or parsed.query or parsed.fragment:raise ValueError('private API endpoint')\n    if not isinstance(request_id,str) or not re.fullmatch(r'[a-z0-9_-]{1,40}',request_id) or not isinstance(digest,str) or not re.fullmatch(r'[0-9a-f]{64}',digest):raise ValueError('operation identity')\n    base=base.rstrip('/')\n    def lookup(identity):\n        try:\n            with urllib.request.urlopen(base+'/operations/'+urllib.parse.quote(identity,safe=''),timeout=.5) as response:return json.loads(response.read())\n        except urllib.error.HTTPError as error:\n            code=error.code;error.close()\n            if code==404:return {'id':request_id,'digest':digest,'status':'unknown'}\n            raise\n    request=urllib.request.Request(base+'/operations',data=json.dumps({'id':request_id,'digest':digest}).encode(),headers={'Content-Type':'application/json'},method='POST')\n    try:\n        with urllib.request.urlopen(request,timeout=.5) as response:result=json.loads(response.read())\n    except urllib.error.HTTPError as error:\n        code=error.code;error.close()\n        if code==409:raise ValueError('operation identity conflict') from error\n        raise\n    except (OSError,http.client.HTTPException):\n        result={'id':request_id,'digest':digest,'status':'failed'}\n    if not isinstance(result,dict) or result.get('id')!=request_id or result.get('digest')!=digest or result.get('status') not in ('queued','running','succeeded','failed','unknown'):raise ValueError('mismatched authoritative operation')\n    return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现 reconcile_submit(base,request_id,digest)。仅连接本题127.0.0.1私有HTTP API，request_id为1..40小写字母数字下划线连字符，digest为64位小写SHA256。POST /operations一次提交id/digest；若连接/HTTP传输异常导致结果未知，则GET /operations/{原id}核对权威记录，不创建新ID、不重放POST。返回原id/摘要及实际queued/running/succeeded/failed状态；查询404返回unknown，409身份冲突ValueError。核对返回身份/摘要，不把running宣称成功或传输失败当业务失败。每次HTTP调用0.5秒上限。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实私有HTTP在SQLite提交后断开响应，恢复查询读实际记录；不启动远端部署或Jenkins，不证明外部不可逆副作用恰好一次、任意重启恢复或生产API兼容。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,json,sqlite3,threading,http.server,socket,urllib.parse\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'api.sqlite3';calls=[];lost=set()\n with sqlite3.connect(path) as connection:connection.execute('CREATE TABLE operations(id TEXT PRIMARY KEY,digest TEXT,status TEXT)')\n class Handler(http.server.BaseHTTPRequestHandler):\n  def log_message(self,*args):pass\n  def respond(self,status,value):\n   raw=json.dumps(value).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)\n  def do_POST(self):\n   data=json.loads(self.rfile.read(int(self.headers['Content-Length'])));calls.append(('POST',data['id']))\n   with sqlite3.connect(path) as connection:\n    row=connection.execute('SELECT id,digest,status FROM operations WHERE id=?',(data['id'],)).fetchone()\n    if row and row[1]!=data['digest']:self.respond(409,{});return\n    if not row:\n     state='running' if data['id'].startswith('running_') else 'succeeded';row=(data['id'],data['digest'],state)\n     connection.execute('INSERT INTO operations VALUES(?,?,?)',row);connection.commit()\n   if data['id'] not in lost:\n    lost.add(data['id']);self.connection.shutdown(socket.SHUT_RDWR);self.connection.close();self.close_connection=True;return\n   self.respond(200,dict(zip(('id','digest','status'),row)))\n  def do_GET(self):\n   identity=urllib.parse.unquote(self.path.removeprefix('/operations/'));calls.append(('GET',identity))\n   with sqlite3.connect(path) as connection:row=connection.execute('SELECT id,digest,status FROM operations WHERE id=?',(identity,)).fetchone()\n   self.respond(200 if row else 404,dict(zip(('id','digest','status'),row)) if row else {})\n server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=True;thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()\n base='http://127.0.0.1:'+str(server.server_port);digest=secrets.token_hex(32)\n try:\n  for prefix,state in [('done_','succeeded'),('running_','running')]:\n   identity=prefix+secrets.token_hex(5);calls.clear();print('STUDENT_OPERATION_ENTERED:reconcile_submit',flush=True)\n   try:result=task.reconcile_submit(base,identity,digest)\n   except Exception as error:raise AssertionError('lost response was not reconciled with authoritative operation') from error\n   assert result=={'id':identity,'digest':digest,'status':state},'transport failure was mistaken for failed deployment or premature success'\n   assert calls==[('POST',identity),('GET',identity)],'uncertain outcome created/replayed another operation instead of reading the original'\n   with sqlite3.connect(path) as connection:assert connection.execute('SELECT COUNT(*) FROM operations WHERE id LIKE ?',(identity+'%',)).fetchone()[0]==1\n  before=[]\n  with sqlite3.connect(path) as connection:before=connection.execute('SELECT * FROM operations ORDER BY id').fetchall()\n  try:task.reconcile_submit(base,identity,secrets.token_hex(32))\n  except ValueError:pass\n  else:raise AssertionError('same operation accepted a changed artifact')\n  with sqlite3.connect(path) as connection:assert connection.execute('SELECT * FROM operations ORDER BY id').fetchall()==before\n finally:server.shutdown();server.server_close();thread.join(timeout=2)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

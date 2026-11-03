@@ -1,0 +1,80 @@
+[
+  {
+    "id": "curated-network-keepalived-readiness-contract",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 3,
+    "topic": "Keepalived健康脚本退出契约与配置引用",
+    "title": "交付有界HTTP就绪脚本并接入Keepalived配置工件",
+    "answer": "```python\nimport pathlib,re,resource,subprocess,sys,tempfile\n\ndef limit_body_file():resource.setrlimit(resource.RLIMIT_FSIZE,(6,6))\n\ndef main(args):\n    if len(args)!=1 or not re.fullmatch(r'[0-9]{4,5}',args[0]) or not 1024<=int(args[0])<=65535:return 2\n    with tempfile.TemporaryDirectory(prefix='readiness-') as directory:\n        body_path=pathlib.Path(directory)/'body'\n        command=['curl','-q','--silent','--show-error','--noproxy','*','--proto','=http',\n                 '--connect-timeout','0.2','--max-time','0.35','--max-filesize','6',\n                 '--output',str(body_path),'--write-out','%{http_code}',f'http://127.0.0.1:{int(args[0])}/ready']\n        try:\n            result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=.6,preexec_fn=limit_body_file)\n            return 0 if result.returncode==0 and result.stdout==b'200' and body_path.read_bytes()==b'READY' else 1\n        except (OSError,subprocess.TimeoutExpired):return 1\n\nif __name__=='__main__':raise SystemExit(main(sys.argv[1:]))\n```\n```text\nglobal_defs {\n    enable_script_security\n}\nvrrp_script app_ready {\n    script \"{{PYTHON}} {{WORKDIR}}/health.py {{PORT}}\"\n    interval 1\n    timeout 1\n    fall 2\n    rise 2\n    weight 0\n    user {{USER}}\n}\nvrrp_instance APP {\n    state BACKUP\n    interface {{IFACE}}\n    virtual_router_id 51\n    priority 150\n    advert_int 1\n    unicast_src_ip 192.0.2.10\n    unicast_peer {\n        192.0.2.11\n    }\n    virtual_ipaddress {\n        192.0.2.100/32\n    }\n    track_script {\n        app_ready\n    }\n}\n```\n\nweight=0在脚本持续失败达到fall时用于FAULT路径，非零权重属于优先级调整；本题只核验配置意图，不模拟VRRP状态转换。HTTP200和业务就绪是两个条件，正文需逐字节比较，不能strip后吞掉多余字节。\n\n原理说明：\n在同一VRRP组两端分别采集VIP是否绑定、实例状态及最后更新时间，结合第三方网络观察VIP对应MAC/入口请求落点。超过合理切换窗口仍有两个有效主状态应告警；两端都无VIP和任一端无数据须单独告警，不能把无数据当备机正常。核对通告到达、接口/VRID一致性、优先级及跟踪健康，发生双主时按预定隔离流程限制一个入口，再修复通信；VRRP本身不是数据库写入仲裁，不能凭ping通就认定已避免双写。\n\n本题探针只判断单节点HTTP就绪，不能区分两个节点是否同时持有VIP。原脑裂诊断题仍独立保留。\n\ncurl 8.4以前的max-filesize不能限制预先未知长度的响应。参考方案另给curl子进程设置6字节文件大小上限，只把3位HTTP状态读进stdout，从而不依赖该新版行为。只影响当前子进程，不修改主机资源限制。",
+    "type": "code",
+    "source": "OpsForge 原创Keepalived健康探针工件",
+    "version": 1,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "network-native-contracts",
+    "hints": [],
+    "rubric": [
+      "HTTP状态与逐字节正文同时满足就绪契约",
+      "探测有界且不受curlrc/代理改变目标",
+      "配置引用与真实原生解析一致，不将探针结果当作VIP/脑裂验收"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg"
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "health.py": "raise SystemExit(0)\n",
+      "keepalived.conf": "global_defs {\n    enable_script_security\n}\nvrrp_script app_ready {\n    script \"{{PYTHON}} {{WORKDIR}}/health.py {{PORT}}\"\n    interval 1\n    timeout 1\n    fall 2\n    rise 2\n    weight 0\n    user {{USER}}\n}\nvrrp_instance APP {\n    state BACKUP\n    interface {{IFACE}}\n    virtual_router_id 51\n    priority 150\n    advert_int 1\n    unicast_src_ip 192.0.2.10\n    unicast_peer {\n        192.0.2.11\n    }\n    virtual_ipaddress {\n        192.0.2.100/32\n    }\n    track_script {\n        app_ready\n    }\n}\n"
+    },
+    "solution_files": {
+      "health.py": "import pathlib,re,resource,subprocess,sys,tempfile\n\ndef limit_body_file():resource.setrlimit(resource.RLIMIT_FSIZE,(6,6))\n\ndef main(args):\n    if len(args)!=1 or not re.fullmatch(r'[0-9]{4,5}',args[0]) or not 1024<=int(args[0])<=65535:return 2\n    with tempfile.TemporaryDirectory(prefix='readiness-') as directory:\n        body_path=pathlib.Path(directory)/'body'\n        command=['curl','-q','--silent','--show-error','--noproxy','*','--proto','=http',\n                 '--connect-timeout','0.2','--max-time','0.35','--max-filesize','6',\n                 '--output',str(body_path),'--write-out','%{http_code}',f'http://127.0.0.1:{int(args[0])}/ready']\n        try:\n            result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=.6,preexec_fn=limit_body_file)\n            return 0 if result.returncode==0 and result.stdout==b'200' and body_path.read_bytes()==b'READY' else 1\n        except (OSError,subprocess.TimeoutExpired):return 1\n\nif __name__=='__main__':raise SystemExit(main(sys.argv[1:]))\n",
+      "keepalived.conf": "global_defs {\n    enable_script_security\n}\nvrrp_script app_ready {\n    script \"{{PYTHON}} {{WORKDIR}}/health.py {{PORT}}\"\n    interval 1\n    timeout 1\n    fall 2\n    rise 2\n    weight 0\n    user {{USER}}\n}\nvrrp_instance APP {\n    state BACKUP\n    interface {{IFACE}}\n    virtual_router_id 51\n    priority 150\n    advert_int 1\n    unicast_src_ip 192.0.2.10\n    unicast_peer {\n        192.0.2.11\n    }\n    virtual_ipaddress {\n        192.0.2.100/32\n    }\n    track_script {\n        app_ready\n    }\n}\n"
+    },
+    "negative_files": {
+      "health.py": "import pathlib,re,resource,subprocess,sys,tempfile\n\ndef limit_body_file():resource.setrlimit(resource.RLIMIT_FSIZE,(6,6))\n\ndef main(args):\n    if len(args)!=1 or not re.fullmatch(r'[0-9]{4,5}',args[0]) or not 1024<=int(args[0])<=65535:return 2\n    with tempfile.TemporaryDirectory(prefix='readiness-') as directory:\n        body_path=pathlib.Path(directory)/'body'\n        command=['curl','-q','--silent','--show-error','--noproxy','*','--proto','=http',\n                 '--connect-timeout','0.2','--max-time','0.35','--max-filesize','6',\n                 '--output',str(body_path),'--write-out','%{http_code}',f'http://127.0.0.1:{int(args[0])}/ready']\n        try:\n            result=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,timeout=.6,preexec_fn=limit_body_file)\n            return 0 if result.returncode==0 and result.stdout==b'200' and True else 1\n        except (OSError,subprocess.TimeoutExpired):return 1\n\nif __name__=='__main__':raise SystemExit(main(sys.argv[1:]))\n",
+      "keepalived.conf": "global_defs {\n    enable_script_security\n}\nvrrp_script app_ready {\n    script \"{{PYTHON}} {{WORKDIR}}/health.py {{PORT}}\"\n    interval 1\n    timeout 1\n    fall 2\n    rise 2\n    weight 0\n    user {{USER}}\n}\nvrrp_instance APP {\n    state BACKUP\n    interface {{IFACE}}\n    virtual_router_id 51\n    priority 150\n    advert_int 1\n    unicast_src_ip 192.0.2.10\n    unicast_peer {\n        192.0.2.11\n    }\n    virtual_ipaddress {\n        192.0.2.100/32\n    }\n    track_script {\n        app_ready\n    }\n}\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "keepalived",
+          "curl",
+          "ip"
+        ],
+        "features": [
+          "keepalived:v2.2"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,sys,socket,threading,http.server,time,pwd,shlex,os\nroot=pathlib.Path.cwd()\nclass Handler(http.server.BaseHTTPRequestHandler):\n    def do_GET(self):\n        self.server.requests.append(self.path);status,body,delay=self.server.mode\n        time.sleep(delay)\n        try:\n            self.send_response(status)\n            if not self.server.unknown_length:self.send_header('Content-Length',str(len(body)))\n            if status==301:self.send_header('Location','/ready')\n            self.end_headers();self.wfile.write(body)\n        except (BrokenPipeError,ConnectionResetError):pass\n    def log_message(self,*args):pass\nserver=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=False;server.requests=[];server.mode=(200,b'READY',0);server.unknown_length=False\nthread=threading.Thread(target=server.serve_forever);thread.start();port=server.server_address[1]\ndef call(args):\n    start=time.monotonic();run=subprocess.run([sys.executable,'health.py',*args],capture_output=True,timeout=1.2,env=call_environment)\n    assert time.monotonic()-start<1.1 and run.stdout==b'','script must be bounded and quiet'\n    return run.returncode\ntry:\n    # An ambient curlrc and proxy must not alter the declared loopback readiness target.\n    curl_home=root/'ambient-curl';curl_home.mkdir()\n    (curl_home/'.curlrc').write_text('url = \"http://127.0.0.1:1/wrong-target\"\\nretry = 2\\nlocation\\n')\n    call_environment={**os.environ,'CURL_HOME':str(curl_home),'HOME':str(curl_home),\n                      'http_proxy':'http://127.0.0.1:1','HTTP_PROXY':'http://127.0.0.1:1',\n                      'ALL_PROXY':'http://127.0.0.1:1','all_proxy':'http://127.0.0.1:1',\n                      'NO_PROXY':'','no_proxy':''}\n    for status,body,expected in [(200,b'READY',0),(200,b'WAIT',1),(200,b'READY\\n',1),(200,b'READY\\x00',1),(204,b'',1),(201,b'READY',1),(503,b'READY',1),(301,b'READY',1),(200,b'x'*100,1)]:\n        server.mode=(status,body,0);before=len(server.requests);assert call([str(port)])==expected,(status,body)\n        assert server.requests[before:]==['/ready'],'no redirects or retries'\n    server.unknown_length=True\n    for body,expected in [(b'READY',0),(b'READY'+b'x'*20000,1)]:\n        server.mode=(200,body,0);assert call([str(port)])==expected,'unknown Content-Length must remain bounded'\n    server.unknown_length=False;server.mode=(200,b'READY',.7);assert call([str(port)])==1\n    with socket.socket() as closed:closed.bind(('127.0.0.1',0));closed_port=closed.getsockname()[1]\n    assert call([str(closed_port)])==1\n    for args in [[],['80'],['65536'],['+1234'],['１２３４'],['1234','extra'],['http://localhost']]:assert call(args)==2\n    before_addr=subprocess.check_output(['ip','-j','addr','show'],text=True);before_route=subprocess.check_output(['ip','-j','route','show','table','all'],text=True)\n    source=(root/'keepalived.conf').read_text();rendered=source\n    values={'PYTHON':sys.executable,'WORKDIR':str(root),'PORT':str(port),'USER':pwd.getpwuid(os.getuid()).pw_name,'IFACE':next(name for _,name in socket.if_nameindex() if name!='lo')}\n    for key,value in values.items():assert '{{'+key+'}}' in source;rendered=rendered.replace('{{'+key+'}}',value)\n    # Restrict to the requested non-executable configuration grammar, then let the real parser validate it.\n    clean='\\n'.join(line.split('#',1)[0].split('!',1)[0] for line in rendered.splitlines())\n    lex=shlex.shlex(clean,posix=True,punctuation_chars='{}');lex.whitespace_split=True;tokens=list(lex);i=0;blocks={}\n    scalar={'script','interval','timeout','fall','rise','weight','user','state','interface','virtual_router_id','priority','advert_int','unicast_src_ip'}\n    while i<len(tokens):\n        kind=tokens[i];i+=1;assert kind in ('global_defs','vrrp_script','vrrp_instance')\n        name='' if kind=='global_defs' else tokens[i];i+=0 if kind=='global_defs' else 1\n        assert tokens[i]=='{';i+=1;data={}\n        while tokens[i]!='}':\n            key=tokens[i];i+=1;assert key not in data\n            if key=='enable_script_security':data[key]=True\n            elif key in ('unicast_peer','virtual_ipaddress','track_script'):\n                assert tokens[i]=='{';i+=1;v=[]\n                while tokens[i]!='}':v.append(tokens[i]);i+=1\n                i+=1;data[key]=v\n            else:assert key in scalar;data[key]=tokens[i];i+=1\n        i+=1;assert (kind,name) not in blocks;blocks[(kind,name)]=data\n    assert set(blocks)=={('global_defs',''),('vrrp_script','app_ready'),('vrrp_instance','APP')}\n    assert blocks[('global_defs','')]=={'enable_script_security':True}\n    assert blocks[('vrrp_script','app_ready')]=={'script':f'{sys.executable} {root}/health.py {port}','interval':'1','timeout':'1','fall':'2','rise':'2','weight':'0','user':values['USER']}\n    instance=blocks[('vrrp_instance','APP')]\n    assert instance=={'state':'BACKUP','interface':values['IFACE'],'virtual_router_id':'51','priority':'150','advert_int':'1','unicast_src_ip':'192.0.2.10','unicast_peer':['192.0.2.11'],'virtual_ipaddress':['192.0.2.100/32'],'track_script':['app_ready']}\n    path=root/'rendered.conf';path.write_text(rendered)\n    before_requests=len(server.requests)\n    run=subprocess.run(['keepalived','--config-test','--use-file='+str(path),'--log-console','--no-syslog'],capture_output=True,text=True,timeout=4)\n    assert run.returncode==0,(run.returncode,run.stderr)\n    assert len(server.requests)==before_requests,'config-test must not execute the health script'\n    assert before_addr==subprocess.check_output(['ip','-j','addr','show'],text=True)\n    assert before_route==subprocess.check_output(['ip','-j','route','show','table','all'],text=True)\n    assert (root/'keepalived.conf').read_text()==source\nfinally:\n    server.shutdown();server.server_close();thread.join(2)\nassert not thread.is_alive()\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "交付health.py与keepalived.conf：脚本接收一个ASCII数字高端口，只探测127.0.0.1该端口/ready；仅HTTP200且正文逐字节等于READY时返回0，其他状态、正文、超时或拒绝连接返回1，参数不合法返回2。不得跟随跳转、重试、受curlrc/代理改变目标；运行有界并保持stdout为空。Keepalived采用app_ready脚本、interval=1/timeout=1、fall=2/rise=2、weight=0、当前普通用户执行并由APP实例track_script引用；保留题定占位符及文档示例单播实例。",
+      "deliverables": [
+        "health.py",
+        "keepalived.conf"
+      ],
+      "verification": "python3 checks/check.py启动真实回环HTTP服务，验证READY、非就绪、尾换行/NUL、204/201/503/301、大正文、迟迟响应和拒绝连接，以及非法参数。核对脚本有界/无输出、不重试/跳转；对集成配置进行原生keepalived --config-test并核验脚本参数与track引用，config-test不能实际执行健康脚本或改变地址/路由。全部通过退出0。这里实测健康脚本与配置工件，没有运行VRRP选举，fall/rise/weight的真实状态跃迁及VIP漂移仍未验证。",
+      "failure_examples": [
+        "只判断HTTP200会把200 WAIT误当就绪；只grep进程存在也不能反映本题就绪协议。"
+      ]
+    },
+    "body": "## 环境与初始材料\n非root Linux、Python3、curl和Keepalived2.2。提供永远成功的health.py故障骨架与Keepalived模板。验收提供临时回环服务、当前用户名/接口/Python路径，文档VIP不分配到任何接口。\n\n## 操作任务\n交付health.py与keepalived.conf：脚本接收一个ASCII数字高端口，只探测127.0.0.1该端口/ready；仅HTTP200且正文逐字节等于READY时返回0，其他状态、正文、超时或拒绝连接返回1，参数不合法返回2。不得跟随跳转、重试、受curlrc/代理改变目标；运行有界并保持stdout为空。Keepalived采用app_ready脚本、interval=1/timeout=1、fall=2/rise=2、weight=0、当前普通用户执行并由APP实例track_script引用；保留题定占位符及文档示例单播实例。\n\n## 提交产物\nhealth.py完整可运行程序、keepalived.conf配置；程序由Python执行，无需更改可执行位。\n\n## 验收方法\npython3 checks/check.py启动真实回环HTTP服务，验证READY、非就绪、尾换行/NUL、204/201/503/301、大正文、迟迟响应和拒绝连接，以及非法参数。核对脚本有界/无输出、不重试/跳转；对集成配置进行原生keepalived --config-test并核验脚本参数与track引用，config-test不能实际执行健康脚本或改变地址/路由。全部通过退出0。这里实测健康脚本与配置工件，没有运行VRRP选举，fall/rise/weight的真实状态跃迁及VIP漂移仍未验证。\n\n失败示例：只判断HTTP200会把200 WAIT误当就绪；只grep进程存在也不能反映本题就绪协议。",
+    "case_signature": "curated-network-keepalived-readiness-contract|keepalived-bounded-http-readiness-script-config-contract",
+    "related_question_ids": [
+      "curated-feishu-questions-001"
+    ]
+  }
+]

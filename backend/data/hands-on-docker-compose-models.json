@@ -1,0 +1,227 @@
+[
+  {
+    "id": "src-d3238a57e1d13ba3",
+    "title": "交付生产覆盖文件：替换端口并保留继承配置",
+    "answer": "### overlay.yaml\n```yaml\nservices:\n  app:\n    command: [serve, --production]\n    ports: !override [\"127.0.0.1:${APP_PORT:?APP_PORT required}:8080\"]\n    environment:\n      LOG_LEVEL: warning\n      DEBUG_ENDPOINT: !reset null\n    volumes: [proddata:/data:ro]\n  db:\n    ports: !reset []\n```\n\n普通空列表不会清除继承的发布端口；使用!reset清除DB端口，!override整体替换app端口。卷合并按target，因此/data对应来源替换为proddata。\n\n原理补充：\n用Compose支持的config渲染查看合并后的服务、挂载、网络及插值结果，并保护可能出现的秘密。核对所用文件顺序和项目名，渲染成功后还需检查实际容器配置；文件中的期望值不自动更新已创建容器。",
+    "category": "Docker / 容器",
+    "difficulty": "入门",
+    "section": "Docker Compose",
+    "type": "code",
+    "has_answer": true,
+    "source": "topics/containers/README.md",
+    "sources": [
+      "topics/containers/README.md"
+    ],
+    "original_title": "描述使用Docker Compose的过程",
+    "original_category": "Docker / 容器",
+    "module": "docker",
+    "level": 3,
+    "topic": "Compose多文件唯一键合并与显式清空",
+    "review_status": "reviewed",
+    "version": 3,
+    "pack": "docker-runtime-completion-20261021",
+    "body": "## 环境与初始材料\n平台提供普通用户的独立Docker Compose 5.1 CLI和题给文件。仅使用config渲染与校验，不连接Docker Engine，不拉镜像、不创建容器、网络或卷。全部镜像名仅作为模型数据。YAML映射键须唯一且为字符串，每个提交文件小于32KiB；仅编辑指定产物，其他材料只读。禁止include、extends、build、外部env_file等额外来源。\n\n## 操作任务\n只编辑overlay.yaml，按base.yaml→overlay.yaml顺序合并。app命令改为[serve,--production]；仅发布一个127.0.0.1:${APP_PORT}→8080/tcp端口，删除旧0.0.0.0:8080映射。LOG_LEVEL=warning，SHARED=keep仍继承，DEBUG_ENDPOINT完全移除。/data改用proddata具名卷且只读，不保留devdata挂载。db不发布任何端口。两镜像、服务和顶层卷声明保留，端口来自验收动态APP_PORT。\n\n## 提交产物\n`overlay.yaml`。\n\n## 验收方法\n官方docker-compose config实际合并三组不同APP_PORT；逐项核对端口唯一性与绑定地址、完整环境映射、命令替换、卷target唯一键与只读标志。原base和提交内容均保持不变。失败例：ports: []不会删除继承端口，普通新端口列表会与旧发布项并存。\n\n模型通过不等于容器已运行；真实网络连通、健康检查执行和数据持久化不在本题验收范围。",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "rubric": [
+      "真实CLI接受配置并得到规定的最终模型",
+      "动态材料与边界组合正确",
+      "只读原材料不变且不访问Engine"
+    ],
+    "language": "configuration",
+    "files": {
+      "base.yaml": "services:\n  app:\n    image: registry.example.invalid/app:teaching\n    command: [serve, --development]\n    ports: [\"0.0.0.0:8080:8080\"]\n    environment: {LOG_LEVEL: debug, SHARED: keep, DEBUG_ENDPOINT: enabled}\n    volumes: [devdata:/data]\n  db:\n    image: postgres:16-alpine\n    ports: [\"5432:5432\"]\nvolumes: {devdata: {}, proddata: {}}\n",
+      "overlay.yaml": "services:\n  app:\n    ports: [\"127.0.0.1:${APP_PORT}:8080\"]\n  db:\n    ports: []\n"
+    },
+    "solution_files": {
+      "overlay.yaml": "services:\n  app:\n    command: [serve, --production]\n    ports: !override [\"127.0.0.1:${APP_PORT:?APP_PORT required}:8080\"]\n    environment:\n      LOG_LEVEL: warning\n      DEBUG_ENDPOINT: !reset null\n    volumes: [proddata:/data:ro]\n  db:\n    ports: !reset []\n"
+    },
+    "negative_files": {
+      "overlay.yaml": "services:\n  app:\n    command: [serve, --production]\n    ports: !override [\"127.0.0.1:${APP_PORT:?APP_PORT required}:8080\"]\n    environment:\n      LOG_LEVEL: warning\n      DEBUG_ENDPOINT: !reset null\n    volumes: [proddata:/data:ro]\n  db:\n    ports: []\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "docker-compose"
+        ],
+        "features": [
+          "docker-compose:v5.1"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,pathlib,subprocess,hashlib,yaml\nroot=pathlib.Path.cwd()\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n    keys=set()\n    for k,v in node.value:\n        if k.tag=='tag:yaml.org,2002:merge':continue\n        key=loader.construct_object(k,deep=deep)\n        assert isinstance(key,str) and key not in keys,'duplicate/nonstring YAML key'\n        keys.add(key)\n    loader.flatten_mapping(node)\n    return yaml.SafeLoader.construct_mapping(loader,node,deep=deep)\ndef tagged(loader,node):\n    if isinstance(node,yaml.SequenceNode):return loader.construct_sequence(node,deep=True)\n    if isinstance(node,yaml.MappingNode):return mapping(loader,node,True)\n    return loader.construct_scalar(node)\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\nStrict.add_constructor('!override',tagged);Strict.add_constructor('!reset',tagged)\ndef parse(name,allow_runtime_env=False):\n    p=root/name;assert p.is_file() and not p.is_symlink() and p.stat().st_size<32768\n    value=yaml.load(p.read_text(),Loader=Strict);assert isinstance(value,dict)\n    assert set(value)<={'services','networks','volumes','name'},'no include/extends/build or unrelated input source'\n    for service in value.get('services',{}).values():\n        assert isinstance(service,dict) and set(service)<={'image','command','ports','environment','volumes','networks','env_file','depends_on','profiles','healthcheck'},'only the stated model fields are permitted'\n        if 'env_file' in service:\n            assert allow_runtime_env,'environment source is not part of this task'\n            entries=service['env_file'] if isinstance(service['env_file'],list) else [service['env_file']]\n            assert len(entries)==1\n            entry=entries[0]\n            assert entry=='runtime.env' or (isinstance(entry,dict) and set(entry)<={'path','required'} and entry.get('path')=='runtime.env' and entry.get('required',True) is True),'external environment sources are forbidden'\n    return value\ndef native(files,flags=(),variables=None,envfile=None):\n    env={k:v for k,v in os.environ.items() if not k.upper().startswith(('DOCKER_','COMPOSE_')) and k not in ('APP_PORT','IMAGE_TAG','APP_LOG_LEVEL','APP_TOKEN','LOG_LEVEL','EMPTY')}\n    env.update(DOCKER_HOST='tcp://127.0.0.1:1',COMPOSE_DISABLE_ENV_FILE='true')\n    env.update(variables or {})\n    args=['docker-compose','--project-name','opsforge-model','--project-directory',str(root),*flags]\n    if envfile:args+=['--env-file',envfile]\n    for name in files:args+=['-f',name]\n    result=subprocess.run([*args,'config','--format','json'],cwd=root,env=env,capture_output=True,text=True,timeout=5)\n    assert result.returncode==0,result.stderr\n    return json.loads(result.stdout)\n\nimport secrets\nassert hashlib.sha256((root/'base.yaml').read_bytes()).hexdigest()=='ceeb1858b3cd08cba0c23e8772d4abed6e5c873756620e38df7dc92e30a1fada'\noverlay=parse('overlay.yaml');assert set(overlay)=={'services'} and set(overlay['services'])=={'app','db'}\nbefore=(root/'overlay.yaml').read_bytes()\nfor port in (18080,28080,30000+secrets.randbelow(10000)):\n    model=native(['base.yaml','overlay.yaml'],variables={'APP_PORT':str(port)})\n    assert set(model['services'])=={'app','db'}\n    app=model['services']['app'];db=model['services']['db']\n    assert app['image']=='registry.example.invalid/app:teaching' and db['image']=='postgres:16-alpine'\n    assert app['command']==['serve','--production']\n    assert app['environment']=={'LOG_LEVEL':'warning','SHARED':'keep'}\n    ports=app['ports'];assert len(ports)==1 and ports[0]['host_ip']=='127.0.0.1' and ports[0]['target']==8080 and ports[0]['published']==str(port) and ports[0]['protocol']=='tcp'\n    assert not db.get('ports'),'an empty untagged overlay list does not clear inherited ports'\n    mounts=app['volumes'];assert len(mounts)==1 and mounts[0]['type']=='volume' and mounts[0]['source']=='proddata' and mounts[0]['target']=='/data' and mounts[0]['read_only'] is True\nassert (root/'overlay.yaml').read_bytes()==before\nassert hashlib.sha256((root/'base.yaml').read_bytes()).hexdigest()=='ceeb1858b3cd08cba0c23e8772d4abed6e5c873756620e38df7dc92e30a1fada'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "只编辑overlay.yaml，按base.yaml→overlay.yaml顺序合并。app命令改为[serve,--production]；仅发布一个127.0.0.1:${APP_PORT}→8080/tcp端口，删除旧0.0.0.0:8080映射。LOG_LEVEL=warning，SHARED=keep仍继承，DEBUG_ENDPOINT完全移除。/data改用proddata具名卷且只读，不保留devdata挂载。db不发布任何端口。两镜像、服务和顶层卷声明保留，端口来自验收动态APP_PORT。",
+      "deliverables": [
+        "overlay.yaml"
+      ],
+      "verification": "官方docker-compose config实际合并三组不同APP_PORT；逐项核对端口唯一性与绑定地址、完整环境映射、命令替换、卷target唯一键与只读标志。原base和提交内容均保持不变。失败例：ports: []不会删除继承端口，普通新端口列表会与旧发布项并存。",
+      "failure_examples": [
+        "普通空列表不会清除继承的发布端口；使用!reset清除DB端口，!override整体替换app端口。卷合并按target，因此/data对应来源替换为proddata。"
+      ]
+    },
+    "case_signature": "src-d3238a57e1d13ba3|Compose多文件唯一键合并与显式清空",
+    "conversion": {
+      "original_id": "src-d3238a57e1d13ba3",
+      "original_title": "多份 Compose 文件和环境变量组合时，如何检查最终生效配置？",
+      "original_type": "source",
+      "preserve_history": true
+    },
+    "references": [
+      "https://docs.docker.com/reference/compose-file/merge/"
+    ]
+  },
+  {
+    "id": "curated-docker-runtime-034",
+    "module": "docker",
+    "category": "Docker / 容器",
+    "level": 2,
+    "topic": "Compose env-file插值和服务env_file覆盖",
+    "title": "分离Compose插值变量与应用运行环境",
+    "answer": "### compose.yaml\n```yaml\nservices:\n  app:\n    image: \"registry.example.invalid/app:${IMAGE_TAG:?IMAGE_TAG required}\"\n    env_file: runtime.env\n    environment:\n      LOG_LEVEL: \"${APP_LOG_LEVEL:-info}\"\n      EMPTY: \"\"\n```\n\nCLI的--env-file提供插值输入，服务env_file提供应用环境；两者用途独立。environment中的显式空值覆盖env_file，同样要区分:-与-对空字符串的处理。\n\n原理补充：\n.env等来源可参与Compose文件插值，服务env_file用于向容器提供环境变量，两者作用层次不同。用config及容器inspect核对最终值并避免泄密；修改文件后需验证实例是否被重建或实际更新。",
+    "type": "code",
+    "source": "OpsForge 容器运行管理补充题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "docker-runtime-completion-20261021",
+    "body": "## 环境与初始材料\n平台提供普通用户的独立Docker Compose 5.1 CLI和题给文件。仅使用config渲染与校验，不连接Docker Engine，不拉镜像、不创建容器、网络或卷。全部镜像名仅作为模型数据。YAML映射键须唯一且为字符串，每个提交文件小于32KiB；仅编辑指定产物，其他材料只读。禁止include、extends、build、外部env_file等额外来源。\n\n## 操作任务\n只编辑compose.yaml，唯一服务app的镜像标签从命令行--env-file image.env的IMAGE_TAG插值；应用环境APP_TOKEN必须来自服务runtime.env，不能误用image.env里的同名值。显式环境LOG_LEVEL用APP_LOG_LEVEL插值，未设置或空字符串均回退info；EMPTY显式覆盖为空字符串。不得把IMAGE_TAG或APP_LOG_LEVEL泄漏成额外应用环境，不增加端口/卷或其他服务。两个.env是只读素材，验收会换成不同值。\n\n## 提交产物\n`compose.yaml`。\n\n## 验收方法\n调用官方CLI config --format json，对未设置、非空、空字符串三种APP_LOG_LEVEL和动态镜像标签/token检验最终镜像与完整应用环境。失败例：把插值env文件当服务env_file会注入错误token且缺少运行环境字段。不执行容器中的命令。\n\n模型通过不等于容器已运行；真实网络连通、健康检查执行和数据持久化不在本题验收范围。",
+    "rubric": [
+      "真实CLI接受配置并得到规定的最终模型",
+      "动态材料与边界组合正确",
+      "只读原材料不变且不访问Engine"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/"
+    ],
+    "language": "configuration",
+    "files": {
+      "compose.yaml": "services:\n  app:\n    image: \"registry.example.invalid/app:${IMAGE_TAG}\"\n    env_file: image.env\n",
+      "image.env": "IMAGE_TAG=teaching\nAPP_TOKEN=interpolation-only\n",
+      "runtime.env": "APP_TOKEN=runtime-token\nLOG_LEVEL=runtime-default\nEMPTY=runtime-nonempty\n"
+    },
+    "solution_files": {
+      "compose.yaml": "services:\n  app:\n    image: \"registry.example.invalid/app:${IMAGE_TAG:?IMAGE_TAG required}\"\n    env_file: runtime.env\n    environment:\n      LOG_LEVEL: \"${APP_LOG_LEVEL:-info}\"\n      EMPTY: \"\"\n"
+    },
+    "negative_files": {
+      "compose.yaml": "services:\n  app:\n    image: \"registry.example.invalid/app:${IMAGE_TAG:?IMAGE_TAG required}\"\n    env_file: runtime.env\n    environment:\n      APP_TOKEN: \"${APP_TOKEN}\"\n      LOG_LEVEL: \"${APP_LOG_LEVEL:-info}\"\n      EMPTY: \"\"\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "docker-compose"
+        ],
+        "features": [
+          "docker-compose:v5.1"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,pathlib,subprocess,hashlib,yaml\nroot=pathlib.Path.cwd()\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n    keys=set()\n    for k,v in node.value:\n        if k.tag=='tag:yaml.org,2002:merge':continue\n        key=loader.construct_object(k,deep=deep)\n        assert isinstance(key,str) and key not in keys,'duplicate/nonstring YAML key'\n        keys.add(key)\n    loader.flatten_mapping(node)\n    return yaml.SafeLoader.construct_mapping(loader,node,deep=deep)\ndef tagged(loader,node):\n    if isinstance(node,yaml.SequenceNode):return loader.construct_sequence(node,deep=True)\n    if isinstance(node,yaml.MappingNode):return mapping(loader,node,True)\n    return loader.construct_scalar(node)\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\nStrict.add_constructor('!override',tagged);Strict.add_constructor('!reset',tagged)\ndef parse(name,allow_runtime_env=False):\n    p=root/name;assert p.is_file() and not p.is_symlink() and p.stat().st_size<32768\n    value=yaml.load(p.read_text(),Loader=Strict);assert isinstance(value,dict)\n    assert set(value)<={'services','networks','volumes','name'},'no include/extends/build or unrelated input source'\n    for service in value.get('services',{}).values():\n        assert isinstance(service,dict) and set(service)<={'image','command','ports','environment','volumes','networks','env_file','depends_on','profiles','healthcheck'},'only the stated model fields are permitted'\n        if 'env_file' in service:\n            assert allow_runtime_env,'environment source is not part of this task'\n            entries=service['env_file'] if isinstance(service['env_file'],list) else [service['env_file']]\n            assert len(entries)==1\n            entry=entries[0]\n            assert entry=='runtime.env' or (isinstance(entry,dict) and set(entry)<={'path','required'} and entry.get('path')=='runtime.env' and entry.get('required',True) is True),'external environment sources are forbidden'\n    return value\ndef native(files,flags=(),variables=None,envfile=None):\n    env={k:v for k,v in os.environ.items() if not k.upper().startswith(('DOCKER_','COMPOSE_')) and k not in ('APP_PORT','IMAGE_TAG','APP_LOG_LEVEL','APP_TOKEN','LOG_LEVEL','EMPTY')}\n    env.update(DOCKER_HOST='tcp://127.0.0.1:1',COMPOSE_DISABLE_ENV_FILE='true')\n    env.update(variables or {})\n    args=['docker-compose','--project-name','opsforge-model','--project-directory',str(root),*flags]\n    if envfile:args+=['--env-file',envfile]\n    for name in files:args+=['-f',name]\n    result=subprocess.run([*args,'config','--format','json'],cwd=root,env=env,capture_output=True,text=True,timeout=5)\n    assert result.returncode==0,result.stderr\n    return json.loads(result.stdout)\n\nimport secrets\nvalue=parse('compose.yaml',allow_runtime_env=True);assert set(value)=={'services'} and set(value['services'])=={'app'}\napp=value['services']['app'];assert 'env_file' in app\noriginal=(root/'compose.yaml').read_bytes()\nfor tag,log in [('release-a',None),('release-'+secrets.token_hex(3),'warning'),('release-empty','')]:\n    token='runtime-'+secrets.token_hex(12)\n    (root/'image.env').write_text('IMAGE_TAG='+tag+'\\nAPP_TOKEN=interpolation-only\\n')\n    (root/'runtime.env').write_text('APP_TOKEN='+token+'\\nLOG_LEVEL=runtime-default\\nEMPTY=runtime-nonempty\\n')\n    material={p:(root/p).read_bytes() for p in ('image.env','runtime.env')}\n    variables={} if log is None else {'APP_LOG_LEVEL':log}\n    model=native(['compose.yaml'],variables=variables,envfile='image.env');services=model['services'];assert set(services)=={'app'}\n    item=services['app'];assert item['image']=='registry.example.invalid/app:'+tag\n    assert item['environment']=={'APP_TOKEN':token,'LOG_LEVEL':log or 'info','EMPTY':''},'interpolation inputs are not an implicit container environment'\n    assert not item.get('ports') and not item.get('volumes')\n    assert all((root/p).read_bytes()==data for p,data in material.items())\nassert (root/'compose.yaml').read_bytes()==original\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "只编辑compose.yaml，唯一服务app的镜像标签从命令行--env-file image.env的IMAGE_TAG插值；应用环境APP_TOKEN必须来自服务runtime.env，不能误用image.env里的同名值。显式环境LOG_LEVEL用APP_LOG_LEVEL插值，未设置或空字符串均回退info；EMPTY显式覆盖为空字符串。不得把IMAGE_TAG或APP_LOG_LEVEL泄漏成额外应用环境，不增加端口/卷或其他服务。两个.env是只读素材，验收会换成不同值。",
+      "deliverables": [
+        "compose.yaml"
+      ],
+      "verification": "调用官方CLI config --format json，对未设置、非空、空字符串三种APP_LOG_LEVEL和动态镜像标签/token检验最终镜像与完整应用环境。失败例：把插值env文件当服务env_file会注入错误token且缺少运行环境字段。不执行容器中的命令。",
+      "failure_examples": [
+        "CLI的--env-file提供插值输入，服务env_file提供应用环境；两者用途独立。environment中的显式空值覆盖env_file，同样要区分:-与-对空字符串的处理。"
+      ]
+    },
+    "case_signature": "curated-docker-runtime-034|Compose env-file插值和服务env_file覆盖",
+    "conversion": {
+      "original_id": "curated-docker-runtime-034",
+      "original_title": "Compose 的 .env 插值文件与服务 env_file 是同一用途吗？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-docker-runtime-035",
+    "module": "docker",
+    "category": "Docker / 容器",
+    "level": 2,
+    "topic": "Compose profile选择与模型依赖闭包",
+    "title": "修复可选工具的Profiles与核心依赖闭包",
+    "answer": "### compose.yaml\n```yaml\nservices:\n  app:\n    image: registry.example.invalid/app:teaching\n    depends_on: [db]\n  db:\n    image: postgres:16-alpine\n  debug:\n    image: busybox:1.36\n    profiles: [debug]\n    depends_on: [db]\n  backup:\n    image: busybox:1.36\n    profiles: [ops]\n    depends_on: [db]\n```\n\n核心依赖服务不应该只落入可选profile；可选工具按用途分组，依赖对象仍须出现在对应的最终模型。此处service_started是模型约束，不能保证真实业务ready。\n\n原理补充：\nprofiles用于选择部分服务是否参与本次启动，未启用的服务可能不会创建。明确启动目标、profile集合和依赖关系，检查渲染及实际服务列表；不能把可选调试服务的缺席误判为主业务故障。",
+    "type": "code",
+    "source": "OpsForge 容器运行管理补充题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "docker-runtime-completion-20261021",
+    "body": "## 环境与初始材料\n平台提供普通用户的独立Docker Compose 5.1 CLI和题给文件。仅使用config渲染与校验，不连接Docker Engine，不拉镜像、不创建容器、网络或卷。全部镜像名仅作为模型数据。YAML映射键须唯一且为字符串，每个提交文件小于32KiB；仅编辑指定产物，其他材料只读。禁止include、extends、build、外部env_file等额外来源。\n\n## 操作任务\n只编辑compose.yaml。app和db是默认核心服务；debug工具仅在debug profile时入选，backup工具仅在ops profile时入选。app/debug/backup均必须依赖db（service_started、required=true），db不依赖其他服务。保留四个镜像，不发布端口、不加卷。默认、debug、ops、两者启用的模型都必须完整且无缺失依赖，不能通过取消依赖让错误配置蒙混过关。\n\n## 提交产物\n`compose.yaml`。\n\n## 验收方法\n官方Compose config验证默认、--profile debug、--profile ops、--profile *以及COMPOSE_PROFILES=debug,ops五种模型的实际服务集合与依赖。失败例：给核心db只标debug会使默认app依赖缺失；把backup也标debug会错误开启工具。只验证选择和依赖模型，不把service_started当作数据库已就绪。\n\n模型通过不等于容器已运行；真实网络连通、健康检查执行和数据持久化不在本题验收范围。",
+    "rubric": [
+      "真实CLI接受配置并得到规定的最终模型",
+      "动态材料与边界组合正确",
+      "只读原材料不变且不访问Engine"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.docker.com/compose/how-tos/profiles/"
+    ],
+    "language": "configuration",
+    "files": {
+      "compose.yaml": "services:\n  app:\n    image: registry.example.invalid/app:teaching\n    depends_on: [db]\n  db:\n    image: postgres:16-alpine\n    profiles: [debug]\n  debug:\n    image: busybox:1.36\n    profiles: [debug]\n    depends_on: [db]\n  backup:\n    image: busybox:1.36\n    profiles: [ops]\n    depends_on: [db]\n"
+    },
+    "solution_files": {
+      "compose.yaml": "services:\n  app:\n    image: registry.example.invalid/app:teaching\n    depends_on: [db]\n  db:\n    image: postgres:16-alpine\n  debug:\n    image: busybox:1.36\n    profiles: [debug]\n    depends_on: [db]\n  backup:\n    image: busybox:1.36\n    profiles: [ops]\n    depends_on: [db]\n"
+    },
+    "negative_files": {
+      "compose.yaml": "services:\n  app:\n    image: registry.example.invalid/app:teaching\n    depends_on: [db]\n  db:\n    image: postgres:16-alpine\n  debug:\n    image: busybox:1.36\n    profiles: [debug]\n    depends_on: [db]\n  backup:\n    image: busybox:1.36\n    profiles: [debug]\n    depends_on: [db]\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "docker-compose"
+        ],
+        "features": [
+          "docker-compose:v5.1"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,pathlib,subprocess,hashlib,yaml\nroot=pathlib.Path.cwd()\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n    keys=set()\n    for k,v in node.value:\n        if k.tag=='tag:yaml.org,2002:merge':continue\n        key=loader.construct_object(k,deep=deep)\n        assert isinstance(key,str) and key not in keys,'duplicate/nonstring YAML key'\n        keys.add(key)\n    loader.flatten_mapping(node)\n    return yaml.SafeLoader.construct_mapping(loader,node,deep=deep)\ndef tagged(loader,node):\n    if isinstance(node,yaml.SequenceNode):return loader.construct_sequence(node,deep=True)\n    if isinstance(node,yaml.MappingNode):return mapping(loader,node,True)\n    return loader.construct_scalar(node)\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\nStrict.add_constructor('!override',tagged);Strict.add_constructor('!reset',tagged)\ndef parse(name,allow_runtime_env=False):\n    p=root/name;assert p.is_file() and not p.is_symlink() and p.stat().st_size<32768\n    value=yaml.load(p.read_text(),Loader=Strict);assert isinstance(value,dict)\n    assert set(value)<={'services','networks','volumes','name'},'no include/extends/build or unrelated input source'\n    for service in value.get('services',{}).values():\n        assert isinstance(service,dict) and set(service)<={'image','command','ports','environment','volumes','networks','env_file','depends_on','profiles','healthcheck'},'only the stated model fields are permitted'\n        if 'env_file' in service:\n            assert allow_runtime_env,'environment source is not part of this task'\n            entries=service['env_file'] if isinstance(service['env_file'],list) else [service['env_file']]\n            assert len(entries)==1\n            entry=entries[0]\n            assert entry=='runtime.env' or (isinstance(entry,dict) and set(entry)<={'path','required'} and entry.get('path')=='runtime.env' and entry.get('required',True) is True),'external environment sources are forbidden'\n    return value\ndef native(files,flags=(),variables=None,envfile=None):\n    env={k:v for k,v in os.environ.items() if not k.upper().startswith(('DOCKER_','COMPOSE_')) and k not in ('APP_PORT','IMAGE_TAG','APP_LOG_LEVEL','APP_TOKEN','LOG_LEVEL','EMPTY')}\n    env.update(DOCKER_HOST='tcp://127.0.0.1:1',COMPOSE_DISABLE_ENV_FILE='true')\n    env.update(variables or {})\n    args=['docker-compose','--project-name','opsforge-model','--project-directory',str(root),*flags]\n    if envfile:args+=['--env-file',envfile]\n    for name in files:args+=['-f',name]\n    result=subprocess.run([*args,'config','--format','json'],cwd=root,env=env,capture_output=True,text=True,timeout=5)\n    assert result.returncode==0,result.stderr\n    return json.loads(result.stdout)\n\ncandidate=parse('compose.yaml');assert set(candidate)=={'services'} and set(candidate['services'])=={'app','db','debug','backup'}\nbefore=(root/'compose.yaml').read_bytes()\ncases=[([],{}, {'app','db'}),(['--profile','debug'],{}, {'app','db','debug'}),(['--profile','ops'],{}, {'app','db','backup'}),(['--profile','*'],{}, {'app','db','debug','backup'}),([],{'COMPOSE_PROFILES':'debug,ops'},{'app','db','debug','backup'})]\nfor flags,variables,wanted in cases:\n    model=native(['compose.yaml'],flags=flags,variables=variables);services=model['services'];assert set(services)==wanted\n    for name,service in services.items():\n        assert service['image']==({'app':'registry.example.invalid/app:teaching','db':'postgres:16-alpine'}.get(name,'busybox:1.36'))\n        assert not service.get('ports') and not service.get('volumes')\n        if name=='db':assert not service.get('depends_on') and not service.get('profiles')\n        else:\n            assert set(service.get('depends_on',{}))=={'db'}\n            dependency=service['depends_on']['db'];assert dependency['condition']=='service_started' and dependency.get('required',True) is True\n    if 'debug' in services:assert services['debug']['profiles']==['debug']\n    if 'backup' in services:assert services['backup']['profiles']==['ops']\nassert (root/'compose.yaml').read_bytes()==before\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "只编辑compose.yaml。app和db是默认核心服务；debug工具仅在debug profile时入选，backup工具仅在ops profile时入选。app/debug/backup均必须依赖db（service_started、required=true），db不依赖其他服务。保留四个镜像，不发布端口、不加卷。默认、debug、ops、两者启用的模型都必须完整且无缺失依赖，不能通过取消依赖让错误配置蒙混过关。",
+      "deliverables": [
+        "compose.yaml"
+      ],
+      "verification": "官方Compose config验证默认、--profile debug、--profile ops、--profile *以及COMPOSE_PROFILES=debug,ops五种模型的实际服务集合与依赖。失败例：给核心db只标debug会使默认app依赖缺失；把backup也标debug会错误开启工具。只验证选择和依赖模型，不把service_started当作数据库已就绪。",
+      "failure_examples": [
+        "核心依赖服务不应该只落入可选profile；可选工具按用途分组，依赖对象仍须出现在对应的最终模型。此处service_started是模型约束，不能保证真实业务ready。"
+      ]
+    },
+    "case_signature": "curated-docker-runtime-035|Compose profile选择与模型依赖闭包",
+    "conversion": {
+      "original_id": "curated-docker-runtime-035",
+      "original_title": "Compose profiles 如何影响默认启动集合和依赖检查？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

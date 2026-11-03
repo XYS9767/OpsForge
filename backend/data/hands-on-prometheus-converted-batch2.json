@@ -1,0 +1,182 @@
+[
+  {
+    "id": "curated-feishu-project-005",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "topic": "告警规则与SLO",
+    "level": 2,
+    "type": "code",
+    "title": "可用内存告警实作：缓存可回收、边界值和无效总量",
+    "body": "## 环境与初始材料\n平台隔离工作区提供promtool 3.5和Python/PyYAML。编辑rules.yaml，fixtures.yaml提供固定Prometheus规则测试输入；无需学员自建Prometheus，也不连接生产。\n\n## 操作任务\n用MemAvailable计算可用比率并保留instance/job；总量为0或缺失时不产生该比率。严格低于15%持续2分钟才告警，等于15%不告警，恢复当次评估解除。不能用MemFree代替MemAvailable，健康但缓存占用多的节点不能误报。\n\n## 产物\n提交rules.yaml，保留题定记录规则和告警的名称、标签合同。\n\n## 验收方法\n执行python3 checks/check.py：官方promtool check rules检查规则，再由promtool test rules真实计算样本、告警pending/firing/恢复。可信fixtures由验收器独立加载，不接受删改测试来通过；允许等价PromQL表达式，不做公式字符串匹配。参考解、原配置、典型错误及重复键四路验证。\n\n## 原理复习\n写出基于可用内存的告警表达式\nnode_exporter 已暴露主机内存指标，要求可用内存比例持续低于 10% 时报警。说明表达式、标签和持续时间。",
+    "answer": "```yaml\ngroups:\n- name: memory-availability\n  interval: 1m\n  rules:\n  - record: instance:memory_available:ratio\n    expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes and on(instance,job)\n      (node_memory_MemTotal_bytes > 0)\n  - alert: NodeMemoryAvailableLow\n    expr: instance:memory_available:ratio < 0.15\n    for: 2m\n    labels:\n      severity: warning\n    annotations:\n      summary: Available memory below 15 percent\n```\n\nMemFree不含可回收缓存，会把缓存充分利用误报成内存不足。记录规则按instance和job匹配有效总量，避免同instance另一job的合法分母放行无效序列；可信样本包括缺失/零总量、阈值相等和恢复，未宣称缺数据时业务健康，缺采集告警应单独配置。\n\n### 原题原理\n可使用 100 * (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) > 90。先核对两侧序列的主机标签匹配与单位，规则设置适当 for 持续时间以过滤短暂波动，并保留 instance 等定位标签。用规则检查工具及历史数据验证阈值；同时监控抓取失败，不能把指标缺失当作内存正常。MemAvailable 比单独的 MemFree 更适合表达可用内存，但应结合工作负载评估阈值。",
+    "rubric": [
+      "表达式与单位",
+      "标签匹配",
+      "持续窗口",
+      "缺失指标监控"
+    ],
+    "hints": [],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/",
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/"
+    ],
+    "source": "飞书项目题知识点改编；回答框架不代表用户实际项目经历",
+    "source_block_id": "BT41dLHelozL6lxkyjPcHkPYn0g",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "feishu-project-reviewed",
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/W8tBwAIvUiD0S8kXRyPc29tqnvg",
+        "block_ids": [
+          "BT41dLHelozL6lxkyjPcHkPYn0g"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "YW0ZdBz6lo3IbtxPhsccGzYLncb",
+          "HXWUdwlcJod2gFx1sjUcYbxgn4c",
+          "JBpNd4uC2oxVSbxJNhGcX6RLnoh",
+          "EoFLdsZKVoqxDmxGDdScOnZonSb"
+        ]
+      }
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "has_answer": true,
+    "files": {
+      "rules.yaml": "groups:\n- name: memory-availability\n  interval: 1m\n  rules:\n  - record: instance:memory_available:ratio\n    expr: node_memory_MemFree_bytes / node_memory_MemTotal_bytes\n  - alert: NodeMemoryAvailableLow\n    expr: instance:memory_available:ratio < 0.15\n    for: 2m\n    labels:\n      severity: warning\n    annotations:\n      summary: Available memory below 15 percent\n",
+      "fixtures.yaml": "rule_files:\n- rules.yaml\nevaluation_interval: 1m\ntests:\n- interval: 1m\n  input_series:\n  - series: node_memory_MemAvailable_bytes{instance=\"busy\",job=\"node\"}\n    values: 10+0x4 60+0x3\n  - series: node_memory_MemTotal_bytes{instance=\"busy\",job=\"node\"}\n    values: 100+0x8\n  - series: node_memory_MemFree_bytes{instance=\"busy\",job=\"node\"}\n    values: 1+0x8\n  - series: node_memory_MemAvailable_bytes{instance=\"healthy\",job=\"node\"}\n    values: 60+0x8\n  - series: node_memory_MemTotal_bytes{instance=\"healthy\",job=\"node\"}\n    values: 100+0x8\n  - series: node_memory_MemFree_bytes{instance=\"healthy\",job=\"node\"}\n    values: 1+0x8\n  - series: node_memory_MemAvailable_bytes{instance=\"boundary\",job=\"node\"}\n    values: 15+0x8\n  - series: node_memory_MemTotal_bytes{instance=\"boundary\",job=\"node\"}\n    values: 100+0x8\n  - series: node_memory_MemFree_bytes{instance=\"boundary\",job=\"node\"}\n    values: 1+0x8\n  - series: node_memory_MemAvailable_bytes{instance=\"invalid\",job=\"node\"}\n    values: 1+0x8\n  - series: node_memory_MemTotal_bytes{instance=\"invalid\",job=\"node\"}\n    values: 0+0x8\n  - series: node_memory_MemFree_bytes{instance=\"invalid\",job=\"node\"}\n    values: 1+0x8\n  - series: node_memory_MemAvailable_bytes{instance=\"missing\",job=\"node\"}\n    values: 1+0x8\n  - series: node_memory_MemAvailable_bytes{instance=\"busy\",job=\"other\"}\n    values: 1+0x8\n  - series: node_memory_MemTotal_bytes{instance=\"busy\",job=\"other\"}\n    values: 0+0x8\n  - series: node_memory_MemFree_bytes{instance=\"busy\",job=\"other\"}\n    values: 1+0x8\n  promql_expr_test:\n  - expr: instance:memory_available:ratio\n    eval_time: 3m\n    exp_samples:\n    - labels: instance:memory_available:ratio{instance=\"busy\",job=\"node\"}\n      value: 0.1\n    - labels: instance:memory_available:ratio{instance=\"healthy\",job=\"node\"}\n      value: 0.6\n    - labels: instance:memory_available:ratio{instance=\"boundary\",job=\"node\"}\n      value: 0.15\n  alert_rule_test:\n  - eval_time: 1m\n    alertname: NodeMemoryAvailableLow\n    exp_alerts: []\n  - eval_time: 2m\n    alertname: NodeMemoryAvailableLow\n    exp_alerts:\n    - exp_labels:\n        instance: busy\n        job: node\n        severity: warning\n      exp_annotations:\n        summary: Available memory below 15 percent\n  - eval_time: 4m\n    alertname: NodeMemoryAvailableLow\n    exp_alerts:\n    - exp_labels:\n        instance: busy\n        job: node\n        severity: warning\n      exp_annotations:\n        summary: Available memory below 15 percent\n  - eval_time: 5m\n    alertname: NodeMemoryAvailableLow\n    exp_alerts: []\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: memory-availability\n  interval: 1m\n  rules:\n  - record: instance:memory_available:ratio\n    expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes and on(instance,job)\n      (node_memory_MemTotal_bytes > 0)\n  - alert: NodeMemoryAvailableLow\n    expr: instance:memory_available:ratio < 0.15\n    for: 2m\n    labels:\n      severity: warning\n    annotations:\n      summary: Available memory below 15 percent\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: memory-availability\n  interval: 1m\n  rules:\n  - record: instance:memory_available:ratio\n    expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes and on(instance,job)\n      (node_memory_MemTotal_bytes > 0)\n  - alert: NodeMemoryAvailableLow\n    expr: instance:memory_available:ratio <= 0.15\n    for: 2m\n    labels:\n      severity: warning\n    annotations:\n      summary: Available memory below 15 percent\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-promtool",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "用MemAvailable计算可用比率并保留instance/job；总量为0或缺失时不产生该比率。严格低于15%持续2分钟才告警，等于15%不告警，恢复当次评估解除。不能用MemFree代替MemAvailable，健康但缓存占用多的节点不能误报。",
+      "verification": "官方promtool真实离线执行PromQL与告警时间状态；带独立边界样本。",
+      "capability_gap": [
+        "不运行抓取、服务发现、Alertmanager通知，不将离线规则执行冒充线上链路通过。"
+      ],
+      "failure_examples": [
+        "negative_files对应题目中容易产生误报或错误数值的配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "promtool"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nEXPECTED={'groups': [{'name': 'memory-availability', 'interval': '1m', 'rules': [{'record': 'instance:memory_available:ratio', 'expr': 'node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes and on(instance,job) (node_memory_MemTotal_bytes > 0)'}, {'alert': 'NodeMemoryAvailableLow', 'expr': 'instance:memory_available:ratio < 0.15', 'for': '2m', 'labels': {'severity': 'warning'}, 'annotations': {'summary': 'Available memory below 15 percent'}}]}]}\nFIXTURE={'rule_files': ['rules.yaml'], 'evaluation_interval': '1m', 'tests': [{'interval': '1m', 'input_series': [{'series': 'node_memory_MemAvailable_bytes{instance=\"busy\",job=\"node\"}', 'values': '10+0x4 60+0x3'}, {'series': 'node_memory_MemTotal_bytes{instance=\"busy\",job=\"node\"}', 'values': '100+0x8'}, {'series': 'node_memory_MemFree_bytes{instance=\"busy\",job=\"node\"}', 'values': '1+0x8'}, {'series': 'node_memory_MemAvailable_bytes{instance=\"healthy\",job=\"node\"}', 'values': '60+0x8'}, {'series': 'node_memory_MemTotal_bytes{instance=\"healthy\",job=\"node\"}', 'values': '100+0x8'}, {'series': 'node_memory_MemFree_bytes{instance=\"healthy\",job=\"node\"}', 'values': '1+0x8'}, {'series': 'node_memory_MemAvailable_bytes{instance=\"boundary\",job=\"node\"}', 'values': '15+0x8'}, {'series': 'node_memory_MemTotal_bytes{instance=\"boundary\",job=\"node\"}', 'values': '100+0x8'}, {'series': 'node_memory_MemFree_bytes{instance=\"boundary\",job=\"node\"}', 'values': '1+0x8'}, {'series': 'node_memory_MemAvailable_bytes{instance=\"invalid\",job=\"node\"}', 'values': '1+0x8'}, {'series': 'node_memory_MemTotal_bytes{instance=\"invalid\",job=\"node\"}', 'values': '0+0x8'}, {'series': 'node_memory_MemFree_bytes{instance=\"invalid\",job=\"node\"}', 'values': '1+0x8'}, {'series': 'node_memory_MemAvailable_bytes{instance=\"missing\",job=\"node\"}', 'values': '1+0x8'}, {'series': 'node_memory_MemAvailable_bytes{instance=\"busy\",job=\"other\"}', 'values': '1+0x8'}, {'series': 'node_memory_MemTotal_bytes{instance=\"busy\",job=\"other\"}', 'values': '0+0x8'}, {'series': 'node_memory_MemFree_bytes{instance=\"busy\",job=\"other\"}', 'values': '1+0x8'}], 'promql_expr_test': [{'expr': 'instance:memory_available:ratio', 'eval_time': '3m', 'exp_samples': [{'labels': 'instance:memory_available:ratio{instance=\"busy\",job=\"node\"}', 'value': 0.1}, {'labels': 'instance:memory_available:ratio{instance=\"healthy\",job=\"node\"}', 'value': 0.6}, {'labels': 'instance:memory_available:ratio{instance=\"boundary\",job=\"node\"}', 'value': 0.15}]}], 'alert_rule_test': [{'eval_time': '1m', 'alertname': 'NodeMemoryAvailableLow', 'exp_alerts': []}, {'eval_time': '2m', 'alertname': 'NodeMemoryAvailableLow', 'exp_alerts': [{'exp_labels': {'instance': 'busy', 'job': 'node', 'severity': 'warning'}, 'exp_annotations': {'summary': 'Available memory below 15 percent'}}]}, {'eval_time': '4m', 'alertname': 'NodeMemoryAvailableLow', 'exp_alerts': [{'exp_labels': {'instance': 'busy', 'job': 'node', 'severity': 'warning'}, 'exp_annotations': {'summary': 'Available memory below 15 percent'}}]}, {'eval_time': '5m', 'alertname': 'NodeMemoryAvailableLow', 'exp_alerts': []}]}]}\nr=load('rules.yaml')\nassert set(r)=={'groups'} and len(r['groups'])==1\ng=r['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']==EXPECTED['groups'][0]['name'] and g['interval']=='1m'\nassert len(g['rules'])==len(EXPECTED['groups'][0]['rules'])\nfor actual,expected in zip(g['rules'],EXPECTED['groups'][0]['rules']):\n assert set(actual)==set(expected)\n assert {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in expected.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\n\nassert shutil.which('promtool'),'platform must supply native promtool'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-rules-') as tmp:\n fixture=copy.deepcopy(FIXTURE);fixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\n path=pathlib.Path(tmp)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf-8')\n for args in [['promtool','check','rules','rules.yaml'],['promtool','test','rules',str(path)]]:\n  p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n  print(p.stdout);print(p.stderr);assert p.returncode==0,'native rule execution failed'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-feishu-project-005",
+      "original_type": "practice",
+      "original_title": "写出基于可用内存的告警表达式",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-088",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 4,
+    "topic": "PromQL查询与计算",
+    "title": "实例重启计数器尖峰修复：逐序列识别reset后再聚合",
+    "answer": "```yaml\ngroups:\n- name: counter-reset-safe\n  interval: 1m\n  rules:\n  - record: service:counter_sum\n    expr: sum by(service) (http_requests_total)\n  - record: service:request_rate2m\n    expr: sum by(service) (rate(http_requests_total[2m]))\n```\n\n逐序列rate才识别各自reset。先sum后rate把其他实例的历史累计量算进重启重置，产生虚高；重启瞬间没有观测到的请求不能臆造，样本的reset区间a贡献0而b仍10。4m窗口首样本是重启后的0，rate不会将外推越过counter零点，a只贡献0.5，合计10.5；5m恢复合计11。旧累计记录可保留，但不能作新速率的数据源。\n\n### 原题原理\n检查各实例counter与启动时间，确认独立重置和实例变化被预先求和混合。改为每序列rate后按业务维度sum，使用重置样本验证旧新表达式差异。核对总量与请求日志，不能只裁剪图表最大值。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "检查各实例counter与启动时间，确认独立重置和实例变化被预先求和混合。",
+      "改为每序列rate后按业务维度sum，使用重置样本验证旧新表达式差异。",
+      "核对总量与请求日志，不能只裁剪图表最大值。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/",
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/"
+    ],
+    "incident_signature": "prometheus-aggregate-before-rate-counter-reset",
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: counter-reset-safe\n  interval: 1m\n  rules:\n  - record: service:counter_sum\n    expr: sum by(service) (http_requests_total)\n  - record: service:request_rate2m\n    expr: service:counter_sum\n",
+      "fixtures.yaml": "rule_files:\n- rules.yaml\nevaluation_interval: 1m\ntests:\n- interval: 1m\n  input_series:\n  - series: http_requests_total{service=\"checkout\",instance=\"a\"}\n    values: 1000 1060 1120 0 60 120\n  - series: http_requests_total{service=\"checkout\",instance=\"b\"}\n    values: 10000 10600 11200 11800 12400 13000\n  - series: http_requests_total{service=\"steady\",instance=\"x\"}\n    values: 0+120x5\n  - series: http_requests_total{service=\"steady\",instance=\"y\"}\n    values: 0+180x5\n  promql_expr_test:\n  - expr: service:request_rate2m\n    eval_time: 2m\n    exp_samples:\n    - labels: service:request_rate2m{service=\"checkout\"}\n      value: 11\n    - labels: service:request_rate2m{service=\"steady\"}\n      value: 5\n  - expr: service:request_rate2m\n    eval_time: 3m\n    exp_samples:\n    - labels: service:request_rate2m{service=\"checkout\"}\n      value: 10\n    - labels: service:request_rate2m{service=\"steady\"}\n      value: 5\n  - expr: service:request_rate2m\n    eval_time: 4m\n    exp_samples:\n    - labels: service:request_rate2m{service=\"checkout\"}\n      value: 10.5\n    - labels: service:request_rate2m{service=\"steady\"}\n      value: 5\n  - expr: service:request_rate2m\n    eval_time: 5m\n    exp_samples:\n    - labels: service:request_rate2m{service=\"checkout\"}\n      value: 11\n    - labels: service:request_rate2m{service=\"steady\"}\n      value: 5\n  - expr: service:counter_sum\n    eval_time: 3m\n    exp_samples:\n    - labels: service:counter_sum{service=\"checkout\"}\n      value: 11800\n    - labels: service:counter_sum{service=\"steady\"}\n      value: 900\n  - expr: service:counter_sum\n    eval_time: 4m\n    exp_samples:\n    - labels: service:counter_sum{service=\"checkout\"}\n      value: 12460\n    - labels: service:counter_sum{service=\"steady\"}\n      value: 1200\n- interval: 1m\n  input_series:\n  - series: http_requests_total{service=\"orders\",instance=\"a\"}\n    values: 2000 2120 2240 0 120 240\n  - series: http_requests_total{service=\"orders\",instance=\"b\"}\n    values: 20000 21200 22400 23600 24800 26000\n  - series: http_requests_total{service=\"batch\",instance=\"x\"}\n    values: 0+240x5\n  - series: http_requests_total{service=\"batch\",instance=\"y\"}\n    values: 0+360x5\n  promql_expr_test:\n  - expr: service:request_rate2m\n    eval_time: 2m\n    exp_samples:\n    - labels: service:request_rate2m{service=\"orders\"}\n      value: 22\n    - labels: service:request_rate2m{service=\"batch\"}\n      value: 10\n  - expr: service:request_rate2m\n    eval_time: 3m\n    exp_samples:\n    - labels: service:request_rate2m{service=\"orders\"}\n      value: 20\n    - labels: service:request_rate2m{service=\"batch\"}\n      value: 10\n  - expr: service:request_rate2m\n    eval_time: 4m\n    exp_samples:\n    - labels: service:request_rate2m{service=\"orders\"}\n      value: 21.0\n    - labels: service:request_rate2m{service=\"batch\"}\n      value: 10\n  - expr: service:request_rate2m\n    eval_time: 5m\n    exp_samples:\n    - labels: service:request_rate2m{service=\"orders\"}\n      value: 22\n    - labels: service:request_rate2m{service=\"batch\"}\n      value: 10\n  - expr: service:counter_sum\n    eval_time: 3m\n    exp_samples:\n    - labels: service:counter_sum{service=\"orders\"}\n      value: 23600\n    - labels: service:counter_sum{service=\"batch\"}\n      value: 1800\n  - expr: service:counter_sum\n    eval_time: 4m\n    exp_samples:\n    - labels: service:counter_sum{service=\"orders\"}\n      value: 24920\n    - labels: service:counter_sum{service=\"batch\"}\n      value: 2400\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: counter-reset-safe\n  interval: 1m\n  rules:\n  - record: service:counter_sum\n    expr: sum by(service) (http_requests_total)\n  - record: service:request_rate2m\n    expr: sum by(service) (rate(http_requests_total[2m]))\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: counter-reset-safe\n  interval: 1m\n  rules:\n  - record: service:counter_sum\n    expr: sum by(service) (http_requests_total)\n  - record: service:request_rate2m\n    expr: rate(service:counter_sum[2m])\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供promtool 3.5和Python/PyYAML。编辑rules.yaml，fixtures.yaml提供固定Prometheus规则测试输入；无需学员自建Prometheus，也不连接生产。\n\n## 操作任务\n保留service:counter_sum供旧看板使用，但修复service:request_rate2m为每服务实际每秒速率。实例a重启的分钟应为checkout=10，4m时因零点外推边界为10.5、5m恢复11，稳态服务始终5。输出只保留service标签，不可硬编码实例、服务和固定数值，也不能对聚合后的counter做rate。提供的原始样本保留重启前较大累计量，能复现错误的聚合reset判断。\n\n## 产物\n提交rules.yaml，保留题定记录规则和告警的名称、标签合同。\n\n## 验收方法\n执行python3 checks/check.py：官方promtool check rules检查规则，再由promtool test rules真实计算样本、告警pending/firing/恢复。可信fixtures由验收器独立加载，不接受删改测试来通过；允许等价PromQL表达式，不做公式字符串匹配。参考解、原配置、典型错误及重复键四路验证。\n\n## 原理复习\n某实例重启后总请求速率出现异常尖峰，表达式先sum累计值再rate。如何修正？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-promtool",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "保留service:counter_sum供旧看板使用，但修复service:request_rate2m为每服务实际每秒速率。实例a重启的分钟应为checkout=10，4m时因零点外推边界为10.5、5m恢复11，稳态服务始终5。输出只保留service标签，不可硬编码实例、服务和固定数值，也不能对聚合后的counter做rate。提供的原始样本保留重启前较大累计量，能复现错误的聚合reset判断。",
+      "verification": "官方promtool真实离线执行PromQL与告警时间状态；带独立边界样本。",
+      "capability_gap": [
+        "不运行抓取、服务发现、Alertmanager通知，不将离线规则执行冒充线上链路通过。"
+      ],
+      "failure_examples": [
+        "negative_files对应题目中容易产生误报或错误数值的配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "promtool"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nEXPECTED={'groups': [{'name': 'counter-reset-safe', 'interval': '1m', 'rules': [{'record': 'service:counter_sum', 'expr': 'sum by(service) (http_requests_total)'}, {'record': 'service:request_rate2m', 'expr': 'sum by(service) (rate(http_requests_total[2m]))'}]}]}\nFIXTURE={'rule_files': ['rules.yaml'], 'evaluation_interval': '1m', 'tests': [{'interval': '1m', 'input_series': [{'series': 'http_requests_total{service=\"checkout\",instance=\"a\"}', 'values': '1000 1060 1120 0 60 120'}, {'series': 'http_requests_total{service=\"checkout\",instance=\"b\"}', 'values': '10000 10600 11200 11800 12400 13000'}, {'series': 'http_requests_total{service=\"steady\",instance=\"x\"}', 'values': '0+120x5'}, {'series': 'http_requests_total{service=\"steady\",instance=\"y\"}', 'values': '0+180x5'}], 'promql_expr_test': [{'expr': 'service:request_rate2m', 'eval_time': '2m', 'exp_samples': [{'labels': 'service:request_rate2m{service=\"checkout\"}', 'value': 11}, {'labels': 'service:request_rate2m{service=\"steady\"}', 'value': 5}]}, {'expr': 'service:request_rate2m', 'eval_time': '3m', 'exp_samples': [{'labels': 'service:request_rate2m{service=\"checkout\"}', 'value': 10}, {'labels': 'service:request_rate2m{service=\"steady\"}', 'value': 5}]}, {'expr': 'service:request_rate2m', 'eval_time': '4m', 'exp_samples': [{'labels': 'service:request_rate2m{service=\"checkout\"}', 'value': 10.5}, {'labels': 'service:request_rate2m{service=\"steady\"}', 'value': 5}]}, {'expr': 'service:request_rate2m', 'eval_time': '5m', 'exp_samples': [{'labels': 'service:request_rate2m{service=\"checkout\"}', 'value': 11}, {'labels': 'service:request_rate2m{service=\"steady\"}', 'value': 5}]}, {'expr': 'service:counter_sum', 'eval_time': '3m', 'exp_samples': [{'labels': 'service:counter_sum{service=\"checkout\"}', 'value': 11800}, {'labels': 'service:counter_sum{service=\"steady\"}', 'value': 900}]}, {'expr': 'service:counter_sum', 'eval_time': '4m', 'exp_samples': [{'labels': 'service:counter_sum{service=\"checkout\"}', 'value': 12460}, {'labels': 'service:counter_sum{service=\"steady\"}', 'value': 1200}]}]}, {'interval': '1m', 'input_series': [{'series': 'http_requests_total{service=\"orders\",instance=\"a\"}', 'values': '2000 2120 2240 0 120 240'}, {'series': 'http_requests_total{service=\"orders\",instance=\"b\"}', 'values': '20000 21200 22400 23600 24800 26000'}, {'series': 'http_requests_total{service=\"batch\",instance=\"x\"}', 'values': '0+240x5'}, {'series': 'http_requests_total{service=\"batch\",instance=\"y\"}', 'values': '0+360x5'}], 'promql_expr_test': [{'expr': 'service:request_rate2m', 'eval_time': '2m', 'exp_samples': [{'labels': 'service:request_rate2m{service=\"orders\"}', 'value': 22}, {'labels': 'service:request_rate2m{service=\"batch\"}', 'value': 10}]}, {'expr': 'service:request_rate2m', 'eval_time': '3m', 'exp_samples': [{'labels': 'service:request_rate2m{service=\"orders\"}', 'value': 20}, {'labels': 'service:request_rate2m{service=\"batch\"}', 'value': 10}]}, {'expr': 'service:request_rate2m', 'eval_time': '4m', 'exp_samples': [{'labels': 'service:request_rate2m{service=\"orders\"}', 'value': 21.0}, {'labels': 'service:request_rate2m{service=\"batch\"}', 'value': 10}]}, {'expr': 'service:request_rate2m', 'eval_time': '5m', 'exp_samples': [{'labels': 'service:request_rate2m{service=\"orders\"}', 'value': 22}, {'labels': 'service:request_rate2m{service=\"batch\"}', 'value': 10}]}, {'expr': 'service:counter_sum', 'eval_time': '3m', 'exp_samples': [{'labels': 'service:counter_sum{service=\"orders\"}', 'value': 23600}, {'labels': 'service:counter_sum{service=\"batch\"}', 'value': 1800}]}, {'expr': 'service:counter_sum', 'eval_time': '4m', 'exp_samples': [{'labels': 'service:counter_sum{service=\"orders\"}', 'value': 24920}, {'labels': 'service:counter_sum{service=\"batch\"}', 'value': 2400}]}]}]}\nr=load('rules.yaml')\nassert set(r)=={'groups'} and len(r['groups'])==1\ng=r['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']==EXPECTED['groups'][0]['name'] and g['interval']=='1m'\nassert len(g['rules'])==len(EXPECTED['groups'][0]['rules'])\nfor actual,expected in zip(g['rules'],EXPECTED['groups'][0]['rules']):\n assert set(actual)==set(expected)\n assert {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in expected.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\n\nassert shutil.which('promtool'),'platform must supply native promtool'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-rules-') as tmp:\n fixture=copy.deepcopy(FIXTURE);fixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\n path=pathlib.Path(tmp)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf-8')\n for args in [['promtool','check','rules','rules.yaml'],['promtool','test','rules',str(path)]]:\n  p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n  print(p.stdout);print(p.stderr);assert p.returncode==0,'native rule execution failed'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-088",
+      "original_type": "case",
+      "original_title": "某实例重启后总请求速率出现异常尖峰，表达式先sum累计值再rate。如何修正？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

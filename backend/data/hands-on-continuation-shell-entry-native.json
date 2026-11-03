@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-advanced-shell-009",
+    "module": "shell",
+    "category": "Shell",
+    "level": 5,
+    "topic": "自动化设计与安全",
+    "title": "真实Bash启动前隔离：BASH_ENV与导出函数不执行，可信PATH和必要证书变量保留",
+    "body": "## 操作任务\n实现launch(script,arguments,approved_sha256,certificate)。仅执行题给批准的本地UTF-8 Bash源文件：不跟随末级symlink，普通文件、当前UID所有、非组/其他可写、至多16KiB，读取的确切字节须匹配可信调用方传入SHA256；读取后用这些已核验字节启动，避免重新按路径读另一个版本。arguments是不超过32个、各最多256字符且无NUL的str列表，不经shell拼接/eval。固定/bin/bash --noprofile --norc，以-c执行批准源，$0固定opsforge-task，参数逐个进入$@。在启动Bash之前设置全新环境，仅PATH=/usr/bin:/bin、LANG=C.UTF-8、SSL_CERT_FILE=存在的certificate绝对路径；不得继承BASH_ENV/ENV、导出函数、其他变量或改父环境。stdin关闭，2秒期限，返回returncode/stdout/stderr三字段，不输出环境值诊断。批准源是可信程序，不把本入口当任意恶意代码沙箱；证书变量保留不代表已验证TLS或修改系统信任库。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Linux /bin/bash非交互启动，伪造BASH_ENV/导出printf/恶意PATH的无害标记对照，字面参数及必需证书变量保留；所有文件为夹具私有，不改默认身份、全局环境或现有任务入口。",
+    "answer": "```python\nimport os,pathlib,stat,hashlib,subprocess,re\ndef launch(script,arguments,approved_sha256,certificate):\n    if not isinstance(arguments,list) or len(arguments)>32 or any(not isinstance(v,str) or '\\0' in v or len(v)>256 for v in arguments) or not isinstance(approved_sha256,str) or not re.fullmatch('[0-9a-f]{64}',approved_sha256):raise ValueError('approved launch input')\n    descriptor=os.open(script,os.O_RDONLY|os.O_NOFOLLOW)\n    try:\n        meta=os.fstat(descriptor)\n        if not stat.S_ISREG(meta.st_mode) or meta.st_uid!=os.geteuid() or meta.st_mode&0o022 or meta.st_size>16384:raise ValueError('private approved script')\n        with os.fdopen(descriptor,'rb',closefd=False) as source:raw=source.read(16385)\n    finally:os.close(descriptor)\n    if len(raw)>16384 or hashlib.sha256(raw).hexdigest()!=approved_sha256:raise ValueError('script approval mismatch')\n    try:code=raw.decode('utf8')\n    except UnicodeDecodeError as error:raise ValueError('script encoding') from error\n    certificate=str(pathlib.Path(certificate).absolute())\n    if not pathlib.Path(certificate).is_file():raise ValueError('certificate material absent')\n    env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','SSL_CERT_FILE':certificate}\n    result=subprocess.run(['/bin/bash','--noprofile','--norc','-c',code,'opsforge-task',*arguments],env=env,stdin=subprocess.DEVNULL,capture_output=True,text=True,encoding='utf8',timeout=2)\n    return {'returncode':result.returncode,'stdout':result.stdout,'stderr':result.stderr}\n```\n\n原题知识说明：\n交付执行身份、解释器调用方式和环境变量允许清单，标出非交互Bash可能读取BASH_ENV等启动输入的时机；参数校验发生在脚本正文内时，无法保护正文之前的初始化。可信启动器应从受控环境启动固定解释器和固定入口，不继承任意用户提供的启动文件路径或导出函数；清理环境也要保留明确需要的证书、时区等运行参数。验收使用无副作用标记验证非批准启动文件未被加载，检查同名函数、PATH和配置目录变化不能改变执行目标。失败直接拒绝启动并记录被拒字段名称，避免输出秘密值。上线先在专用身份与隔离环境验证，回退恢复可信启动入口，不能为修复缺少变量重新继承整个登录环境。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设特有机制及前提",
+      "给出可核验的证据、成功与失败判据",
+      "界定异常恢复与不可承诺的边界"
+    ],
+    "references": [
+      "https://www.gnu.org/software/bash/manual/html_node/Bash-Startup-Files.html",
+      "https://docs.python.org/3.11/library/subprocess.html"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-shell-009",
+      "original_title": "设计受控任务入口，使BASH_ENV和导出函数不能在读取任务参数之前执行非批准初始化，应交付哪些证据？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,pathlib,stat,hashlib,subprocess,re\ndef launch(script,arguments,approved_sha256,certificate):\n    if not isinstance(arguments,list) or len(arguments)>32 or any(not isinstance(v,str) or '\\0' in v or len(v)>256 for v in arguments) or not isinstance(approved_sha256,str) or not re.fullmatch('[0-9a-f]{64}',approved_sha256):raise ValueError('approved launch input')\n    descriptor=os.open(script,os.O_RDONLY|os.O_NOFOLLOW)\n    try:\n        meta=os.fstat(descriptor)\n        if not stat.S_ISREG(meta.st_mode) or meta.st_uid!=os.geteuid() or meta.st_mode&0o022 or meta.st_size>16384:raise ValueError('private approved script')\n        with os.fdopen(descriptor,'rb',closefd=False) as source:raw=source.read(16385)\n    finally:os.close(descriptor)\n    if len(raw)>16384 or hashlib.sha256(raw).hexdigest()!=approved_sha256:raise ValueError('script approval mismatch')\n    try:code=raw.decode('utf8')\n    except UnicodeDecodeError as error:raise ValueError('script encoding') from error\n    certificate=str(pathlib.Path(certificate).absolute())\n    if not pathlib.Path(certificate).is_file():raise ValueError('certificate material absent')\n    env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','SSL_CERT_FILE':certificate}\n    result=subprocess.run(['/bin/bash','--noprofile','--norc','-c',code,'opsforge-task',*arguments],env=env,stdin=subprocess.DEVNULL,capture_output=True,text=True,encoding='utf8',timeout=2)\n    return {'returncode':result.returncode,'stdout':result.stdout,'stderr':result.stderr}\n"
+    },
+    "negative_files": {
+      "task.py": "import os,pathlib,stat,hashlib,subprocess,re\ndef launch(script,arguments,approved_sha256,certificate):\n    if not isinstance(arguments,list) or len(arguments)>32 or any(not isinstance(v,str) or '\\0' in v or len(v)>256 for v in arguments) or not isinstance(approved_sha256,str) or not re.fullmatch('[0-9a-f]{64}',approved_sha256):raise ValueError('approved launch input')\n    descriptor=os.open(script,os.O_RDONLY|os.O_NOFOLLOW)\n    try:\n        meta=os.fstat(descriptor)\n        if not stat.S_ISREG(meta.st_mode) or meta.st_uid!=os.geteuid() or meta.st_mode&0o022 or meta.st_size>16384:raise ValueError('private approved script')\n        with os.fdopen(descriptor,'rb',closefd=False) as source:raw=source.read(16385)\n    finally:os.close(descriptor)\n    if len(raw)>16384 or hashlib.sha256(raw).hexdigest()!=approved_sha256:raise ValueError('script approval mismatch')\n    try:code=raw.decode('utf8')\n    except UnicodeDecodeError as error:raise ValueError('script encoding') from error\n    certificate=str(pathlib.Path(certificate).absolute())\n    if not pathlib.Path(certificate).is_file():raise ValueError('certificate material absent')\n    env={'PATH':'/usr/bin:/bin','LANG':'C.UTF-8','SSL_CERT_FILE':certificate}\n    result=subprocess.run(['/bin/bash','--noprofile','--norc','-c',code,'opsforge-task',*arguments],env={**os.environ,**env},stdin=subprocess.DEVNULL,capture_output=True,text=True,encoding='utf8',timeout=2)\n    return {'returncode':result.returncode,'stdout':result.stdout,'stderr':result.stderr}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现launch(script,arguments,approved_sha256,certificate)。仅执行题给批准的本地UTF-8 Bash源文件：不跟随末级symlink，普通文件、当前UID所有、非组/其他可写、至多16KiB，读取的确切字节须匹配可信调用方传入SHA256；读取后用这些已核验字节启动，避免重新按路径读另一个版本。arguments是不超过32个、各最多256字符且无NUL的str列表，不经shell拼接/eval。固定/bin/bash --noprofile --norc，以-c执行批准源，$0固定opsforge-task，参数逐个进入$@。在启动Bash之前设置全新环境，仅PATH=/usr/bin:/bin、LANG=C.UTF-8、SSL_CERT_FILE=存在的certificate绝对路径；不得继承BASH_ENV/ENV、导出函数、其他变量或改父环境。stdin关闭，2秒期限，返回returncode/stdout/stderr三字段，不输出环境值诊断。批准源是可信程序，不把本入口当任意恶意代码沙箱；证书变量保留不代表已验证TLS或修改系统信任库。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Linux /bin/bash非交互启动，伪造BASH_ENV/导出printf/恶意PATH的无害标记对照，字面参数及必需证书变量保留；所有文件为夹具私有，不改默认身份、全局环境或现有任务入口。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,hashlib,copy\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith tempfile.TemporaryDirectory() as directory:\n root=pathlib.Path(directory);approved=root/'approved task.sh';cert=root/'fixture cert.pem';cert.write_text('PUBLIC FAKE CERTIFICATE MATERIAL',encoding='ascii')\n raw=b\"[[ -r \\\"$SSL_CERT_FILE\\\" ]] || { printf 'CERT_MISSING\\\\n' >&2; exit 9; }; printf 'CERT_READY\\\\n' >&2; printf 'OS:%s\\\\n' \\\"$(uname -s)\\\"; printf '%s\\\\0' \\\"$@\\\"\"\n approved.write_bytes(raw);approved.chmod(0o600);digest=hashlib.sha256(raw).hexdigest()\n marker=root/'startup-ran';injection=root/'argument-ran';startup=root/'startup.sh';startup.write_text('printf bad > \"'+str(marker)+'\"\\n',encoding='utf8')\n fakebin=root/'bin';fakebin.mkdir();fake=(fakebin/'uname');fake.write_text('#!/bin/sh\\nprintf FAKE_OS\\n',encoding='ascii');fake.chmod(0o700)\n args=['first space','--flag','$(touch '+str(injection)+')','中文'];saved=list(args);before=dict(os.environ)\n try:\n  os.environ['BASH_ENV']=str(startup);os.environ['ENV']=str(startup);os.environ['PATH']=str(fakebin)\n  os.environ['BASH_FUNC_printf%%']='() { command printf bad > \"'+str(marker)+'\"; command printf \"$@\"; }'\n  os.environ['OPSFORGE_FAKE_SECRET']='fake-value-must-not-be-logged'\n  contaminated=dict(os.environ)\n  print('STUDENT_OPERATION_ENTERED:launch',flush=True)\n  try:result=task.launch(approved,args,digest,cert)\n  except Exception as error:raise AssertionError('approved native Bash launch failed') from error\n  assert not marker.exists(),'startup environment executed before approved script argument checks'\n  assert result=={'returncode':0,'stdout':'OS:Linux\\n'+''.join(value+'\\0' for value in args),'stderr':'CERT_READY\\n'},'trusted PATH, literal arguments or required certificate environment lost'\n  assert not injection.exists() and args==saved and dict(os.environ)==contaminated\n  approved.write_bytes(raw+b'\\n# unapproved mutation');executed=False\n  try:task.launch(approved,args,digest,cert)\n  except ValueError:pass\n  else:raise AssertionError('unapproved source was executed')\n  assert not marker.exists()\n finally:os.environ.clear();os.environ.update(before)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

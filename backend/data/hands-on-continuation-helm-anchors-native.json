@@ -1,0 +1,76 @@
+[
+  {
+    "id": "curated-advanced-helm-009",
+    "module": "helm",
+    "category": "Helm",
+    "level": 5,
+    "topic": "值合并与校验",
+    "title": "真实Helm YAML锚点展开：基值覆盖不会联动别名，跨文件引用必须拒绝",
+    "body": "## 操作任务\n实现render(run,chart,overrides)。调用Helm3 template anchor-check chart，每个overrides条目用--set-string path=value；run(argv)返回(code,stdout,stderr)，失败抛异常。解析输出唯一ConfigMap中data.expanded的JSON并返回。只观察真实Helm展开合并结果：values.yaml中base=&connection，left/right为别名；覆盖base.host只改base，不主动联动left/right；单独覆盖别名路径只改该路径。未覆盖整数port仍是443，显式--set-string \"0\"必须保持字符串。不得改Chart/原锚点或输入字典，不用PyYAML共享字典对象冒充Helm合并。平台同时验证toYaml已展开而无锚点、跨-f文件不能借用另一个文件的锚点。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Helm3离线解析/合并/template与toJson/toYaml输出；不安装release或调用集群，不证明线上get values、YAML所有标签/合并实现或业务配置已迁移。此处核心是锚点在文档解析后不形成后续--set持续联动的身份关系，与普通覆盖优先级题不同。",
+    "answer": "```python\nimport json,yaml\ndef render(run,chart,overrides):\n    args=['template','anchor-check',str(chart)]\n    for path,value in overrides.items():args+=['--set-string',path+'='+value]\n    code,out,err=run(args)\n    if code:raise RuntimeError('Helm render failed')\n    documents=[d for d in yaml.safe_load_all(out) if d]\n    return json.loads(documents[0]['data']['expanded'])\n```\n\n原题知识说明：\n交付原始YAML锚点、别名和合并键的位置，以及经过解析、值合并和重新序列化后的实际Values。锚点是YAML文档表示能力，解析后通常只保留值，不会保留一个能随后续覆盖自动联动的引用关系；不同文件中的锚点也不能天然跨文档共享。验收对基值和别名路径分别覆盖，比较最终多个字段是否按预期变化，并检查Chart打包、get values和toYaml后锚点丢失是否影响消费者。接口契约应依据展开后的值，不能要求调用者靠隐藏的别名联动理解配置。失败恢复明确的值档案，由维护者选择显式共享参数或模板计算；仅把展开后的YAML重新添加锚点不等于修复合并逻辑，更不能直接修改线上对象掩盖渲染差异。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释Helm特有处理机制与边界",
+      "列出制品或对象层面的可核对证据",
+      "覆盖依赖失败及不可逆副作用"
+    ],
+    "references": [
+      "https://helm.sh/docs/v3/chart_template_guide/yaml_techniques/#yaml-anchors",
+      "https://helm.sh/docs/v3/helm/helm_template/"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-helm-009",
+      "original_title": "【Helm 3】团队依赖values中的YAML锚点复用配置，怎样交付展开与覆盖语义验收？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json,yaml\ndef render(run,chart,overrides):\n    args=['template','anchor-check',str(chart)]\n    for path,value in overrides.items():args+=['--set-string',path+'='+value]\n    code,out,err=run(args)\n    if code:raise RuntimeError('Helm render failed')\n    documents=[d for d in yaml.safe_load_all(out) if d]\n    return json.loads(documents[0]['data']['expanded'])\n"
+    },
+    "negative_files": {
+      "task.py": "import json,yaml\ndef render(run,chart,overrides):\n    args=['template','anchor-check',str(chart)]\n    expanded=dict(overrides)\n    if 'base.host' in overrides:\n        expanded.setdefault('left.host',overrides['base.host']);expanded.setdefault('right.host',overrides['base.host'])\n    for path,value in expanded.items():args+=['--set-string',path+'='+value]\n    code,out,err=run(args)\n    if code:raise RuntimeError('Helm render failed')\n    return json.loads(next(d for d in yaml.safe_load_all(out) if d)['data']['expanded'])\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现render(run,chart,overrides)。调用Helm3 template anchor-check chart，每个overrides条目用--set-string path=value；run(argv)返回(code,stdout,stderr)，失败抛异常。解析输出唯一ConfigMap中data.expanded的JSON并返回。只观察真实Helm展开合并结果：values.yaml中base=&connection，left/right为别名；覆盖base.host只改base，不主动联动left/right；单独覆盖别名路径只改该路径。未覆盖整数port仍是443，显式--set-string \"0\"必须保持字符串。不得改Chart/原锚点或输入字典，不用PyYAML共享字典对象冒充Helm合并。平台同时验证toYaml已展开而无锚点、跨-f文件不能借用另一个文件的锚点。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Helm3离线解析/合并/template与toJson/toYaml输出；不安装release或调用集群，不证明线上get values、YAML所有标签/合并实现或业务配置已迁移。此处核心是锚点在文档解析后不形成后续--set持续联动的身份关系，与普通覆盖优先级题不同。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "requires": {
+        "commands": [
+          "helm"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,tempfile,pathlib,subprocess,json,hashlib,secrets,yaml\nsys.path.insert(0,os.getcwd());import task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith tempfile.TemporaryDirectory(prefix='of-anchor-values-') as directory:\n root=pathlib.Path(directory);chart=root/'chart';(chart/'templates').mkdir(parents=True)\n (chart/'Chart.yaml').write_text('apiVersion: v2\\nname: expanded-anchor\\nversion: 0.1.0\\n')\n original='origin-'+secrets.token_hex(4)+'.example.invalid'\n (chart/'values.yaml').write_text('base: &connection\\n  host: '+original+'\\n  port: 443\\nleft: *connection\\nright: *connection\\n')\n (chart/'templates/cm.yaml').write_text('apiVersion: v1\\nkind: ConfigMap\\nmetadata:\\n  name: expanded\\ndata:\\n  expanded: {{ .Values | toJson | quote }}\\n  yaml: |\\n{{ .Values | toYaml | indent 4 }}\\n')\n env={**os.environ,'HELM_CACHE_HOME':str(root/'cache'),'HELM_CONFIG_HOME':str(root/'config'),'HELM_DATA_HOME':str(root/'data')}\n def run(args):\n  p=subprocess.run(['helm',*args],env=env,capture_output=True,text=True,timeout=5);return p.returncode,p.stdout,p.stderr\n code,out,err=run(['version','--short']);assert code==0 and out.startswith('v3.')\n code,out,err=run(['template','anchor-check',str(chart)]);assert code==0,err\n doc=next(d for d in yaml.safe_load_all(out) if d);assert '&connection' not in doc['data']['yaml'] and '*connection' not in doc['data']['yaml']\n assert yaml.safe_load(doc['data']['yaml'])==json.loads(doc['data']['expanded'])\n cross=root/'cross-file-alias.yaml';cross.write_text('right: *connection\\n')\n code,out,err=run(['template','anchor-check',str(chart),'-f',str(cross)]);assert code!=0 and 'unknown anchor' in err.lower(),'cross-file anchor scope was not rejected'\n protected={p.relative_to(chart).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in chart.rglob('*') if p.is_file()}\n print('NATIVE_HELM_ANCHORS_EXPANDED_CROSS_FILE_REFERENCE_REJECTED',flush=True)\n print('STUDENT_OPERATION_ENTERED:observe_final_values_without_dynamic_alias_link',flush=True)\n samples=[{}, {'base.host':'base-'+secrets.token_hex(4)+'.invalid'}, {'left.host':'left-'+secrets.token_hex(4)+'.invalid'}, {'base.host':'new-base.invalid','left.host':'new-left.invalid'}, {'right.port':'0','base.host':'0'}]\n for overrides in samples:\n  expected={name:dict(host=original,port=443) for name in ('base','left','right')}\n  for path,value in overrides.items():parent,key=path.split('.');expected[parent][key]=value\n  before=dict(overrides)\n  try:actual=task.render(run,chart,overrides)\n  except Exception as error:raise AssertionError('student expanded values inspection failed') from error\n  assert actual==expected,(actual,expected)\n  assert overrides==before\n assert protected=={p.relative_to(chart).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in chart.rglob('*') if p.is_file()},'input chart/anchors were rewritten'\n print('NATIVE_HELM_BASE_OVERRIDE_DOES_NOT_REBIND_ALIAS_EXPLICIT_PATHS_KEEP_TYPES_AND_INPUTS',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "helm"
+    ]
+  }
+]

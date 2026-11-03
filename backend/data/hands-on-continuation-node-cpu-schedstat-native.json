@@ -1,0 +1,146 @@
+[
+  {
+    "id": "curated-advanced-node_exporter-001",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 4,
+    "topic": "CPU内存与系统状态指标",
+    "title": "真实CPU guest双计：host剔除已含guest，五种互斥时间分量合计100%",
+    "answer": "```python\nimport math\ndef usage(previous,current,seconds):\n    if type(seconds) not in (int,float) or not math.isfinite(seconds) or seconds<=0 or not previous or previous.keys()!=current.keys():raise ValueError('same CPU set and positive aligned interval required')\n    totals=dict(host=0,guest=0,idle=0,iowait=0,steal=0)\n    for cpu in previous:\n        delta={kind:{mode:value-previous[cpu][kind][mode] for mode,value in current[cpu][kind].items()} for kind in ('normal','guest')}\n        if any(value<0 for group in delta.values() for value in group.values()):raise ValueError('counter reset')\n        normal=delta['normal'];guest=sum(delta['guest'].values())\n        executed=sum(normal[mode] for mode in ('user','nice','system','irq','softirq'))\n        if guest>normal['user']+normal['nice']:raise ValueError('guest not contained in user/nice')\n        totals['host']+=executed-guest;totals['guest']+=guest\n        for mode in ('idle','iowait','steal'):totals[mode]+=normal[mode]\n    capacity=seconds*len(previous)\n    if not math.isclose(sum(totals.values()),capacity,rel_tol=.001,abs_tol=.001):raise ValueError('unaligned accounting interval')\n    return {mode:value/capacity for mode,value in totals.items()}\n```\n\n原题知识说明：\n先核对exporter版本对/proc/stat中user、nice及guest字段的处理，已核对当前Linux实现将guest时间计入user/nice，并另以guest指标暴露，不能再无条件相加。区分宿主运行虚机的guest消耗与来宾看到的steal，后者也不是应用实际执行时间。以相同CPU集合和窗口对照原始计数、导出指标及查询，检查每种mode定义。验收空闲、宿主普通进程和虚机计算三类负载，明确图中分母。超过100%先查口径及聚合，不能通过强制截断到100隐藏双计。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://raw.githubusercontent.com/prometheus/node_exporter/v1.9.1/collector/cpu_linux.go"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-node_exporter-001",
+      "original_title": "node_cpu_seconds_total与guest时间同时汇总后CPU利用率超过100%，怎样避免虚拟化计时双计？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现usage(previous,current,seconds)，快照为cpu->{normal:{user,nice,system,idle,iowait,irq,softirq,steal},guest:{user,nice}}，计数已由真实exporter转换为秒。相同非空CPU集合、正有限时间，计数非递减且已核对同一采样epoch；不同比较条件ValueError。guest已含在normal.user/nice，executed=user+nice+system+irq+softirq，host=executed-guest；分别汇总host/guest/idle/iowait/steal除以CPU数*seconds，返回恰五比例。必须核对总时间对齐、guest不超user/nice，不叠加guest到总时间或直接丢弃guest。输入不改，不能混入VM vCPU或容器配额分母。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实node_exporter1.9.1 CPU collector读取自有proc/stat和sysfs夹具，明确100HZ及对齐教学采样；没有虚机或真实宿主CPU负载，不能宣称排除硬件计时问题/热插拔缓存影响。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import math\ndef usage(previous,current,seconds):\n    if type(seconds) not in (int,float) or not math.isfinite(seconds) or seconds<=0 or not previous or previous.keys()!=current.keys():raise ValueError('same CPU set and positive aligned interval required')\n    totals=dict(host=0,guest=0,idle=0,iowait=0,steal=0)\n    for cpu in previous:\n        delta={kind:{mode:value-previous[cpu][kind][mode] for mode,value in current[cpu][kind].items()} for kind in ('normal','guest')}\n        if any(value<0 for group in delta.values() for value in group.values()):raise ValueError('counter reset')\n        normal=delta['normal'];guest=sum(delta['guest'].values())\n        executed=sum(normal[mode] for mode in ('user','nice','system','irq','softirq'))\n        if guest>normal['user']+normal['nice']:raise ValueError('guest not contained in user/nice')\n        totals['host']+=executed-guest;totals['guest']+=guest\n        for mode in ('idle','iowait','steal'):totals[mode]+=normal[mode]\n    capacity=seconds*len(previous)\n    if not math.isclose(sum(totals.values()),capacity,rel_tol=.001,abs_tol=.001):raise ValueError('unaligned accounting interval')\n    return {mode:value/capacity for mode,value in totals.items()}\n"
+    },
+    "negative_files": {
+      "task.py": "import math\ndef usage(previous,current,seconds):\n    if type(seconds) not in (int,float) or not math.isfinite(seconds) or seconds<=0 or not previous or previous.keys()!=current.keys():raise ValueError('same CPU set and positive aligned interval required')\n    totals=dict(host=0,guest=0,idle=0,iowait=0,steal=0)\n    for cpu in previous:\n        delta={kind:{mode:value-previous[cpu][kind][mode] for mode,value in current[cpu][kind].items()} for kind in ('normal','guest')}\n        if any(value<0 for group in delta.values() for value in group.values()):raise ValueError('counter reset')\n        normal=delta['normal'];guest=sum(delta['guest'].values())\n        executed=sum(normal[mode] for mode in ('user','nice','system','irq','softirq'))\n        if guest>normal['user']+normal['nice']:raise ValueError('guest not contained in user/nice')\n        totals['host']+=executed;totals['guest']+=guest\n        for mode in ('idle','iowait','steal'):totals[mode]+=normal[mode]\n    capacity=seconds*len(previous)\n    if not math.isclose(sum(totals.values()),capacity,rel_tol=.001,abs_tol=.001):raise ValueError('unaligned accounting interval')\n    return {mode:value/capacity for mode,value in totals.items()}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现usage(previous,current,seconds)，快照为cpu->{normal:{user,nice,system,idle,iowait,irq,softirq,steal},guest:{user,nice}}，计数已由真实exporter转换为秒。相同非空CPU集合、正有限时间，计数非递减且已核对同一采样epoch；不同比较条件ValueError。guest已含在normal.user/nice，executed=user+nice+system+irq+softirq，host=executed-guest；分别汇总host/guest/idle/iowait/steal除以CPU数*seconds，返回恰五比例。必须核对总时间对齐、guest不超user/nice，不叠加guest到总时间或直接丢弃guest。输入不改，不能混入VM vCPU或容器配额分母。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实node_exporter1.9.1 CPU collector读取自有proc/stat和sysfs夹具，明确100HZ及对齐教学采样；没有虚机或真实宿主CPU负载，不能宣称排除硬件计时问题/热插拔缓存影响。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "node_exporter"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/node_fixture.py": "\"\"\"Actual node_exporter1.9.1 collector over owned procfs/sysfs teaching files.\"\"\"\nimport contextlib,os,pathlib,subprocess,socket,time,urllib.request,re\n\n@contextlib.contextmanager\ndef exporter(root,collector):\n    if collector not in ('cpu','schedstat'):raise ValueError('review collector scope before extending')\n    root=pathlib.Path(root);(root/'proc').mkdir(exist_ok=True);(root/'sys').mkdir(exist_ok=True)\n    version=subprocess.run(['node_exporter','--version'],capture_output=True,text=True,timeout=3)\n    assert version.returncode==0 and 'version 1.9.1' in version.stdout+version.stderr\n    with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n    log=(root/'exporter.log').open('wb')\n    args=['node_exporter','--web.listen-address=127.0.0.1:'+str(port),'--collector.disable-defaults','--collector.'+collector,'--path.procfs='+str(root/'proc'),'--path.sysfs='+str(root/'sys')]\n    process=subprocess.Popen(args,stdout=log,stderr=log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'64MiB'})\n    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n    def scrape():\n        with opener.open('http://127.0.0.1:'+str(port)+'/metrics',timeout=2) as response:text=response.read().decode()\n        assert 'node_scrape_collector_success{collector=\"'+collector+'\"} 1' in text,'native collector rejected owned fixture: '+(root/'exporter.log').read_text(errors='replace')[-2000:]\n        rows=[]\n        for line in text.splitlines():\n            if not line.startswith('node_') or line.startswith('#'):continue\n            match=re.fullmatch(r'([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\\{([^}]*)\\})?\\s+([^ ]+)',line)\n            if match:rows.append((match[1],dict(re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)=\"([^\"]*)\"',match[2] or '')),float(match[3])))\n        return rows\n    try:\n        for _ in range(100):\n            assert process.poll() is None,(root/'exporter.log').read_text(errors='replace')[-2000:]\n            try:scrape();break\n            except OSError:time.sleep(.02)\n        else:raise AssertionError('private exporter HTTP readiness failed')\n        print('NATIVE_NODE_EXPORTER_191_COLLECTOR_READY:'+collector,flush=True)\n        yield scrape\n    finally:\n        if process.poll() is None:process.terminate()\n        try:process.wait(timeout=3)\n        except subprocess.TimeoutExpired:process.kill();process.wait()\n        log.close()\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,copy,math\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom node_fixture import exporter\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith tempfile.TemporaryDirectory(prefix='of-cpu-guest-') as directory:\n root=pathlib.Path(directory);(root/'proc').mkdir();cpu_root=root/'sys/devices/system/cpu';cpu_root.mkdir(parents=True)\n (cpu_root/'isolated').write_text('\\n')\n for cpu in (0,1):(cpu_root/('cpu'+str(cpu))).mkdir();(cpu_root/('cpu'+str(cpu))/'online').write_text('1\\n')\n assert os.sysconf('SC_CLK_TCK')==100\n modes=('user','nice','system','idle','iowait','irq','softirq','steal','guest','guest_nice')\n base={0:[1000]*10,1:[2000]*10};increments={0:[60,10,20,5,0,0,0,5,45,5],1:[30,0,10,50,10,0,0,0,20,0]}\n def write(frame):\n  lines=['cpu '+' '.join(str(sum(frame[cpu][i] for cpu in frame)) for i in range(10))]\n  lines+=['cpu'+str(cpu)+' '+' '.join(map(str,values)) for cpu,values in frame.items()]\n  (root/'proc/stat').write_text('\\n'.join(lines)+'\\nintr 0\\nctxt 0\\nbtime 1\\nprocesses 1\\nprocs_running 1\\nprocs_blocked 0\\n')\n write(base)\n with exporter(root,'cpu') as scrape:\n  def snapshot():\n   result={}\n   for metric,labels,value in scrape():\n    if metric not in ('node_cpu_seconds_total','node_cpu_guest_seconds_total'):continue\n    result.setdefault(labels['cpu'],dict(normal={},guest={}))['normal' if metric=='node_cpu_seconds_total' else 'guest'][labels['mode']]=value\n   assert set(result)=={'0','1'} and all(set(row['normal'])==set(modes[:8]) and set(row['guest'])=={'user','nice'} for row in result.values())\n   return result\n  previous=snapshot();frame={cpu:[base[cpu][i]+increments[cpu][i] for i in range(10)] for cpu in base};write(frame);current=snapshot()\n  guest=sum(sum(current[cpu]['guest'][mode]-previous[cpu]['guest'][mode] for mode in ('user','nice')) for cpu in previous)\n  total=sum(sum(current[cpu]['normal'][mode]-previous[cpu]['normal'][mode] for mode in modes[:8]) for cpu in previous)\n  assert math.isclose(total,2) and math.isclose(guest,.7) and (total+guest)/2>1,'actual guest overlap not established'\n  print('NATIVE_CPU_GUEST_ALREADY_IN_USER_NICE_ADDING_BOTH_YIELDS_135_PERCENT',flush=True)\n  print('STUDENT_OPERATION_ENTERED:partition_host_guest_idle_iowait_steal_without_double_count',flush=True)\n  expected=dict(host=.3,guest=.35,idle=.275,iowait=.05,steal=.025)\n  for seconds in (1,2):\n   if seconds==2:\n    previous=current;frame={cpu:[frame[cpu][i]+2*increments[cpu][i] for i in range(10)] for cpu in base};write(frame);current=snapshot()\n   before=copy.deepcopy((previous,current))\n   try:result=task.usage(previous,current,seconds)\n   except Exception as error:raise AssertionError('student nonoverlapping CPU accounting failed') from error\n   assert set(result)==set(expected) and all(math.isclose(result[k],v,abs_tol=1e-10) for k,v in expected.items()),result\n   assert math.isclose(sum(result.values()),1) and (previous,current)==before\n  for first,second,seconds in [(previous,{k:v for k,v in current.items() if k=='0'},2),(previous,current,0)]:\n   try:task.usage(first,second,seconds)\n   except ValueError:pass\n   else:raise AssertionError('incomparable CPU interval accepted')\n  print('NATIVE_CPU_HOST_EXCLUDES_GUEST_GUEST_RETAINED_ALL_COMPONENTS_SUM_ONE',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "node_exporter"
+    ]
+  },
+  {
+    "id": "curated-advanced-node_exporter-007",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 4,
+    "topic": "CPU内存与系统状态指标",
+    "title": "真实schedstat累计等待：一核四秒等待不等于400%运行率，按时间片核对延迟",
+    "answer": "```python\nimport math\ndef analyze(previous,current,seconds):\n    if type(seconds) not in (int,float) or not math.isfinite(seconds) or seconds<=0 or not previous or previous.keys()!=current.keys():raise ValueError('same CPU set and positive interval required')\n    delta={kind:sum(current[cpu][kind]-previous[cpu][kind] for cpu in previous) for kind in ('running','waiting','slices')}\n    if any(current[cpu][kind]<previous[cpu][kind] for cpu in previous for kind in ('running','waiting','slices')):raise ValueError('counter reset')\n    return dict(running_utilization=delta['running']/(seconds*len(previous)),waiting_per_core=delta['waiting']/(seconds*len(previous)),mean_wait_per_slice=delta['waiting']/delta['slices'] if delta['slices'] else None)\n```\n\n原题知识说明：\n不必然损坏：运行时间是CPU实际执行时间，而等待时间累计多个可运行任务等待该CPU的时间，四个任务同时等一秒就可积累四秒，二者不能共用单核墙钟上限。用相同窗口的等待增量与timeslices增量可观察每次调度片的平均等待线索，但不能直接当用户请求p99，因为一个请求可跨多个调度片。先确认内核schedstats启用、计数有效且未重置，再对照CPU亲和性和逐核运行队列；整机有空闲核也可能因绑定造成局部竞争。验收需要单任务、多个绑同核任务及分散到多核三个对照，区分队列等待、运行时间与业务延迟，不把等待比例截到100%。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://raw.githubusercontent.com/prometheus/node_exporter/v1.9.1/collector/schedstat_linux.go"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-node_exporter-007",
+      "original_title": "单核schedstat waiting_seconds_total在一秒内增加四秒，CPU运行时间只增加一秒，是否是计数器损坏？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现analyze(previous,current,seconds)，快照cpu->{running,waiting,slices}由真实collector输出，running/waiting单位秒。相同非空CPU集合、正有限seconds和各计数非递减，否则ValueError。running_utilization=所有running差/(CPU数*seconds)，waiting_per_core=waiting差/(CPU数*seconds)允许大于1，mean_wait_per_slice=waiting差/时间片差，零时间片返回None。不可把等待当执行占用、截断至1或将零时间片伪成零延迟，不改输入。平台实际schedstat 15文件一核累计4s等待/1s执行、另一核3s等待/1s执行，核对真实ns到s转换后运算。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实node_exporter1.9.1 schedstat collector解析自有procfs文件，计数是确定教学输入，不制造真实主机调度拥塞。不将平均时间片延迟当每请求延迟分位数或生产瓶颈定位结果。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import math\ndef analyze(previous,current,seconds):\n    if type(seconds) not in (int,float) or not math.isfinite(seconds) or seconds<=0 or not previous or previous.keys()!=current.keys():raise ValueError('same CPU set and positive interval required')\n    delta={kind:sum(current[cpu][kind]-previous[cpu][kind] for cpu in previous) for kind in ('running','waiting','slices')}\n    if any(current[cpu][kind]<previous[cpu][kind] for cpu in previous for kind in ('running','waiting','slices')):raise ValueError('counter reset')\n    return dict(running_utilization=delta['running']/(seconds*len(previous)),waiting_per_core=delta['waiting']/(seconds*len(previous)),mean_wait_per_slice=delta['waiting']/delta['slices'] if delta['slices'] else None)\n"
+    },
+    "negative_files": {
+      "task.py": "import math\ndef analyze(previous,current,seconds):\n    if type(seconds) not in (int,float) or not math.isfinite(seconds) or seconds<=0 or not previous or previous.keys()!=current.keys():raise ValueError('same CPU set and positive interval required')\n    delta={kind:sum(current[cpu][kind]-previous[cpu][kind] for cpu in previous) for kind in ('running','waiting','slices')}\n    if any(current[cpu][kind]<previous[cpu][kind] for cpu in previous for kind in ('running','waiting','slices')):raise ValueError('counter reset')\n    return dict(running_utilization=delta['running']/(seconds*len(previous)),waiting_per_core=min(1,delta['waiting']/(seconds*len(previous))),mean_wait_per_slice=delta['waiting']/delta['slices'] if delta['slices'] else None)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现analyze(previous,current,seconds)，快照cpu->{running,waiting,slices}由真实collector输出，running/waiting单位秒。相同非空CPU集合、正有限seconds和各计数非递减，否则ValueError。running_utilization=所有running差/(CPU数*seconds)，waiting_per_core=waiting差/(CPU数*seconds)允许大于1，mean_wait_per_slice=waiting差/时间片差，零时间片返回None。不可把等待当执行占用、截断至1或将零时间片伪成零延迟，不改输入。平台实际schedstat 15文件一核累计4s等待/1s执行、另一核3s等待/1s执行，核对真实ns到s转换后运算。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实node_exporter1.9.1 schedstat collector解析自有procfs文件，计数是确定教学输入，不制造真实主机调度拥塞。不将平均时间片延迟当每请求延迟分位数或生产瓶颈定位结果。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "node_exporter"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/node_fixture.py": "\"\"\"Actual node_exporter1.9.1 collector over owned procfs/sysfs teaching files.\"\"\"\nimport contextlib,os,pathlib,subprocess,socket,time,urllib.request,re\n\n@contextlib.contextmanager\ndef exporter(root,collector):\n    if collector not in ('cpu','schedstat'):raise ValueError('review collector scope before extending')\n    root=pathlib.Path(root);(root/'proc').mkdir(exist_ok=True);(root/'sys').mkdir(exist_ok=True)\n    version=subprocess.run(['node_exporter','--version'],capture_output=True,text=True,timeout=3)\n    assert version.returncode==0 and 'version 1.9.1' in version.stdout+version.stderr\n    with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n    log=(root/'exporter.log').open('wb')\n    args=['node_exporter','--web.listen-address=127.0.0.1:'+str(port),'--collector.disable-defaults','--collector.'+collector,'--path.procfs='+str(root/'proc'),'--path.sysfs='+str(root/'sys')]\n    process=subprocess.Popen(args,stdout=log,stderr=log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'64MiB'})\n    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n    def scrape():\n        with opener.open('http://127.0.0.1:'+str(port)+'/metrics',timeout=2) as response:text=response.read().decode()\n        assert 'node_scrape_collector_success{collector=\"'+collector+'\"} 1' in text,'native collector rejected owned fixture: '+(root/'exporter.log').read_text(errors='replace')[-2000:]\n        rows=[]\n        for line in text.splitlines():\n            if not line.startswith('node_') or line.startswith('#'):continue\n            match=re.fullmatch(r'([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\\{([^}]*)\\})?\\s+([^ ]+)',line)\n            if match:rows.append((match[1],dict(re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)=\"([^\"]*)\"',match[2] or '')),float(match[3])))\n        return rows\n    try:\n        for _ in range(100):\n            assert process.poll() is None,(root/'exporter.log').read_text(errors='replace')[-2000:]\n            try:scrape();break\n            except OSError:time.sleep(.02)\n        else:raise AssertionError('private exporter HTTP readiness failed')\n        print('NATIVE_NODE_EXPORTER_191_COLLECTOR_READY:'+collector,flush=True)\n        yield scrape\n    finally:\n        if process.poll() is None:process.terminate()\n        try:process.wait(timeout=3)\n        except subprocess.TimeoutExpired:process.kill();process.wait()\n        log.close()\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,copy,math\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom node_fixture import exporter\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith tempfile.TemporaryDirectory(prefix='of-schedstat-') as directory:\n root=pathlib.Path(directory);(root/'proc').mkdir();base={0:(1000000000,2000000000,100),1:(3000000000,1000000000,200)}\n def write(frame):\n  (root/'proc/schedstat').write_text('version 15\\ntimestamp 100\\n'+'\\n'.join('cpu'+str(cpu)+' 0 0 0 0 0 0 '+' '.join(map(str,values)) for cpu,values in frame.items())+'\\n')\n write(base)\n with exporter(root,'schedstat') as scrape:\n  def snapshot():\n   result={}\n   keys={'node_schedstat_running_seconds_total':'running','node_schedstat_waiting_seconds_total':'waiting','node_schedstat_timeslices_total':'slices'}\n   for metric,labels,value in scrape():\n    if metric in keys:result.setdefault(labels['cpu'],{})[keys[metric]]=value\n   assert set(result)=={'0','1'} and all(set(row)=={'running','waiting','slices'} for row in result.values())\n   return result\n  previous=snapshot();frame={0:(2000000000,6000000000,102),1:(4000000000,4000000000,201)};write(frame);current=snapshot()\n  assert current['0']['waiting']-previous['0']['waiting']==4 and current['0']['running']-previous['0']['running']==1\n  print('NATIVE_SCHEDSTAT_REAL_COLLECTOR_ONE_CORE_FOUR_WAITING_SECONDS_ONE_RUNNING_SECOND',flush=True)\n  print('STUDENT_OPERATION_ENTERED:waiting_is_accumulated_task_delay_not_bounded_cpu_utilization',flush=True)\n  before=copy.deepcopy((previous,current))\n  try:result=task.analyze(previous,current,1)\n  except Exception as error:raise AssertionError('student scheduler interval interpretation failed') from error\n  expected=dict(running_utilization=1,waiting_per_core=3.5,mean_wait_per_slice=7/3)\n  assert set(result)==set(expected) and all(math.isclose(result[k],v,abs_tol=1e-10) for k,v in expected.items()),result\n  assert result['waiting_per_core']>1 and (previous,current)==before\n  steady=copy.deepcopy(current)\n  try:zero=task.analyze(current,steady,1)\n  except Exception as error:raise AssertionError('zero-timeslice interval failed') from error\n  assert zero==dict(running_utilization=0,waiting_per_core=0,mean_wait_per_slice=None)\n  reset=copy.deepcopy(current);reset['0']['waiting']=0\n  for first,second,seconds in [(current,reset,1),(current,{'0':current['0']},1),(current,current,0)]:\n   try:task.analyze(first,second,seconds)\n   except ValueError:pass\n   else:raise AssertionError('counter reset/CPU set/interval mismatch accepted')\n  print('NATIVE_SCHEDSTAT_MULTI_TASK_WAITING_CAN_EXCEED_WALL_BUDGET_TIMESLICE_ZERO_NOT_FABRICATED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "node_exporter"
+    ]
+  }
+]

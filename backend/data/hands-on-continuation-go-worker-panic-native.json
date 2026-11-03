@@ -1,0 +1,76 @@
+[
+  {
+    "id": "curated-parallel-go-106",
+    "module": "go",
+    "category": "Go 运维开发",
+    "level": 4,
+    "topic": "错误处理与日志",
+    "title": "Go新goroutine的panic边界：进程崩溃对照与单次失败对账",
+    "answer": "```go\npackage exercise\nimport (\"errors\";\"fmt\";\"runtime/debug\")\ntype Outcome struct {Err error; Panicked bool; Stack string; NeedsReconciliation bool}\nfunc RunTask(fn func()error)(<-chan Outcome,error) {\n if fn==nil {return nil,errors.New(\"task function is required\")}\n result:=make(chan Outcome,1)\n go func(){\n  returned:=false;out:=Outcome{}\n  defer func(){\n   if !returned {value:=recover();out.Err=fmt.Errorf(\"task panic: %v\",value);out.Panicked=true;out.Stack=string(debug.Stack());out.NeedsReconciliation=true}\n   result<-out;close(result)\n  }()\n  out.Err=fn();returned=true\n }()\n return result,nil\n}\n```\n\n原题知识说明：\n保留panic栈并确认发生goroutine与recover所在栈不同；recover不能跨goroutine捕获。暂停依赖该worker的批量动作并核对未决副作用，由开发为任务入口定义同goroutine恢复边界，记录失败和堆栈并判断共享状态是否仍安全。验收worker panic返回明确失败且任务可对账；若状态可能损坏，应受控退出而非吞异常继续运行。",
+    "type": "code",
+    "incident_signature": "go:recover-outside-panicking-goroutine",
+    "source": "独立编审：Go特有数据与并发故障",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "用类型/栈/字节证据证明根因",
+      "正确交接开发修复与运维止损",
+      "列出本故障的正常和边界验收"
+    ],
+    "references": [
+      "https://go.dev/ref/spec#Handling_panics",
+      "https://pkg.go.dev/runtime/debug#Stack"
+    ],
+    "language": "go",
+    "conversion": {
+      "original_id": "curated-parallel-go-106",
+      "original_title": "main中有defer recover，但新worker一次panic仍让整个Go服务退出。如何桌面排查？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n提交package exercise的task.go，实现Outcome{Err error;Panicked bool;Stack string;NeedsReconciliation bool}和RunTask(fn func()error)(<-chan Outcome,error)。nil函数同步返回nil通道和非nil错误；有效任务必须在新goroutine恰执行一次。结果通道缓冲1，发出恰一个Outcome后关闭。正常返回的error原样保留，正常结果Panicked=false、Stack为空、NeedsReconciliation=false；在执行任务的同一goroutine设置defer/recover，任何panic（含nil）转为非nil错误且文本含panic，Panicked与NeedsReconciliation=true并保留debug.Stack，不自动重试有副作用任务。只在启动调用方defer recover不能满足合同；必须实际用子进程证明该错误模式仍致进程异常退出。此包装将独立任务失败交给调用方核对，不保证任意共享状态经panic后安全。\n\n## 提交产物\ntask.go\n\n## 验收方法\n真实子进程错误边界对照，go test -race执行普通返回、普通错误、panic字符串、panic(nil)、副作用单次及结果关闭。\n\n## 能力边界\n真实隔离Go进程、实际未捕获worker panic导致子进程非零退出、修复后显式Outcome及-race测试。验证任务入口边界和可核对失败，不保证共享状态修复、外部事务回滚或生产全链路隔离。",
+    "files": {
+      "task.go": "package exercise\ntype Outcome struct{Err error;Panicked bool;Stack string;NeedsReconciliation bool}\nfunc RunTask(func()error)(<-chan Outcome,error){panic(\"NotImplementedError\")}\n"
+    },
+    "solution_files": {
+      "task.go": "package exercise\nimport (\"errors\";\"fmt\";\"runtime/debug\")\ntype Outcome struct {Err error; Panicked bool; Stack string; NeedsReconciliation bool}\nfunc RunTask(fn func()error)(<-chan Outcome,error) {\n if fn==nil {return nil,errors.New(\"task function is required\")}\n result:=make(chan Outcome,1)\n go func(){\n  returned:=false;out:=Outcome{}\n  defer func(){\n   if !returned {value:=recover();out.Err=fmt.Errorf(\"task panic: %v\",value);out.Panicked=true;out.Stack=string(debug.Stack());out.NeedsReconciliation=true}\n   result<-out;close(result)\n  }()\n  out.Err=fn();returned=true\n }()\n return result,nil\n}\n"
+    },
+    "negative_files": {
+      "task.go": "package exercise\ntype Outcome struct {Err error; Panicked bool; Stack string; NeedsReconciliation bool}\nfunc RunTask(fn func()error)(<-chan Outcome,error) {\n if fn==nil {return nil, __nilError{}}\n defer func(){recover()}() // this caller goroutine cannot catch a new worker panic\n result:=make(chan Outcome,1)\n go func(){result<-Outcome{Err:fn()};close(result)}()\n return result,nil\n}\ntype __nilError struct{}\nfunc (__nilError) Error()string{return \"nil function\"}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "提交package exercise的task.go，实现Outcome{Err error;Panicked bool;Stack string;NeedsReconciliation bool}和RunTask(fn func()error)(<-chan Outcome,error)。nil函数同步返回nil通道和非nil错误；有效任务必须在新goroutine恰执行一次。结果通道缓冲1，发出恰一个Outcome后关闭。正常返回的error原样保留，正常结果Panicked=false、Stack为空、NeedsReconciliation=false；在执行任务的同一goroutine设置defer/recover，任何panic（含nil）转为非nil错误且文本含panic，Panicked与NeedsReconciliation=true并保留debug.Stack，不自动重试有副作用任务。只在启动调用方defer recover不能满足合同；必须实际用子进程证明该错误模式仍致进程异常退出。此包装将独立任务失败交给调用方核对，不保证任意共享状态经panic后安全。",
+      "deliverables": [
+        "task.go"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实隔离Go进程、实际未捕获worker panic导致子进程非零退出、修复后显式Outcome及-race测试。验证任务入口边界和可核对失败，不保证共享状态修复、外部事务回滚或生产全链路隔离。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "go"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/task_test.go": "package exercise\nimport(\"testing\";\"context\";\"os\";\"os/exec\";\"time\";\"strings\";\"errors\";\"sync/atomic\")\nfunc TestUnsafeChild(t *testing.T){\n if os.Getenv(\"OPSF_UNSAFE_WORKER\")!=\"1\"{return}\n defer func(){if recover()!=nil {os.Stdout.WriteString(\"CALLER_RECOVERED_CHILD\")}}()\n go func(){panic(\"unsafe-worker-boom\")}()\n select{}\n}\nfunc TestCallerRecoverCannotCatchWorker(t *testing.T){\n ctx,cancel:=context.WithTimeout(context.Background(),3*time.Second);defer cancel()\n cmd:=exec.CommandContext(ctx,os.Args[0],\"-test.run=^TestUnsafeChild$\")\n cmd.Env=append(os.Environ(),\"OPSF_UNSAFE_WORKER=1\")\n output,err:=cmd.CombinedOutput()\n if ctx.Err()!=nil||err==nil||!strings.Contains(string(output),\"unsafe-worker-boom\")||strings.Contains(string(output),\"CALLER_RECOVERED_CHILD\"){t.Fatal(\"child panic control not reproduced\",err,string(output))}\n t.Log(\"NATIVE_GO_UNRECOVERED_WORKER_CHILD_EXIT_REPRODUCED\")\n}\nfunc outcome(t *testing.T,fn func()error) Outcome {\n t.Helper();result,err:=RunTask(fn);if err!=nil||result==nil{t.Fatal(\"start\",err)}\n if cap(result)!=1{t.Fatal(\"result must buffer exactly one outcome\")}\n select {case value,ok:=<-result:\n  if !ok{t.Fatal(\"no outcome\")};select{case _,ok:=<-result:if ok{t.Fatal(\"extra outcome\")};case <-time.After(time.Second):t.Fatal(\"result never closed\")};return value\n case <-time.After(time.Second):t.Fatal(\"worker result deadline\");return Outcome{}}\n}\nfunc TestTaskOutcomes(t *testing.T){\n if result,err:=RunTask(nil);result!=nil||err==nil{t.Fatal(\"nil must fail synchronously\")}\n normal:=outcome(t,func()error{return nil});if normal.Err!=nil||normal.Panicked||normal.Stack!=\"\"||normal.NeedsReconciliation{t.Fatal(\"success\",normal)}\n sentinel:=errors.New(\"original task error\");ordinary:=outcome(t,func()error{return sentinel})\n if !errors.Is(ordinary.Err,sentinel)||ordinary.Panicked||ordinary.Stack!=\"\"||ordinary.NeedsReconciliation{t.Fatal(\"ordinary error\",ordinary)}\n for _,value:=range []any{\"worker-boom\",nil}{\n  var writes atomic.Int32\n  failed:=outcome(t,func()error{writes.Add(1);panic(value)})\n  if failed.Err==nil||!strings.Contains(failed.Err.Error(),\"panic\")||!failed.Panicked||!failed.NeedsReconciliation||!strings.Contains(failed.Stack,\"goroutine\")||writes.Load()!=1{t.Fatal(\"panic lost or task repeated\",failed,writes.Load())}\n }\n // The process remains alive, and a fresh independent task still has explicit success.\n if later:=outcome(t,func()error{return nil});later.Err!=nil||later.Panicked{t.Fatal(\"later task\",later)}\n}\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,subprocess\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED: worker panic boundary and crashing child control',flush=True)\nenv={**os.environ,'GOCACHE':'/tmp/opsforge-go-cache','GOMODCACHE':'/tmp/opsforge-go-modcache','GOTOOLCHAIN':'local','GOPROXY':'off','GOSUMDB':'off','CGO_ENABLED':'1','GOMAXPROCS':'2'}\nwith tempfile.TemporaryDirectory(prefix='opsforge-go-panic-') as directory:\n root=pathlib.Path(directory);(root/'go.mod').write_text('module opsforge.local/exercise\\n\\ngo 1.23\\n',encoding='utf8')\n (root/'task.go').write_bytes(pathlib.Path('task.go').read_bytes());(root/'task_test.go').write_bytes(pathlib.Path('checks/task_test.go').read_bytes())\n proc=subprocess.run(['go','test','-race','-vet=off','-v','-count=1','-timeout=10s','./...'],cwd=root,env=env,capture_output=True,text=True,timeout=100)\n detail=proc.stdout+proc.stderr\n if len(detail)>5000:detail=detail[:4000]+'\\n[diagnostic shortened]\\n'+detail[-1000:]\n assert proc.returncode==0,'Go worker validation failed: '+detail\n assert 'NATIVE_GO_UNRECOVERED_WORKER_CHILD_EXIT_REPRODUCED' in proc.stdout,'unsafe child control was not executed'\n print('NATIVE_GO_UNRECOVERED_WORKER_CHILD_EXIT_REPRODUCED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "go"
+    ]
+  }
+]

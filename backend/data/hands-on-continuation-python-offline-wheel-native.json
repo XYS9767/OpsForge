@@ -1,0 +1,75 @@
+[
+  {
+    "id": "curated-advanced-python-011",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 5,
+    "topic": "运行环境与工具工程",
+    "title": "真实离线PEP517交付：运行wheel齐备仍缺构建依赖，隔离构建后运行环境不带构建工具",
+    "body": "## 操作任务\n实现deliver(run,case)，run(argv)实际调用python -m pip并返回(code,stdout,stderr)。先wheel case.source，--no-index --no-cache-dir，分别--find-links case.runtime_wheels和case.build_wheels，保留默认PEP517构建隔离，--no-deps仅停止收集应用运行依赖，--wheel-dir case.output；成功后install其中opsforge_application-1.0-py3-none-any.whl，--no-index --no-cache-dir --find-links运行wheel目录 --target case.target，不使用--no-deps。任一步非0立即RuntimeError。输入及源文件不改，不安装到全局，不以--no-build-isolation掩盖缺构建依赖。真实仅运行wheel的初始构建失败；补充构建仓后隔离backend可导入buildhelper1.0，运行目录只安装应用和runtime2.0，独立-S解释器运行正常且无buildhelper。错误0.9构建仓必须失败且不继续安装。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实现有pip23/CPython3.11、纯Python自定义PEP517 backend和自有wheel，无网络、宿主安装或镜像构建。只验证本平台纯Python构建/运行依赖闭包，不证明跨平台ABI、原生编译链、签名仓库及所有动态构建依赖已交付。",
+    "answer": "```python\nimport pathlib\ndef deliver(run,case):\n    args=['wheel','--no-index','--no-cache-dir','--find-links',case['runtime_wheels'],'--find-links',case['build_wheels'],'--no-deps','--wheel-dir',case['output'],case['source']]\n    code,out,err=run(args)\n    if code:raise RuntimeError('offline isolated build failed')\n    artifact=str(pathlib.Path(case['output'])/'opsforge_application-1.0-py3-none-any.whl')\n    code,out,err=run(['install','--no-index','--no-cache-dir','--find-links',case['runtime_wheels'],'--target',case['target'],artifact])\n    if code:raise RuntimeError('offline runtime install failed')\n```\n\n原题知识说明：\n交付目标Python版本、ABI、操作系统/架构以及全部依赖锁定清单，把可直接安装的wheel与需要构建的sdist分开。PEP 517隔离构建可能额外安装构建后端依赖，仅缓存应用requirements不能保证断网成功；应预制受审wheel并记录来源、摘要和构建环境。验收在无网络且无旧缓存的新环境安装，故意使用错误平台wheel、缺构建依赖和同名不同内容包，确认不能静默回源或改用未审版本。安装成功后验证入口、原生扩展加载和关键功能，不能只检查pip退出码。失败保持旧虚拟环境与旧依赖集合，修正离线仓库后重新创建环境；不要在生产环境临时开放公网或覆盖现有包来让安装通过。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "明确语言运行时与业务合同的边界",
+      "给出可区分正确与失败的具体样例",
+      "说明资源或数据恢复限制"
+    ],
+    "references": [
+      "https://pip.pypa.io/en/stable/reference/build-system/",
+      "https://pip.pypa.io/en/stable/cli/pip_wheel/"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-python-011",
+      "original_title": "交付Python离线wheel仓库时，怎样区分应用运行依赖与PEP 517构建隔离依赖？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import pathlib\ndef deliver(run,case):\n    args=['wheel','--no-index','--no-cache-dir','--find-links',case['runtime_wheels'],'--find-links',case['build_wheels'],'--no-deps','--wheel-dir',case['output'],case['source']]\n    code,out,err=run(args)\n    if code:raise RuntimeError('offline isolated build failed')\n    artifact=str(pathlib.Path(case['output'])/'opsforge_application-1.0-py3-none-any.whl')\n    code,out,err=run(['install','--no-index','--no-cache-dir','--find-links',case['runtime_wheels'],'--target',case['target'],artifact])\n    if code:raise RuntimeError('offline runtime install failed')\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib\ndef deliver(run,case):\n    args=['wheel','--no-index','--no-cache-dir','--find-links',case['runtime_wheels'],'--no-deps','--wheel-dir',case['output'],case['source']]\n    code,out,err=run(args)\n    if code:raise RuntimeError('offline isolated build failed')\n    artifact=str(pathlib.Path(case['output'])/'opsforge_application-1.0-py3-none-any.whl')\n    code,out,err=run(['install','--no-index','--no-cache-dir','--find-links',case['runtime_wheels'],'--target',case['target'],artifact])\n    if code:raise RuntimeError('offline runtime install failed')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现deliver(run,case)，run(argv)实际调用python -m pip并返回(code,stdout,stderr)。先wheel case.source，--no-index --no-cache-dir，分别--find-links case.runtime_wheels和case.build_wheels，保留默认PEP517构建隔离，--no-deps仅停止收集应用运行依赖，--wheel-dir case.output；成功后install其中opsforge_application-1.0-py3-none-any.whl，--no-index --no-cache-dir --find-links运行wheel目录 --target case.target，不使用--no-deps。任一步非0立即RuntimeError。输入及源文件不改，不安装到全局，不以--no-build-isolation掩盖缺构建依赖。真实仅运行wheel的初始构建失败；补充构建仓后隔离backend可导入buildhelper1.0，运行目录只安装应用和runtime2.0，独立-S解释器运行正常且无buildhelper。错误0.9构建仓必须失败且不继续安装。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实现有pip23/CPython3.11、纯Python自定义PEP517 backend和自有wheel，无网络、宿主安装或镜像构建。只验证本平台纯Python构建/运行依赖闭包，不证明跨平台ABI、原生编译链、签名仓库及所有动态构建依赖已交付。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 100,
+      "requires": {
+        "commands": [],
+        "python_modules": [
+          "pip"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/wheel_fixture.py": "\"\"\"Tiny valid pure-Python teaching wheels; standard library only, no package hooks.\"\"\"\ndef wheel(directory,name,version,files,requires=()):\n    import zipfile,base64,hashlib,csv,io,pathlib\n    normalized=name.replace('-','_');info=normalized+'-'+version+'.dist-info'\n    metadata='Metadata-Version: 2.1\\nName: '+name+'\\nVersion: '+version+'\\n'\n    for requirement in requires:metadata+='Requires-Dist: '+requirement+'\\n'\n    contents={key:value.encode() if isinstance(value,str) else value for key,value in files.items()}\n    contents[info+'/METADATA']=(metadata+'\\n').encode()\n    contents[info+'/WHEEL']=b'Wheel-Version: 1.0\\nGenerator: OpsForge teaching fixture\\nRoot-Is-Purelib: true\\nTag: py3-none-any\\n'\n    record=io.StringIO();writer=csv.writer(record,lineterminator='\\n')\n    for name_in_wheel,data in contents.items():writer.writerow((name_in_wheel,'sha256='+base64.urlsafe_b64encode(hashlib.sha256(data).digest()).decode().rstrip('='),len(data)))\n    writer.writerow((info+'/RECORD','',''));contents[info+'/RECORD']=record.getvalue().encode()\n    directory=pathlib.Path(directory);directory.mkdir(parents=True,exist_ok=True)\n    filename=normalized+'-'+version+'-py3-none-any.whl'\n    with zipfile.ZipFile(directory/filename,'w',zipfile.ZIP_DEFLATED) as archive:\n        for name_in_wheel,data in contents.items():archive.writestr(name_in_wheel,data)\n    return filename\n\n\ndef prepare(root):\n    import inspect,pathlib\n    root=pathlib.Path(root);runtime=root/'runtime-wheels';build=root/'build-wheels';wrong=root/'wrong-build';source=root/'source';source.mkdir()\n    wheel(runtime,'opsforge-runtime','2.0',{'opsforge_runtime.py':'VALUE=7\\n'})\n    helper=inspect.getsource(wheel)+'''\ndef emit(directory):\n    import json\n    marker=dict(build_dependency='1.0',isolated='pip-build-env-' in __file__)\n    return wheel(directory,'opsforge-application','1.0',{'opsforge_application.py':'from opsforge_runtime import VALUE\\\\nANSWER=VALUE+42\\\\n','opsforge_build_provenance.json':json.dumps(marker)},['opsforge-runtime==2.0'])\n'''\n    wheel(build,'opsforge-buildhelper','1.0',{'opsforge_buildhelper.py':helper})\n    wheel(wrong,'opsforge-buildhelper','0.9',{'opsforge_buildhelper.py':helper})\n    (source/'pyproject.toml').write_text('[build-system]\\nrequires=[\"opsforge-buildhelper==1.0\"]\\nbuild-backend=\"backend\"\\nbackend-path=[\".\"]\\n')\n    (source/'backend.py').write_text('import opsforge_buildhelper\\ndef build_wheel(wheel_directory, config_settings=None, metadata_directory=None):\\n    return opsforge_buildhelper.emit(wheel_directory)\\n')\n    return source,runtime,build,wrong\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,subprocess,json,copy,hashlib,importlib.util\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom wheel_fixture import prepare\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nassert importlib.util.find_spec('opsforge_buildhelper') is None\nwith tempfile.TemporaryDirectory(prefix='of-pep517-offline-') as directory:\n root=pathlib.Path(directory);source,runtime,build,wrong=prepare(root)\n env={**os.environ,'PIP_CONFIG_FILE':'/dev/null','PIP_NO_INDEX':'1','PIP_DISABLE_PIP_VERSION_CHECK':'1','PIP_CACHE_DIR':str(root/'cache'),'PYTHONDONTWRITEBYTECODE':'1','PYTHONNOUSERSITE':'1'}\n calls=[]\n def run(args):\n  calls.append(args[:]);p=subprocess.run([sys.executable,'-m','pip',*args],env=env,capture_output=True,text=True,timeout=25);return p.returncode,p.stdout,p.stderr\n code,out,err=run(['wheel','--no-index','--no-cache-dir','--find-links',str(runtime),'--no-deps','--wheel-dir',str(root/'initial-output'),str(source)])\n assert code!=0 and 'opsforge-buildhelper' in out+err,'runtime-only wheelhouse unexpectedly satisfied build-system.requires'\n protected={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for folder in (source,runtime,build,wrong) for p in folder.rglob('*') if p.is_file()}\n case=dict(source=str(source),runtime_wheels=str(runtime),build_wheels=str(build),output=str(root/'output'),target=str(root/'installed'));original=copy.deepcopy(case);calls.clear()\n print('NATIVE_PIP_RUNTIME_WHEELS_PRESENT_BUT_PEP517_BUILD_DEPENDENCY_MISSING',flush=True)\n print('STUDENT_OPERATION_ENTERED:separate_offline_build_isolation_and_runtime_dependency_closures',flush=True)\n try:task.deliver(run,case)\n except Exception as error:raise AssertionError('student offline build/runtime delivery failed') from error\n assert len(calls)==2 and calls[0][0]=='wheel' and calls[1][0]=='install' and all('--no-index' in args for args in calls)\n assert '--no-build-isolation' not in calls[0] and '--no-deps' in calls[0] and '--no-deps' not in calls[1]\n artifact=root/'output'/'opsforge_application-1.0-py3-none-any.whl';assert artifact.is_file()\n # No site-packages, pip, or build tools are available to this isolated runtime interpreter.\n probe=\"import sys,json,pathlib,importlib.util;sys.path.insert(0,sys.argv[1]);import opsforge_application;print(json.dumps(dict(answer=opsforge_application.ANSWER,build_helper=importlib.util.find_spec('opsforge_buildhelper') is not None,provenance=json.loads((pathlib.Path(sys.argv[1])/'opsforge_build_provenance.json').read_text()))))\"\n result=subprocess.run([sys.executable,'-I','-S','-c',probe,case['target']],env=env,capture_output=True,text=True,timeout=4)\n assert result.returncode==0,result.stderr\n assert json.loads(result.stdout)==dict(answer=49,build_helper=False,provenance=dict(build_dependency='1.0',isolated=True)),'build used ambient dependency or build tools leaked into runtime closure'\n assert sorted(p.name for p in (root/'installed').glob('*.dist-info'))==['opsforge_application-1.0.dist-info','opsforge_runtime-2.0.dist-info']\n bad={**case,'build_wheels':str(wrong),'output':str(root/'bad-output'),'target':str(root/'bad-target')};calls.clear()\n try:task.deliver(run,bad)\n except RuntimeError:pass\n else:raise AssertionError('wrong build helper version silently accepted')\n assert len(calls)==1 and not (root/'bad-target').exists(),'failed build continued to runtime install'\n assert protected=={str(p):hashlib.sha256(p.read_bytes()).hexdigest() for folder in (source,runtime,build,wrong) for p in folder.rglob('*') if p.is_file()}\n assert case==original and importlib.util.find_spec('opsforge_buildhelper') is None\n print('NATIVE_PEP517_BUILD_HELPER_ISOLATED_RUNTIME_INSTALL_ONLY_APPLICATION_AND_RUNTIME_DEPENDENCY',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "python"
+    ]
+  }
+]

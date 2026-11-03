@@ -1,0 +1,80 @@
+[
+  {
+    "id": "curated-parallel-node_exporter-107",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 4,
+    "topic": "指标语义与采集质量",
+    "title": "换盘身份实操：先按序列号记录counter，再计算同一物理盘的速率",
+    "answer": "```yaml\n{\n  \"groups\": [\n    {\n      \"name\": \"disk_identity\",\n      \"interval\": \"1m\",\n      \"rules\": [\n        {\n          \"record\": \"node:disk_read_bytes_total:serial\",\n          \"expr\": \"node_disk_read_bytes_total * on(instance,device) group_left(serial) node_disk_info{serial!=\\\"\\\"}\"\n        },\n        {\n          \"record\": \"node:disk_read_bytes:rate2m\",\n          \"expr\": \"rate(node:disk_read_bytes_total:serial[2m]) and on(instance,device,serial) node_disk_info{serial!=\\\"\\\"}\"\n        }\n      ]\n    }\n  ]\n}\n```\n\n原题知识说明：\n核对设备名、序列号、节点生命周期和计数重置，确认图中混合不同物理对象。保留历史边界并补充稳定资产映射，长期比较按设备身份分组。验证新旧盘不再被误作连续磨损趋势，不能只平滑曲线隐藏切换。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "核对设备名、序列号、节点生命周期和计数重置，确认图中混合不同物理对象。",
+      "保留历史边界并补充稳定资产映射，长期比较按设备身份分组。",
+      "验证新旧盘不再被误作连续磨损趋势，不能只平滑曲线隐藏切换。"
+    ],
+    "references": [
+      "https://raw.githubusercontent.com/prometheus/node_exporter/v1.9.1/collector/diskstats_linux.go",
+      "https://prometheus.io/docs/prometheus/latest/configuration/unit_testing_rules/"
+    ],
+    "incident_signature": "node-exporter-device-name-reuse-history-identity",
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "yaml",
+    "conversion": {
+      "original_id": "curated-parallel-node_exporter-107",
+      "original_title": "换盘后相同device=sdb曲线被接在旧盘后面，资产记录显示序列号已变。如何处理？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n提交rules.yaml，group=disk_identity、interval=1m，依次填写两个record：node:disk_read_bytes_total:serial把原始读字节counter与同instance/device且非空serial的node_disk_info关联，保留instance/device/job并增加serial；node:disk_read_bytes:rate2m对前一record取rate[2m]，且只输出当前存在的同instance/device/serial。不能先对仅device标签的原始counter取rate后再贴最新serial，否则换盘首点会把跨盘差值挂到新盘。夹具真实运行node_exporter1.9.1，私有procfs/udev中同名sdb的serial由旧变新，原始counter仍单调增长；将实际采集的四个值送入promtool3.5逻辑1m规则测试。换盘首点应无可信速率，下一点才有新盘速率；旧序列号停止输出，其他host的同名sdb独立，serial缺失保持未知而不是无序列号回退。\n\n## 提交产物\nrules.yaml\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实collector读取私有procfs/sysfs/udev格式样本并导出变化的serial，真实promtool规则引擎验收身份隔离。四次collector抓取即时执行，规则测试使用明确的逻辑1m间隔，不声称生产已等时采样或物理换盘；不改宿主设备、现有Prometheus历史或生产规则。本题恢复的是新录制序列的身份边界，既有无序列号历史仍需另行标记/分段；不伪造可恢复已丢失的历史身份。",
+    "files": {
+      "rules.yaml": "{\"groups\": [{\"name\": \"disk_identity\", \"interval\": \"1m\", \"rules\": []}]}\n"
+    },
+    "solution_files": {
+      "rules.yaml": "{\n  \"groups\": [\n    {\n      \"name\": \"disk_identity\",\n      \"interval\": \"1m\",\n      \"rules\": [\n        {\n          \"record\": \"node:disk_read_bytes_total:serial\",\n          \"expr\": \"node_disk_read_bytes_total * on(instance,device) group_left(serial) node_disk_info{serial!=\\\"\\\"}\"\n        },\n        {\n          \"record\": \"node:disk_read_bytes:rate2m\",\n          \"expr\": \"rate(node:disk_read_bytes_total:serial[2m]) and on(instance,device,serial) node_disk_info{serial!=\\\"\\\"}\"\n        }\n      ]\n    }\n  ]\n}\n"
+    },
+    "negative_files": {
+      "rules.yaml": "{\n  \"groups\": [\n    {\n      \"name\": \"disk_identity\",\n      \"interval\": \"1m\",\n      \"rules\": [\n        {\n          \"record\": \"node:disk_read_bytes_total:serial\",\n          \"expr\": \"node_disk_read_bytes_total * on(instance,device) group_left(serial) node_disk_info{serial!=\\\"\\\"}\"\n        },\n        {\n          \"record\": \"node:disk_read_bytes:rate2m\",\n          \"expr\": \"rate(node_disk_read_bytes_total[2m]) * on(instance,device) group_left(serial) node_disk_info{serial!=\\\"\\\"}\"\n        }\n      ]\n    }\n  ]\n}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "提交rules.yaml，group=disk_identity、interval=1m，依次填写两个record：node:disk_read_bytes_total:serial把原始读字节counter与同instance/device且非空serial的node_disk_info关联，保留instance/device/job并增加serial；node:disk_read_bytes:rate2m对前一record取rate[2m]，且只输出当前存在的同instance/device/serial。不能先对仅device标签的原始counter取rate后再贴最新serial，否则换盘首点会把跨盘差值挂到新盘。夹具真实运行node_exporter1.9.1，私有procfs/udev中同名sdb的serial由旧变新，原始counter仍单调增长；将实际采集的四个值送入promtool3.5逻辑1m规则测试。换盘首点应无可信速率，下一点才有新盘速率；旧序列号停止输出，其他host的同名sdb独立，serial缺失保持未知而不是无序列号回退。",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实collector读取私有procfs/sysfs/udev格式样本并导出变化的serial，真实promtool规则引擎验收身份隔离。四次collector抓取即时执行，规则测试使用明确的逻辑1m间隔，不声称生产已等时采样或物理换盘；不改宿主设备、现有Prometheus历史或生产规则。本题恢复的是新录制序列的身份边界，既有无序列号历史仍需另行标记/分段；不伪造可恢复已丢失的历史身份。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "node_exporter",
+          "promtool"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/node_disk.py": "\"\"\"Native collector fixture; owned non-root loopback process only.\"\"\"\nimport contextlib\nimport json\nimport os\nfrom pathlib import Path\nimport shutil\nimport socket\nimport subprocess\nimport tempfile\nimport threading\nimport time\nimport urllib.request\n\n\n@contextlib.contextmanager\ndef node(directory, flags=(), textfile=True):\n    assert os.name == 'posix' and os.geteuid() != 0, 'isolated non-root Linux required'\n    binary = shutil.which('node_exporter')\n    assert binary, 'node_exporter missing'\n    directory = Path(directory).resolve()\n    with socket.socket() as sock:\n        sock.bind(('127.0.0.1', 0))\n        port = sock.getsockname()[1]\n    stop = threading.Event()\n    failures = []\n    stats = {'peak_rss': 0, 'port': port, 'uid': os.geteuid()}\n    with tempfile.TemporaryDirectory(prefix='opsforge-node-') as temporary:\n        with (Path(temporary)/'node.log').open('wb') as output:\n            collector_flags = ['--collector.textfile', '--collector.textfile.directory='+str(directory)] if textfile else []\n            process = subprocess.Popen([binary, '--web.listen-address=127.0.0.1:'+str(port),\n                '--collector.disable-defaults', *collector_flags, *flags],\n                stdout=output, stderr=output,\n                env={**os.environ, 'GOMAXPROCS':'1', 'GOMEMLIMIT':'64MiB'})\n            deadline = time.monotonic()+30\n            def monitor():\n                while not stop.is_set() and process.poll() is None:\n                    try:\n                        status = Path('/proc',str(process.pid),'status').read_text()\n                        rss = next(int(line.split()[1])*1024 for line in status.splitlines() if line.startswith('VmRSS:'))\n                        stats['peak_rss'] = max(stats['peak_rss'],rss)\n                        if rss > 128*1024**2 or time.monotonic() > deadline:\n                            failures.append('resource guard');process.kill();return\n                    except (FileNotFoundError, ProcessLookupError):\n                        return\n                    stop.wait(.02)\n            guard = threading.Thread(target=monitor, daemon=True)\n            guard.start()\n            base = 'http://127.0.0.1:'+str(port)\n            def scrape(query=''):\n                with urllib.request.urlopen(base+'/metrics'+query, timeout=2) as response:\n                    assert response.status == 200\n                    return response.read().decode()\n            try:\n                ready = time.monotonic()+5\n                while True:\n                    try:\n                        with urllib.request.urlopen(base+'/', timeout=.5):\n                            break\n                    except OSError:\n                        assert process.poll() is None and time.monotonic() < ready, 'native collector startup failed: '+(Path(temporary)/'node.log').read_text(errors='replace')[-2500:]\n                        time.sleep(.03)\n                yield scrape\n                assert not failures, failures\n            finally:\n                stop.set()\n                if process.poll() is None:\n                    process.terminate()\n                try:\n                    process.wait(timeout=3)\n                except subprocess.TimeoutExpired:\n                    process.kill();process.wait(timeout=3)\n                guard.join(timeout=2)\n                stats['terminated'] = process.poll() is not None\n                print('NODE_NATIVE '+json.dumps(stats))\n                assert not failures, failures\n\n\ndef samples(text, name):\n    # Exported label values (for example uname.version) can contain spaces.\n    return {line.rsplit(None,1)[0]:float(line.rsplit(None,1)[1]) for line in text.splitlines()\n            if line.startswith(name+' ') or line.startswith(name+'{')}\n",
+        "checks/check.py": "import json,os,pathlib,re,secrets,subprocess,sys,tempfile,yaml\nsys.path[:0]=[os.getcwd(),str(pathlib.Path.cwd()/'checks')]\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\npath=pathlib.Path('rules.yaml')\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n result={}\n for key,value in node.value:\n  key=loader.construct_object(key,deep=deep)\n  if key in result:raise ValueError('duplicate YAML key')\n  result[key]=loader.construct_object(value,deep=deep)\n return result\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndocument=yaml.load(path.read_text(),Loader=Strict)\nif not document['groups'][0].get('rules'):raise NotImplementedError('implement recording rules')\nassert set(document)=={'groups'} and len(document['groups'])==1\ngroup=document['groups'][0]\nassert set(group)=={'name','interval','rules'} and group['name']=='disk_identity' and group['interval']=='1m'\nassert len(group['rules'])==2 and [r['record'] for r in group['rules']]==['node:disk_read_bytes_total:serial','node:disk_read_bytes:rate2m']\nassert all(set(r)=={'record','expr'} and isinstance(r['expr'],str) for r in group['rules'])\nfor command,version in [('node_exporter','version 1.9.1'),('promtool','version 3.5.')]:\n result=subprocess.run([command,'--version'],capture_output=True,text=True,timeout=3)\n assert result.returncode==0 and version in result.stdout+result.stderr\nfrom node_disk import node,samples\nwith tempfile.TemporaryDirectory(prefix='node-serial-') as directory:\n root=pathlib.Path(directory);proc=root/'proc';sysfs=root/'sys';udev=root/'udev'\n for d in (proc,sysfs,udev):d.mkdir()\n queue=sysfs/'block/sdb/queue';queue.mkdir(parents=True);(queue/'logical_block_size').write_text('4096\\n')\n old='old_'+secrets.token_hex(4);new='new_'+secrets.token_hex(4);captured=[]\n def write(turn):\n  (proc/'diskstats').write_text('8 16 sdb 10 0 '+str((turn+1)*10)+' 20 1 0 3 2 0 22 22\\n')\n  (udev/'b8:16').write_text('E:ID_SERIAL_SHORT='+(old if turn<2 else new)+'\\n')\n write(0)\n flags=['--collector.diskstats','--path.procfs='+str(proc),'--path.sysfs='+str(sysfs),'--path.udev.data='+str(udev),'--collector.diskstats.device-exclude=','--collector.diskstats.device-include=^sdb$']\n with node(directory,flags,textfile=False) as scrape:\n  for turn in range(4):\n   write(turn);text=scrape()\n   assert samples(text,'node_scrape_collector_success')=={'node_scrape_collector_success{collector=\"diskstats\"}':1}\n   counter=samples(text,'node_disk_read_bytes_total')\n   assert set(counter)=={'node_disk_read_bytes_total{device=\"sdb\"}'}\n   info=samples(text,'node_disk_info');assert len(info)==1\n   labels=next(iter(info));serial=re.search(r'serial=\"([^\"]+)\"',labels)\n   assert serial and serial[1]==(old if turn<2 else new)\n   captured.append(int(next(iter(counter.values()))))\n assert captured==[5120,10240,15360,20480],'counter must remain monotonic despite actual serial-label change'\n print('NATIVE_NODE_DISK_SAME_SDB_COUNTER_MONOTONIC_ACTUAL_UDEV_SERIAL_CHANGED_OLD_TO_NEW',flush=True)\n def series(name,labels,values):\n  return dict(series=name+'{'+','.join(k+'='+json.dumps(v) for k,v in labels.items())+'}',values=values)\n labels={'instance':'host-a','device':'sdb','job':'node'}\n source=[series('node_disk_read_bytes_total',labels,' '.join(map(str,captured))),\n   series('node_disk_info',{'instance':'host-a','device':'sdb','serial':old},'1 1 stale _'),\n   series('node_disk_info',{'instance':'host-a','device':'sdb','serial':new},'_ _ 1 1'),\n   series('node_disk_read_bytes_total',{'instance':'host-b','device':'sdb','job':'node'},'100+60x3'),\n   series('node_disk_info',{'instance':'host-b','device':'sdb','serial':'other'},'1+0x3'),\n   series('node_disk_read_bytes_total',{'instance':'missing','device':'sdb','job':'node'},'100+60x3'),\n   series('node_disk_info',{'instance':'missing','device':'sdb','serial':''},'1+0x3')]\n def sample(record,serial,value):return dict(labels=record+'{device=\"sdb\",instance=\"host-a\",job=\"node\",serial=\"'+serial+'\"}',value=value)\n record='node:disk_read_bytes:rate2m'\n tests=[dict(expr=record+'{instance=\"host-a\",serial=\"'+old+'\"}',eval_time='1m',exp_samples=[sample(record,old,5120/60)]),\n  dict(expr=record+'{instance=\"host-a\"}',eval_time='2m',exp_samples=[]),\n  dict(expr=record+'{instance=\"host-a\"}',eval_time='3m',exp_samples=[sample(record,new,5120/60)]),\n  dict(expr=record+'{instance=\"missing\"}',eval_time='3m',exp_samples=[]),\n  dict(expr=record+'{instance=\"host-b\"}',eval_time='3m',exp_samples=[dict(labels=record+'{device=\"sdb\",instance=\"host-b\",job=\"node\",serial=\"other\"}',value=1)])]\n fixture=dict(rule_files=[str(path.resolve())],evaluation_interval='1m',fuzzy_compare=True,tests=[dict(interval='1m',input_series=source,promql_expr_test=tests)])\n testfile=root/'tests.yaml';testfile.write_text(yaml.safe_dump(fixture,sort_keys=False))\n print('STUDENT_OPERATION_ENTERED:record_serial_identity_before_rate_not_attach_new_serial_after_cross_disk_rate',flush=True)\n result=subprocess.run(['promtool','test','rules',str(testfile)],capture_output=True,text=True,timeout=8)\n assert result.returncode==0,'actual rule engine mixed physical disk identities: '+(result.stdout+result.stderr)[-6000:]\n print('NATIVE_RULE_ENGINE_NO_RATE_AT_FIRST_NEW_DISK_SAMPLE_THEN_NEW_SERIAL_RATE_OTHER_HOST_SEPARATE_MISSING_ID_UNKNOWN',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "case"
+  }
+]

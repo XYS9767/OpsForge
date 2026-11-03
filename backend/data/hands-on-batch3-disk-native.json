@@ -1,0 +1,264 @@
+[
+  {
+    "id": "src-ee4b33eb338b1c4a",
+    "title": "扩展离线ext4镜像：同时增长容器和真实文件系统",
+    "answer": "```python\nimport os,subprocess\ndef grow(image,new_bytes):\n    old=os.stat(image).st_size\n    if type(new_bytes) is not int or new_bytes<=old or new_bytes%1048576:raise ValueError('growth required')\n    p=subprocess.run(['e2fsck','-f','-p',str(image)],capture_output=True)\n    if p.returncode not in (0,1):raise RuntimeError('filesystem not safely expandable')\n    with open(image,'r+b') as f:f.truncate(new_bytes)\n    subprocess.run(['resize2fs',str(image)],check=True,capture_output=True)\n```\n\n原题说明：\n先确认备份、设备拓扑和文件系统支持，再按云盘/磁盘、分区、PV/VG、LV、文件系统的实际层次逐层扩展并验证。并非每层都存在；XFS/ext4 等工具与在线能力不同。扩容不能当作缩容的逆过程，禁止猜设备名执行。",
+    "category": "磁盘与文件系统",
+    "difficulty": "入门",
+    "section": "磁盘和文件系统",
+    "type": "practice",
+    "has_answer": true,
+    "source": "topics/linux/README.md",
+    "sources": [
+      "topics/linux/README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "真实离线ext4镜像合同；只有与冻结source哈希一致的原生验证才计入完成。",
+    "original_category": "Linux",
+    "original_title": "描述扩展文件系统磁盘空间的过程",
+    "module": "disk",
+    "topic": "LVM卷管理与快照",
+    "level": 3,
+    "body": "## 环境\n真实ext4离线普通镜像文件，Linux非root。禁止挂载、接触宿主块设备或修改系统配置。\n\n## 操作任务\n实现 grow(image,new_bytes)：image为未挂载的正常ext4普通镜像，new_bytes大于当前文件且为MiB倍数。先原生e2fsck离线检查，再增长文件容器，用resize2fs扩展真实文件系统；保留UUID及原文件/payload内容。只扩大镜像长度而不调整超级块不合格。返回None。\n\n## 提交产物\ntask.py。\n\n## 验收方法\n原生e2fsprogs及超级块/数据双重核对。镜像没有挂载，不声称验证在线业务、断电或物理介质持久性。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "disk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "src-ee4b33eb338b1c4a",
+      "original_title": "描述扩展文件系统磁盘空间的过程",
+      "original_type": "source"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import os,subprocess\ndef grow(image,new_bytes):\n    old=os.stat(image).st_size\n    if type(new_bytes) is not int or new_bytes<=old or new_bytes%1048576:raise ValueError('growth required')\n    p=subprocess.run(['e2fsck','-f','-p',str(image)],capture_output=True)\n    if p.returncode not in (0,1):raise RuntimeError('filesystem not safely expandable')\n    with open(image,'r+b') as f:f.truncate(new_bytes)\n    subprocess.run(['resize2fs',str(image)],check=True,capture_output=True)\n"
+    },
+    "negative_files": {
+      "task.py": "def grow(image,new_bytes):\n    with open(image,'r+b') as f:f.truncate(new_bytes)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "真实e2fsprogs、非root普通镜像，无mount",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": [
+        "原生工具、超级块、载荷及输入保持断言"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "mkfs.ext4",
+          "e2fsck",
+          "resize2fs",
+          "debugfs"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,struct,hashlib,shutil,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef run(argv):\n p=subprocess.run(argv,capture_output=True,text=True,env=dict(os.environ,LC_ALL='C'),timeout=15)\n assert p.returncode==0,(argv,p.stdout,p.stderr)\n return p.stdout+p.stderr\ndef superblock(path):\n with open(path,'rb') as f:f.seek(1024);s=f.read(1024)\n assert struct.unpack_from('<H',s,56)[0]==0xef53\n return dict(inodes=struct.unpack_from('<I',s,0)[0],blocks=struct.unpack_from('<I',s,4)[0],free_blocks=struct.unpack_from('<I',s,12)[0],free_inodes=struct.unpack_from('<I',s,16)[0],block_size=1024<<struct.unpack_from('<I',s,24)[0],uuid=str(uuid.UUID(bytes=s[104:120])))\ndef make(path,inodes=128):\n with open(path,'wb') as f:f.truncate(16*1024*1024)\n run(['mkfs.ext4','-q','-F','-N',str(inodes),str(path)])\n print('NATIVE_EXT4_FIXTURE_READY',flush=True)\ndef payload(image,root,data):\n source=root/'payload-source';source.write_bytes(data)\n run(['debugfs','-w','-R','write '+str(source)+' /payload',str(image)])\ndef read_payload(image):\n p=subprocess.run(['debugfs','-R','cat /payload',str(image)],capture_output=True,timeout=5)\n assert p.returncode==0\n return p.stdout\nwith tempfile.TemporaryDirectory() as d:\n root=pathlib.Path(d);image=root/'grow.img';make(image);data=secrets.token_bytes(7000);payload(image,root,data)\n before=superblock(image);target=32*1024*1024\n assert task.grow(image,target) is None\n after=superblock(image)\n assert image.stat().st_size==target and after['blocks']*after['block_size']==target\n assert after['uuid']==before['uuid'] and read_payload(image)==data\n run(['e2fsck','-f','-n',str(image)])\n target+=16*1024*1024\n assert task.grow(image,target) is None\n after=superblock(image)\n assert image.stat().st_size==target and after['blocks']*after['block_size']==target\n assert after['uuid']==before['uuid'] and read_payload(image)==data\n run(['e2fsck','-f','-n',str(image)])\n digest=hashlib.sha256(image.read_bytes()).hexdigest()\n try:task.grow(image,target//2);raise AssertionError('shrink accepted')\n except ValueError:pass\n assert hashlib.sha256(image.read_bytes()).hexdigest()==digest\nprint('NATIVE_EXT4_ACTUAL_RESIZE_VERIFIED')\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-disk-086",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "level": 3,
+    "topic": "存储介质与设备模型",
+    "title": "隔离克隆卷UUID碰撞：仅变更指定ext4克隆的真实UUID",
+    "answer": "```python\nimport pathlib,uuid,struct,subprocess,os\ndef reidentify(source,clone,new_uuid):\n    value=uuid.UUID(new_uuid)\n    if str(value)!=new_uuid:raise ValueError('canonical UUID required')\n    with open(source,'rb') as f:f.seek(1128);old=str(uuid.UUID(bytes=f.read(16)))\n    if new_uuid==old or os.path.samefile(source,clone):raise ValueError('distinct clone and UUID required')\n    subprocess.run(['tune2fs','-U',new_uuid,str(clone)],check=True,capture_output=True)\n```\n\n原题说明：\n将设备序列号、WWN、文件系统UUID及数据版本对应，停止向身份不明挂载写入并保留两卷。隔离克隆卷，按受支持方式为克隆分配唯一标识并修正挂载配置。验证冷启动实际设备与数据版本，不只检查路径存在；若已错写，需单独评估数据合并恢复。",
+    "type": "practice",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "真实离线ext4镜像合同；只有与冻结source哈希一致的原生验证才计入完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "将设备序列号、WWN、文件系统UUID及数据版本对应，停止向身份不明挂载写入并保留两卷。",
+      "隔离克隆卷，按受支持方式为克隆分配唯一标识并修正挂载配置。",
+      "验证冷启动实际设备与数据版本，不只检查路径存在；若已错写，需单独评估数据合并恢复。"
+    ],
+    "references": [],
+    "incident_signature": "disk-cloned-filesystem-uuid-ambiguous-mount",
+    "related_modules": [
+      "disk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-disk-086",
+      "original_title": "挂入克隆卷后重启偶尔把旧数据卷当成生产卷，两者文件系统UUID相同。如何恢复？",
+      "original_type": "case"
+    },
+    "body": "## 环境\n真实ext4离线普通镜像文件，Linux非root。禁止挂载、接触宿主块设备或修改系统配置。\n\n## 操作任务\n实现 reidentify(source,clone,new_uuid)：两镜像是未挂载ext4文件，最初UUID相同。验证new_uuid是规范UUID且不同于source当前UUID，只对clone使用原生tune2fs设置UUID，不改source、载荷、镜像尺寸。返回None。这里验证卷标识修复，不声称已修改生产fstab/initramfs或完成重启挂载验收。\n\n## 提交产物\ntask.py。\n\n## 验收方法\n原生e2fsprogs及超级块/数据双重核对。镜像没有挂载，不声称验证在线业务、断电或物理介质持久性。",
+    "files": {
+      "task.py": "raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import pathlib,uuid,struct,subprocess,os\ndef reidentify(source,clone,new_uuid):\n    value=uuid.UUID(new_uuid)\n    if str(value)!=new_uuid:raise ValueError('canonical UUID required')\n    with open(source,'rb') as f:f.seek(1128);old=str(uuid.UUID(bytes=f.read(16)))\n    if new_uuid==old or os.path.samefile(source,clone):raise ValueError('distinct clone and UUID required')\n    subprocess.run(['tune2fs','-U',new_uuid,str(clone)],check=True,capture_output=True)\n"
+    },
+    "negative_files": {
+      "task.py": "def reidentify(source,clone,new_uuid):return None\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "真实e2fsprogs、非root普通镜像，无mount",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": [
+        "原生工具、超级块、载荷及输入保持断言"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "mkfs.ext4",
+          "tune2fs",
+          "debugfs",
+          "e2fsck"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,struct,hashlib,shutil,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef run(argv):\n p=subprocess.run(argv,capture_output=True,text=True,env=dict(os.environ,LC_ALL='C'),timeout=15)\n assert p.returncode==0,(argv,p.stdout,p.stderr)\n return p.stdout+p.stderr\ndef superblock(path):\n with open(path,'rb') as f:f.seek(1024);s=f.read(1024)\n assert struct.unpack_from('<H',s,56)[0]==0xef53\n return dict(inodes=struct.unpack_from('<I',s,0)[0],blocks=struct.unpack_from('<I',s,4)[0],free_blocks=struct.unpack_from('<I',s,12)[0],free_inodes=struct.unpack_from('<I',s,16)[0],block_size=1024<<struct.unpack_from('<I',s,24)[0],uuid=str(uuid.UUID(bytes=s[104:120])))\ndef make(path,inodes=128):\n with open(path,'wb') as f:f.truncate(16*1024*1024)\n run(['mkfs.ext4','-q','-F','-N',str(inodes),str(path)])\n print('NATIVE_EXT4_FIXTURE_READY',flush=True)\ndef payload(image,root,data):\n source=root/'payload-source';source.write_bytes(data)\n run(['debugfs','-w','-R','write '+str(source)+' /payload',str(image)])\ndef read_payload(image):\n p=subprocess.run(['debugfs','-R','cat /payload',str(image)],capture_output=True,timeout=5)\n assert p.returncode==0\n return p.stdout\nwith tempfile.TemporaryDirectory() as d:\n root=pathlib.Path(d);source=root/'source';clone=root/'clone';make(source);data=secrets.token_bytes(5000);payload(source,root,data);shutil.copyfile(source,clone)\n before=hashlib.sha256(source.read_bytes()).hexdigest();old=superblock(source);new=str(uuid.uuid4());size=clone.stat().st_size\n assert superblock(clone)['uuid']==old['uuid']\n assert task.reidentify(source,clone,new) is None\n assert superblock(clone)['uuid']==new and superblock(source)==old\n assert hashlib.sha256(source.read_bytes()).hexdigest()==before and clone.stat().st_size==size and read_payload(clone)==data\n run(['e2fsck','-f','-n',str(clone)])\n clone_hash=hashlib.sha256(clone.read_bytes()).hexdigest()\n for bad in [old['uuid'],'not-a-uuid']:\n  try:task.reidentify(source,clone,bad);raise AssertionError('invalid identity accepted')\n  except ValueError:pass\n  assert hashlib.sha256(clone.read_bytes()).hexdigest()==clone_hash\n hard=root/'hardlink';os.link(source,hard)\n try:task.reidentify(source,hard,str(uuid.uuid4()));raise AssertionError('same inode accepted')\n except ValueError:pass\n assert hashlib.sha256(source.read_bytes()).hexdigest()==before\nprint('NATIVE_EXT4_CLONE_UUID_VERIFIED')\n"
+      }
+    }
+  },
+  {
+    "id": "src-88f2931fcf125b9f",
+    "title": "真实重现ext4 inode耗尽且数据块仍空闲",
+    "answer": "```python\nimport struct\ndef diagnose(image):\n    with open(image,'rb') as f:f.seek(1024);s=f.read(1024)\n    if len(s)!=1024 or struct.unpack_from('<H',s,56)[0]!=0xef53 or not (struct.unpack_from('<I',s,96)[0]&0x40):raise ValueError('unsupported ext4 superblock')\n    blocks=struct.unpack_from('<I',s,12)[0];inodes=struct.unpack_from('<I',s,16)[0]\n    return dict(free_inodes=inodes,free_blocks=blocks,cause='block_exhausted' if blocks==0 else 'inode_exhausted' if inodes==0 else 'not_exhausted')\n```\n\n原题说明：\n先检查 df -i 的 inode、用户/项目配额、写入实际挂载点与保留块，再看文件系统只读状态、最大文件大小及底层错误。df 的空闲块与目标进程可分配空间不一定相同。对删除后未释放空间还应看打开但已删除的文件；确认原因后定点处理，避免清空业务目录。 inode确已耗尽时，先定位大量小文件及保留需求，受控清理已确认可回收对象或迁移/扩容；不同文件系统inode分配方式不同，不能保证在线直接增加固定inode数量。",
+    "category": "磁盘与文件系统",
+    "difficulty": "入门",
+    "section": "调试",
+    "type": "practice",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "真实离线ext4镜像合同；只有与冻结source哈希一致的原生验证才计入完成。",
+    "original_category": "Linux",
+    "original_title": "你试图创建一个新文件，但显示“文件系统已满”。 你使用df检查是否有可用空间，你看到还有20％的空间。 可能是什么问题?",
+    "module": "disk",
+    "topic": "文件系统结构与容量",
+    "level": 3,
+    "body": "## 环境\n真实ext4离线普通镜像文件，Linux非root。禁止挂载、接触宿主块设备或修改系统配置。\n\n## 操作任务\n实现 diagnose(image)：只读检查真实离线ext4普通小镜像超级块，返回{free_inodes:int,free_blocks:int,cause:str}。本题限定extents特性启用、计数在低32位；魔数或extents特性不匹配应ValueError，此局部检查不等于完整fsck。free_inodes为0且free_blocks大于0时cause=inode_exhausted；free_blocks为0时cause=block_exhausted；其余cause=not_exhausted。固定检查器会实际创建大量空文件及另一镜像写满数据块，确认原生debugfs分配失败；不能按字节空闲量猜测，也不得删除文件或重格式化。\n\n## 提交产物\ntask.py。\n\n## 验收方法\n原生e2fsprogs及超级块/数据双重核对。镜像没有挂载，不声称验证在线业务、断电或物理介质持久性。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-175e2f4ccb016c75",
+        "title": "您正在尝试创建新文件，但收到“文件系统已满”。您使用 df 检查可用空间，发现您仅使用了 20% 的空间。可能是什么问题？",
+        "category": "Linux",
+        "source": "topics/linux/README.md",
+        "sources": [
+          "topics/linux/README.md"
+        ]
+      }
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c"
+    ],
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "Dx90diEiPoOb4cxu7Bmcj1een6c",
+        "question": "15、如果某一个磁盘空间充足，但是无法创建新文件，请问为什么？inode"
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "Fm7mdwyggo7atrxGxqkcolionke",
+        "question": "42、inode满了会发生什么，如何解决"
+      }
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "Dx90diEiPoOb4cxu7Bmcj1een6c"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "Fm7mdwyggo7atrxGxqkcolionke"
+        ]
+      }
+    ],
+    "related_modules": [
+      "disk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "src-88f2931fcf125b9f",
+      "original_title": "你试图创建一个新文件，但显示“文件系统已满”。 你使用df检查是否有可用空间，你看到还有20％的空间。 可能是什么问题?",
+      "original_type": "source"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import struct\ndef diagnose(image):\n    with open(image,'rb') as f:f.seek(1024);s=f.read(1024)\n    if len(s)!=1024 or struct.unpack_from('<H',s,56)[0]!=0xef53 or not (struct.unpack_from('<I',s,96)[0]&0x40):raise ValueError('unsupported ext4 superblock')\n    blocks=struct.unpack_from('<I',s,12)[0];inodes=struct.unpack_from('<I',s,16)[0]\n    return dict(free_inodes=inodes,free_blocks=blocks,cause='block_exhausted' if blocks==0 else 'inode_exhausted' if inodes==0 else 'not_exhausted')\n"
+    },
+    "negative_files": {
+      "task.py": "def diagnose(image):return dict(free_inodes=0,free_blocks=0,cause='block_exhausted')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "真实e2fsprogs、非root普通镜像，无mount",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": [
+        "原生工具、超级块、载荷及输入保持断言"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "mkfs.ext4",
+          "debugfs"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,struct,hashlib,shutil,uuid\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef run(argv):\n p=subprocess.run(argv,capture_output=True,text=True,env=dict(os.environ,LC_ALL='C'),timeout=15)\n assert p.returncode==0,(argv,p.stdout,p.stderr)\n return p.stdout+p.stderr\ndef superblock(path):\n with open(path,'rb') as f:f.seek(1024);s=f.read(1024)\n assert struct.unpack_from('<H',s,56)[0]==0xef53\n return dict(inodes=struct.unpack_from('<I',s,0)[0],blocks=struct.unpack_from('<I',s,4)[0],free_blocks=struct.unpack_from('<I',s,12)[0],free_inodes=struct.unpack_from('<I',s,16)[0],block_size=1024<<struct.unpack_from('<I',s,24)[0],uuid=str(uuid.UUID(bytes=s[104:120])))\ndef make(path,inodes=128):\n with open(path,'wb') as f:f.truncate(16*1024*1024)\n run(['mkfs.ext4','-q','-F','-N',str(inodes),str(path)])\n print('NATIVE_EXT4_FIXTURE_READY',flush=True)\ndef payload(image,root,data):\n source=root/'payload-source';source.write_bytes(data)\n run(['debugfs','-w','-R','write '+str(source)+' /payload',str(image)])\ndef read_payload(image):\n p=subprocess.run(['debugfs','-R','cat /payload',str(image)],capture_output=True,timeout=5)\n assert p.returncode==0\n return p.stdout\nwith tempfile.TemporaryDirectory() as d:\n root=pathlib.Path(d);image=root/'inodes';make(image,64);empty=root/'empty';empty.write_bytes(b'')\n first=superblock(image);before=hashlib.sha256(image.read_bytes()).hexdigest()\n assert task.diagnose(image)==dict(free_inodes=first['free_inodes'],free_blocks=first['free_blocks'],cause='not_exhausted')\n assert hashlib.sha256(image.read_bytes()).hexdigest()==before\n commands=root/'commands';commands.write_text(''.join('write '+str(empty)+' /f'+str(i)+'\\n' for i in range(first['inodes']+5)))\n result=subprocess.run(['debugfs','-w','-f',str(commands),str(image)],capture_output=True,text=True,timeout=15)\n assert result.returncode==0 and 'Could not allocate inode' in result.stderr\n current=superblock(image);assert current['free_inodes']==0 and current['free_blocks']>0\n before=hashlib.sha256(image.read_bytes()).hexdigest()\n assert task.diagnose(image)==dict(free_inodes=0,free_blocks=current['free_blocks'],cause='inode_exhausted')\n assert hashlib.sha256(image.read_bytes()).hexdigest()==before\n full=root/'blocks';make(full);big=root/'big';big.write_bytes(secrets.token_bytes(18*1024*1024))\n result=subprocess.run(['debugfs','-w','-R','write '+str(big)+' /full',str(full)],capture_output=True,text=True,timeout=15)\n assert result.returncode==0 and 'Could not allocate block' in result.stderr\n current=superblock(full);assert current['free_blocks']==0 and current['free_inodes']>0\n before=hashlib.sha256(full.read_bytes()).hexdigest()\n assert task.diagnose(full)==dict(free_inodes=current['free_inodes'],free_blocks=0,cause='block_exhausted')\n assert hashlib.sha256(full.read_bytes()).hexdigest()==before\n ext2=root/'ext2'\n with ext2.open('wb') as stream:stream.truncate(16*1024*1024)\n run(['mkfs.ext4','-q','-F','-t','ext2',str(ext2)])\n try:task.diagnose(ext2);raise AssertionError('ext2 accepted')\n except ValueError:pass\n invalid=root/'invalid';invalid.write_bytes(secrets.token_bytes(4096))\n try:task.diagnose(invalid);raise AssertionError('non-ext4 accepted')\n except ValueError:pass\nprint('NATIVE_EXT4_INODE_EXHAUSTION_VERIFIED')\n"
+      }
+    }
+  }
+]

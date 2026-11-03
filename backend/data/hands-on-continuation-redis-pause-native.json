@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-parallel-redis-078",
+    "module": "redis",
+    "category": "Redis",
+    "level": 3,
+    "topic": "性能与访问治理",
+    "title": "真实CLIENT PAUSE WRITE边界：读继续，超时写仍可能在UNPAUSE后执行，失败也恢复",
+    "answer": "```python\ndef pause_writes(command,work,milliseconds):\n    if type(milliseconds) is not int or not 500<=milliseconds<=1500:raise ValueError('bounded maintenance pause required')\n    command('CLIENT','PAUSE',milliseconds,'WRITE')\n    try:return work()\n    finally:command('CLIENT','UNPAUSE')\n```\n\n原题知识说明：\n暂停会让请求等待，模式与版本决定受影响操作；应用可能超时并重试形成恢复后的突发。限时使用并预估队列，验收恢复后重复写、尾延迟及连接池压力。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现pause_writes(command,work,milliseconds)。milliseconds为非bool整数500..1500，否则ValueError且不发命令；实际CLIENT PAUSE milliseconds WRITE，然后返回work()结果，finally必须CLIENT UNPAUSE，工作异常原样传播。不能用ALL暂停读，也不能成功才清理。真实私有Redis中work先GET/PING应立即成功，再专用连接发一次INCR，客户端50ms超时而服务端仍未执行；UNPAUSE后该排队写实际生效一次，说明超时不是回滚，不能据超时盲目重放。后续失败work仍解除写暂停，正常写再次可用。只在本题私有实例，禁止外部服务维护操作。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Redis7.2 Unix socket及单个排队INCR、有限客户端socket超时和实际UNPAUSE。不同于连接池等待、WAIT复制确认或请求ID去重；只验证该维护边界，不承诺所有超时写必已执行，也不做生产切主/延迟SLO证明。",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/commands/client-pause/",
+      "https://redis.io/docs/latest/commands/client-unpause/"
+    ],
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-078",
+      "original_title": "CLIENT PAUSE的作用为何需要与应用超时和重试策略一起评估？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def pause_writes(command,work,milliseconds):\n    if type(milliseconds) is not int or not 500<=milliseconds<=1500:raise ValueError('bounded maintenance pause required')\n    command('CLIENT','PAUSE',milliseconds,'WRITE')\n    try:return work()\n    finally:command('CLIENT','UNPAUSE')\n"
+    },
+    "negative_files": {
+      "task.py": "def pause_writes(command,work,milliseconds):\n    if type(milliseconds) is not int or not 500<=milliseconds<=1500:raise ValueError('bounded maintenance pause required')\n    command('CLIENT','PAUSE',milliseconds,'ALL')\n    try:return work()\n    finally:command('CLIENT','UNPAUSE')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现pause_writes(command,work,milliseconds)。milliseconds为非bool整数500..1500，否则ValueError且不发命令；实际CLIENT PAUSE milliseconds WRITE，然后返回work()结果，finally必须CLIENT UNPAUSE，工作异常原样传播。不能用ALL暂停读，也不能成功才清理。真实私有Redis中work先GET/PING应立即成功，再专用连接发一次INCR，客户端50ms超时而服务端仍未执行；UNPAUSE后该排队写实际生效一次，说明超时不是回滚，不能据超时盲目重放。后续失败work仍解除写暂停，正常写再次可用。只在本题私有实例，禁止外部服务维护操作。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Redis7.2 Unix socket及单个排队INCR、有限客户端socket超时和实际UNPAUSE。不同于连接池等待、WAIT复制确认或请求ID去重；只验证该维护边界，不承诺所有超时写必已执行，也不做生产切主/延迟SLO证明。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import os,sys,pathlib,socket,threading,queue,time\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,student,token\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nwith NativeRedis() as server:\n key=token('paused-counter');server.command('SET',key,0);writer=server.client();writer.socket.settimeout(.05);outcomes=queue.Queue();started=threading.Event();calls=[];thread=None\n def control(*parts):calls.append(parts);return server.command(*parts)\n def write_once():\n  started.set()\n  try:outcomes.put(('reply',writer.command('INCR',key)))\n  except (socket.timeout,TimeoutError):outcomes.put(('timeout-result-unknown',None))\n def work():\n  global thread\n  before=time.monotonic();assert server.command('GET',key)=='0' and server.command('PING')=='PONG'\n  assert time.monotonic()-before<.3,'ALL paused reads instead of write-only maintenance'\n  thread=threading.Thread(target=write_once);thread.start();assert started.wait(1)\n  outcome=outcomes.get(timeout=1);assert outcome==('timeout-result-unknown',None),'queued write did not reach actual client timeout'\n  thread.join(1);assert not thread.is_alive() and server.command('GET',key)=='0','write unexpectedly completed during pause'\n  return 'client-timeout-is-not-rollback'\n try:\n  result=student(task.pause_writes,control,work,1000)\n  assert result=='client-timeout-is-not-rollback' and calls==[('CLIENT','PAUSE',1000,'WRITE'),('CLIENT','UNPAUSE')]\n  deadline=time.monotonic()+1\n  while server.command('GET',key)!='1':\n   assert time.monotonic()<deadline,'timed-out queued write not executed after unpause';time.sleep(.01)\n  assert server.command('GET',key)=='1','timed-out INCR must not be blindly replayed'\n  calls.clear()\n  def fail():raise RuntimeError('explicit maintenance operation failure')\n  print('STUDENT_OPERATION_ENTERED:unpause_actual_redis_even_when_maintenance_callback_raises',flush=True)\n  try:task.pause_writes(control,fail,1000)\n  except RuntimeError:pass\n  else:raise AssertionError('maintenance failure swallowed')\n  assert calls==[('CLIENT','PAUSE',1000,'WRITE'),('CLIENT','UNPAUSE')],'failure left owned Redis writes paused'\n  independent=server.client()\n  try:independent.socket.settimeout(.3);assert independent.command('INCR',key)==2\n  finally:independent.close()\n  assert server.command('GET',key)=='2'\n  before=len(calls)\n  for invalid in (True,0,499,1501,'1000'):\n   try:task.pause_writes(control,fail,invalid)\n   except ValueError:pass\n   else:raise AssertionError('invalid pause budget accepted')\n  assert len(calls)==before\n  print('NATIVE_REDIS_PAUSE_WRITE_READS_CONTINUE_TIMED_OUT_QUEUED_INCR_EXECUTES_ONCE_AFTER_UNPAUSE_FAILURE_CLEANUP_VERIFIED',flush=True)\n finally:\n  server.command('CLIENT','UNPAUSE')\n  if thread is not None:thread.join(2)\n  writer.close()\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

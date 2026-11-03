@@ -1,0 +1,46 @@
+Kafka/TiDB 困难方向原生实验（本地样本）
+
+题目使用真实进程，在工作区内以普通用户启动独立临时服务，仅绑定回环地址。
+Kafka 4.0.0 使用真实 KRaft broker，不等价于多 broker/跨节点高可用验收。
+TiDB 8.5.4 使用真实 TiDB、PD、TiKV。具体单/多 store 能力边界以每题说明为准。
+Kubernetes API 题使用真实隔离 API Server/etcd，不等价于 kubelet、CNI 或节点故障验收。
+
+一、镜像
+1. 先导入上一轮的 opsforge-lab:20261025-local，或按 lab/Dockerfile 构建基础镜像。
+   上一轮不可变 ID 见原交付镜像清单；不能悄悄换成同名其他镜像。
+2. 从项目根目录构建：
+   docker --context desktop-linux build -f lab/Dockerfile.pilot -t opsforge-lab:20261025-pilot lab
+3. 本样本扩展只支持 linux/amd64，服务基础镜像均按 digest 固定；Python wheel按SHA256固定。
+   原Kafka镜像使用musl Java，扩展使用Debian原生Java17，避免跨libc复制不能执行。
+
+二、网页工作区配置模板（本轮没有部署到外部服务器）
+默认 enable_distributed_lab=false。需要高内存的题不会降级到模拟、普通或特权Docker工作区。
+管理员确认专用节点有足够资源后，在deploy/config.json显式设置：
+  lab_backend: kubernetes
+  lab_node_selector: 原有普通实验节点标签（保留）
+  enable_distributed_lab: true
+  distributed_node_selector: 分布式实验专用节点标签，例如 opsforge-distributed=true
+发布镜像清单的lab需指向本次扩展镜像。沿用现有render_deploy.py校验和生成流程。
+新增opsforge-distributed命名空间与namespaced broker角色，原practice命名空间及角色不变。
+每个高内存工作区：普通UID1000、只读根、全部capabilities丢弃、无宿主socket/hostPath，
+不挂载ServiceAccount token、无特权sidecar，限制5Gi内存/2CPU/6Gi临时存储，工作目录最大4Gi。
+新增NetworkPolicy阻断外部/跨Pod通信，题内服务仅使用同一工作区回环地址。
+原普通工作区768Mi和原有身份/权限不变。不要切换用户默认kubeconfig/context替代权限叠加。
+TiDB多store还要求独立节点的kubelet podPidsLimit至少768或不限制；Kubernetes Pod没有
+合法的独立pids-limit字段，不能把Docker参数填进Pod YAML。管理员配置节点前须评估影响。
+本轮未修改任何节点/kubelet配置；运行器读取cgroup限制，不满足时报告环境不可用，不判学员错。
+需要已实现NetworkPolicy的CNI；本轮本地Docker验证使用--network none，不能冒称真实集群CNI验收通过。
+
+三、复现平台判分（不需要Kubernetes或外部账号）
+在项目根目录，分别对三份题库运行：
+  py -3 scripts/validate_authored_contracts.py --source backend/data/hands-on-pilot-kafka-native.json --docker opsforge-lab:20261025-pilot --docker-context desktop-linux --memory 2g --cpus 2 --output work/kafka-recheck.json
+  py -3 scripts/validate_authored_contracts.py --source backend/data/hands-on-pilot-tidb-native.json --docker opsforge-lab:20261025-pilot --docker-context desktop-linux --memory 5g --cpus 2 --output work/tidb-recheck.json
+  py -3 scripts/validate_authored_contracts.py --source backend/data/hands-on-pilot-kubernetes-native.json --docker opsforge-lab:20261025-pilot --docker-context desktop-linux --memory 2g --cpus 2 --output work/kubernetes-recheck.json
+Linux可将py -3替换为python3。默认Docker验证仍为768Mi/1CPU，只有显式参数才提高预算。
+每题四路：reference必须完成且通过；starter/negative必须拒绝；early_exit必须无完成标记且拒绝。
+工具/环境失败或超时不算正确拒绝。执行中不得把正在重写的题库JSON覆盖到一半，应原子替换。
+各题的额外变异反例及运行版本以本次证据清单为准。
+
+四、关闭与清理
+配置开关改回false停止提供新的高内存工作区；已有工作区按正常生命周期清理。
+可选namespace/RBAC不自动删除，避免移除仍在使用的权限。外部清理由管理员另行决定。

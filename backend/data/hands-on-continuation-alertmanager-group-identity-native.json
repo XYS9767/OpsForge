@@ -1,0 +1,72 @@
+[
+  {
+    "id": "curated-parallel-alertmanager-044",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 1,
+    "topic": "接收器集成与通知模板",
+    "title": "真实分组身份：两个通知groupKey承载三个告警fingerprint，不能按组吞掉同组故障",
+    "answer": "```python\nimport copy\ndef summarize(payload):\n    key=payload[\"groupKey\"];ids=[a[\"fingerprint\"] for a in payload[\"alerts\"]]\n    if not isinstance(key,str) or not key or not ids or not all(isinstance(x,str) and x for x in ids) or len(set(ids))!=len(ids):raise ValueError(\"distinct actual alert identities required\")\n    return {\"group_key\":key,\"group_labels\":copy.deepcopy(payload[\"groupLabels\"]),\"alert_ids\":sorted(ids),\"alert_count\":len(ids)}\n```\n\n原题知识说明：\ngroupKey标识通知聚合组，fingerprint标识具体标签集合的告警。更新单工单或组事件需选择对应粒度，不能混用导致整个分组被一个实例覆盖。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "groupKey标识通知聚合组，fingerprint标识具体标签集合的告警。",
+      "更新单工单或组事件需选择对应粒度，不能混用导致整个分组被一个实例覆盖。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/notifications/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-044",
+      "original_title": "groupKey与单告警fingerprint用途有什么不同？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现summarize(payload)：读取真实Webhook的groupKey/groupLabels/alerts[].fingerprint，返回group_key、group_labels深拷贝、按字典序排序的alert_ids和alert_count。groupKey及每个fingerprint均须非空字符串，alerts非空且fingerprint不得重复，否则ValueError；不改输入。真实Alertmanager按service分组，api组有两台主机告警、db组有一条；须将三个独立fingerprint与真实GET /api/v2/alerts对应，不能把groupKey当成单告警身份，也不能拿第一条fingerprint冒充整组标识。输入告警顺序变化不改变总结。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n官方Alertmanager0.28.1真实API、调度分组及本地Webhook，不是手写的组身份样例。只验证组与单告警身份区别，不代表receiver更名不重发、跨集群去重或工单幂等已通过。自有临时进程和回环通道，不发外部消息，不改默认身份或构建镜像。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef summarize(payload):\n    key=payload[\"groupKey\"];ids=[a[\"fingerprint\"] for a in payload[\"alerts\"]]\n    if not isinstance(key,str) or not key or not ids or not all(isinstance(x,str) and x for x in ids) or len(set(ids))!=len(ids):raise ValueError(\"distinct actual alert identities required\")\n    return {\"group_key\":key,\"group_labels\":copy.deepcopy(payload[\"groupLabels\"]),\"alert_ids\":sorted(ids),\"alert_count\":len(ids)}\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef summarize(payload):\n    key=payload[\"groupKey\"];ids=[a[\"fingerprint\"] for a in payload[\"alerts\"]]\n    if not isinstance(key,str) or not key or not ids or not all(isinstance(x,str) and x for x in ids) or len(set(ids))!=len(ids):raise ValueError(\"distinct actual alert identities required\")\n    return {\"group_key\":key,\"group_labels\":copy.deepcopy(payload[\"groupLabels\"]),\"alert_ids\":[key],\"alert_count\":1}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "官方Alertmanager0.28.1与Python，Windows私有回环Webhook和临时数据目录",
+      "operation": "实现summarize(payload)：读取真实Webhook的groupKey/groupLabels/alerts[].fingerprint，返回group_key、group_labels深拷贝、按字典序排序的alert_ids和alert_count。groupKey及每个fingerprint均须非空字符串，alerts非空且fingerprint不得重复，否则ValueError；不改输入。真实Alertmanager按service分组，api组有两台主机告警、db组有一条；须将三个独立fingerprint与真实GET /api/v2/alerts对应，不能把groupKey当成单告警身份，也不能拿第一条fingerprint冒充整组标识。输入告警顺序变化不改变总结。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "官方Alertmanager0.28.1真实API、调度分组及本地Webhook，不是手写的组身份样例。只验证组与单告警身份区别，不代表receiver更名不重发、跨集群去重或工单幂等已通过。自有临时进程和回环通道，不发外部消息，不改默认身份或构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "alertmanager"
+        ],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/notifications_fixture.py": "\"\"\"Shared private notification fixture; owned loopback endpoints and native process only.\"\"\"\nimport contextlib,json,pathlib,shutil,socket,subprocess,threading,time,urllib.request,urllib.error\nfrom http.server import BaseHTTPRequestHandler,ThreadingHTTPServer\ndef request(method,url,payload=None):\n req=urllib.request.Request(url,data=json.dumps(payload).encode() if payload is not None else (b'' if method=='POST' else None),method=method,headers={'Content-Type':'application/json'})\n try:\n  with urllib.request.urlopen(req,timeout=3) as r:status,raw=r.status,r.read().decode()\n except urllib.error.HTTPError as e:status,raw=e.code,e.read().decode()\n try:return status,json.loads(raw)\n except ValueError:return status,raw\ndef wait_for(condition,seconds=8):\n end=time.monotonic()+seconds\n while time.monotonic()<end:\n  if condition():return\n  time.sleep(.05)\n raise AssertionError('native Alertmanager notification witness absent')\n@contextlib.contextmanager\ndef receiver():\n seen=[]\n class Hook(BaseHTTPRequestHandler):\n  def do_POST(self):\n   seen.append(json.loads(self.rfile.read(int(self.headers['Content-Length']))));self.send_response(200);self.send_header('Content-Length','0');self.end_headers()\n  def log_message(self,*args):pass\n server=ThreadingHTTPServer(('127.0.0.1',0),Hook);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()\n try:yield 'http://127.0.0.1:'+str(server.server_port),seen\n finally:server.shutdown();server.server_close();thread.join(timeout=3)\n@contextlib.contextmanager\ndef native(root,config):\n root=pathlib.Path(root);root.mkdir();path=root/'config.json';path.write_text(json.dumps(config),encoding='utf8')\n with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]\n base='http://127.0.0.1:'+str(port);binary=shutil.which('alertmanager') or shutil.which('alertmanager.exe')\n with (root/'native.log').open('wb') as log:\n  proc=subprocess.Popen([binary,'--config.file='+str(path),'--storage.path='+str(root/'data'),'--web.listen-address=127.0.0.1:'+str(port),'--cluster.listen-address=','--log.level=error'],stdout=log,stderr=subprocess.STDOUT)\n  try:\n   def ready():\n    if proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private notification process startup')\n    try:return request('GET',base+'/-/ready')[0]==200\n    except OSError:return False\n   wait_for(ready,12);yield base,path,proc\n  finally:\n   if proc.poll() is None:proc.terminate()\n   try:proc.wait(timeout=4)\n   except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n",
+        "checks/check.py": "import copy,datetime,json,pathlib,shutil,subprocess,sys,tempfile\nsys.path.insert(0,str(pathlib.Path.cwd()/\"checks\"))\nimport task\nfrom notifications_fixture import native,receiver,request,wait_for\nbinary=shutil.which(\"alertmanager\") or shutil.which(\"alertmanager.exe\")\nassert binary and \"0.28.1\" in subprocess.check_output([binary,\"--version\"],stderr=subprocess.STDOUT,text=True,timeout=5)\nprint(\"NATIVE_PLATFORM_READY\",flush=True)\nwith tempfile.TemporaryDirectory(prefix=\"opsforge-group-identity-\") as temp,receiver() as (url,seen):\n config={\"route\":{\"receiver\":\"private\",\"group_by\":[\"service\"],\"group_wait\":\"250ms\",\"group_interval\":\"1s\",\"repeat_interval\":\"1h\"},\"receivers\":[{\"name\":\"private\",\"webhook_configs\":[{\"url\":url}]}]}\n with native(pathlib.Path(temp)/\"native\",config) as (base,path,proc):\n  now=datetime.datetime.now(datetime.timezone.utc);alerts=[dict(labels=dict(alertname=\"PrivateGrouping\",service=service,instance=instance),startsAt=now.isoformat(),endsAt=(now+datetime.timedelta(minutes=5)).isoformat()) for service,instance in [(\"api\",\"host-a\"),(\"api\",\"host-b\"),(\"db\",\"host-a\")]]\n  assert request(\"POST\",base+\"/api/v2/alerts\",alerts)[0]==200\n  wait_for(lambda:{p[\"groupLabels\"].get(\"service\") for p in seen}=={\"api\",\"db\"})\n  groups={p[\"groupLabels\"][\"service\"]:p for p in seen};assert len(groups[\"api\"][\"alerts\"])==2 and len(groups[\"db\"][\"alerts\"])==1\n  api=request(\"GET\",base+\"/api/v2/alerts\")[1];actual={r[\"fingerprint\"] for r in api};assert len(actual)==3\n  unchanged=copy.deepcopy(groups)\n  print(\"STUDENT_OPERATION_ENTERED: distinguish actual native notification groups from three individual alert identities\",flush=True)\n  a,b=task.summarize(groups[\"api\"]),task.summarize(groups[\"db\"])\n  for key,summary in [(\"api\",a),(\"db\",b)]:\n   expected=groups[key]\n   assert summary==dict(group_key=expected[\"groupKey\"],group_labels=expected[\"groupLabels\"],alert_ids=sorted(r[\"fingerprint\"] for r in expected[\"alerts\"]),alert_count=len(expected[\"alerts\"]))\n  assert a[\"group_key\"]!=b[\"group_key\"] and set(a[\"alert_ids\"])|set(b[\"alert_ids\"])==actual\n  assert groups==unchanged and a[\"alert_count\"]==2 and b[\"alert_count\"]==1\n  print(\"NATIVE_ALERTMANAGER_TWO_REAL_GROUPKEYS_THREE_API_FINGERPRINTS_TWO_ALERTS_SHARE_GROUP_NOT_ALERT_ID\",flush=True)\n  reversed_payload=copy.deepcopy(groups[\"api\"]);reversed_payload[\"alerts\"].reverse();assert task.summarize(reversed_payload)==a\n  duplicate=copy.deepcopy(groups[\"api\"]);duplicate[\"alerts\"].append(copy.deepcopy(duplicate[\"alerts\"][0]))\n  try:task.summarize(duplicate)\n  except ValueError:pass\n  else:raise AssertionError(\"duplicate individual identities not rejected\")\nprint(\"NATIVE_SEMANTIC_ASSERTIONS_PASSED\",flush=True)\n"
+      }
+    },
+    "question_format": "practice"
+  }
+]

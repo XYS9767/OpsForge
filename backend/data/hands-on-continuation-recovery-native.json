@@ -1,0 +1,142 @@
+[
+  {
+    "id": "curated-permissions-completion-049",
+    "module": "permissions",
+    "category": "用户、权限与安全",
+    "level": 4,
+    "topic": "凭据、证书与密钥",
+    "title": "真实worker环境快照故障：验证新凭据进程就绪后才停止旧进程",
+    "answer": "```python\nimport os,json,subprocess\nfrom pathlib import Path\ndef refresh_worker(old,config,argv,verify):\n    value=json.loads(Path(config).read_text(encoding='utf8'))\n    token=value.get('token') if isinstance(value,dict) else None\n    if not isinstance(token,str) or len(token)<16 or '\\0' in token:raise ValueError('worker token')\n    env={**os.environ,'OPSFORGE_WORKER_TOKEN':token}\n    fresh=subprocess.Popen(argv,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n    try:\n        if verify(fresh) is not True:raise RuntimeError('new worker not verified')\n        if old.poll() is None:\n            old.terminate()\n            try:old.wait(timeout=1)\n            except subprocess.TimeoutExpired:old.kill();old.wait(timeout=2)\n        return fresh\n    except BaseException:\n        if fresh.poll() is None:\n            fresh.terminate()\n            try:fresh.wait(timeout=1)\n            except subprocess.TimeoutExpired:fresh.kill();fresh.wait(timeout=2)\n        if fresh.stdout:fresh.stdout.close()\n        if fresh.stderr:fresh.stderr.close()\n        raise\n```\n\n原题知识说明：\n核对消费者实际载入方式和进程启动时间，区分文件更新与环境变量在启动时复制。按允许的过渡策略恢复可用路径，分批重启或使用应用已支持的重载机制，验证新凭据生效后撤旧。检查所有 worker、定时任务及错误重试，避免只验证一个在线实例。",
+    "type": "code",
+    "source": "OpsForge 原创权限与安全专题题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原故障ID；先在自有环境复现失效，再验证恢复及独立错误实现，范围以正文为准。",
+    "pack": "permissions-completion-20261021",
+    "body": "## 操作任务\n实现 refresh_worker(old,config,argv,verify)。old为自有旧worker，config是私有JSON文件含token（至少16字符且无NUL）。从最新文件生成新子进程env，仅覆盖OPSFORGE_WORKER_TOKEN并保留其他变量，stdout/stderr为文本PIPE。verify(fresh)实际核对新进程且必须严格True；通过后才有限TERM/KILL停止回收旧进程，返回仍运行的新Popen。验证失败/异常须关闭回收新进程及其PIPE，保留旧进程并传播错误。不得改变父环境或外部账号。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；真实自有文件与子进程，先复现再恢复。\n\n## 能力边界\n真实子进程启动环境复制与单worker替换顺序；未连接凭据服务、生产连接池或执行密钥撤销，不代表所有worker已滚动完成。",
+    "rubric": [
+      "身份与授权区分准确",
+      "不扩大权限掩盖根因",
+      "验证合法访问与禁止访问"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.python.org/3.11/library/subprocess.html#subprocess.Popen"
+    ],
+    "incident_signature": "permissions-long-lived-worker-keeps-old-environment-secret",
+    "exercise_mode": "tabletop",
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-permissions-completion-049",
+      "original_title": "密钥已轮换并更新环境配置，但常驻 worker 继续用旧值访问，旧密钥撤销后任务失败。如何恢复？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement fault recovery\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,json,subprocess\nfrom pathlib import Path\ndef refresh_worker(old,config,argv,verify):\n    value=json.loads(Path(config).read_text(encoding='utf8'))\n    token=value.get('token') if isinstance(value,dict) else None\n    if not isinstance(token,str) or len(token)<16 or '\\0' in token:raise ValueError('worker token')\n    env={**os.environ,'OPSFORGE_WORKER_TOKEN':token}\n    fresh=subprocess.Popen(argv,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n    try:\n        if verify(fresh) is not True:raise RuntimeError('new worker not verified')\n        if old.poll() is None:\n            old.terminate()\n            try:old.wait(timeout=1)\n            except subprocess.TimeoutExpired:old.kill();old.wait(timeout=2)\n        return fresh\n    except BaseException:\n        if fresh.poll() is None:\n            fresh.terminate()\n            try:fresh.wait(timeout=1)\n            except subprocess.TimeoutExpired:fresh.kill();fresh.wait(timeout=2)\n        if fresh.stdout:fresh.stdout.close()\n        if fresh.stderr:fresh.stderr.close()\n        raise\n"
+    },
+    "negative_files": {
+      "task.py": "import os,json,subprocess\nfrom pathlib import Path\ndef refresh_worker(old,config,argv,verify):\n    value=json.loads(Path(config).read_text(encoding='utf8'))\n    token=value.get('token') if isinstance(value,dict) else None\n    if not isinstance(token,str) or len(token)<16 or '\\0' in token:raise ValueError('worker token')\n    env=dict(os.environ)\n    fresh=subprocess.Popen(argv,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n    try:\n        if verify(fresh) is not True:raise RuntimeError('new worker not verified')\n        if old.poll() is None:\n            old.terminate()\n            try:old.wait(timeout=1)\n            except subprocess.TimeoutExpired:old.kill();old.wait(timeout=2)\n        return fresh\n    except BaseException:\n        if fresh.poll() is None:\n            fresh.terminate()\n            try:fresh.wait(timeout=1)\n            except subprocess.TimeoutExpired:fresh.kill();fresh.wait(timeout=2)\n        if fresh.stdout:fresh.stdout.close()\n        if fresh.stderr:fresh.stderr.close()\n        raise\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11，自有临时文件与进程",
+      "operation": "实现 refresh_worker(old,config,argv,verify)。old为自有旧worker，config是私有JSON文件含token（至少16字符且无NUL）。从最新文件生成新子进程env，仅覆盖OPSFORGE_WORKER_TOKEN并保留其他变量，stdout/stderr为文本PIPE。verify(fresh)实际核对新进程且必须严格True；通过后才有限TERM/KILL停止回收旧进程，返回仍运行的新Popen。验证失败/异常须关闭回收新进程及其PIPE，保留旧进程并传播错误。不得改变父环境或外部账号。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实子进程启动环境复制与单worker替换顺序；未连接凭据服务、生产连接池或执行密钥撤销，不代表所有worker已滚动完成。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,hashlib,time,select,sqlite3,multiprocessing\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student recovery failed') from error\nwith tempfile.TemporaryDirectory() as directory:\n root=pathlib.Path(directory);config=root/'worker.json';oldtoken=secrets.token_hex(20);newtoken=secrets.token_hex(20);env_before=dict(os.environ);children=[]\n code=\"import os,hashlib,time; print(hashlib.sha256(os.environ['OPSFORGE_WORKER_TOKEN'].encode()).hexdigest(),flush=True); time.sleep(20)\";argv=[sys.executable,'-u','-c',code]\n def fingerprint(child):\n  assert select.select([child.stdout],[],[],2)[0],'worker did not emit readiness';return child.stdout.readline().strip()\n def own_old():\n  child=subprocess.Popen(argv,env={**os.environ,'OPSFORGE_WORKER_TOKEN':oldtoken},stdout=subprocess.PIPE,text=True);children.append(child)\n  assert fingerprint(child)==hashlib.sha256(oldtoken.encode()).hexdigest();return child\n try:\n  os.environ['OPSFORGE_WORKER_TOKEN']=oldtoken;before=dict(os.environ);old=own_old()\n  config.write_text(json.dumps({'token':newtoken}));assert old.poll() is None\n  observed_old=subprocess.check_output([sys.executable,'-c',\"import os;print(os.environ['OPSFORGE_WORKER_TOKEN'])\"],text=True).strip()\n  assert observed_old==oldtoken,'fixture parent unexpectedly reloaded file configuration'\n  old_environment=pathlib.Path('/proc',str(old.pid),'environ').read_bytes().split(b'\\0')\n  assert ('OPSFORGE_WORKER_TOKEN='+oldtoken).encode() in old_environment and ('OPSFORGE_WORKER_TOKEN='+newtoken).encode() not in old_environment,'running worker did not retain the original startup environment'\n  print('NATIVE_FAULT_REPRODUCED:running-worker-retains-old-environment',flush=True)\n  def verify(fresh):\n   children.append(fresh);assert old.poll() is None,'old worker stopped before replacement readiness'\n   return fingerprint(fresh)==hashlib.sha256(newtoken.encode()).hexdigest()\n  fresh=student(task.refresh_worker,old,config,argv,verify)\n  assert fresh.poll() is None and old.poll() is not None and dict(os.environ)==before,'replacement failed or parent environment changed'\n  old=own_old();failed=[]\n  def reject(fresh):children.append(fresh);failed.append(fresh);fingerprint(fresh);return False\n  try:task.refresh_worker(old,config,argv,reject)\n  except RuntimeError:pass\n  else:raise AssertionError('unverified worker accepted')\n  assert old.poll() is None and failed[0].poll() is not None and failed[0].stdout.closed and dict(os.environ)==before\n  try:task.refresh_worker(old,config,['/opsforge-missing-worker'],verify)\n  except FileNotFoundError:pass\n  else:raise AssertionError('missing executable accepted')\n  assert old.poll() is None\n finally:\n  os.environ.clear();os.environ.update(env_before)\n  for child in children:\n   if child.poll() is None:child.kill()\n   child.wait(timeout=3)\n   if child.stdout:child.stdout.close()\n   if child.stderr:child.stderr.close()\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-cicd-073",
+    "module": "cicd",
+    "category": "CI/CD 与 GitOps",
+    "level": 4,
+    "topic": "流水线编排与执行",
+    "title": "真实SQLite发布门禁：旧运行晚完成被拒，同一代次不能换制品",
+    "answer": "```python\nimport sqlite3,re\nfrom pathlib import Path\ndef promote(path,generation,digest):\n    if type(generation) is not int or generation<0 or not isinstance(digest,str) or not re.fullmatch(r'[0-9a-f]{64}',digest):raise ValueError('generation and sha256')\n    connection=sqlite3.connect(Path(path).resolve().as_uri()+'?mode=rw',uri=True,timeout=2,isolation_level=None)\n    try:\n        connection.execute('BEGIN IMMEDIATE')\n        row=connection.execute('SELECT generation,digest FROM deployment WHERE id=1').fetchone()\n        if row is None:raise ValueError('missing deployment state')\n        if generation<row[0]:connection.rollback();return 'stale'\n        if generation==row[0]:\n            if digest!=row[1]:raise ValueError('same generation changed artifact')\n            connection.rollback();return 'unchanged'\n        connection.execute('UPDATE deployment SET generation=?,digest=? WHERE id=1',(generation,digest));connection.commit();return 'promoted'\n    except BaseException:connection.rollback();raise\n    finally:connection.close()\n```\n\n原题知识说明：\n按运行ID和生效摘要重建时间线，确认没有版本顺序或过期运行保护。暂停竞争发布，恢复批准版本；维护流程增加环境互斥、旧运行淘汰及执行前版本校验。验收人为让旧任务晚完成，要求它被拒绝而非覆盖新版本；只限制单个agent并发无法覆盖多个执行器。",
+    "type": "code",
+    "incident_signature": "cicd:old-pipeline-finishes-after-new-release",
+    "source": "独立编审：交付控制面根因",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原故障ID；先在自有环境复现失效，再验证恢复及独立错误实现，范围以正文为准。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "证明该交付根因",
+      "阻断受影响发布",
+      "验证故障条件被覆盖"
+    ],
+    "references": [
+      "https://www.sqlite.org/lang_transaction.html",
+      "https://docs.python.org/3.11/library/sqlite3.html"
+    ],
+    "related_modules": [
+      "cicd"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-cicd-073",
+      "original_title": "较新构建已发布v8，排队很久的旧构建随后部署v7，把环境悄悄降级。如何桌面处置？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现 promote(path,generation,digest)。自有现有SQLite库有deployment(id,generation,digest)，仅id=1是目标环境；generation为非负非bool整数，digest为64位小写SHA256十六进制。用实际写事务原子读取并比较：较旧返回stale，相同代次同摘要unchanged，相同代次不同摘要ValueError，较新更新并提交返回promoted。其他行不变，错误回滚关闭连接，不创建缺失数据库。允许新代次批准旧制品，代次而非版本字符串决定顺序。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；真实自有文件与子进程，先复现再恢复。\n\n## 能力边界\n真实SQLite事务与独立旧运行进程的本地发布状态门禁；不运行Jenkins、Argo或远端部署，不声称数据库门禁已与外部制品切换形成分布式原子事务。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement fault recovery\")\n"
+    },
+    "solution_files": {
+      "task.py": "import sqlite3,re\nfrom pathlib import Path\ndef promote(path,generation,digest):\n    if type(generation) is not int or generation<0 or not isinstance(digest,str) or not re.fullmatch(r'[0-9a-f]{64}',digest):raise ValueError('generation and sha256')\n    connection=sqlite3.connect(Path(path).resolve().as_uri()+'?mode=rw',uri=True,timeout=2,isolation_level=None)\n    try:\n        connection.execute('BEGIN IMMEDIATE')\n        row=connection.execute('SELECT generation,digest FROM deployment WHERE id=1').fetchone()\n        if row is None:raise ValueError('missing deployment state')\n        if generation<row[0]:connection.rollback();return 'stale'\n        if generation==row[0]:\n            if digest!=row[1]:raise ValueError('same generation changed artifact')\n            connection.rollback();return 'unchanged'\n        connection.execute('UPDATE deployment SET generation=?,digest=? WHERE id=1',(generation,digest));connection.commit();return 'promoted'\n    except BaseException:connection.rollback();raise\n    finally:connection.close()\n"
+    },
+    "negative_files": {
+      "task.py": "import sqlite3,re\nfrom pathlib import Path\ndef promote(path,generation,digest):\n    if type(generation) is not int or generation<0 or not isinstance(digest,str) or not re.fullmatch(r'[0-9a-f]{64}',digest):raise ValueError('generation and sha256')\n    connection=sqlite3.connect(Path(path).resolve().as_uri()+'?mode=rw',uri=True,timeout=2,isolation_level=None)\n    try:\n        connection.execute('BEGIN IMMEDIATE')\n        row=connection.execute('SELECT generation,digest FROM deployment WHERE id=1').fetchone()\n        if row is None:raise ValueError('missing deployment state')\n        if False:pass\n        if generation==row[0]:\n            if digest!=row[1]:raise ValueError('same generation changed artifact')\n            connection.rollback();return 'unchanged'\n        connection.execute('UPDATE deployment SET generation=?,digest=? WHERE id=1',(generation,digest));connection.commit();return 'promoted'\n    except BaseException:connection.rollback();raise\n    finally:connection.close()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，Python3.11，自有临时文件与进程",
+      "operation": "实现 promote(path,generation,digest)。自有现有SQLite库有deployment(id,generation,digest)，仅id=1是目标环境；generation为非负非bool整数，digest为64位小写SHA256十六进制。用实际写事务原子读取并比较：较旧返回stale，相同代次同摘要unchanged，相同代次不同摘要ValueError，较新更新并提交返回promoted。其他行不变，错误回滚关闭连接，不创建缺失数据库。允许新代次批准旧制品，代次而非版本字符串决定顺序。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实SQLite事务与独立旧运行进程的本地发布状态门禁；不运行Jenkins、Argo或远端部署，不声称数据库门禁已与外部制品切换形成分布式原子事务。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,secrets,subprocess,json,stat,hashlib,time,select,sqlite3,multiprocessing\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student recovery failed') from error\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'deployment.sqlite3';old=secrets.token_hex(32);new=secrets.token_hex(32);neighbor=secrets.token_hex(32)\n with sqlite3.connect(path) as connection:\n  connection.execute('CREATE TABLE deployment(id INTEGER PRIMARY KEY,generation INTEGER NOT NULL,digest TEXT NOT NULL)');connection.executemany('INSERT INTO deployment VALUES(?,?,?)',[(1,6,old),(2,100,neighbor)])\n def state():\n  with sqlite3.connect(path) as connection:return connection.execute('SELECT * FROM deployment ORDER BY id').fetchall()\n # Reproduce the original last-writer-wins defect using a separate private demonstration row.\n with sqlite3.connect(path) as connection:\n  connection.execute('CREATE TABLE unsafe(generation INTEGER)');connection.execute('INSERT INTO unsafe VALUES(8)');connection.execute('UPDATE unsafe SET generation=7')\n  assert connection.execute('SELECT generation FROM unsafe').fetchone()[0]==7\n print('NATIVE_FAULT_REPRODUCED:late-old-run-downgrade',flush=True)\n assert student(task.promote,path,8,new)=='promoted'\n # A genuinely separate delayed process completes generation7 after generation8 committed.\n code=\"import task,sys,json,os; print(json.dumps({'result':task.promote(sys.argv[1],7,sys.argv[2]),'pid':os.getpid()}))\"\n delayed=json.loads(subprocess.check_output([sys.executable,'-c',code,str(path),old],text=True))\n assert delayed['pid']!=os.getpid() and delayed['result']=='stale' and state()==[(1,8,new),(2,100,neighbor)],'late old process downgraded deployment'\n assert task.promote(path,8,new)=='unchanged'\n for gen,digest in [(8,old),(True,new),(9,'not-a-digest')]:\n  before=state()\n  try:task.promote(path,gen,digest)\n  except ValueError:pass\n  else:raise AssertionError('generation identity conflict or invalid input accepted')\n  assert state()==before\n assert task.promote(path,9,old)=='promoted' and state()==[(1,9,old),(2,100,neighbor)]\n missing=pathlib.Path(directory)/'absent.sqlite3'\n try:task.promote(missing,1,new)\n except sqlite3.OperationalError:pass\n else:raise AssertionError('missing deployment database was implicitly created')\n assert not missing.exists()\n # Place a real competing process exactly after the old request read its state.\n # A proper write transaction makes the contender receive actual SQLITE_BUSY;\n # a check-then-write implementation lets it commit and then wrongly overwrites it.\n from unittest.mock import patch\n native_connect=sqlite3.connect\n with native_connect(path) as connection:connection.execute('UPDATE deployment SET generation=6,digest=? WHERE id=1',(old,))\n boundary=[]\n contender_code=\"\"\"import sys,json,sqlite3,task\nnative=task.sqlite3.connect\ndef short_connect(*args,**kwargs):\n kwargs['timeout']=.05\n return native(*args,**kwargs)\ntask.sqlite3.connect=short_connect\ntry:result=task.promote(sys.argv[1],8,sys.argv[2])\nexcept sqlite3.OperationalError as error:\n if 'locked' not in str(error):raise\n result='busy'\nprint(json.dumps(result))\n\"\"\"\n class Cursor:\n  def __init__(self,raw):self.raw=raw\n  def fetchone(self):\n   row=self.raw.fetchone()\n   if not boundary and self.raw.description and [x[0] for x in self.raw.description]==['generation','digest']:\n    boundary.append(json.loads(subprocess.check_output([sys.executable,'-c',contender_code,str(path),new],text=True)))\n   return row\n  def __getattr__(self,name):return getattr(self.raw,name)\n class Connection:\n  def __init__(self,raw):self.raw=raw\n  def execute(self,*args,**kwargs):return Cursor(self.raw.execute(*args,**kwargs))\n  def __getattr__(self,name):return getattr(self.raw,name)\n def wrapped_connect(*args,**kwargs):return Connection(native_connect(*args,**kwargs))\n with patch.object(task.sqlite3,'connect',side_effect=wrapped_connect):\n  assert student(task.promote,path,7,old)=='promoted'\n if boundary==['promoted']:\n  assert state()[0]==(1,8,new),'old request overwrote a newer commit after checking state outside a write transaction'\n elif boundary:\n  assert boundary==['busy'],'unexpected real SQLite contention result'\n assert task.promote(path,8,new) in ('promoted','unchanged') and state()==[(1,8,new),(2,100,neighbor)]\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

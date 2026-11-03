@@ -1,0 +1,116 @@
+[
+  {
+    "id": "curated-feishu-60-047",
+    "module": "nginx",
+    "category": "Nginx",
+    "level": 3,
+    "topic": "日志、观测与发布",
+    "title": "编写Nginx代际观察器：真实区分reload、双master热交接与回退后的原master",
+    "answer": "```python\nimport pathlib,re\n\ndef inspect_masters(pidfile):\n path=pathlib.Path(pidfile);previous=pathlib.Path(str(path)+'.oldbin')\n def role(pid):\n  try:return (pathlib.Path('/proc')/str(pid)/'cmdline').read_bytes().split(b'\\0')[0].decode()\n  except (FileNotFoundError,ProcessLookupError,UnicodeError) as exc:raise ValueError('missing or unreadable process') from exc\n def master(file):\n  try:text=file.read_text().strip()\n  except (OSError,UnicodeError) as exc:raise ValueError('missing or invalid pidfile') from exc\n  if re.fullmatch(r'[1-9][0-9]{0,9}',text) is None:raise ValueError('positive ASCII PID required')\n  pid=int(text)\n  if not role(pid).startswith('nginx: master process '):raise ValueError('not a live nginx master')\n  return pid\n def workers(pid):\n  try:children=(pathlib.Path('/proc')/str(pid)/'task'/str(pid)/'children').read_text().split()\n  except OSError as exc:raise ValueError('master disappeared') from exc\n  result=[]\n  for text in children:\n   child=int(text)\n   try:description=role(child)\n   except ValueError:continue\n   if description.startswith('nginx: worker process'):result.append(child)\n  return sorted(result)\n active=master(path);old=None\n if previous.exists():\n  old=master(previous)\n  if old==active:raise ValueError('old and active master cannot be identical')\n active_workers=workers(active);old_workers=workers(old) if old is not None else []\n phase='single_master' if old is None else 'dual_masters' if old_workers else 'old_workers_quiesced'\n return {'active_master':active,'old_master':old,'active_workers':active_workers,'old_workers':old_workers,'phase':phase}\n```\n\n原题知识说明：\n重载主要使master读取配置并替换worker，热升级二进制涉及新master及监听继承。需按部署方式确认支持的USR2、WINCH、QUIT流程、PID文件和旧master存续，并验证模块ABI、版本及长连接；在旧进程仍可恢复前验证新worker服务。systemd或容器管理可能改变流程，不能简单并行启动另一个占同端口程序。",
+    "type": "code",
+    "source": "飞书《60》技术问题改编并纠错",
+    "source_block_id": "NBMKdJtJJolbiExNVeHcIqR6nvb",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "feishu-60-reviewed",
+    "body": "## 操作任务\n实现只读诊断函数inspect_masters(pidfile)。读取该PID文件以及可选的同名.oldbin文件，PID须为1–10位正ASCII十进制、实际/proc/cmdline须为nginx master；文件非法、进程不存在/非master或新旧PID相同抛ValueError。分别读取两位master的直接子进程，只收集cmdline为nginx worker的PID并排序；旧master的直接子进程可能还包含新master，不能误计成worker。返回精确字段active_master、old_master（无则None）、active_workers、old_workers、phase：无旧master为single_master；有旧master且旧worker非空为dual_masters；旧worker已停为old_workers_quiesced。不得修改PID文件或发信号。判分器以真实Nginx驱动HUP、USR2、WINCH和回退，你的程序须报告各阶段真实结构；single_master不单独证明已reload，任何进程状态也不单独证明业务健康。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n隔离非root Linux，复制现有同一Nginx ELF到私有临时路径，真实执行双master、监听继承与回退；不是构建或跨版本二进制兼容验收，不证明模块ABI或生产零错误升级，不操作宿主PID、默认账号或镜像。学习者交付观察程序，信号与HTTP对照由私有判分器驱动，原生执行与只读诊断边界明确。",
+    "rubric": [
+      "重载主要使master读取配置并替换worker，热升级二进制涉及新master及监听继承",
+      "需按部署方式确认支持的USR2、WINCH、QUIT流程、PID文件和旧master存续，并验证模块ABI、版本及长连接；在旧进程仍可恢复前验证新worker服务",
+      "systemd或容器管理可能改变流程，不能简单并行启动另一个占同端口程序"
+    ],
+    "references": [
+      "https://nginx.org/en/docs/control.html"
+    ],
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "NBMKdJtJJolbiExNVeHcIqR6nvb",
+        "question": "47、nginx平滑升级的步骤"
+      }
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "NBMKdJtJJolbiExNVeHcIqR6nvb"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+        "block_ids": [
+          "XiCPdAWh2ofK4IxijK1cFNabnje",
+          "VoA1dTzLpoiPJGxOD5ncdaINnee"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "IwGidsHuyo04j4xtK28cqEJDnve",
+          "NkVHdOBPioca8mxy4lZcbLvCnZu",
+          "VKSodUCmjolRprxW8JScxQ6vnpd",
+          "YLM8dFnwxoXJ9rxc1ZTcENL3nah",
+          "XMMwdlNsJor5U7xGwt8cvdvgnNc",
+          "WJB8dxpDDoOWUgxGhA3c73yWn7f",
+          "JdY5dFdozoyMSZxtXlQcH0MVnUf",
+          "PDdUdSlElogbB3x3P4RcS10Kndf",
+          "TShydb1oIohsq4xYb1lcY0xEnjb",
+          "LZg2dInZroZ2ZDxin7xcndBUn5c",
+          "GreWdd1K8oOHw3xxvWlczIsxn7g",
+          "Z86ldtIBFoFGmVx76qrcA54Engf",
+          "YyOodx2hGomXISx0raUcANKFnOd",
+          "L2F4dYEiCoCtTBx0ZAhcu9xEnXf",
+          "OHoudsHv1oqXm5xNbw4cRJD0n3g",
+          "ESwUdwJQVoblXfx91stcAv4gnZf"
+        ]
+      }
+    ],
+    "related_modules": [
+      "nginx"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-feishu-60-047",
+      "original_title": "Nginx热升级二进制与重新加载配置有哪些不同步骤和回退条件？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import pathlib,re\n\ndef inspect_masters(pidfile):\n path=pathlib.Path(pidfile);previous=pathlib.Path(str(path)+'.oldbin')\n def role(pid):\n  try:return (pathlib.Path('/proc')/str(pid)/'cmdline').read_bytes().split(b'\\0')[0].decode()\n  except (FileNotFoundError,ProcessLookupError,UnicodeError) as exc:raise ValueError('missing or unreadable process') from exc\n def master(file):\n  try:text=file.read_text().strip()\n  except (OSError,UnicodeError) as exc:raise ValueError('missing or invalid pidfile') from exc\n  if re.fullmatch(r'[1-9][0-9]{0,9}',text) is None:raise ValueError('positive ASCII PID required')\n  pid=int(text)\n  if not role(pid).startswith('nginx: master process '):raise ValueError('not a live nginx master')\n  return pid\n def workers(pid):\n  try:children=(pathlib.Path('/proc')/str(pid)/'task'/str(pid)/'children').read_text().split()\n  except OSError as exc:raise ValueError('master disappeared') from exc\n  result=[]\n  for text in children:\n   child=int(text)\n   try:description=role(child)\n   except ValueError:continue\n   if description.startswith('nginx: worker process'):result.append(child)\n  return sorted(result)\n active=master(path);old=None\n if previous.exists():\n  old=master(previous)\n  if old==active:raise ValueError('old and active master cannot be identical')\n active_workers=workers(active);old_workers=workers(old) if old is not None else []\n phase='single_master' if old is None else 'dual_masters' if old_workers else 'old_workers_quiesced'\n return {'active_master':active,'old_master':old,'active_workers':active_workers,'old_workers':old_workers,'phase':phase}\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib,re\n\ndef inspect_masters(pidfile):\n path=pathlib.Path(pidfile);previous=pathlib.Path(str(path)+'.oldbin')\n def role(pid):\n  try:return (pathlib.Path('/proc')/str(pid)/'cmdline').read_bytes().split(b'\\0')[0].decode()\n  except (FileNotFoundError,ProcessLookupError,UnicodeError) as exc:raise ValueError('missing or unreadable process') from exc\n def master(file):\n  try:text=file.read_text().strip()\n  except (OSError,UnicodeError) as exc:raise ValueError('missing or invalid pidfile') from exc\n  if re.fullmatch(r'[1-9][0-9]{0,9}',text) is None:raise ValueError('positive ASCII PID required')\n  pid=int(text)\n  if not role(pid).startswith('nginx: master process '):raise ValueError('not a live nginx master')\n  return pid\n def workers(pid):\n  try:children=(pathlib.Path('/proc')/str(pid)/'task'/str(pid)/'children').read_text().split()\n  except OSError as exc:raise ValueError('master disappeared') from exc\n  result=[]\n  for text in children:\n   child=int(text)\n   try:description=role(child)\n   except ValueError:continue\n   if description.startswith('nginx: worker process'):result.append(child)\n  return sorted(result)\n active=master(path);old=None\n if False and previous.exists():\n  old=master(previous)\n  if old==active:raise ValueError('old and active master cannot be identical')\n active_workers=workers(active);old_workers=workers(old) if old is not None else []\n phase='single_master' if old is None else 'dual_masters' if old_workers else 'old_workers_quiesced'\n return {'active_master':active,'old_master':old,'active_workers':active_workers,'old_workers':old_workers,'phase':phase}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现只读诊断函数inspect_masters(pidfile)。读取该PID文件以及可选的同名.oldbin文件，PID须为1–10位正ASCII十进制、实际/proc/cmdline须为nginx master；文件非法、进程不存在/非master或新旧PID相同抛ValueError。分别读取两位master的直接子进程，只收集cmdline为nginx worker的PID并排序；旧master的直接子进程可能还包含新master，不能误计成worker。返回精确字段active_master、old_master（无则None）、active_workers、old_workers、phase：无旧master为single_master；有旧master且旧worker非空为dual_masters；旧worker已停为old_workers_quiesced。不得修改PID文件或发信号。判分器以真实Nginx驱动HUP、USR2、WINCH和回退，你的程序须报告各阶段真实结构；single_master不单独证明已reload，任何进程状态也不单独证明业务健康。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "隔离非root Linux，复制现有同一Nginx ELF到私有临时路径，真实执行双master、监听继承与回退；不是构建或跨版本二进制兼容验收，不证明模块ABI或生产零错误升级，不操作宿主PID、默认账号或镜像。学习者交付观察程序，信号与HTTP对照由私有判分器驱动，原生执行与只读诊断边界明确。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "nginx"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,tempfile,subprocess,shutil,socket,time,urllib.request,os,signal,hashlib\nassert os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nimport sys\nsys.path.insert(0,os.getcwd())\nimport task\nwith tempfile.TemporaryDirectory(prefix='of-nginx-generations-') as folder:\n root=pathlib.Path(folder);binary=root/'nginx';shutil.copyfile(shutil.which('nginx'),binary);binary.chmod(0o700);assert binary.read_bytes()[:4]==b'\\x7fELF'\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n config=root/'nginx.conf';pidfile=root/'nginx.pid';log=root/'error.log';owned=set()\n temporary=' '.join(name+' '+str(root/name)+';' for name in ('client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path'))\n config.write_text('daemon on; master_process on; worker_processes 1; pid '+str(pidfile)+'; error_log '+str(log)+' info; events { worker_connections 32; } http { access_log off; '+temporary+' server { listen 127.0.0.1:'+str(port)+'; location / { add_header X-Worker-Pid $pid always; return 200 \"private-generation-body\"; } } }')\n def wait(fn,label,seconds=4):\n  deadline=time.monotonic()+seconds\n  while time.monotonic()<deadline:\n   try:\n    value=fn()\n    if value:return value\n   except (FileNotFoundError,ProcessLookupError,ConnectionError,TimeoutError,ValueError,OSError):pass\n   time.sleep(.04)\n  raise AssertionError(label+' deadline; '+(log.read_text()[-1600:] if log.exists() else 'no log'))\n def command(pid):return (pathlib.Path('/proc')/str(pid)/'cmdline').read_bytes().split(b'\\0')[0].decode()\n def children(pid):return [int(value) for value in (pathlib.Path('/proc')/str(pid)/'task'/str(pid)/'children').read_text().split()]\n def workers(pid):return [child for child in children(pid) if command(child).startswith('nginx: worker process')]\n def request():\n  with urllib.request.urlopen('http://127.0.0.1:'+str(port)+'/',timeout=.4) as response:\n   assert response.status==200 and response.read()==b'private-generation-body';return int(response.headers['X-Worker-Pid'])\n def observe(phase):\n  paths=[pidfile,pathlib.Path(str(pidfile)+'.oldbin')];before={str(path):path.read_bytes() if path.exists() else None for path in paths}\n  active=int(pidfile.read_text());old_master=int(paths[1].read_text()) if paths[1].exists() else None\n  expected=dict(active_master=active,old_master=old_master,active_workers=sorted(workers(active)),old_workers=sorted(workers(old_master)) if old_master is not None else [],phase=phase)\n  print('STUDENT_OPERATION_ENTERED:inspect_actual_nginx_master_generations',flush=True)\n  actual=task.inspect_masters(str(pidfile));assert actual==expected,(actual,expected)\n  assert before=={str(path):path.read_bytes() if path.exists() else None for path in paths},'read-only observer changed PID files'\n  assert request() and command(active).startswith('nginx: master process '),'read-only observer changed serving processes'\n try:\n  started=subprocess.run([str(binary),'-p',str(root),'-c',str(config),'-e','stderr'],capture_output=True,text=True,timeout=3);assert started.returncode==0,(started.stderr,log.read_text() if log.exists() else 'no log')\n  old=wait(lambda:int(pidfile.read_text()),'old master');owned.add(old);first=wait(request,'old HTTP service');assert command(old).startswith('nginx: master process ');observe('single_master')\n  os.kill(old,signal.SIGHUP);second=wait(lambda:(pid:=request())!=first and pid,'new worker after HUP');assert int(pidfile.read_text())==old and not pathlib.Path(str(pidfile)+'.oldbin').exists()\n  wait(lambda:workers(old)==[second],'only replacement worker remains after HUP');observe('single_master');print('NATIVE_NGINX_HUP_SAME_MASTER_NEW_WORKER',old,first,second,flush=True)\n  os.kill(old,signal.SIGUSR2);new=wait(lambda:(pid:=int(pidfile.read_text()))!=old and pid,'USR2 new master');owned.add(new)\n  assert int(pathlib.Path(str(pidfile)+'.oldbin').read_text())==old and command(new).startswith('nginx: master process ');wait(lambda:workers(new),'new master workers ready');observe('dual_masters')\n  print('NATIVE_NGINX_USR2_DUAL_MASTERS_SAME_EXISTING_BINARY',old,new,children(old),workers(new),hashlib.sha256(binary.read_bytes()).hexdigest(),flush=True)\n  os.kill(old,signal.SIGWINCH);wait(lambda:not workers(old),'old workers quiesced');wait(lambda:request() in workers(new),'new generation serves inherited listener')\n  observe('old_workers_quiesced');print('NATIVE_NGINX_WINCH_OLD_MASTER_ALIVE_NEW_WORKER_SERVING',flush=True)\n  os.kill(old,signal.SIGHUP);wait(lambda:workers(old),'rollback old workers restarted');observe('dual_masters')\n  os.kill(new,signal.SIGQUIT);wait(lambda:int(pidfile.read_text())==old and not pathlib.Path(str(pidfile)+'.oldbin').exists(),'original pidfile restored after rollback');wait(lambda:request() in workers(old),'old generation actually serves after rollback')\n  observe('single_master');print('NATIVE_NGINX_ROLLBACK_ORIGINAL_MASTER_RESTORED_LISTENER_ALIVE',old,flush=True)\n  bad=root/'invalid.pid'\n  for value in ('0','-1','not-a-pid',str(os.getpid())):\n   bad.write_text(value);before=bad.read_bytes()\n   try:task.inspect_masters(str(bad))\n   except ValueError:pass\n   else:raise AssertionError('invalid or unrelated PID accepted')\n   assert bad.read_bytes()==before\n  bad.write_text(str(old));pathlib.Path(str(bad)+'.oldbin').write_text(str(old))\n  try:task.inspect_masters(str(bad))\n  except ValueError:pass\n  else:raise AssertionError('identical old and active PID accepted')\n  print('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n finally:\n  for pid in owned:\n   try:\n    if command(pid).startswith('nginx: master process ') and str(root) in command(pid):os.kill(pid,signal.SIGTERM)\n   except (ProcessLookupError,FileNotFoundError):pass\n  time.sleep(.15)\n"
+      }
+    }
+  }
+]

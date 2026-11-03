@@ -1,0 +1,86 @@
+[
+  {
+    "id": "curated-parallel-prometheus-008",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "抓取配置与采集质量",
+    "title": "修复语法合法但TLS名称错误的采集配置并验证认证",
+    "answer": "```yaml\njob_name: secure-exporter\nscrape_interval: 1s\nscrape_timeout: 500ms\nscheme: https\ntls_config:\n  ca_file: training-ca.pem\n  server_name: metrics.lab.invalid\n  insecure_skip_verify: false\nauthorization:\n  type: Bearer\n  credentials: training-readonly\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n```\n正确server_name匹配证书SAN，ca_file明确给出信任根，Bearer令牌解决应用层访问授权。语法检查不会替你连接并判断这些身份是否正确，须再核对Targets和实际业务样本。禁用证书校验不是修复名称错误。\n\n原题原理：它检查配置语法和相关结构，不替代运行环境里的网络、认证或目标指标格式验证。加载后应确认成功状态、targets错误与实际序列。语法正确配置也可能选错环境。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它检查配置语法和相关结构，不替代运行环境里的网络、认证或目标指标格式验证。",
+      "加载后应确认成功状态、targets错误与实际序列。",
+      "语法正确配置也可能选错环境。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/#tls_config"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "job.yaml": "job_name: secure-exporter\nscrape_interval: 1s\nscrape_timeout: 500ms\nscheme: https\ntls_config:\n  ca_file: training-ca.pem\n  server_name: wrong.lab.invalid\n  insecure_skip_verify: false\nauthorization:\n  type: Bearer\n  credentials: training-readonly\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n",
+      "endpoint-contract.json": "{\n  \"scheme\": \"https\",\n  \"certificate_dns_san\": \"metrics.lab.invalid\",\n  \"trusted_ca_file\": \"training-ca.pem\",\n  \"bearer_for_local_fixture_only\": \"training-readonly\",\n  \"expected_metric\": \"secure_business_total{app=\\\"checkout\\\"} 42\",\n  \"route\": \"/metrics\"\n}\n"
+    },
+    "solution_files": {
+      "job.yaml": "job_name: secure-exporter\nscrape_interval: 1s\nscrape_timeout: 500ms\nscheme: https\ntls_config:\n  ca_file: training-ca.pem\n  server_name: metrics.lab.invalid\n  insecure_skip_verify: false\nauthorization:\n  type: Bearer\n  credentials: training-readonly\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n"
+    },
+    "negative_files": {
+      "job.yaml": "job_name: secure-exporter\nscrape_interval: 1s\nscrape_timeout: 500ms\nscheme: https\ntls_config:\n  ca_file: training-ca.pem\n  server_name: metrics.lab.invalid\n  insecure_skip_verify: false\nauthorization:\n  type: Bearer\n  credentials: wrong-training-token\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n"
+    },
+    "body": "## 环境与初始材料\n平台提供原生Prometheus/promtool、OpenSSL及隔离HTTPS指标端，自动生成一天有效期的测试证书。证书DNS SAN只有metrics.lab.invalid，网络连接仍走127.0.0.1随机端口；training-ca.pem由平台提供，不要求学员自己签证书。端点仅接受测试Bearer令牌training-readonly，并返回secure_business_total{app=\"checkout\"}=42。所有令牌和证书仅用于本题，无真实凭据。\n\n## 操作任务\n修复job.yaml，让原生HTTPS抓取同时完成信任校验、名称校验与Bearer认证。初始server_name错误，但配置语法是合法的；不能把promtool check config成功当作目标可达。根据endpoint-contract.json修正身份，不允许insecure_skip_verify=true，不换明文HTTP，不删除认证。静态地址19100仅占位，平台替换真实环回端口；server_name用于证书验证，不把它当实际公网DNS连接地址。\n\n## 产物\n提交job.yaml；保留job名、HTTPS、间隔/超时、CA引用和目标。tls_config必须保留insecure_skip_verify=false，允许调整server_name；authorization保持Bearer类型并填题给测试令牌。不能使用真实密码或外部端点。\n\n## 验收方法\n执行python3 checks/check.py。先用原生promtool check config验证合法语法，再真实连接带证书的HTTPS端点；Targets必须up且lastError为空，至少两次认证成功、无401，TSDB查询得到完整标签和值42，up=1。初始名称错误应在实际握手失败，错误令牌应在实际HTTP认证失败；关闭证书校验直接违反合同。进程只环回监听，限资源、finally回收。\n\n## 边界\n这是Prometheus向外抓取时的TLS/认证配置，与给Prometheus自身Web页面配置登录是两个方向。不证明生产证书链、自动续期、代理网络或公网DNS已就绪，也不调整系统信任库。CA只写在当前题目的临时目录。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-scrape-tls-auth",
+      "deliverables": [
+        "job.yaml"
+      ],
+      "operation": "修复语法合法但实际TLS身份错误的抓取并验证Bearer",
+      "verification": "原生config检查、HTTPS证书与SAN验证、端点认证计数、Targets和存储样本",
+      "capability_gap": [
+        "非公网证书/续期/代理/DNS验收"
+      ],
+      "failure_examples": [
+        "语法通过但证书名字错误",
+        "证书正确但Bearer错误",
+        "关闭校验绕过身份问题"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus",
+          "promtool",
+          "openssl"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import ssl\nimport pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1s'},'scrape_configs':[JOB]}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\nEXPECTED={'job_name': 'secure-exporter', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'scheme': 'https', 'tls_config': {'ca_file': 'training-ca.pem', 'server_name': 'metrics.lab.invalid', 'insecure_skip_verify': False}, 'authorization': {'type': 'Bearer', 'credentials': 'training-readonly'}, 'static_configs': [{'targets': ['127.0.0.1:19100']}]}\n\ncandidate=yaml.load(pathlib.Path('job.yaml').read_text(encoding='utf-8'),Loader=Strict)\nassert isinstance(candidate,dict) and set(candidate)==set(EXPECTED)\nfor key in EXPECTED:\n if key not in ['tls_config','authorization']:assert candidate[key]==EXPECTED[key]\ntls=candidate['tls_config'];auth=candidate['authorization']\nassert isinstance(tls,dict) and set(tls)=={'ca_file','server_name','insecure_skip_verify'}\nassert tls['ca_file']=='training-ca.pem' and tls['insecure_skip_verify'] is False,'certificate verification must remain enabled'\nassert isinstance(tls['server_name'],str) and 0<len(tls['server_name'])<=100\nassert isinstance(auth,dict) and set(auth)=={'type','credentials'} and auth['type']=='Bearer'\nassert isinstance(auth['credentials'],str) and len(auth['credentials'])<=100\nstate={'authorized':0,'unauthorized':0}\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  if self.path!='/metrics':self.send_error(404);return\n  if self.headers.get('Authorization')!='Bearer training-readonly':\n   state['unauthorized']+=1;self.send_response(401);self.end_headers();return\n  state['authorized']+=1;body=b'# TYPE secure_business_total counter\\nsecure_business_total{app=\"checkout\"} 42\\n'\n  self.send_response(200);self.send_header('Content-Type','text/plain; version=0.0.4');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n def log_message(self,*args):pass\nhttpd=None;thread=None\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-exporter-tls-') as d:\n root=pathlib.Path(d)\n try:\n  run_command(['openssl','req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-keyout',str(root/'key.pem'),'-out',str(root/'training-ca.pem'),'-subj','/CN=metrics.lab.invalid','-addext','subjectAltName=DNS:metrics.lab.invalid','-days','1'],root)\n  httpd=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler)\n  context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(root/'training-ca.pem',root/'key.pem');httpd.socket=context.wrap_socket(httpd.socket,server_side=True)\n  thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()\n  JOB=copy.deepcopy(candidate);JOB['static_configs'][0]['targets']=['127.0.0.1:'+str(httpd.server_port)];JOB['tls_config']['ca_file']=str(root/'training-ca.pem')\n  check=root/'syntax.yaml';check.write_text(yaml.safe_dump({'scrape_configs':[JOB]}),encoding='utf-8');run_command(['promtool','check','config',str(check)],root)\n  with server(root,'source') as (url,api):\n   end=time.monotonic()+10\n   while time.monotonic()<end:\n    targets=api('/api/v1/targets')['data']['activeTargets']\n    if len(targets)==1 and targets[0]['health']=='up' and state['authorized']>=2:break\n    time.sleep(.1)\n   else:raise AssertionError('syntax-valid configuration did not establish authenticated verified TLS scrape: '+repr(targets))\n   assert targets[0]['lastError']=='' and state['unauthorized']==0\n   row=vector(api,'secure_business_total');assert len(row)==1 and float(row[0]['value'][1])==42\n   assert row[0]['metric']=={'__name__':'secure_business_total','job':'secure-exporter','instance':'127.0.0.1:'+str(httpd.server_port),'app':'checkout'}\n   up=vector(api,'up');assert len(up)==1 and float(up[0]['value'][1])==1\n finally:\n  if httpd:httpd.shutdown();httpd.server_close()\n  if thread:thread.join(timeout=2)\n  print('native lifecycle:',json.dumps(STATS))\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "outbound_scrape_tls_ca_san_and_bearer_runtime_beyond_config_syntax",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-008",
+      "original_type": "interview",
+      "original_title": "promtool check config通过能证明目标可抓取吗？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

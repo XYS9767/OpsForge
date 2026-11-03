@@ -1,0 +1,82 @@
+[
+  {
+    "id": "curated-dockerfile-expansion-071",
+    "module": "dockerfile",
+    "category": "Dockerfile",
+    "topic": "运行入口与信号",
+    "level": 4,
+    "type": "code",
+    "title": "修复Linux入口脚本shebang的CRLF故障",
+    "body": "## 操作任务\n实现repair_shebang(path)：只修复入口脚本首行shebang的CRLF，将CR剥离并写成LF；验证绝对解释器路径，原子替换并保留执行位。其他正文原样保留；无shebang或相对解释器必须拒绝且不改文件。\n\n## 提交产物\ntask.py\n\n## 验收方法\n在隔离临时目录实测内核执行失败与原子修复后成功；拒绝相对解释器且保留原文件。\n\n## 能力边界\n临时真实Linux文件中内核执行带CRLF的#!/bin/sh脚本失败；修复后同一文件可执行并输出预期内容。本合同不构建容器镜像，不改动生产文件。",
+    "answer": "```python\nimport os,pathlib,re,tempfile,stat\n\ndef repair_shebang(path):\n    path=pathlib.Path(path); data=path.read_bytes(); lines=data.splitlines(keepends=True)\n    if not lines or not lines[0].startswith(b\"#!\"):\n        raise ValueError(\"missing shebang\")\n    first=lines[0].rstrip(b\"\\r\\n\")\n    if b\"\\x00\" in first or b\"\\r\" in first or len(first)<=2:\n        raise ValueError(\"invalid shebang\")\n    interpreter=first[2:].split(None,1)[0]\n    if not interpreter.startswith(b\"/\"):\n        raise ValueError(\"interpreter must be absolute\")\n    repaired=first+b\"\\n\"+b\"\".join(lines[1:])\n    mode=path.stat().st_mode\n    fd,tmp=tempfile.mkstemp(prefix=\".\"+path.name+\".\",dir=path.parent)\n    try:\n        with os.fdopen(fd,\"wb\") as f:\n            f.write(repaired);f.flush();os.fsync(f.fileno())\n        os.chmod(tmp,stat.S_IMODE(mode));os.replace(tmp,path)\n    finally:\n        if os.path.exists(tmp):os.unlink(tmp)\n    return path.read_bytes()\n```\n\n原题知识说明：\n查看 shebang、CRLF/BOM、解释器路径和执行权限；CR 字符可能成为解释器路径的一部分。先在源码交付流程修正编码并重建验证，不用启动时随意 sed 修改全部文件掩盖来源问题。 读取文件头原字节确认shebang尾部CRLF使CR成为解释器路径的一部分。回退到已验证制品，由开发按目标平台换行约定重新交付并校验哈希。不要在生产临时改应用脚本；验收直接启动和代表功能。 Unix解释器入口和严格解析器可能将行末CR保留为路径或字段一部分，导致找不到解释器或比较失败。用字节查看确认，按文件契约由维护者规范换行。不能对所有二进制或签名文件盲目转换。",
+    "rubric": [
+      "查看 shebang、CRLF/BOM、解释器路径和执行权限；CR 字符可能成为解释器路径的一部分"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.docker.com/reference/dockerfile/",
+      "https://docs.docker.com/build/building/best-practices/"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 4,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "dockerfile-expansion",
+    "merged_sources": [
+      {
+        "id": "curated-parallel-basics-091",
+        "title": "从Windows交付的启动文件在Linux报解释器路径含^M，如何处置？"
+      },
+      {
+        "id": "curated-parallel-basics-055",
+        "title": "CRLF与LF差异为何会影响某些Unix程序入口？"
+      }
+    ],
+    "incident_signature": "dockerfile-crlf-shebang-interpreter-cr",
+    "exercise_mode": "tabletop",
+    "language": "python",
+    "has_answer": true,
+    "conversion": {
+      "original_id": "curated-dockerfile-expansion-071",
+      "original_title": "Windows交付的入口脚本在Linux镜像报bad interpreter，十六进制显示shebang以CRLF结束。如何恢复？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,pathlib,re,tempfile,stat\n\ndef repair_shebang(path):\n    path=pathlib.Path(path); data=path.read_bytes(); lines=data.splitlines(keepends=True)\n    if not lines or not lines[0].startswith(b\"#!\"):\n        raise ValueError(\"missing shebang\")\n    first=lines[0].rstrip(b\"\\r\\n\")\n    if b\"\\x00\" in first or b\"\\r\" in first or len(first)<=2:\n        raise ValueError(\"invalid shebang\")\n    interpreter=first[2:].split(None,1)[0]\n    if not interpreter.startswith(b\"/\"):\n        raise ValueError(\"interpreter must be absolute\")\n    repaired=first+b\"\\n\"+b\"\".join(lines[1:])\n    mode=path.stat().st_mode\n    fd,tmp=tempfile.mkstemp(prefix=\".\"+path.name+\".\",dir=path.parent)\n    try:\n        with os.fdopen(fd,\"wb\") as f:\n            f.write(repaired);f.flush();os.fsync(f.fileno())\n        os.chmod(tmp,stat.S_IMODE(mode));os.replace(tmp,path)\n    finally:\n        if os.path.exists(tmp):os.unlink(tmp)\n    return path.read_bytes()\n"
+    },
+    "negative_files": {
+      "task.py": "import os,pathlib,re,tempfile,stat\n\ndef repair_shebang(path):\n    path=pathlib.Path(path); data=path.read_bytes(); lines=data.splitlines(keepends=True)\n    if not lines or not lines[0].startswith(b\"#!\"):\n        raise ValueError(\"missing shebang\")\n    first=lines[0].rstrip(b\"\\n\")\n    if b\"\\x00\" in first or b\"\\r\" in first or len(first)<=2:\n        raise ValueError(\"invalid shebang\")\n    interpreter=first[2:].split(None,1)[0]\n    if not interpreter.startswith(b\"/\"):\n        raise ValueError(\"interpreter must be absolute\")\n    repaired=first+b\"\\n\"+b\"\".join(lines[1:])\n    mode=path.stat().st_mode\n    fd,tmp=tempfile.mkstemp(prefix=\".\"+path.name+\".\",dir=path.parent)\n    try:\n        with os.fdopen(fd,\"wb\") as f:\n            f.write(repaired);f.flush();os.fsync(f.fileno())\n        os.chmod(tmp,stat.S_IMODE(mode));os.replace(tmp,path)\n    finally:\n        if os.path.exists(tmp):os.unlink(tmp)\n    return path.read_bytes()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现repair_shebang(path)：只修复入口脚本首行shebang的CRLF，将CR剥离并写成LF；验证绝对解释器路径，原子替换并保留执行位。其他正文原样保留；无shebang或相对解释器必须拒绝且不改文件。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "临时真实Linux文件中内核执行带CRLF的#!/bin/sh脚本失败；修复后同一文件可执行并输出预期内容。本合同不构建容器镜像，不改动生产文件。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib,subprocess,tempfile,os,stat\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'));task=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED: repair shebang line ending',flush=True)\nwith tempfile.TemporaryDirectory(prefix='shebang-crlf ') as d:\n root=pathlib.Path(d);script=root/'entry.sh';payload=b'#!/bin/sh\\r\\necho repaired\\r\\n';script.write_bytes(payload);script.chmod(0o755)\n try:\n  before=subprocess.run([str(script)],capture_output=True,text=True,timeout=3)\n  assert before.returncode!=0 and ('bad interpreter' in before.stderr or 'not found' in before.stderr),before\n except FileNotFoundError:\n  pass  # Linux cannot resolve the literal interpreter path ending in CR.\n print('NATIVE_OPERATION_ENTERED: kernel rejected CRLF shebang',flush=True)\n try:fixed=task.repair_shebang(script)\n except ValueError as e:raise AssertionError('CRLF shebang was not repaired') from e\n assert fixed==b'#!/bin/sh\\necho repaired\\r\\n','only the shebang line may change'\n assert script.stat().st_mode & 0o111\n after=subprocess.run([str(script)],capture_output=True,text=True,timeout=3);assert after.returncode==0 and after.stdout=='repaired\\n',(after.returncode,after.stdout,after.stderr)\n assert script.read_bytes()==fixed\n bad=root/'relative.sh';bad.write_bytes(b'#!sh\\r\\necho x\\n')\n try:task.repair_shebang(bad)\n except ValueError:pass\n else:raise AssertionError('relative interpreter accepted')\n assert bad.read_bytes()==b'#!sh\\r\\necho x\\n','rejected input must stay unchanged'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "dockerfile"
+    ]
+  }
+]

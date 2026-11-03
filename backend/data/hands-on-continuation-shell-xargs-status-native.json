@@ -1,0 +1,76 @@
+[
+  {
+    "id": "curated-advanced-shell-012",
+    "module": "shell",
+    "category": "Shell",
+    "level": 5,
+    "topic": "错误信号与并发",
+    "title": "区分xargs普通失败与255中止并拒绝误报成功",
+    "body": "## 操作任务\n编写task.sh WORKER NUL_INPUT，使用GNU xargs并行执行只读检查并明确区分退出状态：全成功才能返回0；普通子命令非零时等待其余可调度项目结束但批次失败；任一子命令返回255时将xargs提前中止作为批次失败；xargs自身错误也不能报告成功。安全传递包含空格的参数且不通过eval拼接命令。\n\n## 提交产物\ntask.sh\n\n## 验收方法\n隔离Linux实际运行GNU xargs并发worker，比较成功、普通非零继续全批和255提前中止的退出/日志结果。\n\n## 能力边界\n针对Linux Bash和GNU xargs；验收用本地只读假worker与NUL分隔临时输入，不修改系统资源。普通失败代表已完成所有可调度项但结果不完整，255代表提前停止，两者都禁止发布成功。",
+    "answer": "```bash\n#!/usr/bin/env bash\nset -u\nif (( $# != 2 )); then printf 'usage: %s WORKER NUL_INPUT\\n' \"$0\" >&2; exit 2; fi\nworker=$1; input=$2\nif [[ ! -x \"$worker\" || ! -f \"$input\" ]]; then printf 'invalid worker or input\\n' >&2; exit 2; fi\nif xargs -0 -r -n1 -P2 -- \"$worker\" < \"$input\"; then status=0; else status=$?; fi\ncase $status in\n  0) printf 'COMPLETE\\n'; exit 0 ;;\n  123) printf 'CHILD_FAILURE: all schedulable items completed with ordinary errors\\n' >&2; exit 1 ;;\n  124) printf 'BATCH_ABORTED: child returned 255\\n' >&2; exit 1 ;;\n  *) printf 'XARGS_FAILURE: status=%s\\n' \"$status\" >&2; exit 1 ;;\nesac\n```\n\n原题知识说明：\n交付子命令退出码协议、xargs汇总状态解释和输入到任务的分配清单。GNU xargs对255等状态有特殊停止语义，不能把每个非零都视作继续处理的普通业务失败；并行执行时还必须区分已启动、已完成和因停止未启动的项目。若子工具有不受控退出码，应由开发提供不丢失原始状态的适配层，而不是统一改为0。验收在第一批、中间批和最后一批分别触发255、普通失败、执行失败及信号终止，核对输入条数等于成功、失败和未执行数量之和，并确认没有后台任务遗留。失败报告保留原始状态与汇总状态，重跑仅接受明确未完成的任务清单；不得因已有若干输出文件便宣布整批通过。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设特有机制及前提",
+      "给出可核验的证据、成功与失败判据",
+      "界定异常恢复与不可承诺的边界"
+    ],
+    "references": [
+      "https://www.gnu.org/software/bash/manual/bash.html",
+      "https://www.gnu.org/software/findutils/manual/html_mono/find.html",
+      "https://www.gnu.org/software/coreutils/manual/html_node/tee-invocation.html"
+    ],
+    "related_modules": [
+      "shell"
+    ],
+    "language": "bash",
+    "conversion": {
+      "original_id": "curated-advanced-shell-012",
+      "original_title": "用xargs并发驱动只读检查时，子命令返回255和普通非零应怎样进入完整批次验收？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.sh": "echo NotImplementedError >&2; exit 1\n"
+    },
+    "solution_files": {
+      "task.sh": "#!/usr/bin/env bash\nset -u\nif (( $# != 2 )); then printf 'usage: %s WORKER NUL_INPUT\\n' \"$0\" >&2; exit 2; fi\nworker=$1; input=$2\nif [[ ! -x \"$worker\" || ! -f \"$input\" ]]; then printf 'invalid worker or input\\n' >&2; exit 2; fi\nif xargs -0 -r -n1 -P2 -- \"$worker\" < \"$input\"; then status=0; else status=$?; fi\ncase $status in\n  0) printf 'COMPLETE\\n'; exit 0 ;;\n  123) printf 'CHILD_FAILURE: all schedulable items completed with ordinary errors\\n' >&2; exit 1 ;;\n  124) printf 'BATCH_ABORTED: child returned 255\\n' >&2; exit 1 ;;\n  *) printf 'XARGS_FAILURE: status=%s\\n' \"$status\" >&2; exit 1 ;;\nesac\n"
+    },
+    "negative_files": {
+      "task.sh": "#!/usr/bin/env bash\nset -u\nif (( $# != 2 )); then printf 'usage: %s WORKER NUL_INPUT\\n' \"$0\" >&2; exit 2; fi\nworker=$1; input=$2\nif [[ ! -x \"$worker\" || ! -f \"$input\" ]]; then printf 'invalid worker or input\\n' >&2; exit 2; fi\nxargs -0 -r -n1 -P2 -- \"$worker\" < \"$input\" || true\nstatus=0\ncase $status in\n  0) printf 'COMPLETE\\n'; exit 0 ;;\n  123) printf 'CHILD_FAILURE: all schedulable items completed with ordinary errors\\n' >&2; exit 1 ;;\n  124) printf 'BATCH_ABORTED: child returned 255\\n' >&2; exit 1 ;;\n  *) printf 'XARGS_FAILURE: status=%s\\n' \"$status\" >&2; exit 1 ;;\nesac\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "编写task.sh WORKER NUL_INPUT，使用GNU xargs并行执行只读检查并明确区分退出状态：全成功才能返回0；普通子命令非零时等待其余可调度项目结束但批次失败；任一子命令返回255时将xargs提前中止作为批次失败；xargs自身错误也不能报告成功。安全传递包含空格的参数且不通过eval拼接命令。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "针对Linux Bash和GNU xargs；验收用本地只读假worker与NUL分隔临时输入，不修改系统资源。普通失败代表已完成所有可调度项但结果不完整，255代表提前停止，两者都禁止发布成功。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [
+          "bash"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,tempfile,os,subprocess\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: xargs batch exit audit',flush=True)\nif 'NotImplementedError' in pathlib.Path('task.sh').read_text(encoding='utf8'):raise NotImplementedError('implement task.sh')\nwith tempfile.TemporaryDirectory(prefix='xargs-contract-') as directory:\n root=pathlib.Path(directory);worker=root/'worker';source=pathlib.Path('worker.sh').read_text(encoding='utf8');worker.write_text(source,encoding='utf8');worker.chmod(0o755)\n data=root/'items.bin';log=root/'run.log';env=os.environ.copy();env['RUN_LOG']=str(log)\n def run(items):\n  log.unlink(missing_ok=True);data.write_bytes(b''.join(item.encode()+b'\\x00' for item in items));return subprocess.run(['/bin/bash','task.sh',str(worker),str(data)],env=env,capture_output=True,text=True,timeout=5)\n ok=run(['a','b','c']);assert ok.returncode==0 and 'COMPLETE' in ok.stdout and len(log.read_text().splitlines())==3\n ordinary=run(['ok1','fail','ok2']);assert ordinary.returncode==1 and 'CHILD_FAILURE' in ordinary.stderr and len(log.read_text().splitlines())==3\n fatal=run(['fatal255','later']);assert fatal.returncode==1 and 'BATCH_ABORTED' in fatal.stderr and 'COMPLETE' not in fatal.stdout\n bad=run(['ordinary','fatal255']);assert bad.returncode==1 and 'COMPLETE' not in bad.stdout\n invalid=subprocess.run(['/bin/bash','task.sh',str(worker)],env=env,capture_output=True,text=True);assert invalid.returncode==2\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n",
+        "worker.sh": "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$RUN_LOG\"\ncase $1 in fail|ordinary) exit 7;; fatal255) exit 255;; esac\nexit 0\n"
+      }
+    }
+  }
+]

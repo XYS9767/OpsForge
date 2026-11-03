@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-istio-expansion-practice-007",
+    "title": "Istio故障注入实操：限定GET测试路径和延迟比例",
+    "body": "## 操作任务\n提交policy.yaml，VirtualService首条approved-test仅匹配GET且路径前缀/test，对该规则10%请求注入固定2秒延迟；后续other-traffic规则不注入故障。两条均指向固定reviews服务80端口，保持匹配顺序。本题为离线配置验证，不得对真实生产流量注入故障。\n\n## 产物\npolicy.yaml\n\n## 验收方法\npython3 checks/check.py，实际istioctl离线分析并核对批准字段。\n\n## 能力边界\n真实istioctl1.31.3在隔离user/net namespace对固定工作负载和提交资源进行离线分析，并核对限定字段；未运行网格、代理、外部服务或实际请求，不声称重试次数、TLS握手、证书信任或生产流量已验证。无镜像构建、拉取或默认身份变更。",
+    "answer": "提交policy.yaml，VirtualService首条approved-test仅匹配GET且路径前缀/test，对该规则10%请求注入固定2秒延迟；后续other-traffic规则不注入故障。两条均指向固定reviews服务80端口，保持匹配顺序。本题为离线配置验证，不得对真实生产流量注入故障。 真实网格运行和故障边界需另行验证。",
+    "explanation": "配置分析和字段核验不替代真实代理及依赖的运行时验证。",
+    "rubric": [
+      "真实本地分析通过且限定资源身份、字段、顺序和作用域符合题设。"
+    ],
+    "category": "Istio",
+    "module": "istio",
+    "related_modules": [
+      "istio"
+    ],
+    "type": "code",
+    "language": "yaml",
+    "question_format": "practice",
+    "level": 2,
+    "difficulty": "基础",
+    "has_answer": true,
+    "version": 1,
+    "review_status": "reviewed",
+    "source": "OpsForge-verified-gap-expansion",
+    "tags": [
+      "Istio",
+      "服务网格"
+    ],
+    "review_note": "原模块真实实操缺口绑定冻结空名额，原生及页面证据另存，不计旧题改编与原故障。",
+    "references": [
+      "https://istio.io/latest/docs/ops/diagnostic-tools/istioctl-analyze/",
+      "https://istio.io/latest/docs/tasks/traffic-management/fault-injection/",
+      "https://istio.io/latest/docs/reference/config/networking/virtual-service/"
+    ],
+    "files": {
+      "base.yaml": "{\n  \"apiVersion\": \"v1\",\n  \"kind\": \"Namespace\",\n  \"metadata\": {\n    \"name\": \"mesh-training\",\n    \"labels\": {\n      \"istio-injection\": \"enabled\"\n    }\n  }\n}\n---\n{\n  \"apiVersion\": \"v1\",\n  \"kind\": \"Service\",\n  \"metadata\": {\n    \"name\": \"reviews\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"selector\": {\n      \"app\": \"reviews\"\n    },\n    \"ports\": [\n      {\n        \"name\": \"http\",\n        \"port\": 80,\n        \"targetPort\": 8080\n      }\n    ]\n  }\n}\n---\n{\n  \"apiVersion\": \"apps/v1\",\n  \"kind\": \"Deployment\",\n  \"metadata\": {\n    \"name\": \"reviews-v1\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"replicas\": 0,\n    \"selector\": {\n      \"matchLabels\": {\n        \"app\": \"reviews\",\n        \"version\": \"v1\"\n      }\n    },\n    \"template\": {\n      \"metadata\": {\n        \"labels\": {\n          \"app\": \"reviews\",\n          \"version\": \"v1\"\n        }\n      },\n      \"spec\": {\n        \"containers\": [\n          {\n            \"name\": \"app\",\n            \"image\": \"example.invalid/unused:v1\",\n            \"ports\": [\n              {\n                \"containerPort\": 8080,\n                \"name\": \"http\"\n              }\n            ]\n          }\n        ]\n      }\n    }\n  }\n}\n---\n{\n  \"apiVersion\": \"apps/v1\",\n  \"kind\": \"Deployment\",\n  \"metadata\": {\n    \"name\": \"reviews-v2\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"replicas\": 0,\n    \"selector\": {\n      \"matchLabels\": {\n        \"app\": \"reviews\",\n        \"version\": \"v2\"\n      }\n    },\n    \"template\": {\n      \"metadata\": {\n        \"labels\": {\n          \"app\": \"reviews\",\n          \"version\": \"v2\"\n        }\n      },\n      \"spec\": {\n        \"containers\": [\n          {\n            \"name\": \"app\",\n            \"image\": \"example.invalid/unused:v2\",\n            \"ports\": [\n              {\n                \"containerPort\": 8080,\n                \"name\": \"http\"\n              }\n            ]\n          }\n        ]\n      }\n    }\n  }\n}\n",
+      "policy.yaml": "# IMPLEMENT_POLICY\n"
+    },
+    "solution_files": {
+      "policy.yaml": "{\n  \"apiVersion\": \"networking.istio.io/v1\",\n  \"kind\": \"VirtualService\",\n  \"metadata\": {\n    \"name\": \"reviews-fault\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"hosts\": [\n      \"reviews.mesh-training.svc.cluster.local\"\n    ],\n    \"http\": [\n      {\n        \"name\": \"approved-test\",\n        \"match\": [\n          {\n            \"method\": {\n              \"exact\": \"GET\"\n            },\n            \"uri\": {\n              \"prefix\": \"/test\"\n            }\n          }\n        ],\n        \"fault\": {\n          \"delay\": {\n            \"percentage\": {\n              \"value\": 10.0\n            },\n            \"fixedDelay\": \"2s\"\n          }\n        },\n        \"route\": [\n          {\n            \"destination\": {\n              \"host\": \"reviews.mesh-training.svc.cluster.local\",\n              \"port\": {\n                \"number\": 80\n              }\n            }\n          }\n        ]\n      },\n      {\n        \"name\": \"other-traffic\",\n        \"route\": [\n          {\n            \"destination\": {\n              \"host\": \"reviews.mesh-training.svc.cluster.local\",\n              \"port\": {\n                \"number\": 80\n              }\n            }\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    },
+    "negative_files": {
+      "policy.yaml": "{\n  \"apiVersion\": \"networking.istio.io/v1\",\n  \"kind\": \"VirtualService\",\n  \"metadata\": {\n    \"name\": \"reviews-fault\",\n    \"namespace\": \"mesh-training\"\n  },\n  \"spec\": {\n    \"hosts\": [\n      \"reviews.mesh-training.svc.cluster.local\"\n    ],\n    \"http\": [\n      {\n        \"name\": \"approved-test\",\n        \"match\": [\n          {\n            \"method\": {\n              \"exact\": \"GET\"\n            },\n            \"uri\": {\n              \"prefix\": \"/test\"\n            }\n          }\n        ],\n        \"fault\": {\n          \"delay\": {\n            \"percentage\": {\n              \"value\": 100.0\n            },\n            \"fixedDelay\": \"2s\"\n          }\n        },\n        \"route\": [\n          {\n            \"destination\": {\n              \"host\": \"reviews.mesh-training.svc.cluster.local\",\n              \"port\": {\n                \"number\": 80\n              }\n            }\n          }\n        ]\n      },\n      {\n        \"name\": \"other-traffic\",\n        \"route\": [\n          {\n            \"destination\": {\n              \"host\": \"reviews.mesh-training.svc.cluster.local\",\n              \"port\": {\n                \"number\": 80\n              }\n            }\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "既有私有WSL普通student，真实istioctl隔离本地分析",
+      "operation": "提交policy.yaml，VirtualService首条approved-test仅匹配GET且路径前缀/test，对该规则10%请求注入固定2秒延迟；后续other-traffic规则不注入故障。两条均指向固定reviews服务80端口，保持匹配顺序。本题为离线配置验证，不得对真实生产流量注入故障。",
+      "deliverables": [
+        "policy.yaml"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实istioctl1.31.3在隔离user/net namespace对固定工作负载和提交资源进行离线分析，并核对限定字段；未运行网格、代理、外部服务或实际请求，不声称重试次数、TLS握手、证书信任或生产流量已验证。无镜像构建、拉取或默认身份变更。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "istioctl",
+          "unshare"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import hashlib,json,os,pathlib,subprocess,tempfile,yaml\nassert os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nbase=pathlib.Path('base.yaml');policy=pathlib.Path('policy.yaml');assert hashlib.sha256(base.read_bytes()).hexdigest()=='174942024b34cb93a54a3b9808416cd695dab7a2d9ab8cfa9d224bba9d2db1f7'\nraw=policy.read_text(encoding='utf8')\nif raw.strip()=='# IMPLEMENT_POLICY':raise NotImplementedError('complete the approved policy')\nprint('STUDENT_OPERATION_ENTERED:actual_istioctl_local_policy_analysis',flush=True)\nwith tempfile.TemporaryDirectory(prefix='of-istio-more-') as directory:\n root=pathlib.Path(directory);config=root/'kubeconfig.json';config.write_text(json.dumps({'apiVersion':'v1','kind':'Config','clusters':[],'contexts':[],'users':[],'current-context':''}));env={**os.environ,'KUBECONFIG':str(config),'ISTIO_CONFIG_DIR':str(root/'config'),'GOMAXPROCS':'2','GOMEMLIMIT':'384MiB'}\n result=subprocess.run(['unshare','-Urn','--','istioctl','analyze','--use-kube=false','--kubeconfig',str(config),'--namespace','mesh-training','--failure-threshold','Error',str(base.resolve()),str(policy.resolve())],capture_output=True,text=True,env=env,timeout=20);assert result.returncode==0,result.stdout+result.stderr\n actual=list(yaml.safe_load_all(raw));assert actual==json.loads('[{\"apiVersion\": \"networking.istio.io/v1\", \"kind\": \"VirtualService\", \"metadata\": {\"name\": \"reviews-fault\", \"namespace\": \"mesh-training\"}, \"spec\": {\"hosts\": [\"reviews.mesh-training.svc.cluster.local\"], \"http\": [{\"name\": \"approved-test\", \"match\": [{\"method\": {\"exact\": \"GET\"}, \"uri\": {\"prefix\": \"/test\"}}], \"fault\": {\"delay\": {\"percentage\": {\"value\": 10.0}, \"fixedDelay\": \"2s\"}}, \"route\": [{\"destination\": {\"host\": \"reviews.mesh-training.svc.cluster.local\", \"port\": {\"number\": 80}}}]}, {\"name\": \"other-traffic\", \"route\": [{\"destination\": {\"host\": \"reviews.mesh-training.svc.cluster.local\", \"port\": {\"number\": 80}}}]}]}}]'),'approved resource order, identity and semantics must remain exact'\n print('NATIVE_ISTIOCTL_FAULT_INJECTION_APPROVED_CONFIGURATION_STATIC_ONLY',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

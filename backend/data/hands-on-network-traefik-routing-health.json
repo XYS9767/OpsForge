@@ -1,0 +1,216 @@
+[
+  {
+    "id": "curated-feishu-interview-022",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 2,
+    "topic": "Traefik规则长度优先级与显式覆盖",
+    "title": "配置Traefik显式优先级，避免长正则规则遮蔽精确主机",
+    "answer": "```yaml\nhttp:\n  routers:\n    specific:\n      rule: Host(`api.lab.test`)\n      entryPoints: [web]\n      priority: 200\n      service: specific\n    generic:\n      rule: HostRegexp(`^[a-z]+\\.lab\\.test$`)\n      entryPoints: [web]\n      priority: 100\n      service: generic\n  services:\n    specific:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{A_PORT}}\n    generic:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{B_PORT}}\n```\n\n将api.lab.test所有路径路由到A，其余纯小写字母子域*.lab.test路由到B，域外Host返回404。必须保留两个重叠的原始规则，用显式priority保证精确主机优先，而不是依赖规则字符串长度。不能套用Nginx location最长前缀的推断。\n\n原题原理说明：\n按所需协议、动态发现来源、路由表达、TLS管理、健康检查、插件与版本、可观测性和团队维护能力比较。Traefik以provider集成动态发现较常见，Nginx也可通过相应控制器或管理系统实现自动化，不能说只能手工配置。用实际流量形态测试长连接、错误恢复、配置变更和资源成本，再选择可维护方案。",
+    "type": "code",
+    "source": "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "feishu-interview-review-20261021",
+    "hints": [],
+    "rubric": [
+      "按所需协议、动态发现来源、路由表达、TLS管理、健康检查、插件与版本、可观测性和团队维护能力比较",
+      "Traefik以provider集成动态发现较常见，Nginx也可通过相应控制器或管理系统实现自动化，不能说只能手工配置",
+      "用实际流量形态测试长连接、错误恢复、配置变更和资源成本，再选择可维护方案"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh"
+    ],
+    "source_block_ids": [
+      "RApTdwPDToIWERxeJLZczanZnJh"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh",
+        "block_ids": [
+          "RApTdwPDToIWERxeJLZczanZnJh"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "files": {
+      "dynamic.yaml": "http:\n  routers:\n    specific:\n      rule: Host(`api.lab.test`)\n      entryPoints: [web]\n      priority: 0\n      service: specific\n    generic:\n      rule: HostRegexp(`^[a-z]+\\.lab\\.test$`)\n      entryPoints: [web]\n      priority: 0\n      service: generic\n  services:\n    specific:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{A_PORT}}\n    generic:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{B_PORT}}\n"
+    },
+    "solution_files": {
+      "dynamic.yaml": "http:\n  routers:\n    specific:\n      rule: Host(`api.lab.test`)\n      entryPoints: [web]\n      priority: 200\n      service: specific\n    generic:\n      rule: HostRegexp(`^[a-z]+\\.lab\\.test$`)\n      entryPoints: [web]\n      priority: 100\n      service: generic\n  services:\n    specific:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{A_PORT}}\n    generic:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{B_PORT}}\n"
+    },
+    "negative_files": {
+      "dynamic.yaml": "http:\n  routers:\n    specific:\n      rule: Host(`api.lab.test`)\n      entryPoints: [web]\n      priority: 50\n      service: specific\n    generic:\n      rule: HostRegexp(`^[a-z]+\\.lab\\.test$`)\n      entryPoints: [web]\n      priority: 100\n      service: generic\n  services:\n    specific:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{A_PORT}}\n    generic:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{B_PORT}}\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "traefik"
+        ],
+        "features": [
+          "traefik:v3.5"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,socket,subprocess,threading,http.server,time,os,contextlib,secrets,yaml,http.client\nroot=pathlib.Path.cwd();token=secrets.token_hex(8)\nclass Backend(http.server.BaseHTTPRequestHandler):\n    def do_GET(self):\n        if self.path=='/health':\n            self.server.checks+=1;status=200 if self.server.healthy else 503;body=b'health'\n        else:self.server.visits+=1;status=200;body=(self.server.label+':'+token).encode()\n        self.send_response(status);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n    def log_message(self,*args):pass\n@contextlib.contextmanager\ndef fixture():\n    servers=[];threads=[];proc=None\n    try:\n        for label in ('A','B'):\n            server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Backend);server.label=label;server.healthy=True;server.checks=0;server.visits=0\n            thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start();servers.append(server);threads.append(thread)\n        with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n        text=(root/'dynamic.yaml').read_text()\n        for label,server in zip(('A','B'),servers):\n            assert '{{'+label+'_PORT}}' in text\n            text=text.replace('{{'+label+'_PORT}}',str(server.server_address[1]))\n        (root/'rendered.yaml').write_text(text)\n        config={'global':{'checkNewVersion':False,'sendAnonymousUsage':False},'entryPoints':{'web':{'address':f'127.0.0.1:{port}'}},'providers':{'file':{'filename':str(root/'rendered.yaml'),'watch':False}},'log':{'level':'ERROR'}}\n        (root/'traefik.yaml').write_text(yaml.safe_dump(config))\n        with (root/'native.log').open('w') as log:\n            proc=subprocess.Popen(['traefik','--configFile='+str(root/'traefik.yaml')],stdout=log,stderr=log,env={**os.environ,'GOMAXPROCS':'1','GOMEMLIMIT':'96MiB'})\n            deadline=time.monotonic()+4\n            while True:\n                try:\n                    with socket.create_connection(('127.0.0.1',port),timeout=.2):break\n                except OSError:\n                    assert time.monotonic()<deadline,(root/'native.log').read_text();time.sleep(.03)\n            def get(host,path='/'):\n                connection=http.client.HTTPConnection('127.0.0.1',port,timeout=.5)\n                try:\n                    connection.request('GET',path,headers={'Host':host});response=connection.getresponse();return response.status,response.read()\n                finally:connection.close()\n            yield get,servers,proc\n    finally:\n        if proc and proc.poll() is None:\n            proc.terminate()\n            try:proc.wait(timeout=4)\n            except subprocess.TimeoutExpired:proc.kill();proc.wait()\n        for server in servers:server.shutdown();server.server_close()\n        for thread in threads:thread.join(2);assert not thread.is_alive()\n\nconfig=yaml.safe_load((root/'dynamic.yaml').read_text());routes=config['http']['routers']\nassert routes['specific']['rule']=='Host(`api.lab.test`)'\nassert routes['generic']['rule']==r'HostRegexp(`^[a-z]+\\.lab\\.test$`)'\nassert type(routes['specific'].get('priority')) is int and type(routes['generic'].get('priority')) is int\nassert routes['specific']['priority']>0 and routes['generic']['priority']>0\nwith fixture() as (get,servers,proc):\n    deadline=time.monotonic()+4\n    while get('api.lab.test')[0]!=200:\n        assert time.monotonic()<deadline;time.sleep(.03)\n    baseline=[server.visits for server in servers]\n    for path in ['/', '/v1/items?cursor=next', '/nested/deep']:\n        assert get('api.lab.test',path)==(200,('A:'+token).encode()), 'long generic rule shadowed shorter specific rule'\n    for host in ['web.lab.test','reports.lab.test','x'+secrets.token_hex(4).translate(str.maketrans('0123456789','abcdefghij'))+'.lab.test']:\n        assert get(host)==(200,('B:'+token).encode()),host\n    assert get('outside.invalid')[0]==404\n    assert [server.visits-before for server,before in zip(servers,baseline)]==[3,3]\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "将api.lab.test所有路径路由到A，其余纯小写字母子域*.lab.test路由到B，域外Host返回404。必须保留两个重叠的原始规则，用显式priority保证精确主机优先，而不是依赖规则字符串长度。不能套用Nginx location最长前缀的推断。",
+      "deliverables": [
+        "dynamic.yaml"
+      ],
+      "verification": "原生Traefik接受真实请求，检验API多个路径/查询、固定与随机其他Host、域外404以及后端实际命中次数；两个规则默认长度排序会把api.lab.test交给B，独立错误配置必失败。",
+      "failure_examples": [
+        "把priority设0表示使用默认规则长度排序；较长的HostRegexp会遮蔽较短Host，即使后者语义上更具体。"
+      ]
+    },
+    "body": "## 环境与初始材料\n普通Linux用户、Traefik3.5、Python3/PyYAML。提供dynamic.yaml故障配置，验收启动两个真实回环HTTP后端A/B与一个Traefik。仅替换{{A_PORT}}/{{B_PORT}}为随机高端口。禁用版本检查、匿名遥测与ACME，不使用容器/集群。\n\n## 操作任务\n将api.lab.test所有路径路由到A，其余纯小写字母子域*.lab.test路由到B，域外Host返回404。必须保留两个重叠的原始规则，用显式priority保证精确主机优先，而不是依赖规则字符串长度。不能套用Nginx location最长前缀的推断。\n\n## 提交产物\ndynamic.yaml完整配置，保留端口占位符和web入口名称；后端由验收提供，不提交模拟路由器。\n\n## 验收方法\n原生Traefik接受真实请求，检验API多个路径/查询、固定与随机其他Host、域外404以及后端实际命中次数；两个规则默认长度排序会把api.lab.test交给B，独立错误配置必失败。 全部断言通过退出0，结束回收本题全部进程。仅验本机路由和应用代理行为，不代表公网性能或VIP漂移能力。\n\n失败示例：把priority设0表示使用默认规则长度排序；较长的HostRegexp会遮蔽较短Host，即使后者语义上更具体。",
+    "case_signature": "curated-feishu-interview-022|Traefik规则长度优先级与显式覆盖",
+    "conversion": {
+      "original_id": "curated-feishu-interview-022",
+      "original_title": "比较Traefik与Nginx时，怎样避免把选型简化为一个快一个自动化？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-feishu-project-008",
+    "module": "network",
+    "category": "网络与 DNS",
+    "topic": "Traefik应用健康池摘除与恢复",
+    "level": 3,
+    "type": "code",
+    "title": "交付Traefik主动健康检查与后端自动恢复，明确VIP边界",
+    "body": "## 环境与初始材料\n普通Linux用户、Traefik3.5、Python3/PyYAML。提供dynamic.yaml故障配置，验收启动两个真实回环HTTP后端A/B与一个Traefik。仅替换{{A_PORT}}/{{B_PORT}}为随机高端口。禁用版本检查、匿名遥测与ACME，不使用容器/集群。\n\n## 操作任务\n为service.lab.test配置两个后端的主动/health检查（参考间隔200ms、超时100ms），各阶段应在4秒内收敛。初始两后端均可用时均能收到请求；B的/health变503后自动摘除，恢复200后自动加入；全部不健康时入口返回503，仅A恢复后只发往A。进程与入口地址不重建。普通业务/始终200，因此不能把/当健康端点。此处练习Traefik应用层职责；没有配置Keepalived、VRRP或声称浮动IP已切换。\n\n## 提交产物\ndynamic.yaml完整配置，保留端口占位符和web入口名称；后端由验收提供，不提交模拟路由器。\n\n## 验收方法\n真实后端动态改变/health状态，轮询原生Traefik请求分配与503，检查健康探测确实发生、恢复不重启代理、业务路径200不掩盖健康503。最终回收服务。 全部断言通过退出0，结束回收本题全部进程。仅验本机路由和应用代理行为，不代表公网性能或VIP漂移能力。\n\n失败示例：检查/会永远得到业务200，B虽健康端点已失败仍留在池中；这与VIP是否可达是不同层次。",
+    "answer": "```yaml\nhttp:\n  routers:\n    app:\n      rule: Host(`service.lab.test`)\n      entryPoints: [web]\n      service: pool\n  services:\n    pool:\n      loadBalancer:\n        healthCheck:\n          path: /health\n          interval: 200ms\n          timeout: 100ms\n        servers:\n          - url: http://127.0.0.1:{{A_PORT}}\n          - url: http://127.0.0.1:{{B_PORT}}\n```\n\n为service.lab.test配置两个后端的主动/health检查（参考间隔200ms、超时100ms），各阶段应在4秒内收敛。初始两后端均可用时均能收到请求；B的/health变503后自动摘除，恢复200后自动加入；全部不健康时入口返回503，仅A恢复后只发往A。进程与入口地址不重建。普通业务/始终200，因此不能把/当健康端点。此处练习Traefik应用层职责；没有配置Keepalived、VRRP或声称浮动IP已切换。\n\n原题原理说明：\nTraefik 负责应用流量路由，Keepalived 可通过 VRRP 协调 VIP 所属节点，二者职责不同。必须先确认网络支持所需 VIP 漂移、通告和地址绑定方式；部分云网络需要云厂商支持的方案，不能照搬同二层网络配置。健康检测要反映入口是否可用，并防止双主。验收从客户端连续请求观察切换时间、连接中断和恢复，保留回切策略。",
+    "rubric": [
+      "路由与VIP职责",
+      "网络前提",
+      "双主防护",
+      "客户端验收"
+    ],
+    "hints": [],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/W8tBwAIvUiD0S8kXRyPc29tqnvg",
+      "https://www.keepalived.org/manpage.html",
+      "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+      "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb"
+    ],
+    "source": "飞书项目题知识点改编；回答框架不代表用户实际项目经历",
+    "source_block_id": "YT2CdksmUoymcDxfVmocc2zcnIc",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "feishu-project-reviewed",
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/W8tBwAIvUiD0S8kXRyPc29tqnvg",
+        "block_ids": [
+          "YT2CdksmUoymcDxfVmocc2zcnIc"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+        "block_ids": [
+          "OaWid1jH8osZqNxe0VCcJrvPnWc",
+          "ASo4dZpPto8FKsxwGi5caPDenoc",
+          "AKiUdEJlnoVKiuxVE5Jczvqxno7",
+          "C0TUdlzKAoS6bAx3BWhcJBvLn8g",
+          "QV91dPaoZoNDafxvM3mcpazunhd",
+          "Rb3Ad30LMoMzcqxYo4scwhdZnWe"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+        "block_ids": [
+          "DFEZdeNafoZK0zxgbaRcErQWn3g",
+          "FS05dbpKNovMd7xOMDncgjdmnLd",
+          "HtVjdRBTgolfRxxrbHecViZPn4f",
+          "HZVddAAfsoEZI5xR9AUcVvrMnoh",
+          "TwNgd6bXtoz5iJxsZXZcRIhZn4c",
+          "RzmddDg0qoxIs1xmdpCcItt2nzb"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "YvnrdtcTdoapB1xGNyKcdJM8n0g",
+          "K4GUdBUJ2onQrvxoJOEcxKF7n9f",
+          "FVUIdHDcUo8dRlxJ9xEciR08nke",
+          "D8Jcd1GnQosEI4xQWqhca5qdnLb",
+          "CTzTdHejCoIKZ3xaWrRczriRniM",
+          "XPwYdyojTobszcxff1ociRo1nIc",
+          "WVKedpVclo4kFcxqTqvcIbmyneg"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "dynamic.yaml": "http:\n  routers:\n    app:\n      rule: Host(`service.lab.test`)\n      entryPoints: [web]\n      service: pool\n  services:\n    pool:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{A_PORT}}\n          - url: http://127.0.0.1:{{B_PORT}}\n"
+    },
+    "solution_files": {
+      "dynamic.yaml": "http:\n  routers:\n    app:\n      rule: Host(`service.lab.test`)\n      entryPoints: [web]\n      service: pool\n  services:\n    pool:\n      loadBalancer:\n        healthCheck:\n          path: /health\n          interval: 200ms\n          timeout: 100ms\n        servers:\n          - url: http://127.0.0.1:{{A_PORT}}\n          - url: http://127.0.0.1:{{B_PORT}}\n"
+    },
+    "negative_files": {
+      "dynamic.yaml": "http:\n  routers:\n    app:\n      rule: Host(`service.lab.test`)\n      entryPoints: [web]\n      service: pool\n  services:\n    pool:\n      loadBalancer:\n        healthCheck:\n          path: /\n          interval: 200ms\n          timeout: 100ms\n        servers:\n          - url: http://127.0.0.1:{{A_PORT}}\n          - url: http://127.0.0.1:{{B_PORT}}\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "traefik"
+        ],
+        "features": [
+          "traefik:v3.5"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,socket,subprocess,threading,http.server,time,os,contextlib,secrets,yaml,http.client\nroot=pathlib.Path.cwd();token=secrets.token_hex(8)\nclass Backend(http.server.BaseHTTPRequestHandler):\n    def do_GET(self):\n        if self.path=='/health':\n            self.server.checks+=1;status=200 if self.server.healthy else 503;body=b'health'\n        else:self.server.visits+=1;status=200;body=(self.server.label+':'+token).encode()\n        self.send_response(status);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n    def log_message(self,*args):pass\n@contextlib.contextmanager\ndef fixture():\n    servers=[];threads=[];proc=None\n    try:\n        for label in ('A','B'):\n            server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Backend);server.label=label;server.healthy=True;server.checks=0;server.visits=0\n            thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start();servers.append(server);threads.append(thread)\n        with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n        text=(root/'dynamic.yaml').read_text()\n        for label,server in zip(('A','B'),servers):\n            assert '{{'+label+'_PORT}}' in text\n            text=text.replace('{{'+label+'_PORT}}',str(server.server_address[1]))\n        (root/'rendered.yaml').write_text(text)\n        config={'global':{'checkNewVersion':False,'sendAnonymousUsage':False},'entryPoints':{'web':{'address':f'127.0.0.1:{port}'}},'providers':{'file':{'filename':str(root/'rendered.yaml'),'watch':False}},'log':{'level':'ERROR'}}\n        (root/'traefik.yaml').write_text(yaml.safe_dump(config))\n        with (root/'native.log').open('w') as log:\n            proc=subprocess.Popen(['traefik','--configFile='+str(root/'traefik.yaml')],stdout=log,stderr=log,env={**os.environ,'GOMAXPROCS':'1','GOMEMLIMIT':'96MiB'})\n            deadline=time.monotonic()+4\n            while True:\n                try:\n                    with socket.create_connection(('127.0.0.1',port),timeout=.2):break\n                except OSError:\n                    assert time.monotonic()<deadline,(root/'native.log').read_text();time.sleep(.03)\n            def get(host,path='/'):\n                connection=http.client.HTTPConnection('127.0.0.1',port,timeout=.5)\n                try:\n                    connection.request('GET',path,headers={'Host':host});response=connection.getresponse();return response.status,response.read()\n                finally:connection.close()\n            yield get,servers,proc\n    finally:\n        if proc and proc.poll() is None:\n            proc.terminate()\n            try:proc.wait(timeout=4)\n            except subprocess.TimeoutExpired:proc.kill();proc.wait()\n        for server in servers:server.shutdown();server.server_close()\n        for thread in threads:thread.join(2);assert not thread.is_alive()\n\nwith fixture() as (get,servers,proc):\n    pid=proc.pid\n    def wait_for(predicate):\n        deadline=time.monotonic()+4\n        while not predicate():\n            assert time.monotonic()<deadline,'pool state did not converge';time.sleep(.05)\n    def batch():return [get('service.lab.test') for _ in range(8)]\n    a=(200,('A:'+token).encode());b=(200,('B:'+token).encode())\n    wait_for(lambda:set(batch())=={a,b})\n    wait_for(lambda:all(server.checks>0 for server in servers))\n    servers[1].healthy=False\n    wait_for(lambda:set(batch())=={a})\n    assert set(batch())=={a},'unhealthy B still receives application traffic'\n    # Its ordinary endpoint still returns 200: checking '/' instead of '/health' must fail.\n    assert servers[1].visits>0\n    servers[1].healthy=True\n    wait_for(lambda:set(batch())=={a,b})\n    servers[0].healthy=False;servers[1].healthy=False\n    wait_for(lambda:all(status==503 for status,_ in batch()))\n    assert all(status==503 for status,_ in batch()),'no healthy backend must fail closed'\n    servers[0].healthy=True\n    wait_for(lambda:set(batch())=={a})\n    assert proc.pid==pid and proc.poll() is None,'do not restart entrypoint to fake health recovery'\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "为service.lab.test配置两个后端的主动/health检查（参考间隔200ms、超时100ms），各阶段应在4秒内收敛。初始两后端均可用时均能收到请求；B的/health变503后自动摘除，恢复200后自动加入；全部不健康时入口返回503，仅A恢复后只发往A。进程与入口地址不重建。普通业务/始终200，因此不能把/当健康端点。此处练习Traefik应用层职责；没有配置Keepalived、VRRP或声称浮动IP已切换。",
+      "deliverables": [
+        "dynamic.yaml"
+      ],
+      "verification": "真实后端动态改变/health状态，轮询原生Traefik请求分配与503，检查健康探测确实发生、恢复不重启代理、业务路径200不掩盖健康503。最终回收服务。",
+      "failure_examples": [
+        "检查/会永远得到业务200，B虽健康端点已失败仍留在池中；这与VIP是否可达是不同层次。"
+      ]
+    },
+    "case_signature": "curated-feishu-project-008|Traefik应用健康池摘除与恢复",
+    "conversion": {
+      "original_id": "curated-feishu-project-008",
+      "original_title": "Traefik 与 Keepalived 如何分工",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

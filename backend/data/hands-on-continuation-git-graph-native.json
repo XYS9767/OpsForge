@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-advanced-git-006",
+    "module": "git",
+    "category": "Git",
+    "level": 5,
+    "topic": "仓库规模与恢复",
+    "title": "真实commit-graph与Bloom图链：合并/重命名查询对照，增量保留旧层，浅克隆退回普通查询",
+    "body": "## 操作任务\n实现build_graph(repo,mode)，repo仅为夹具自建仓库，mode为full或incremental，否则ValueError。浅克隆返回{indexed:False,reason:\"shallow\"}且不创建图，不猜测缺失历史。完整仓库full使用reachable+changed-paths并替换图链，incremental追加不合并旧层，原生verify后返回{indexed:True,layers:N}。使用调用级core.commitGraph=true，不改任何Git默认配置、refs、HEAD、index或工作区；清除继承GIT_*重定向，屏蔽全局/系统配置，只允许写此仓库辅助图文件。夹具固定分支、合并、重命名，分别禁用/启用core.commitGraph和readChangedPaths对照精确路径历史及parents，再新增提交验证两层链。Bloom只能筛候选，不得用Bloom命中替代实际路径历史。失败明确传播，不删除对象或改写历史；普通查询仍可作为回退。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实本地Git提交图、Bloom chunks、两层增量链、verify/fsck及浅克隆查询对照；所有提交/分支/本地clone仅限临时夹具，不变更OpsForge仓库Git状态，不推远程，不以小样本声称已测性能收益。",
+    "answer": "```python\nimport os,subprocess,pathlib\ndef build_graph(repo,mode):\n    if mode not in ('full','incremental'):raise ValueError('graph mode')\n    env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}\n    env.update(GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_GLOBAL=os.devnull,GIT_TERMINAL_PROMPT='0')\n    def git(*args):return subprocess.run(['git','-c','core.commitGraph=true','-C',str(repo),*args],env=env,capture_output=True,text=True,check=True,timeout=4).stdout.strip()\n    if git('rev-parse','--is-shallow-repository')=='true':return {'indexed':False,'reason':'shallow'}\n    git('commit-graph','write','--reachable','--changed-paths','--split=replace' if mode=='full' else '--split=no-merge')\n    git('commit-graph','verify')\n    directory=pathlib.Path(git('rev-parse','--absolute-git-dir'))/'objects'/'info'/'commit-graphs'\n    layers=(directory/'commit-graph-chain').read_text(encoding='ascii').splitlines()\n    return {'indexed':True,'layers':len(layers)}\n```\n\n原题知识说明：\n交付Git版本、图文件布局、查询样本和可重复的性能基线，区分辅助索引与真正的提交对象和引用。commit-graph及路径过滤应加速图遍历，不应改变给定引用集合的正确查询结果；Bloom过滤允许候选误报，不能作为“文件绝未改变”的独立业务证据。验收比较启用与禁用加速时的提交集合、路径历史及耗时，覆盖合并、多工作树、增量图链和不完整克隆等实际条件，并运行相应只读验证。辅助文件异常时优先由管理员停用并重建该索引，保留对象库与引用，不把删除对象作为修索引手段。回退应恢复可用的普通查询路径并接受暂时性能下降；若对象本身损坏则转独立恢复流程，不能以重建图成功掩盖数据损坏。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "说明对象、引用或协议的特有边界",
+      "交付正反例验收及来源记录",
+      "定义失败中止和共享历史保护规则"
+    ],
+    "references": [
+      "https://git-scm.com/docs/git-commit-graph",
+      "https://git-scm.com/docs/git-config"
+    ],
+    "related_modules": [
+      "git"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-git-006",
+      "original_title": "大型仓库上线commit-graph与路径Bloom过滤加速时，怎样交付不改变历史查询结果的验收？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,subprocess,pathlib\ndef build_graph(repo,mode):\n    if mode not in ('full','incremental'):raise ValueError('graph mode')\n    env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}\n    env.update(GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_GLOBAL=os.devnull,GIT_TERMINAL_PROMPT='0')\n    def git(*args):return subprocess.run(['git','-c','core.commitGraph=true','-C',str(repo),*args],env=env,capture_output=True,text=True,check=True,timeout=4).stdout.strip()\n    if git('rev-parse','--is-shallow-repository')=='true':return {'indexed':False,'reason':'shallow'}\n    git('commit-graph','write','--reachable','--changed-paths','--split=replace' if mode=='full' else '--split=no-merge')\n    git('commit-graph','verify')\n    directory=pathlib.Path(git('rev-parse','--absolute-git-dir'))/'objects'/'info'/'commit-graphs'\n    layers=(directory/'commit-graph-chain').read_text(encoding='ascii').splitlines()\n    return {'indexed':True,'layers':len(layers)}\n"
+    },
+    "negative_files": {
+      "task.py": "import os,subprocess,pathlib\ndef build_graph(repo,mode):\n    if mode not in ('full','incremental'):raise ValueError('graph mode')\n    env={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}\n    env.update(GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_GLOBAL=os.devnull,GIT_TERMINAL_PROMPT='0')\n    def git(*args):return subprocess.run(['git','-c','core.commitGraph=true','-C',str(repo),*args],env=env,capture_output=True,text=True,check=True,timeout=4).stdout.strip()\n    if git('rev-parse','--is-shallow-repository')=='true':return {'indexed':False,'reason':'shallow'}\n    git('commit-graph','write','--reachable','--split=replace' if mode=='full' else '--split=no-merge')\n    git('commit-graph','verify')\n    directory=pathlib.Path(git('rev-parse','--absolute-git-dir'))/'objects'/'info'/'commit-graphs'\n    layers=(directory/'commit-graph-chain').read_text(encoding='ascii').splitlines()\n    return {'indexed':True,'layers':len(layers)}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现build_graph(repo,mode)，repo仅为夹具自建仓库，mode为full或incremental，否则ValueError。浅克隆返回{indexed:False,reason:\"shallow\"}且不创建图，不猜测缺失历史。完整仓库full使用reachable+changed-paths并替换图链，incremental追加不合并旧层，原生verify后返回{indexed:True,layers:N}。使用调用级core.commitGraph=true，不改任何Git默认配置、refs、HEAD、index或工作区；清除继承GIT_*重定向，屏蔽全局/系统配置，只允许写此仓库辅助图文件。夹具固定分支、合并、重命名，分别禁用/启用core.commitGraph和readChangedPaths对照精确路径历史及parents，再新增提交验证两层链。Bloom只能筛候选，不得用Bloom命中替代实际路径历史。失败明确传播，不删除对象或改写历史；普通查询仍可作为回退。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实本地Git提交图、Bloom chunks、两层增量链、verify/fsck及浅克隆查询对照；所有提交/分支/本地clone仅限临时夹具，不变更OpsForge仓库Git状态，不推远程，不以小样本声称已测性能收益。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "git"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,tempfile,hashlib,struct\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nenv={k:v for k,v in os.environ.items() if not k.startswith('GIT_')}\nenv.update(GIT_CONFIG_NOSYSTEM='1',GIT_CONFIG_GLOBAL=os.devnull,GIT_TERMINAL_PROMPT='0',GIT_AUTHOR_NAME='Fixture',GIT_AUTHOR_EMAIL='fixture@example.invalid',GIT_COMMITTER_NAME='Fixture',GIT_COMMITTER_EMAIL='fixture@example.invalid')\ndef git(repo,*args,ok=True):\n p=subprocess.run(['git','-c','protocol.file.allow=always','-c','core.autocrlf=false','-C',str(repo),*args],env=env,capture_output=True,text=True,timeout=5)\n if ok:assert p.returncode==0,p.stderr\n return p\ndef out(repo,*args):return git(repo,*args).stdout.strip()\ndef commit(repo,name,text):\n (repo/name).write_text(text,encoding='utf8');git(repo,'add','--',name);git(repo,'commit','-m','fixture '+name)\ndef queries(repo,enabled):\n prefix=['-c','core.commitGraph='+str(enabled).lower(),'-c','commitGraph.readChangedPaths='+str(enabled).lower()]\n return [out(repo,*prefix,*args) for args in [('log','--all','--format=%H','--','service.txt'),('log','--first-parent','--format=%H','--','service.txt'),('log','--follow','--format=%H','--','renamed.txt'),('rev-list','--all','--parents')]]\ndef unchanged(repo):\n return (out(repo,'show-ref'),out(repo,'rev-parse','HEAD'),out(repo,'status','--porcelain'),out(repo,'ls-files','--stage'),(repo/'.git'/'config').read_bytes())\ndef graph_layers(repo):\n folder=repo/'.git'/'objects'/'info'/'commit-graphs';layers=(folder/'commit-graph-chain').read_text().splitlines()\n for identity in layers:\n  data=(folder/('graph-'+identity+'.graph')).read_bytes();assert data[:4]==b'CGPH' and data[4]==1\n  chunks=[data[8+i*12:12+i*12] for i in range(data[6])]\n  assert b'BIDX' in chunks and b'BDAT' in chunks,'changed-path Bloom chunks absent'\n return layers\ndef student(repo,mode):\n print('STUDENT_OPERATION_ENTERED:build_graph',flush=True)\n try:return task.build_graph(repo,mode)\n except Exception as error:raise AssertionError('native graph build failed') from error\nwith tempfile.TemporaryDirectory() as directory:\n root=pathlib.Path(directory);repo=root/'history';repo.mkdir();git(repo,'init','-b','main')\n commit(repo,'service.txt','base');commit(repo,'original.txt','rename me')\n git(repo,'switch','-c','feature');commit(repo,'service.txt','feature');git(repo,'switch','main');commit(repo,'other.txt','main')\n git(repo,'merge','--no-ff','feature','-m','fixture merge');git(repo,'mv','original.txt','renamed.txt');git(repo,'commit','-m','fixture rename')\n baseline=queries(repo,False);before=unchanged(repo)\n assert student(repo,'full')=={'indexed':True,'layers':1}\n assert len(graph_layers(repo))==1 and queries(repo,True)==baseline and queries(repo,False)==baseline\n assert unchanged(repo)==before,'auxiliary graph changed refs/index/worktree/config'\n old=graph_layers(repo)[0];commit(repo,'service.txt','incremental');commit(repo,'new.txt','new path')\n baseline=queries(repo,False);before=unchanged(repo)\n assert student(repo,'incremental')=={'indexed':True,'layers':2},'incremental mode replaced rather than extended the graph chain'\n assert len(graph_layers(repo))==2 and graph_layers(repo)[0]==old\n assert queries(repo,True)==baseline and queries(repo,False)==baseline and unchanged(repo)==before\n git(repo,'fsck','--full');git(repo,'commit-graph','verify')\n shallow=root/'shallow';git(root,'clone','--depth=2','--no-local',repo.as_uri(),str(shallow));assert out(shallow,'rev-parse','--is-shallow-repository')=='true'\n before=unchanged(shallow);assert student(shallow,'full')=={'indexed':False,'reason':'shallow'}\n assert unchanged(shallow)==before and not (shallow/'.git'/'objects'/'info'/'commit-graphs').exists()\n assert queries(shallow,True)==queries(shallow,False),'shallow fallback changed reachable history'\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

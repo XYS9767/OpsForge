@@ -1,0 +1,66 @@
+[
+  {
+    "id": "curated-istio-continuation-code-003",
+    "module": "istio",
+    "category": "Istio",
+    "level": 4,
+    "topic": "工作负载证书与轮换预算",
+    "title": "读取真实PEM证书核对Istio URI身份和轮换预算，区分元数据与信任验证",
+    "type": "code",
+    "question_format": "code",
+    "source": "OpsForge continuation independently authored",
+    "version": 1,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "真实X.509解析与原生签发测试证书的四路/突变验收；不替代证书链或实时mTLS验证。",
+    "pack": "continuation-20261028",
+    "language": "python",
+    "body": "## 操作任务\n实现task.py中的assess(pem,expected_uri,now,min_remaining)。pem是最多65536字节、仅含单张PEM证书的bytes，允许首尾空白和CRLF，拒绝证书链、额外文本和损坏输入。用cryptography真实解析X.509，不信任CN。\nexpected_uri仅接受小写ASCII `spiffe://<trust-domain>/ns/<namespace>/sa/<service-account>`。本练习限定trust-domain匹配`[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?`，namespace与service-account匹配`[a-z0-9](?:[a-z0-9-]*[a-z0-9])?`；不解码百分号，不接受查询/fragment/额外路径。本练习语法子集不代替完整SPIFFE规范验证。\nnow是0..253402300799的整数UTC秒，min_remaining是非负整数，bool不算整数。输入类型/格式错误抛ValueError。\n输出metadata_ready/reasons/uri_sans/not_before/not_after/remaining_seconds/sha256/trust_verified/live_mtls。按证书真实UTC秒计算有效期，now<not_before记not_yet_valid，now>=not_after记expired；未过期且剩余秒数<min_remaining记rotation_budget。URI SAN按原顺序列出，必须恰有一个且等于expected_uri，否则workload_identity，DNS SAN可并存；CN或DNS不得替代URI。原因按上述顺序排列。剩余秒数允许负值，sha256为真实DER的SHA256十六进制。无原因才metadata_ready=true；始终trust_verified=false、live_mtls=\"not_tested\"。\n\n## 产物\ntask.py，实现上述函数，不修改证书或任何信任配置。\n\n## 验收方法\nPython3与cryptography；checks/check.py真实生成并签名多份X.509证书，独立检查DER摘要、URI多值/缺失/CN冒充、信任域/SA错配、生效/到期/轮换边界、损坏/多证书PEM及非法参数。参考实现通过，骨架、典型错误和提前退出必须拒绝。\n\n## 能力边界\n仅解析本地证书元数据，不验证签名链、CA信任、吊销或私钥归属，不连接SDS/Istio/业务服务；元数据合格不等于真实mTLS成功。测试证书仅用于临时练习，不加入系统信任库。\n",
+    "answer": "```python\nimport datetime,re\nfrom cryptography import x509\nfrom cryptography.hazmat.primitives import hashes\n\ndef assess(pem, expected_uri, now, min_remaining):\n    if not isinstance(pem,bytes) or len(pem)>65536 or not re.fullmatch(rb'\\s*-----BEGIN CERTIFICATE-----\\r?\\n[A-Za-z0-9+/=\\r\\n]+-----END CERTIFICATE-----\\s*',pem):\n        raise ValueError('exactly one bounded PEM certificate required')\n    if not isinstance(expected_uri,str) or not re.fullmatch(r'spiffe://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?/ns/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/sa/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?',expected_uri):\n        raise ValueError('expected Istio workload URI')\n    if type(now) is not int or type(min_remaining) is not int or not 0<=now<=253402300799 or min_remaining<0:\n        raise ValueError('integer UTC seconds required')\n    try:\n        cert=x509.load_pem_x509_certificate(pem)\n        utc=datetime.timezone.utc\n        before=int(cert.not_valid_before.replace(tzinfo=utc).timestamp())\n        after=int(cert.not_valid_after.replace(tzinfo=utc).timestamp())\n        try:uris=cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.UniformResourceIdentifier)\n        except x509.ExtensionNotFound:uris=[]\n    except Exception as error:\n        raise ValueError('invalid X.509 encoding or extensions') from error\n    reasons=[]\n    if now<before:reasons.append('not_yet_valid')\n    if now>=after:reasons.append('expired')\n    if now<after and after-now<min_remaining:reasons.append('rotation_budget')\n    if uris!=[expected_uri]:reasons.append('workload_identity')\n    return {'metadata_ready':not reasons,'reasons':reasons,'uri_sans':uris,'not_before':before,'not_after':after,'remaining_seconds':after-now,\n            'sha256':cert.fingerprint(hashes.SHA256()).hex(),'trust_verified':False,'live_mtls':'not_tested'}\n```",
+    "files": {
+      "task.py": "def assess(pem, expected_uri, now, min_remaining):\n    raise NotImplementedError(\"parse actual X.509 metadata\")\n"
+    },
+    "solution_files": {
+      "task.py": "import datetime,re\nfrom cryptography import x509\nfrom cryptography.hazmat.primitives import hashes\n\ndef assess(pem, expected_uri, now, min_remaining):\n    if not isinstance(pem,bytes) or len(pem)>65536 or not re.fullmatch(rb'\\s*-----BEGIN CERTIFICATE-----\\r?\\n[A-Za-z0-9+/=\\r\\n]+-----END CERTIFICATE-----\\s*',pem):\n        raise ValueError('exactly one bounded PEM certificate required')\n    if not isinstance(expected_uri,str) or not re.fullmatch(r'spiffe://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?/ns/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/sa/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?',expected_uri):\n        raise ValueError('expected Istio workload URI')\n    if type(now) is not int or type(min_remaining) is not int or not 0<=now<=253402300799 or min_remaining<0:\n        raise ValueError('integer UTC seconds required')\n    try:\n        cert=x509.load_pem_x509_certificate(pem)\n        utc=datetime.timezone.utc\n        before=int(cert.not_valid_before.replace(tzinfo=utc).timestamp())\n        after=int(cert.not_valid_after.replace(tzinfo=utc).timestamp())\n        try:uris=cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.UniformResourceIdentifier)\n        except x509.ExtensionNotFound:uris=[]\n    except Exception as error:\n        raise ValueError('invalid X.509 encoding or extensions') from error\n    reasons=[]\n    if now<before:reasons.append('not_yet_valid')\n    if now>=after:reasons.append('expired')\n    if now<after and after-now<min_remaining:reasons.append('rotation_budget')\n    if uris!=[expected_uri]:reasons.append('workload_identity')\n    return {'metadata_ready':not reasons,'reasons':reasons,'uri_sans':uris,'not_before':before,'not_after':after,'remaining_seconds':after-now,\n            'sha256':cert.fingerprint(hashes.SHA256()).hex(),'trust_verified':False,'live_mtls':'not_tested'}\n"
+    },
+    "negative_files": {
+      "task.py": "import datetime,re\nfrom cryptography import x509\nfrom cryptography.hazmat.primitives import hashes\n\ndef assess(pem, expected_uri, now, min_remaining):\n    if not isinstance(pem,bytes) or len(pem)>65536 or not re.fullmatch(rb'\\s*-----BEGIN CERTIFICATE-----\\r?\\n[A-Za-z0-9+/=\\r\\n]+-----END CERTIFICATE-----\\s*',pem):\n        raise ValueError('exactly one bounded PEM certificate required')\n    if not isinstance(expected_uri,str) or not re.fullmatch(r'spiffe://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?/ns/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?/sa/[a-z0-9](?:[a-z0-9-]*[a-z0-9])?',expected_uri):\n        raise ValueError('expected Istio workload URI')\n    if type(now) is not int or type(min_remaining) is not int or not 0<=now<=253402300799 or min_remaining<0:\n        raise ValueError('integer UTC seconds required')\n    try:\n        cert=x509.load_pem_x509_certificate(pem)\n        utc=datetime.timezone.utc\n        before=int(cert.not_valid_before.replace(tzinfo=utc).timestamp())\n        after=int(cert.not_valid_after.replace(tzinfo=utc).timestamp())\n        try:uris=cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.UniformResourceIdentifier)\n        except x509.ExtensionNotFound:uris=[]\n    except Exception as error:\n        raise ValueError('invalid X.509 encoding or extensions') from error\n    reasons=[]\n    if now<before:reasons.append('not_yet_valid')\n    if now>=after:reasons.append('expired')\n    if now<after and after-now<min_remaining:reasons.append('rotation_budget')\n    if expected_uri not in uris:reasons.append('workload_identity')\n    return {'metadata_ready':not reasons,'reasons':reasons,'uri_sans':uris,'not_before':before,'not_after':after,'remaining_seconds':after-now,\n            'sha256':cert.fingerprint(hashes.SHA256()).hex(),'trust_verified':False,'live_mtls':'not_tested'}\n"
+    },
+    "run": "python3 checks/check.py",
+    "rubric": [
+      "真实解析与DER摘要",
+      "UTC和轮换边界",
+      "准确匹配URI SAN",
+      "不混淆元数据、链信任与实时业务"
+    ],
+    "references": [
+      "https://istio.io/latest/docs/concepts/security/",
+      "https://cryptography.io/en/latest/x509/reference/"
+    ],
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "deliverables": [
+        "task.py"
+      ],
+      "operation": "解析真实PEM证书的URI身份、有效期与轮换预算，保留能力边界",
+      "verification": "真实X.509正反测试",
+      "scope": "local certificate metadata only"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "cryptography"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,sys,hashlib,datetime\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom task import assess\nfrom cryptography import x509\nfrom cryptography.hazmat.primitives import hashes,serialization\nfrom cryptography.hazmat.primitives.asymmetric import ec\nfrom cryptography.x509.oid import NameOID\nUTC=datetime.timezone.utc\nT=1793145600\nURI='spiffe://cluster.local/ns/payments/sa/reader'\nkey=ec.generate_private_key(ec.SECP256R1())\ndef certificate(uris=(URI,),before=T-100,after=T+100,cn='unrelated.example',dns=None):\n    name=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,cn)])\n    b=x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(datetime.datetime.fromtimestamp(before,UTC)).not_valid_after(datetime.datetime.fromtimestamp(after,UTC))\n    names=[x509.UniformResourceIdentifier(u) for u in uris]\n    if dns:names.append(x509.DNSName(dns))\n    if names:b=b.add_extension(x509.SubjectAlternativeName(names),critical=False)\n    return b.sign(key,hashes.SHA256()).public_bytes(serialization.Encoding.PEM)\ndef invalid(fn):\n    try:fn()\n    except Exception as error:\n        assert isinstance(error,ValueError),'format errors must use ValueError, got '+type(error).__name__\n        return\n    raise AssertionError('invalid input accepted')\npem=certificate();out=assess(pem,URI,T,100)\nexpected={'metadata_ready':True,'reasons':[],'uri_sans':[URI],'not_before':T-100,'not_after':T+100,'remaining_seconds':100,\n          'sha256':hashlib.sha256(x509.load_pem_x509_certificate(pem).public_bytes(serialization.Encoding.DER)).hexdigest(),'trust_verified':False,'live_mtls':'not_tested'}\nassert out==expected,out\nassert assess(pem,URI,T+1,100)['reasons']==['rotation_budget']\nassert assess(pem,URI,T-100,0)['metadata_ready']\nassert assess(pem,URI,T-101,0)['reasons']==['not_yet_valid']\nassert assess(pem,URI,T+100,0)['reasons']==['expired']\nassert assess(pem,URI,T+101,0)['remaining_seconds']==-1\nfor uris in [(),('spiffe://cluster.local/ns/payments/sa/writer',),('spiffe://other.local/ns/payments/sa/reader',),(URI,URI),(URI,'spiffe://other.local/ns/payments/sa/reader')]:\n    p=certificate(uris=uris,cn=URI,dns='reader.payments.svc.cluster.local')\n    r=assess(p,URI,T,0);assert r['reasons']==['workload_identity'] and not r['metadata_ready'],r\nassert assess(certificate(uris=(),before=T+1,after=T+100),URI,T,200)['reasons']==['not_yet_valid','rotation_budget','workload_identity']\n# Whitespace and CRLF PEM do not change the DER identity or certificate digest.\nassert assess(b' \\n'+pem+b'\\n',URI,T,100)==out\nassert assess(pem.replace(b'\\n',b'\\r\\n'),URI,T,100)==out\nother=certificate();assert assess(other,URI,T,0)['sha256']!=out['sha256']\nassert assess(certificate(dns='reader.payments.svc.cluster.local'),URI,T,0)['metadata_ready']\nfor bad in [b'',pem+pem,b'comment\\n'+pem,pem+b'trailing',pem.decode(),b'-----BEGIN CERTIFICATE-----\\nAAAA\\n-----END CERTIFICATE-----',b'x'*65537]:invalid(lambda b=bad:assess(b,URI,T,0))\nfor uri in ['spiffe://cluster.local/ns/payments/sa/reader?admin=true','spiffe://cluster.local/ns/payments/sa/reader/','spiffe://cluster.local/ns/payments/sa/%72eader','SPIFFE://cluster.local/ns/payments/sa/reader','spiffe://cluster.local/ns/../sa/reader','spiffe://cluster.local/ns/payments/sa/reader#x',None]:invalid(lambda u=uri:assess(pem,u,T,0))\nfor now,budget in [(True,0),(T,True),(-1,0),(T,-1),(1.0,0),(253402300800,0)]:invalid(lambda n=now,b=budget:assess(pem,URI,n,b))\nDUPLICATE_SAN = b'-----BEGIN CERTIFICATE-----\\nMIIBgDCCASegAwIBAgIBATAKBggqhkjOPQQDAjAPMQ0wCwYDVQQDDAR0ZXN0MB4XDTI2MTAyODAw\\nMDAwMFoXDTI2MTAyOTAwMDAwMFowDzENMAsGA1UEAwwEdGVzdDBZMBMGByqGSM49AgEGCCqGSM49\\nAwEHA0IABAEfQKODqSytlTeC2tqJzpASd90z5Gm/w9IJRtTiK2ktxI/+ttxuU3rlm2GbdOHDnpP7\\n7A9DagvdgUCUa/pd2r2jdDByMDcGA1UdEQQwMC6GLHNwaWZmZTovL2NsdXN0ZXIubG9jYWwvbnMv\\ncGF5bWVudHMvc2EvcmVhZGVyMDcGA1UdEQQwMC6GLHNwaWZmZTovL2NsdXN0ZXIubG9jYWwvbnMv\\ncGF5bWVudHMvc2EvcmVhZGVyMAoGCCqGSM49BAMCA0cAMEQCIFB0ibgc5WSFmW5AEaVAhRhLeZK6\\nbFMFiP6HrIAKD7u7AiAtxUii3xDJVUs7flsoPwOXRfoK4GpGjEafep2ZnHGy9w==\\n-----END CERTIFICATE-----\\n'\ntry:x509.load_pem_x509_certificate(DUPLICATE_SAN).extensions\nexcept x509.DuplicateExtension:pass\nelse:raise AssertionError('duplicate SAN fixture must exercise real parser failure')\ninvalid(lambda:assess(DUPLICATE_SAN,URI,T,0))\nprint('ISTIO_CERT_METADATA_BOUNDARIES_OK')\n"
+      }
+    },
+    "case_signature": "istio-code|certificate-metadata-budget-v1",
+    "workitem_id": "planned-new:istio:code:003"
+  }
+]

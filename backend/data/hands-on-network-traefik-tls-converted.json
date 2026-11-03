@@ -1,0 +1,91 @@
+[
+  {
+    "id": "curated-feishu-interview-023",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 2,
+    "topic": "Traefik TLS证书存储与路由配置",
+    "title": "交付Traefik文件证书与TLS路由，拒绝默认兜底身份",
+    "answer": "```yaml\nhttp:\n  routers:\n    app:\n      rule: Host(`app.lab.test`)\n      entryPoints: [websecure]\n      service: app\n      tls: {}\n  services:\n    app:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{BACKEND_PORT}}\ntls:\n  certificates:\n    - certFile: {{WORKDIR}}/app.crt\n      keyFile: {{WORKDIR}}/app.key\n  options:\n    default:\n      minVersion: VersionTLS12\n      sniStrict: true\n```\n\n证书属于动态tls.certificates，HTTP路由通过tls:{}开启终止TLS。default TLS选项不带Provider后缀，可对无法匹配到具体路由的未知SNI握手施加严格策略。证书选择发生在HTTP Host解析之前，二者需分别验证。\n\n原理说明：\n先确认provider和部署模式：Kubernetes Ingress可引用同命名空间TLS Secret，IngressRoute等CRD按对应TLS配置引用，文件provider可引用证书和私钥，ACME可由配置的resolver管理签发。router须启用TLS并匹配entryPoint；核对域名SAN、链、有效期和实际SNI握手，不能只凭Secret存在或首页可访问认定所有入口正确。",
+    "type": "code",
+    "source": "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "feishu-interview-review-20261021",
+    "hints": [],
+    "rubric": [
+      "先确认provider和部署模式：Kubernetes Ingress可引用同命名空间TLS Secret，IngressRoute等CRD按对应TLS配置引用，文件provider可引用证书和私钥，ACME可由配置的resolver管理签发",
+      "router须启用TLS并匹配entryPoint；核对域名SAN、链、有效期和实际SNI握手，不能只凭Secret存在或首页可访问认定所有入口正确"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh"
+    ],
+    "source_block_ids": [
+      "B2CfdbI0xonDFpxhSJ2crvcxn6g"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh",
+        "block_ids": [
+          "B2CfdbI0xonDFpxhSJ2crvcxn6g"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "files": {
+      "dynamic.yaml": "http:\n  routers:\n    app:\n      rule: Host(`app.lab.test`)\n      entryPoints: [websecure]\n      service: app\n      tls: {}\n  services:\n    app:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{BACKEND_PORT}}\ntls:\n  certificates:\n    - certFile: {{WORKDIR}}/unrelated.crt\n      keyFile: {{WORKDIR}}/unrelated.key\n  options:\n    default:\n      minVersion: VersionTLS12\n      sniStrict: true\n"
+    },
+    "solution_files": {
+      "dynamic.yaml": "http:\n  routers:\n    app:\n      rule: Host(`app.lab.test`)\n      entryPoints: [websecure]\n      service: app\n      tls: {}\n  services:\n    app:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{BACKEND_PORT}}\ntls:\n  certificates:\n    - certFile: {{WORKDIR}}/app.crt\n      keyFile: {{WORKDIR}}/app.key\n  options:\n    default:\n      minVersion: VersionTLS12\n      sniStrict: true\n"
+    },
+    "negative_files": {
+      "dynamic.yaml": "http:\n  routers:\n    app:\n      rule: Host(`app.lab.test`)\n      entryPoints: [websecure]\n      service: app\n      tls: {}\n  services:\n    app:\n      loadBalancer:\n        servers:\n          - url: http://127.0.0.1:{{BACKEND_PORT}}\ntls:\n  certificates:\n    - certFile: {{WORKDIR}}/app.crt\n      keyFile: {{WORKDIR}}/app.key\n  options:\n    default:\n      minVersion: VersionTLS12\n      sniStrict: false\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "traefik",
+          "openssl"
+        ],
+        "features": [
+          "traefik:v3.5"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,socket,subprocess,ssl,threading,http.server,time,os,hashlib,contextlib,yaml\nroot=pathlib.Path.cwd();template=(root/'dynamic.yaml').read_text()\nassert '{{BACKEND_PORT}}' in template and '{{WORKDIR}}' in template\n\ndef command(*args):\n    result=subprocess.run(args,capture_output=True,timeout=4)\n    assert result.returncode==0,result.stderr[-600:]\ncommand('openssl','ecparam','-name','prime256v1','-genkey','-noout','-out','ca.key')\ncommand('openssl','req','-new','-x509','-key','ca.key','-out','ca.crt','-days','1','-subj','/CN=Offline-Traefik-CA','-addext','basicConstraints=critical,CA:TRUE')\nfor name,host in [('app','app.lab.test'),('unrelated','unrelated.lab.test')]:\n    command('openssl','ecparam','-name','prime256v1','-genkey','-noout','-out',name+'.key')\n    command('openssl','req','-new','-key',name+'.key','-out',name+'.csr','-subj','/CN='+host)\n    pathlib.Path(name+'.ext').write_text('subjectAltName=DNS:'+host+'\\nbasicConstraints=critical,CA:FALSE\\nextendedKeyUsage=serverAuth\\n')\n    command('openssl','x509','-req','-in',name+'.csr','-CA','ca.crt','-CAkey','ca.key','-CAcreateserial','-out',name+'.crt','-days','1','-extfile',name+'.ext')\nclass App(http.server.BaseHTTPRequestHandler):\n    def do_GET(self):\n        self.server.seen.append((self.headers.get('Host'),self.path));body=b'private-app:'+self.path.encode()\n        self.send_response(200);self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n    def log_message(self,*args):pass\nbackend=http.server.ThreadingHTTPServer(('127.0.0.1',0),App);backend.seen=[]\nthread=threading.Thread(target=backend.serve_forever,daemon=True);thread.start()\nwith socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]\ntext=template.replace('{{WORKDIR}}',str(root)).replace('{{BACKEND_PORT}}',str(backend.server_address[1]))\n(root/'rendered.yaml').write_text(text)\nconfig={'global':{'checkNewVersion':False,'sendAnonymousUsage':False},'entryPoints':{'websecure':{'address':f'127.0.0.1:{port}'}},'providers':{'file':{'filename':str(root/'rendered.yaml'),'watch':False}},'log':{'level':'ERROR'}}\n(root/'traefik.yaml').write_text(yaml.safe_dump(config));proc=None\ntry:\n    with (root/'native.log').open('w') as log:\n        proc=subprocess.Popen(['traefik','--configFile='+str(root/'traefik.yaml')],stdout=log,stderr=log,env={**os.environ,'GOMAXPROCS':'1','GOMEMLIMIT':'96MiB'})\n        deadline=time.monotonic()+4\n        while True:\n            try:\n                with socket.create_connection(('127.0.0.1',port),timeout=.2):break\n            except OSError:\n                assert time.monotonic()<deadline,(root/'native.log').read_text();time.sleep(.03)\n        context=ssl.create_default_context(cafile='ca.crt');expected=ssl.PEM_cert_to_DER_cert((root/'app.crt').read_text())\n        # Dynamic configuration arrives asynchronously; wait for the valid identity, not merely open TCP.\n        while True:\n            try:\n                with socket.create_connection(('127.0.0.1',port),timeout=.5) as raw:\n                    with context.wrap_socket(raw,server_hostname='app.lab.test') as secure:\n                        assert secure.getpeercert(binary_form=True)==expected\n                        secure.sendall(b'GET /proof HTTP/1.1\\r\\nHost: app.lab.test\\r\\nConnection: close\\r\\n\\r\\n');reply=b''\n                        while chunk:=secure.recv(8192):reply+=chunk\n                        assert b' 200 ' in reply.split(b'\\r\\n',1)[0] and reply.endswith(b'private-app:/proof')\n                        break\n            except (ssl.SSLError,AssertionError):\n                assert time.monotonic()<deadline,(root/'native.log').read_text();time.sleep(.03)\n        assert ('app.lab.test','/proof') in backend.seen\n        tls12=ssl.create_default_context(cafile='ca.crt');tls12.minimum_version=ssl.TLSVersion.TLSv1_2;tls12.maximum_version=ssl.TLSVersion.TLSv1_2\n        with socket.create_connection(('127.0.0.1',port),timeout=.5) as raw:\n            with tls12.wrap_socket(raw,server_hostname='app.lab.test') as secure:assert secure.version()=='TLSv1.2'\n        legacy=ssl._create_unverified_context();legacy.minimum_version=ssl.TLSVersion.TLSv1_1;legacy.maximum_version=ssl.TLSVersion.TLSv1_1;legacy.set_ciphers('ALL:@SECLEVEL=0')\n        with socket.create_connection(('127.0.0.1',port),timeout=.5) as raw:\n            try:\n                with legacy.wrap_socket(raw,server_hostname='app.lab.test'):pass\n            except ssl.SSLError:pass\n            else:raise AssertionError('TLS1.1 accepted')\n        # Disable client certificate checks ONLY to prove the SERVER itself enforces unknown/no SNI rejection.\n        insecure=ssl._create_unverified_context()\n        for host in ['unknown.lab.test',None]:\n            with socket.create_connection(('127.0.0.1',port),timeout=.5) as raw:\n                try:\n                    with insecure.wrap_socket(raw,server_hostname=host) as secure:\n                        secure.sendall(b'GET /forbidden HTTP/1.1\\r\\nHost: app.lab.test\\r\\nConnection: close\\r\\n\\r\\n');secure.recv(1)\n                except (ssl.SSLError,ConnectionResetError):pass\n                else:raise AssertionError('unknown/no SNI accepted with fallback certificate')\n        # A valid TLS identity does not authorize a different HTTP Host to route to the application.\n        with socket.create_connection(('127.0.0.1',port),timeout=.5) as raw:\n            with context.wrap_socket(raw,server_hostname='app.lab.test') as secure:\n                secure.sendall(b'GET /wrong-host HTTP/1.1\\r\\nHost: other.lab.test\\r\\nConnection: close\\r\\n\\r\\n');reply=b''\n                while chunk:=secure.recv(8192):reply+=chunk\n                assert b' 404 ' in reply.split(b'\\r\\n',1)[0]\n        assert not any(path in ('/forbidden','/wrong-host') for _,path in backend.seen)\nfinally:\n    if proc and proc.poll() is None:\n        proc.terminate()\n        try:proc.wait(timeout=4)\n        except subprocess.TimeoutExpired:proc.kill();proc.wait()\n    backend.shutdown();backend.server_close();thread.join(2)\nassert not thread.is_alive()\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "修复dynamic.yaml：用File Provider声明app.crt/app.key证书；为websecure入口建立仅Host(`app.lab.test`)的TLS HTTP路由并转发本题回环后端。默认TLS选项启用sniStrict，拒绝未知或缺失SNI，最低TLS1.2；不要依赖自签名默认兜底证书，也不要把routers.app.tls误写成证书文件容器。保留{{WORKDIR}}与{{BACKEND_PORT}}占位符，验收仅替换为本题目录与随机高端口。",
+      "deliverables": [
+        "dynamic.yaml"
+      ],
+      "verification": "python3 checks/check.py启动真实Traefik进程和HTTP后端，生成临时CA/正确域名证书/无关证书；验证实际TLS DER证书与app.crt完全一致、CA与域名校验成功、HTTPS200真实到达后端、未知/无SNI由服务器拒绝、正确TLS但错误HTTP Host返回404且不到后端。停止全部本题服务。全部断言通过退出0；只有本地File Provider与TLS路由被验证，不涉及ACME、公网DNS或自动续签。",
+      "failure_examples": [
+        "设置正确证书但允许未知SNI使用默认兜底身份，不能通过服务器严格身份边界验收；客户端关闭校验的反例专门检测该缺陷。"
+      ]
+    },
+    "body": "## 环境与初始材料\n非root Linux、固定Traefik3、OpenSSL、Python3/PyYAML。仅回环随机高端口，禁ACME、版本检查和匿名遥测，不用Docker或Kubernetes。dynamic.yaml初始绑定了不属于app.lab.test的证书。验收生成临时CA、app.crt/app.key和unrelated.crt/unrelated.key及真实HTTP后端。\n\n## 操作任务\n修复dynamic.yaml：用File Provider声明app.crt/app.key证书；为websecure入口建立仅Host(`app.lab.test`)的TLS HTTP路由并转发本题回环后端。默认TLS选项启用sniStrict，拒绝未知或缺失SNI，最低TLS1.2；不要依赖自签名默认兜底证书，也不要把routers.app.tls误写成证书文件容器。保留{{WORKDIR}}与{{BACKEND_PORT}}占位符，验收仅替换为本题目录与随机高端口。\n\n## 提交产物\ndynamic.yaml完整配置；实际加载后由Traefik终止TLS并转发HTTPS请求。\n\n## 验收方法\npython3 checks/check.py启动真实Traefik进程和HTTP后端，生成临时CA/正确域名证书/无关证书；验证实际TLS DER证书与app.crt完全一致、CA与域名校验成功、HTTPS200真实到达后端、未知/无SNI由服务器拒绝、正确TLS但错误HTTP Host返回404且不到后端。停止全部本题服务。全部断言通过退出0；只有本地File Provider与TLS路由被验证，不涉及ACME、公网DNS或自动续签。\n\n失败示例：设置正确证书但允许未知SNI使用默认兜底身份，不能通过服务器严格身份边界验收；客户端关闭校验的反例专门检测该缺陷。",
+    "case_signature": "curated-feishu-interview-023|traefik-file-cert-store-strict-sni-http-host",
+    "conversion": {
+      "original_id": "curated-feishu-interview-023",
+      "original_type": "interview",
+      "original_title": "Traefik中的TLS证书由哪些配置对象提供，怎样确认路由实际使用了正确证书？",
+      "preserve_history": true
+    }
+  }
+]

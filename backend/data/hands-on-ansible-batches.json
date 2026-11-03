@@ -1,0 +1,298 @@
+[
+  {
+    "id": "curated-ansible-expansion-045",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "区分 serial 批次大小和 forks 工作进程数",
+    "level": 2,
+    "type": "code",
+    "title": "区分 serial 批次大小和 forks 工作进程数",
+    "body": "## 操作环境\nLinux普通用户、ansible-core、Python3/PyYAML。lab_nodes是本题临时清单中的逻辑主机，全部connection:local，forks=1，不连接任何外部节点。文件事件只证明编排行为，不代表真实服务或数据库变更。\n\n## 操作任务\n执行器固定forks=1；配置serial让每个发布批次最多2台。每台把当前ansible_play_batch写入自己的JSON。5台应形成2/2/1批次，3台形成2/1；不要误把forks=1当作serial=1。\n\n## 提交产物\nplaybook.yaml。不得改变hosts、连接方式或引入提权。\n\n## 验收方法\n原生Ansible执行多个本地逻辑主机和变化的清单，检查每台记录、批次内容、失败后是否继续以及一次性事件数量。",
+    "answer": "```yaml\n- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  serial: 2\n  tasks:\n  - name: Record the scheduling batch for each host\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/{{ inventory_hostname }}.json'\n      content: '{{ ansible_play_batch | to_json }}'\n      mode: '0600'\n```\n\nserial决定一批有哪些主机，forks限制同时执行任务的工作进程；即使forks=1，原生批次仍可有2台。",
+    "rubric": [
+      "不是"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_strategies.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  serial: 1\n  tasks:\n  - name: Record the scheduling batch for each host\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/{{ inventory_hostname }}.json'\n      content: '{{ ansible_play_batch | to_json }}'\n      mode: '0600'\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  serial: 2\n  tasks:\n  - name: Record the scheduling batch for each host\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/{{ inventory_hostname }}.json'\n      content: '{{ ansible_play_batch | to_json }}'\n      mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  serial: 3\n  tasks:\n  - name: Record the scheduling batch for each host\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/{{ inventory_hostname }}.json'\n      content: '{{ ansible_play_batch | to_json }}'\n      mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "执行器固定forks=1；配置serial让每个发布批次最多2台。每台把当前ansible_play_batch写入自己的JSON。5台应形成2/2/1批次，3台形成2/1；不要误把forks=1当作serial=1。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "真实Ansible批次、失败和事件文件断言",
+      "failure_examples": [
+        "serial决定一批有哪些主机，forks限制同时执行任务的工作进程；即使forks=1，原生批次仍可有2台。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nsource=Path('playbook.yaml').read_text();doc=yaml.safe_load(source)\nassert all(p.get('hosts')=='lab_nodes' and p.get('connection')=='local' and not p.get('become',False) for p in doc)\ndef run(root,hosts,extra=None,expected=0):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    inventory={'all':{'children':{'lab_nodes':{'hosts':{name:{'ansible_connection':'local',**values} for name,values in hosts.items()}}}}}\n    (root/'inventory.yaml').write_text(yaml.safe_dump(inventory,sort_keys=False))\n    (root/'playbook.yaml').write_text(source)\n    (root/'variables.json').write_text(json.dumps({'workspace':str(root),'ansible_python_interpreter':sys.executable,**(extra or {})}))\n    (root/'ansible.cfg').write_text('[defaults]\\nretry_files_enabled=False\\n')\n    env={**os.environ,'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1',\n         'ANSIBLE_INVENTORY_ENABLED':'yaml','ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),\n         'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),'ANSIBLE_LOG_PATH':str(root/'ansible.log')}\n    result=subprocess.run(['ansible-playbook','-i','inventory.yaml','-f','1','playbook.yaml','-e','@variables.json'],\n        cwd=root,env=env,capture_output=True,text=True,timeout=40)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'A failed batch must preserve its failed status'\n    return result.stdout\n\n\nfor names in [['a','b','c','d','e'],['x','y','z']]:\n    with tempfile.TemporaryDirectory() as tmp:\n        root=Path(tmp);run(root,{n:{} for n in names})\n        for i,name in enumerate(names):\n            expected=names[(i//2)*2:(i//2)*2+2]\n            assert json.loads((root/(name+'.json')).read_text())==expected\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-045",
+      "original_type": "interview",
+      "original_title": "serial 与 forks 控制的是同一个并发数量吗？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-045"
+  },
+  {
+    "id": "curated-ansible-expansion-077",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "修复多个主机委派写入同一后端清单时相互覆盖",
+    "level": 4,
+    "type": "code",
+    "title": "修复多个主机委派写入同一后端清单时相互覆盖",
+    "body": "## 操作环境\nLinux普通用户、ansible-core、Python3/PyYAML。lab_nodes是本题临时清单中的逻辑主机，全部connection:local，forks=1，不连接任何外部节点。文件事件只证明编排行为，不代表真实服务或数据库变更。\n\n## 操作任务\n每台有backend_address。backends.json必须包含整个lab_nodes的地址并稳定排序，每台还需写visited标记。修复每台delegate_to localhost覆盖同一个文件的问题；不能只取首台，也不能遗漏本轮其他主机。\n\n## 提交产物\nplaybook.yaml。不得改变hosts、连接方式或引入提权。\n\n## 验收方法\n原生Ansible执行多个本地逻辑主机和变化的清单，检查每台记录、批次内容、失败后是否继续以及一次性事件数量。",
+    "answer": "```yaml\n- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  tasks:\n  - name: Assemble the entire inventory once instead of overwriting per host\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/backends.json'\n      content: '{{ groups[\"lab_nodes\"] | map(\"extract\", hostvars, \"backend_address\")\n        | list | sort | to_json }}'\n      mode: '0600'\n    run_once: true\n    delegate_to: localhost\n  - name: Record that every host was covered\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/visited-{{ inventory_hostname }}'\n      content: visited\n      mode: '0600'\n```\n\n委派不会自动把多个主机的文件写入合并。先从hostvars聚合完整清单，再由一个任务写入，不能用“最后一台写成功”代表整体正确。",
+    "rubric": [
+      "多个并发任务覆盖同一文件，委托不会自动串行"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_strategies.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "incident_signature": "委托并发覆盖",
+    "exercise_mode": "tabletop",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  tasks:\n  - name: Assemble the entire inventory once instead of overwriting per host\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/backends.json'\n      content: '{{ [backend_address] | to_json }}'\n      mode: '0600'\n    run_once: false\n    delegate_to: localhost\n  - name: Record that every host was covered\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/visited-{{ inventory_hostname }}'\n      content: visited\n      mode: '0600'\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  tasks:\n  - name: Assemble the entire inventory once instead of overwriting per host\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/backends.json'\n      content: '{{ groups[\"lab_nodes\"] | map(\"extract\", hostvars, \"backend_address\")\n        | list | sort | to_json }}'\n      mode: '0600'\n    run_once: true\n    delegate_to: localhost\n  - name: Record that every host was covered\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/visited-{{ inventory_hostname }}'\n      content: visited\n      mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  tasks:\n  - name: Assemble the entire inventory once instead of overwriting per host\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/backends.json'\n      content: '{{ [hostvars[groups[\"lab_nodes\"][0]].backend_address] | to_json }}'\n      mode: '0600'\n    run_once: true\n    delegate_to: localhost\n  - name: Record that every host was covered\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/visited-{{ inventory_hostname }}'\n      content: visited\n      mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "每台有backend_address。backends.json必须包含整个lab_nodes的地址并稳定排序，每台还需写visited标记。修复每台delegate_to localhost覆盖同一个文件的问题；不能只取首台，也不能遗漏本轮其他主机。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "真实Ansible批次、失败和事件文件断言",
+      "failure_examples": [
+        "委派不会自动把多个主机的文件写入合并。先从hostvars聚合完整清单，再由一个任务写入，不能用“最后一台写成功”代表整体正确。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nsource=Path('playbook.yaml').read_text();doc=yaml.safe_load(source)\nassert all(p.get('hosts')=='lab_nodes' and p.get('connection')=='local' and not p.get('become',False) for p in doc)\ndef run(root,hosts,extra=None,expected=0):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    inventory={'all':{'children':{'lab_nodes':{'hosts':{name:{'ansible_connection':'local',**values} for name,values in hosts.items()}}}}}\n    (root/'inventory.yaml').write_text(yaml.safe_dump(inventory,sort_keys=False))\n    (root/'playbook.yaml').write_text(source)\n    (root/'variables.json').write_text(json.dumps({'workspace':str(root),'ansible_python_interpreter':sys.executable,**(extra or {})}))\n    (root/'ansible.cfg').write_text('[defaults]\\nretry_files_enabled=False\\n')\n    env={**os.environ,'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1',\n         'ANSIBLE_INVENTORY_ENABLED':'yaml','ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),\n         'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),'ANSIBLE_LOG_PATH':str(root/'ansible.log')}\n    result=subprocess.run(['ansible-playbook','-i','inventory.yaml','-f','1','playbook.yaml','-e','@variables.json'],\n        cwd=root,env=env,capture_output=True,text=True,timeout=40)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'A failed batch must preserve its failed status'\n    return result.stdout\n\n\nwith tempfile.TemporaryDirectory() as tmp:\n    root=Path(tmp)\n    for hosts in [{'west':{'backend_address':'192.0.2.30'},'east':{'backend_address':'192.0.2.10'},'central':{'backend_address':'192.0.2.20'}},{'new':{'backend_address':'192.0.2.40'},'east':{'backend_address':'192.0.2.10'}}]:\n        run(root,hosts)\n        assert json.loads((root/'backends.json').read_text())==sorted(v['backend_address'] for v in hosts.values())\n        for name in hosts:assert (root/('visited-'+name)).read_text()=='visited'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-077",
+      "original_type": "case",
+      "original_title": "20台主机各自 delegate_to 同一控制节点重写后端列表，最终只剩一个地址。根因与修复是什么？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-077"
+  },
+  {
+    "id": "curated-ansible-expansion-078",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "避免 serial 分批重复执行 run_once 迁移事件",
+    "level": 4,
+    "type": "code",
+    "title": "避免 serial 分批重复执行 run_once 迁移事件",
+    "body": "## 操作环境\nLinux普通用户、ansible-core、Python3/PyYAML。lab_nodes是本题临时清单中的逻辑主机，全部connection:local，forks=1，不连接任何外部节点。文件事件只证明编排行为，不代表真实服务或数据库变更。\n\n## 操作任务\n保持serial=1。每次完整play运行只允许追加一条migration事件，并让所有逻辑主机写visited标记；更换清单和首台名称后仍正确。这里只用本地事件文件验证“一次”的编排语义，不执行真实DDL。\n\n## 提交产物\nplaybook.yaml。不得改变hosts、连接方式或引入提权。\n\n## 验收方法\n原生Ansible执行多个本地逻辑主机和变化的清单，检查每台记录、批次内容、失败后是否继续以及一次性事件数量。",
+    "answer": "```yaml\n- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  serial: 1\n  tasks:\n  - name: Execute the migration marker once across all serial batches\n    ansible.builtin.command:\n      argv:\n      - '{{ ansible_playbook_python }}'\n      - -c\n      - import pathlib,sys;p=pathlib.Path(sys.argv[1]);p.write_text((p.read_text()\n        if p.exists() else \"\")+\"migration\\n\")\n      - '{{ workspace }}/migration-events'\n    when: inventory_hostname == ansible_play_hosts_all[0]\n  - name: Visit every host in the batch\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/visited-{{ inventory_hostname }}'\n      content: visited\n      mode: '0600'\n```\n\nrun_once在serial中可能每批执行一次。明确限制到整个play的第一台主机，才能验证每次play只发生一次；跨重试的数据库幂等仍需另外设计。",
+    "rubric": [
+      "run_once 在批次范围内运行导致全局动作被重复调用"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_strategies.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "incident_signature": "批次重复迁移",
+    "exercise_mode": "tabletop",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  serial: 1\n  tasks:\n  - name: Execute the migration marker once across all serial batches\n    ansible.builtin.command:\n      argv:\n      - '{{ ansible_playbook_python }}'\n      - -c\n      - import pathlib,sys;p=pathlib.Path(sys.argv[1]);p.write_text((p.read_text()\n        if p.exists() else \"\")+\"migration\\n\")\n      - '{{ workspace }}/migration-events'\n    run_once: true\n  - name: Visit every host in the batch\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/visited-{{ inventory_hostname }}'\n      content: visited\n      mode: '0600'\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  serial: 1\n  tasks:\n  - name: Execute the migration marker once across all serial batches\n    ansible.builtin.command:\n      argv:\n      - '{{ ansible_playbook_python }}'\n      - -c\n      - import pathlib,sys;p=pathlib.Path(sys.argv[1]);p.write_text((p.read_text()\n        if p.exists() else \"\")+\"migration\\n\")\n      - '{{ workspace }}/migration-events'\n    when: inventory_hostname == ansible_play_hosts_all[0]\n  - name: Visit every host in the batch\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/visited-{{ inventory_hostname }}'\n      content: visited\n      mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  serial: 1\n  tasks:\n  - name: Execute the migration marker once across all serial batches\n    ansible.builtin.command:\n      argv:\n      - '{{ ansible_playbook_python }}'\n      - -c\n      - import pathlib,sys;p=pathlib.Path(sys.argv[1]);p.write_text((p.read_text()\n        if p.exists() else \"\")+\"migration\\n\")\n      - '{{ workspace }}/migration-events'\n    when: inventory_hostname == 'a'\n  - name: Visit every host in the batch\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/visited-{{ inventory_hostname }}'\n      content: visited\n      mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "保持serial=1。每次完整play运行只允许追加一条migration事件，并让所有逻辑主机写visited标记；更换清单和首台名称后仍正确。这里只用本地事件文件验证“一次”的编排语义，不执行真实DDL。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "真实Ansible批次、失败和事件文件断言",
+      "failure_examples": [
+        "run_once在serial中可能每批执行一次。明确限制到整个play的第一台主机，才能验证每次play只发生一次；跨重试的数据库幂等仍需另外设计。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nsource=Path('playbook.yaml').read_text();doc=yaml.safe_load(source)\nassert all(p.get('hosts')=='lab_nodes' and p.get('connection')=='local' and not p.get('become',False) for p in doc)\ndef run(root,hosts,extra=None,expected=0):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    inventory={'all':{'children':{'lab_nodes':{'hosts':{name:{'ansible_connection':'local',**values} for name,values in hosts.items()}}}}}\n    (root/'inventory.yaml').write_text(yaml.safe_dump(inventory,sort_keys=False))\n    (root/'playbook.yaml').write_text(source)\n    (root/'variables.json').write_text(json.dumps({'workspace':str(root),'ansible_python_interpreter':sys.executable,**(extra or {})}))\n    (root/'ansible.cfg').write_text('[defaults]\\nretry_files_enabled=False\\n')\n    env={**os.environ,'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1',\n         'ANSIBLE_INVENTORY_ENABLED':'yaml','ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),\n         'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),'ANSIBLE_LOG_PATH':str(root/'ansible.log')}\n    result=subprocess.run(['ansible-playbook','-i','inventory.yaml','-f','1','playbook.yaml','-e','@variables.json'],\n        cwd=root,env=env,capture_output=True,text=True,timeout=40)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'A failed batch must preserve its failed status'\n    return result.stdout\n\n\nfor names in [['a','b','c'],['x','y']]:\n    with tempfile.TemporaryDirectory() as tmp:\n        root=Path(tmp);hosts={n:{} for n in names};run(root,hosts)\n        assert (root/'migration-events').read_text().splitlines()==['migration']\n        for name in names:assert (root/('visited-'+name)).read_text()=='visited'\n        run(root,hosts);assert (root/'migration-events').read_text().splitlines()==['migration','migration']\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-078",
+      "original_type": "case",
+      "original_title": "serial:5 的发布中 run_once 数据迁移每批都执行，第二批报重复 DDL。如何处置？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-078"
+  },
+  {
+    "id": "curated-ansible-expansion-064",
+    "module": "ansible",
+    "category": "Ansible",
+    "topic": "验证失败百分比阈值的严格超过边界",
+    "level": 3,
+    "type": "code",
+    "title": "验证失败百分比阈值的严格超过边界",
+    "body": "## 操作环境\nLinux普通用户、ansible-core、Python3/PyYAML。lab_nodes是本题临时清单中的逻辑主机，全部connection:local，forks=1，不连接任何外部节点。文件事件只证明编排行为，不代表真实服务或数据库变更。\n\n## 操作任务\n一个批次4台。max_fail_percentage设50：2台失败时另外2台应继续，3台失败时剩余1台不得继续；失败的play必须保留非零退出码，零失败时所有主机继续。保持serial=4。\n\n## 提交产物\nplaybook.yaml。不得改变hosts、连接方式或引入提权。\n\n## 验收方法\n原生Ansible执行多个本地逻辑主机和变化的清单，检查每台记录、批次内容、失败后是否继续以及一次性事件数量。",
+    "answer": "```yaml\n- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  serial: 4\n  max_fail_percentage: 50\n  tasks:\n  - name: Fail selected fixture hosts\n    ansible.builtin.fail:\n      msg: controlled fixture failure\n    when: probe_failed | bool\n  - name: Record hosts allowed to continue\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/continued-{{ inventory_hostname }}'\n      content: continued\n      mode: '0600'\n```\n\nmax_fail_percentage是严格超过才停止，不是达到即停止；用2/4和3/4边界原生执行，不能仅看配置文本。",
+    "rubric": [
+      "该设置按实际批次和失败比例规则决定是否停止，边界不是随意四舍五入"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.ansible.com/projects/ansible/latest/playbook_guide/playbooks_strategies.html"
+    ],
+    "source": "OpsForge 原创技术题",
+    "version": 2,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "ansible-expansion",
+    "related_modules": [
+      "ansible"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "has_answer": true,
+    "files": {
+      "playbook.yaml": "- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  serial: 4\n  max_fail_percentage: 49\n  tasks:\n  - name: Fail selected fixture hosts\n    ansible.builtin.fail:\n      msg: controlled fixture failure\n    when: probe_failed | bool\n  - name: Record hosts allowed to continue\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/continued-{{ inventory_hostname }}'\n      content: continued\n      mode: '0600'\n"
+    },
+    "solution_files": {
+      "playbook.yaml": "- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  serial: 4\n  max_fail_percentage: 50\n  tasks:\n  - name: Fail selected fixture hosts\n    ansible.builtin.fail:\n      msg: controlled fixture failure\n    when: probe_failed | bool\n  - name: Record hosts allowed to continue\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/continued-{{ inventory_hostname }}'\n      content: continued\n      mode: '0600'\n"
+    },
+    "negative_files": {
+      "playbook.yaml": "- name: Isolated local scheduling\n  hosts: lab_nodes\n  connection: local\n  gather_facts: false\n  serial: 4\n  max_fail_percentage: 100\n  tasks:\n  - name: Fail selected fixture hosts\n    ansible.builtin.fail:\n      msg: controlled fixture failure\n    when: probe_failed | bool\n  - name: Record hosts allowed to continue\n    ansible.builtin.copy:\n      dest: '{{ workspace }}/continued-{{ inventory_hostname }}'\n      content: continued\n      mode: '0600'\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "linux",
+      "operation": "一个批次4台。max_fail_percentage设50：2台失败时另外2台应继续，3台失败时剩余1台不得继续；失败的play必须保留非零退出码，零失败时所有主机继续。保持serial=4。",
+      "deliverables": [
+        "playbook.yaml"
+      ],
+      "verification": "真实Ansible批次、失败和事件文件断言",
+      "failure_examples": [
+        "max_fail_percentage是严格超过才停止，不是达到即停止；用2/4和3/4边界原生执行，不能仅看配置文本。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 110,
+      "requires": {
+        "commands": [
+          "ansible-playbook"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,subprocess,sys,tempfile\nfrom pathlib import Path\nimport yaml\nsource=Path('playbook.yaml').read_text();doc=yaml.safe_load(source)\nassert all(p.get('hosts')=='lab_nodes' and p.get('connection')=='local' and not p.get('become',False) for p in doc)\ndef run(root,hosts,extra=None,expected=0):\n    root=Path(root);root.mkdir(parents=True,exist_ok=True)\n    inventory={'all':{'children':{'lab_nodes':{'hosts':{name:{'ansible_connection':'local',**values} for name,values in hosts.items()}}}}}\n    (root/'inventory.yaml').write_text(yaml.safe_dump(inventory,sort_keys=False))\n    (root/'playbook.yaml').write_text(source)\n    (root/'variables.json').write_text(json.dumps({'workspace':str(root),'ansible_python_interpreter':sys.executable,**(extra or {})}))\n    (root/'ansible.cfg').write_text('[defaults]\\nretry_files_enabled=False\\n')\n    env={**os.environ,'ANSIBLE_CONFIG':str(root/'ansible.cfg'),'ANSIBLE_NOCOLOR':'1','ANSIBLE_FORKS':'1',\n         'ANSIBLE_INVENTORY_ENABLED':'yaml','ANSIBLE_LOCAL_TEMP':str(root/'control_tmp'),\n         'ANSIBLE_REMOTE_TEMP':str(root/'remote_tmp'),'ANSIBLE_LOG_PATH':str(root/'ansible.log')}\n    result=subprocess.run(['ansible-playbook','-i','inventory.yaml','-f','1','playbook.yaml','-e','@variables.json'],\n        cwd=root,env=env,capture_output=True,text=True,timeout=40)\n    if expected==0:assert result.returncode==0,result.stdout+result.stderr\n    else:assert result.returncode!=0,'A failed batch must preserve its failed status'\n    return result.stdout\n\n\nfor failed in [0,2,3]:\n    with tempfile.TemporaryDirectory() as tmp:\n        root=Path(tmp);hosts={str(i):{'probe_failed':i<failed} for i in range(4)}\n        run(root,hosts,expected=1 if failed else 0)\n        expected={str(i) for i in range(failed,4)} if failed<=2 else set()\n        actual={p.name.removeprefix('continued-') for p in root.glob('continued-*')}\n        assert actual==expected,(failed,actual,expected)\n"
+      }
+    },
+    "conversion": {
+      "original_id": "curated-ansible-expansion-064",
+      "original_type": "interview",
+      "original_title": "max_fail_percentage 的阈值边界为什么必须先验证？",
+      "preserve_history": true
+    },
+    "case_signature": "ansible-native-064"
+  }
+]

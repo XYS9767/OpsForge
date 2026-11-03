@@ -1,0 +1,91 @@
+[
+  {
+    "id": "curated-parallel-prometheus-076",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 4,
+    "topic": "告警规则与SLO",
+    "title": "优化查询样本成本并证明时间、数值和全部标签等价",
+    "answer": "```json\n{\n  \"optimized\": \"service:requests:rate5m * 1\"\n}\n```\n直接使用已有按service/zone聚合的记录避免每次查询重复读取所有原始实例和计算rate。乘1保持数值和业务标签，同时移除记录指标名，与基线聚合输出一致；sum by(service,zone)(service:requests:rate5m)也是本题可行等价写法。只看曲线形状或总量不够：丢掉zone改变结果身份；只确认数值而不测实际引擎读样本数也无法证明优化目标已实现。\n\n原题原理：改聚合顺序或匹配键可能提升性能却改变加权、重置处理和输出身份。对正常、缺样、重置及重复标签样本对比数值和标签集合，并记录误差容许。只比较一张趋势图不足以证明等价。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "实际样本工作量而非墙钟噪声",
+      "完整标签与多时刻数值等价",
+      "原生构建缓存且保护源数据",
+      "明确缓存和时间网格前提"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/api/",
+      "https://prometheus.io/docs/practices/rules/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "json",
+    "files": {
+      "queries.json": "{\n  \"optimized\": \"sum by(service,zone)(rate(requests_total[5m]))\"\n}\n",
+      "material.json": "{\n  \"baseline\": \"sum by(service,zone)(rate(requests_total[5m]))\",\n  \"existing_record\": \"service:requests:rate5m\",\n  \"recording_interval_seconds\": 60,\n  \"raw_services\": [\n    \"shop\",\n    \"search\"\n  ],\n  \"zones\": [\n    \"a\",\n    \"b\"\n  ],\n  \"instances_per_service_zone\": 5,\n  \"relative_sample_seconds\": [\n    0,\n    60,\n    120,\n    180,\n    240,\n    300,\n    360,\n    420,\n    480,\n    540,\n    600,\n    660,\n    720,\n    780,\n    840,\n    900\n  ],\n  \"counter_initial\": 10000,\n  \"counter_increment_formula\": \"(service_index+1)*(zone_index+1)*(instance_index+1)*(1+minute%3), index starts0; increments only minute1..15\",\n  \"cached_samples\": \"native baseline eval at relative300..900 step60\",\n  \"query_cases\": [\n    {\n      \"start\": 600,\n      \"end\": 900,\n      \"step\": 60\n    },\n    {\n      \"start\": 420,\n      \"end\": 660,\n      \"step\": 120\n    }\n  ]\n}\n"
+    },
+    "solution_files": {
+      "queries.json": "{\n  \"optimized\": \"service:requests:rate5m * 1\"\n}\n"
+    },
+    "negative_files": {
+      "queries.json": "{\n  \"optimized\": \"sum by(service)(service:requests:rate5m)\"\n}\n"
+    },
+    "body": "## 环境与初始材料\n平台提供Prometheus/promtool 3.5及隔离临时TSDB。material.json完整定义20条原始counter（2服务×2zone×5实例）、1分钟采样及变化增量。原生PromQL先生成已有记录service:requests:rate5m每分钟的4条聚合结果，再将原始数据与这些记录放入同一只读测试数据集。缓存来自真实引擎，不是手写固定答案。\n\n## 操作任务\n修复queries.json的optimized表达式，利用已有service:requests:rate5m记录替代重复扫描20条原始counter。必须与基线sum by(service,zone)(rate(requests_total[5m]))在题定两组query_range网格上逐时间点数值等价，并保留完全相同的service/zone标签集合，输出不能多__name__或丢zone。不要把不同zone先求和，也不能把当前一个值铺满历史。记录样本与查询时刻均对齐60秒网格；本题不允许改基线或记录计算，也不修改数据文件。\n\n## 产物\n提交queries.json，恰有optimized字符串。表达式不必逐字相同，允许等价聚合或乘1去掉记录指标名。\n\n## 验收方法\n运行python3 checks/check.py。先以原生引擎生成可信缓存，再分别执行基线与学生query_range，比较所有标签、时间戳和值（浮点相对容差1e-9）。通过真实stats.samples.totalQueryableSamples核验每个查询学生样本工作量不超过基线25%，且确实读取样本。两组相对网格分别600..900步60和420..660步120；最后校验原始持久块摘要未变。保留zone但仍跑原表达式会因成本不降而失败；粗暴跨zone合并会因标签/数值不等价而失败。\n\n## 边界\n这里只证明固定数据集、已有缓存且评估网格对齐时的样本读取成本降低，不根据单次毫秒耗时宣称生产提速。不覆盖缓存延迟/缺失、任意秒级网格、记录规则写入成本、生产并发和P99；若这些前提变化，必须重新评估等价性。所有进程限资源且finally关闭，不访问其他服务。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-query-stats",
+      "deliverables": [
+        "queries.json"
+      ],
+      "operation": "利用已有记录降低原生引擎样本成本，同时逐网格证明结果及标签等价",
+      "verification": "真实query_range数据和sample stats，两组网格，持久块摘要",
+      "capability_gap": [
+        "固定20条原始counter和4条记录，未验证生产性能/缓存缺失/任意网格"
+      ],
+      "failure_examples": [
+        "保留原表达式数值正确但成本未降低",
+        "按service合并丢失zone",
+        "直接选择record多出指标名与基线标签不符"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus",
+          "promtool"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "prometheus:v3.5",
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1m'},'scrape_configs':[]}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\nimport math\ncandidate=yaml.load(pathlib.Path('queries.json').read_text(encoding='utf-8'),Loader=Strict)\nassert isinstance(candidate,dict) and set(candidate)=={'optimized'}\nexpr=candidate['optimized'];assert isinstance(expr,str) and 0<len(expr)<=1000\nbaseline='sum by(service,zone)(rate(requests_total[5m]))'\ndef normalize(response):\n assert response['status']=='success' and response['data']['resultType']=='matrix'\n rows={}\n for s in response['data']['result']:\n  key=tuple(sorted(s['metric'].items()));assert key not in rows\n  rows[key]=[(float(t),float(v)) for t,v in s['values']]\n return rows\ndef same(actual,expected):\n a,b=normalize(actual),normalize(expected);assert a.keys()==b.keys(),'all output labels including metric name must agree'\n for key in a:\n  assert len(a[key])==len(b[key])\n  for (ta,va),(tb,vb) in zip(a[key],b[key]):\n   assert ta==tb and math.isclose(va,vb,rel_tol=1e-9,abs_tol=1e-10),'time/value mismatch'\ndef cost(response):\n samples=response['data']['stats']['samples'];n=samples['totalQueryableSamples']\n assert isinstance(n,int) and n>0\n return n\nwith tempfile.TemporaryDirectory(prefix='trusted-native-query-cost-') as d:\n root=pathlib.Path(d);base=int(time.time())-86400;base-=base%7200\n raw=['# TYPE requests_total counter']\n for service_index,service in enumerate(['shop','search']):\n  for zone_index,zone in enumerate(['a','b']):\n   for instance in range(5):\n    total=10000\n    for minute in range(16):\n     if minute:total+=(service_index+1)*(zone_index+1)*(instance+1)*(1+minute%3)\n     raw.append('requests_total{service=\"'+service+'\",zone=\"'+zone+'\",instance=\"'+str(instance)+'\"} '+str(total)+' '+str(base+minute*60))\n (root/'raw.om').write_bytes(('\\n'.join(raw+['# EOF'])+'\\n').encode())\n try:\n  run_command(['promtool','tsdb','create-blocks-from','openmetrics',str(root/'raw.om'),str(root/'raw')],root)\n  with server(root,'raw') as (url,api):\n   # Baseline engine, not a Python approximation, produces the fixture's existing recording samples.\n   recorded=api('/api/v1/query_range',{'query':baseline,'start':base+300,'end':base+900,'step':60})\n   result=normalize(recorded);assert len(result)==4 and all(len(v)==11 for v in result.values())\n  combined=raw+['# TYPE service:requests:rate5m gauge']\n  for label_pairs,values in result.items():\n   labeltext=','.join(k+'='+json.dumps(v) for k,v in label_pairs)\n   for stamp,value in values:combined.append('service:requests:rate5m{'+labeltext+'} '+repr(value)+' '+str(int(stamp)))\n  (root/'combined.om').write_bytes(('\\n'.join(combined+['# EOF'])+'\\n').encode())\n  run_command(['promtool','tsdb','create-blocks-from','openmetrics',str(root/'combined.om'),str(root/'source')],root)\n  before=digest_blocks(root/'source');comparisons=[]\n  with server(root,'source') as (url,api):\n   for start,end,step in [(600,900,60),(420,660,120)]:\n    params={'start':base+start,'end':base+end,'step':step,'stats':'all'}\n    original=api('/api/v1/query_range',{**params,'query':baseline})\n    optimized=api('/api/v1/query_range',{**params,'query':expr})\n    same(optimized,original);n0=cost(original);n1=cost(optimized)\n    assert n1<=n0/4,'must reduce real engine sample work to at most25% of baseline'\n    comparisons.append({'start':start,'end':end,'step':step,'baseline_samples':n0,'optimized_samples':n1})\n  assert digest_blocks(root/'source')==before,'queries must not rewrite source blocks'\n  print('native query comparisons:',json.dumps(comparisons))\n finally:print('native lifecycle:',json.dumps(STATS))\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "recording_cache_query_optimization_native_sample_stats_and_exact_label_equivalence",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-076",
+      "original_type": "interview",
+      "original_title": "为什么PromQL优化必须验证数值等价和标签等价？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

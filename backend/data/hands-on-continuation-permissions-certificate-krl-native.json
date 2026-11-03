@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-permissions-quality-005",
+    "module": "permissions",
+    "category": "用户、权限与安全",
+    "level": 3,
+    "topic": "凭据、证书与密钥",
+    "title": "真实SSH证书撤销：只撤指定序列号，叠加旧KRL并保留同钥其他证书",
+    "answer": "```python\nimport os,pathlib,subprocess,tempfile\ndef revoke_certificate(certificate,prior,output):\n    certificate,prior,output=map(pathlib.Path,(certificate,prior,output))\n    if any(p.is_symlink() or not p.is_file() for p in (certificate,prior)) or output.is_symlink():raise ValueError('regular owned inputs required')\n    if output.resolve() in (certificate.resolve(),prior.resolve()):raise ValueError('distinct output required')\n    fields=certificate.read_text().split()\n    if not fields or fields[0]!='ssh-ed25519-cert-v01@openssh.com':raise ValueError('Ed25519 certificate required, not raw key or CA')\n    check=subprocess.run(['ssh-keygen','-L','-f',str(certificate)],capture_output=True,text=True,timeout=3)\n    if check.returncode:raise ValueError('invalid certificate')\n    check=subprocess.run(['ssh-keygen','-Q','-f',str(prior),str(certificate)],capture_output=True,text=True,timeout=3)\n    if check.returncode not in (0,1):raise ValueError('invalid prior KRL')\n    fd,name=tempfile.mkstemp(prefix='.krl-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'wb') as stream:stream.write(prior.read_bytes())\n        result=subprocess.run(['ssh-keygen','-k','-u','-f',name,str(certificate)],capture_output=True,text=True,timeout=3)\n        if result.returncode:raise ValueError('certificate revocation update failed')\n        os.chmod(name,0o600);os.replace(name,output)\n    finally:\n        if os.path.exists(name):os.unlink(name)\n```\n\n原题知识说明：\n使用OpenSSH支持的撤销列表或KRL并通过RevokedKeys等机制分发，明确序列号或密钥范围。核对文件可读性和节点生效状态，以新会话验证被撤证书拒绝；已有会话不会因文件更新自动结束，离线节点应隔离或完成撤销同步后再开放。",
+    "type": "code",
+    "source": "OpsForge 身份与安全补充编审",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "semantic-quality-supplement-20261021",
+    "body": "## 操作任务\n实现revoke_certificate(certificate,prior,output)。仅接收本题有效Ed25519用户证书和既有二进制KRL，将该证书按OpenSSH证书身份加入既有撤销列表，生成独立0600输出；保留过去的撤销，不得撤销整CA、底层用户公钥、同一公钥的其他序列号证书或其他CA同序列号。用真实ssh-keygen -L/-Q校验，使用-k -u在私有候选副本更新，再替换输出。输入为普通非符号链接文件，输出不与输入同路径或符号链接。畸形/原始公钥/损坏KRL和覆盖输入ValueError，失败保留输出及输入并清理.krl-*。重复加入应保持撤销语义。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实OpenSSH签发短期有效教学证书、二进制KRL增量更新与-Q检查。与032仅将原始公钥放入新KRL不同，本题考察CA内证书序列号范围及旧撤销叠加。这里只验撤销工件，不代表sshd RevokedKeys分发或新会话拒绝、已有会话终止和离线节点隔离已完成；保留原题完整处置说明供后续验收。无真实身份/系统信任库/默认SSH配置变更，不构建镜像。",
+    "rubric": [
+      "使用OpenSSH支持的撤销列表或KRL并通过RevokedKeys等机制分发，明确序列号或密钥范围",
+      "核对文件可读性和节点生效状态，以新会话验证被撤证书拒绝；已有会话不会因文件更新自动结束，离线节点应隔离或完成撤销同步后再开放",
+      ""
+    ],
+    "hints": [],
+    "references": [
+      "https://man.openbsd.org/ssh-keygen#KEY_REVOCATION_LISTS",
+      "https://man.openbsd.org/sshd_config#RevokedKeys"
+    ],
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-permissions-quality-005",
+      "original_title": "短期SSH证书还未过期时，如何设计紧急撤销与离线节点处置？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,pathlib,subprocess,tempfile\ndef revoke_certificate(certificate,prior,output):\n    certificate,prior,output=map(pathlib.Path,(certificate,prior,output))\n    if any(p.is_symlink() or not p.is_file() for p in (certificate,prior)) or output.is_symlink():raise ValueError('regular owned inputs required')\n    if output.resolve() in (certificate.resolve(),prior.resolve()):raise ValueError('distinct output required')\n    fields=certificate.read_text().split()\n    if not fields or fields[0]!='ssh-ed25519-cert-v01@openssh.com':raise ValueError('Ed25519 certificate required, not raw key or CA')\n    check=subprocess.run(['ssh-keygen','-L','-f',str(certificate)],capture_output=True,text=True,timeout=3)\n    if check.returncode:raise ValueError('invalid certificate')\n    check=subprocess.run(['ssh-keygen','-Q','-f',str(prior),str(certificate)],capture_output=True,text=True,timeout=3)\n    if check.returncode not in (0,1):raise ValueError('invalid prior KRL')\n    fd,name=tempfile.mkstemp(prefix='.krl-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'wb') as stream:stream.write(prior.read_bytes())\n        result=subprocess.run(['ssh-keygen','-k','-u','-f',name,str(certificate)],capture_output=True,text=True,timeout=3)\n        if result.returncode:raise ValueError('certificate revocation update failed')\n        os.chmod(name,0o600);os.replace(name,output)\n    finally:\n        if os.path.exists(name):os.unlink(name)\n"
+    },
+    "negative_files": {
+      "task.py": "import os,pathlib,subprocess,tempfile\ndef revoke_certificate(certificate,prior,output):\n    certificate,prior,output=map(pathlib.Path,(certificate,prior,output))\n    if any(p.is_symlink() or not p.is_file() for p in (certificate,prior)) or output.is_symlink():raise ValueError('regular owned inputs required')\n    if output.resolve() in (certificate.resolve(),prior.resolve()):raise ValueError('distinct output required')\n    fields=certificate.read_text().split()\n    if not fields or fields[0]!='ssh-ed25519-cert-v01@openssh.com':raise ValueError('Ed25519 certificate required, not raw key or CA')\n    check=subprocess.run(['ssh-keygen','-L','-f',str(certificate)],capture_output=True,text=True,timeout=3)\n    if check.returncode:raise ValueError('invalid certificate')\n    check=subprocess.run(['ssh-keygen','-Q','-f',str(prior),str(certificate)],capture_output=True,text=True,timeout=3)\n    if check.returncode not in (0,1):raise ValueError('invalid prior KRL')\n    fd,name=tempfile.mkstemp(prefix='.krl-',dir=output.parent)\n    try:\n        with os.fdopen(fd,'wb') as stream:stream.write(prior.read_bytes())\n        os.unlink(name)\n        result=subprocess.run(['ssh-keygen','-k','-f',name,str(certificate)],capture_output=True,text=True,timeout=3)\n        if result.returncode:raise ValueError('certificate revocation update failed')\n        os.chmod(name,0o600);os.replace(name,output)\n    finally:\n        if os.path.exists(name):os.unlink(name)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现revoke_certificate(certificate,prior,output)。仅接收本题有效Ed25519用户证书和既有二进制KRL，将该证书按OpenSSH证书身份加入既有撤销列表，生成独立0600输出；保留过去的撤销，不得撤销整CA、底层用户公钥、同一公钥的其他序列号证书或其他CA同序列号。用真实ssh-keygen -L/-Q校验，使用-k -u在私有候选副本更新，再替换输出。输入为普通非符号链接文件，输出不与输入同路径或符号链接。畸形/原始公钥/损坏KRL和覆盖输入ValueError，失败保留输出及输入并清理.krl-*。重复加入应保持撤销语义。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实OpenSSH签发短期有效教学证书、二进制KRL增量更新与-Q检查。与032仅将原始公钥放入新KRL不同，本题考察CA内证书序列号范围及旧撤销叠加。这里只验撤销工件，不代表sshd RevokedKeys分发或新会话拒绝、已有会话终止和离线节点隔离已完成；保留原题完整处置说明供后续验收。无真实身份/系统信任库/默认SSH配置变更，不构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "ssh-keygen"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,pathlib,secrets,shutil,stat,subprocess,sys\nsys.path.insert(0,os.getcwd())\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nimport task\ndef run(args):return subprocess.run(args,capture_output=True,text=True,timeout=4)\ndef key(name):\n p=run(['ssh-keygen','-q','-t','ed25519','-N','','-f',name]);assert p.returncode==0,p.stderr\ndef sign(keyfile,ca,serial,target):\n p=run(['ssh-keygen','-q','-s',ca,'-I','owned-'+secrets.token_hex(3),'-n','training','-V','-1m:+10m','-z',str(serial),keyfile+'.pub']);assert p.returncode==0,p.stderr\n shutil.copyfile(keyfile+'-cert.pub',target)\ndef query(krl,certificate):\n p=run(['ssh-keygen','-Q','-f',krl,certificate])\n assert p.returncode in (0,1),(p.returncode,p.stderr)\n if p.returncode==1:assert 'REVOKED' in p.stdout+p.stderr\n return p.returncode==1\nfor name in ('ca','other-ca','shared-user','previous-user','bystander'):key(name)\nserial=secrets.randbelow(100000)+100\nsign('shared-user','ca',serial,'target-cert.pub');sign('shared-user','ca',serial+1,'same-key-other-serial.pub')\nsign('previous-user','ca',serial+2,'previous-cert.pub');sign('bystander','other-ca',serial,'other-ca-same-serial.pub')\np=run(['ssh-keygen','-k','-f','prior.krl','previous-cert.pub']);assert p.returncode==0,p.stderr\nassert query('prior.krl','previous-cert.pub') and not query('prior.krl','target-cert.pub')\nassert not query('prior.krl','same-key-other-serial.pub')\nprint('NATIVE_OPENSSH_UNEXPIRED_SIGNED_CERTIFICATES_PRIOR_KRL_AND_SAME_KEY_DIFFERENT_SERIAL_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED:add_only_approved_certificate_serial_preserve_prior_revocations_and_ca',flush=True)\ninputs={name:pathlib.Path(name).read_bytes() for name in ('prior.krl','target-cert.pub','ca.pub','shared-user.pub')}\ntry:task.revoke_certificate('target-cert.pub','prior.krl','updated.krl')\nexcept Exception as error:raise AssertionError('additive certificate-scoped KRL update failed') from error\nassert query('updated.krl','target-cert.pub'),'target certificate still accepted by KRL query'\nassert query('updated.krl','previous-cert.pub'),'existing certificate revocation was lost'\nassert not query('updated.krl','same-key-other-serial.pub'),'same key with a different serial was over-revoked'\nassert not query('updated.krl','other-ca-same-serial.pub'),'same serial issued by other CA was over-revoked'\nassert not query('updated.krl','shared-user.pub') and not query('updated.krl','ca.pub'),'raw user key or entire CA was revoked'\nassert all(pathlib.Path(name).read_bytes()==data for name,data in inputs.items())\nassert stat.S_IMODE(pathlib.Path('updated.krl').stat().st_mode)==0o600 and not list(pathlib.Path('.').glob('.krl-*'))\nstable=pathlib.Path('updated.krl').read_bytes()\ntask.revoke_certificate('target-cert.pub','updated.krl','second.krl')\nassert query('second.krl','target-cert.pub') and query('second.krl','previous-cert.pub') and not query('second.krl','same-key-other-serial.pub')\npathlib.Path('broken.pub').write_text('ssh-ed25519-cert-v01@openssh.com AAAA invalid\\n')\npathlib.Path('broken.krl').write_text('not a binary KRL\\n')\nfor certificate,prior,output in [('shared-user.pub','prior.krl','updated.krl'),('broken.pub','prior.krl','updated.krl'),('target-cert.pub','broken.krl','updated.krl'),('target-cert.pub','prior.krl','prior.krl'),('target-cert.pub','prior.krl','target-cert.pub')]:\n before={name:pathlib.Path(name).read_bytes() for name in (certificate,prior,output)}\n try:task.revoke_certificate(certificate,prior,output)\n except ValueError:pass\n else:raise AssertionError('unsafe raw key, malformed KRL or input overwrite accepted')\n assert all(pathlib.Path(name).read_bytes()==data for name,data in before.items())\n assert pathlib.Path('updated.krl').read_bytes()==stable and not list(pathlib.Path('.').glob('.krl-*'))\nprint('NATIVE_KRL_CERTIFICATE_SERIAL_CA_SCOPE_PREVIOUS_REVOCATIONS_RAW_KEYS_AND_FAILURE_OUTPUT_PRESERVED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

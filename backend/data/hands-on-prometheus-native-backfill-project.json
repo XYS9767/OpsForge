@@ -1,0 +1,99 @@
+[
+  {
+    "id": "curated-advanced-prometheus-019",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 5,
+    "topic": "TSDB存储与远端传输",
+    "title": "交付真实历史记录规则回填、独立验收与仅撤回新增块的回滚",
+    "answer": "### rules.yaml\n```\ngroups:\n- name: queue-history\n  interval: 1m\n  rules:\n  - record: service:queued_tasks:sum\n    expr: sum by(service) (queue_depth)\n```\n\n### backfill-window.json\n```\n{\n  \"start_offset\": 120,\n  \"end_offset\": 600,\n  \"minimum_head_gap_seconds\": 10800\n}\n```\n\n### migration.py\n```\nimport re\ndef rollout(existing,generated):\n    def checked(values):\n        if not isinstance(values,list):raise ValueError('list required')\n        if any(not isinstance(x,str) or not re.fullmatch(r'[0-9A-HJKMNP-TV-Z]{26}',x) for x in values):raise ValueError('invalid block ID')\n        if len(set(values))!=len(values):raise ValueError('duplicate block ID')\n        return set(values)\n    old,new=checked(existing),checked(generated)\n    if old&new:raise ValueError('existing block collision')\n    return {'install':sorted(new),'rollback_remove':sorted(new),'preserve':sorted(old)}\n```\n\n将新增块先写到staging，记录实际ULID，再复制到独立验收副本；回滚以新增ULID清单为唯一删除集合。原始块和当前head始终保留。promtool按规则组评估偏移生成历史时间戳，所以用range-vector直接读取原样本，再按同一时刻原始序列验证汇总，不能期望所有点都落在整分钟。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 4,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "原生历史回填数值与标签合同正确",
+      "源历史和实时head保留",
+      "仅新增块安装与回滚可追溯且边界拒绝"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/storage/",
+      "https://github.com/prometheus/prometheus/blob/v3.5.0/cmd/promtool/rules.go"
+    ],
+    "body": "## 环境与初始材料\n平台自动提供promtool/Prometheus3.5和Python/PyYAML，均限制在临时目录和127.0.0.1随机端口。source-material.json给出三条原始序列与当前head哨兵；学员无需自建集群。每次只有一个Prometheus，promtool为短命子进程；没有业务服务器连接。\n\n## 操作任务\n完成三项产物：rules.yaml每1分钟记录service:queued_tasks:sum，按service汇总queue_depth，去掉instance但保留service；backfill-window.json限定T0+120至T0+600秒历史窗口并至少远离当前head3小时；migration.py实现rollout(existing,generated)，两输入为块ULID列表，返回install/rollback_remove仅为新增块，preserve完整原块。必须拒绝ID重叠、重复或非26位Crockford ULID，不能修改输入。实际流程由平台按产物执行：生成原始历史块和真实当前head，回填到独立staging，保留源数据，在独立副本导入并按实际存储时间核对值，撤回仅新块后再启动验证原始历史仍在。不能把回填直接写进源数据目录，不能用删整个TSDB作为回滚。\n\n## 产物\n提交rules.yaml、backfill-window.json、migration.py。\n\n## 验收方法\n运行python3 checks/check.py，真实OpenMetrics→TSDB、规则历史回填、独立实例回读及回滚后二次回读。验证每个service的真实样本时间和值、源历史块摘要不变及回填期间当前head哨兵999不变。规则组对齐可有偏移，按实际样本时间核对，不能把整分钟查询返回值误作原存储时间。每组应有8或9个60秒间隔样本，且处于要求窗口。错误丢service、删除旧块、碰撞ID必须失败。\n\n## 能力边界\n这是本机隔离TSDB和head的真实验收，不覆盖生产大数据量、跨版本迁移、对象存储、长周期压缩或实际发布审批。独立副本用于演练安装/回滚，不把本题通过当作允许修改生产目录。\n",
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "configuration",
+    "files": {
+      "rules.yaml": "groups:\n- name: queue-history\n  interval: 1m\n  rules:\n  - record: service:queued_tasks:sum\n    expr: queue_depth\n",
+      "backfill-window.json": "{\n  \"start_offset\": 120,\n  \"end_offset\": 600,\n  \"minimum_head_gap_seconds\": 10800\n}\n",
+      "migration.py": "def rollout(existing,generated):\n    return {\"install\":generated,\"rollback_remove\":existing+generated,\"preserve\":[]}\n",
+      "source-material.json": "{\n  \"source_epoch\": \"验收时提供当前时间前一天并对齐2小时的T0\",\n  \"sample_interval_seconds\": 60,\n  \"samples\": 11,\n  \"queue_depth\": [\n    {\n      \"service\": \"pay\",\n      \"instance\": \"a\",\n      \"values\": \"10+n (n=0..10)\"\n    },\n    {\n      \"service\": \"pay\",\n      \"instance\": \"b\",\n      \"values\": \"5+n (n=0..10)\"\n    },\n    {\n      \"service\": \"mail\",\n      \"instance\": \"a\",\n      \"values\": \"2\"\n    }\n  ],\n  \"live_head\": \"同名记录service=live当前值999，源实例保留真实head写入，历史回填只去独立staging\"\n}"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: queue-history\n  interval: 1m\n  rules:\n  - record: service:queued_tasks:sum\n    expr: sum by(service) (queue_depth)\n",
+      "backfill-window.json": "{\n  \"start_offset\": 120,\n  \"end_offset\": 600,\n  \"minimum_head_gap_seconds\": 10800\n}\n",
+      "migration.py": "import re\ndef rollout(existing,generated):\n    def checked(values):\n        if not isinstance(values,list):raise ValueError('list required')\n        if any(not isinstance(x,str) or not re.fullmatch(r'[0-9A-HJKMNP-TV-Z]{26}',x) for x in values):raise ValueError('invalid block ID')\n        if len(set(values))!=len(values):raise ValueError('duplicate block ID')\n        return set(values)\n    old,new=checked(existing),checked(generated)\n    if old&new:raise ValueError('existing block collision')\n    return {'install':sorted(new),'rollback_remove':sorted(new),'preserve':sorted(old)}\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: queue-history\n  interval: 1m\n  rules:\n  - record: service:queued_tasks:sum\n    expr: sum(queue_depth)\n",
+      "backfill-window.json": "{\n  \"start_offset\": 120,\n  \"end_offset\": 600,\n  \"minimum_head_gap_seconds\": 10800\n}\n",
+      "migration.py": "import re\ndef rollout(existing,generated):\n    def checked(values):\n        if not isinstance(values,list):raise ValueError('list required')\n        if any(not isinstance(x,str) or not re.fullmatch(r'[0-9A-HJKMNP-TV-Z]{26}',x) for x in values):raise ValueError('invalid block ID')\n        if len(set(values))!=len(values):raise ValueError('duplicate block ID')\n        return set(values)\n    old,new=checked(existing),checked(generated)\n    if old&new:raise ValueError('existing block collision')\n    return {'install':sorted(new),'rollback_remove':sorted(new),'preserve':sorted(old)}\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-tsdb",
+      "deliverables": [
+        "rules.yaml",
+        "backfill-window.json",
+        "migration.py"
+      ],
+      "operation": "完成三项产物：rules.yaml每1分钟记录service:queued_tasks:sum，按service汇总queue_depth，去掉instance但保留service；backfill-window.json限定T0+120至T0+600秒历史窗口并至少远离当前head3小时；migration.py实现rollout(existing,generated)，两输入为块ULID列表，返回install/rollback_remove仅为新增块，preserve完整原块。必须拒绝ID重叠、重复或非26位Crockford ULID，不能修改输入。实际流程由平台按产物执行：生成原始历史块和真实当前head，回填到独立staging，保留源数据，在独立副本导入并按实际存储时间核对值，撤回仅新块后再启动验证原始历史仍在。不能把回填直接写进源数据目录，不能用删整个TSDB作为回滚。",
+      "verification": "官方promtool生成真实TSDB块/回填；原生Prometheus前后查询、摘要及隔离回滚验收",
+      "capability_gap": [
+        "不验生产规模、跨版本、远端对象存储或生产发布"
+      ],
+      "failure_examples": [
+        "丢service聚合成单条",
+        "回滚计划包含旧块",
+        "新增ULID与现有碰撞",
+        "窗口越过head安全间隔"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 90,
+      "requires": {
+        "commands": [
+          "promtool",
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "prometheus:v3.5",
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom migration import rollout\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1m'},'scrape_configs':[]}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\nrules=yaml.load(pathlib.Path('rules.yaml').read_text(encoding='utf-8'),Loader=Strict)\nassert set(rules)=={'groups'} and len(rules['groups'])==1\ng=rules['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']=='queue-history' and g['interval']=='1m'\nassert len(g['rules'])==1 and set(g['rules'][0])=={'record','expr'} and g['rules'][0]['record']=='service:queued_tasks:sum'\nwindow=json.loads(pathlib.Path('backfill-window.json').read_text(encoding='utf-8'))\nassert window=={'start_offset':120,'end_offset':600,'minimum_head_gap_seconds':10800},'keep requested history and head safety interval'\nfor command in ['prometheus','promtool']:assert shutil.which(command),'native tool missing'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-backfill-') as d:\n root=pathlib.Path(d);base=int(time.time())-86400;base-=base%7200\n lines=['# TYPE queue_depth gauge']\n for service,instance,start in [('pay','a',10),('pay','b',5),('mail','a',2)]:\n  for n in range(11):lines.append('queue_depth{service=\"'+service+'\",instance=\"'+instance+'\"} '+str(start+n if service=='pay' else start)+' '+str(base+n*60))\n lines.append('# EOF');(root/'source.om').write_bytes(('\\n'.join(lines)+'\\n').encode())\n try:\n  run_command(['promtool','tsdb','create-blocks-from','openmetrics',str(root/'source.om'),str(root/'source')],root)\n  existing=block_ids(root/'source');snapshot=digest_blocks(root/'source')\n  # The source runs a real current recording rule in head; backfill staging never uses its directory.\n  with server(root,'source',live=True) as (url,api):\n   end=time.monotonic()+4\n   while not vector(api,'service:queued_tasks:sum{service=\"live\"}'):\n    assert time.monotonic()<end;time.sleep(.1)\n   raw_before=vector(api,'queue_depth',base+600)\n   assert base+window['end_offset']<=time.time()-window['minimum_head_gap_seconds'],'historical window reaches live head safety interval'\n   run_command(['promtool','check','rules',str(pathlib.Path('rules.yaml').resolve())],root)\n   run_command(['promtool','tsdb','create-blocks-from','rules','--url='+url,'--start='+str(base+window['start_offset']),'--end='+str(base+window['end_offset']),'--output-dir='+str(root/'staging'),str(pathlib.Path('rules.yaml').resolve())],root)\n   assert vector(api,'queue_depth',base+600)==raw_before\n   assert vector(api,'service:queued_tasks:sum{service=\"live\"}')[0]['value'][1]=='999'\n   assert digest_blocks(root/'source')==snapshot,'source immutable blocks changed'\n  generated=block_ids(root/'staging');assert generated\n  args=(copy.deepcopy(existing),copy.deepcopy(generated));plan=rollout(*args)\n  assert args==(existing,generated),'input inventory mutated'\n  assert set(plan)=={'install','rollback_remove','preserve'}\n  assert set(plan['install'])==set(generated) and len(plan['install'])==len(generated)\n  assert set(plan['rollback_remove'])==set(generated) and len(plan['rollback_remove'])==len(generated)\n  assert set(plan['preserve'])==set(existing) and len(plan['preserve'])==len(existing)\n  merged=root/'merged';merged.mkdir()\n  for bid in existing:shutil.copytree(root/'source'/bid,merged/bid)\n  for bid in plan['install']:\n   assert bid in generated and not (merged/bid).exists()\n   shutil.copytree(root/'staging'/bid,merged/bid)\n  with server(root,'merged') as (_,api):\n   assert vector(api,'queue_depth',base+600)==raw_before,'raw history lost after install'\n   # Read stored sample timestamps directly; rule-group alignment can be fractional/non-minute.\n   matrix=vector(api,'service:queued_tasks:sum[10m]',base+600)\n   assert {row['metric'].get('service') for row in matrix}=={'pay','mail'}\n   for row in matrix:\n    assert set(row['metric'])=={'__name__','service'}\n    vals=row['values'];assert 8<=len(vals)<=9\n    times=[float(t) for t,v in vals]\n    assert base+120<=times[0]<base+180 and base+540<times[-1]<=base+600\n    assert all(abs(b-a-60)<.002 for a,b in zip(times,times[1:]))\n    for stamp,value in vals:\n     n=math.floor((float(stamp)-base)/60+1e-6)\n     expected=15+2*n if row['metric']['service']=='pay' else 2\n     assert abs(float(value)-expected)<1e-9,'backfilled value/labels do not match source at stored timestamp'\n   print('actual backfilled sample matrix:',json.dumps(matrix))\n  # Apply rollback only inside the disposable merged directory, never source or arbitrary paths.\n  for bid in plan['rollback_remove']:\n   assert bid in generated and bid not in existing\n   target=(merged/bid).resolve();assert target.parent==merged.resolve()\n   shutil.rmtree(target)\n  assert block_ids(merged)==existing\n  with server(root,'merged') as (_,api):\n   assert vector(api,'queue_depth',base+600)==raw_before\n   assert vector(api,'service:queued_tasks:sum',base+600)==[],'rollback left generated recording history'\n  # Fail closed before copying in the presence of identity collisions or unsafe paths.\n  for old,new in [(existing,existing),([],['../escape']),([],['bad']),([],generated+generated)]:\n   try:rollout(old,new)\n   except ValueError:pass\n   else:raise AssertionError('unsafe block inventory accepted')\n  print('native backfill, independent install verification and scoped rollback passed')\n finally:\n  print('native lifecycle report:',json.dumps(STATS))\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-advanced-prometheus-019",
+      "original_type": "practice",
+      "original_title": "交付Prometheus记录规则历史回填，要求回填块与实时head区间不冲突且新规则口径可追溯。",
+      "original_version": 1,
+      "theory_retained": false,
+      "previous_answer": "先冻结规则版本、依赖数据来源和回填绝对区间，确认所用promtool与服务器版本支持的回填流程及块导入限制；回填历史应避开当前可变head覆盖范围，不能直接手改WAL。在隔离实例用固定步长计算新序列，核对每个块的时间范围、标签和样本数，尤其区分原始数据缺口与规则应产生的空值。交付规则哈希、块清单和前后查询对照，验证留存策略不会马上删除回填数据，且历史计算不触发当时告警重放。验收查询边界没有双样本或异常跳变。发现重叠或口径错误停止导入，保留原实例及已导入块记录，按受支持流程恢复。若记录规则存在依赖，同轮回填不会让后序规则自动读取前序刚生成的结果；应按依赖顺序先回填并导入上游，再处理下游，逐阶段对照。"
+    }
+  }
+]

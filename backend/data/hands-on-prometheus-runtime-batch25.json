@@ -1,0 +1,86 @@
+[
+  {
+    "id": "curated-parallel-prometheus-048",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 3,
+    "topic": "告警规则与SLO",
+    "title": "为迟到指标设置规则查询偏移，并验证真实记录时间与数值",
+    "answer": "```yaml\ngroups:\n- name: delayed-input\n  interval: 500ms\n  query_offset: 4s\n  rules:\n  - record: queue:input_rate:per_second\n    expr: sum by(job) (rate(queue_input_total[3s]))\n```\nquery_offset同时把组内表达式的评估时刻及记录样本时刻移到过去，使数据含义一致。只在表达式上offset会把旧时刻的结果标记成当前记录，掩盖实际迟到；扩大窗口或填零也不能等价代替所需事件时间语义。\n\n原题原理：可能错过计划评估并延迟告警或记录数据。检查规则持续时间与错过评估计数，缩小扫描范围、优化表达式或拆分合理依赖。单纯缩短间隔可能让情况更严重。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "可能错过计划评估并延迟告警或记录数据。",
+      "检查规则持续时间与错过评估计数，缩小扫描范围、优化表达式或拆分合理依赖。",
+      "单纯缩短间隔可能让情况更严重。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/recording_rules/#rule-query-offset",
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: delayed-input\n  interval: 500ms\n  query_offset: 0s\n  rules:\n  - record: queue:input_rate:per_second\n    expr: sum by(job) (rate(queue_input_total[3s]))\n",
+      "input-contract.json": "{\n  \"metric\": \"queue_input_total\",\n  \"explicit_timestamp_delay_seconds\": 4,\n  \"scrape_interval\": \"1s\",\n  \"rate_window\": \"3s\",\n  \"rule_interval\": \"500ms\",\n  \"desired_query_offset\": \"4s\",\n  \"phases\": \"positive random constant rate, then increased by eleven without reset\"\n}\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: delayed-input\n  interval: 500ms\n  query_offset: 4s\n  rules:\n  - record: queue:input_rate:per_second\n    expr: sum by(job) (rate(queue_input_total[3s]))\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: delayed-input\n  interval: 500ms\n  query_offset: 8s\n  rules:\n  - record: queue:input_rate:per_second\n    expr: sum by(job) (rate(queue_input_total[3s]))\n"
+    },
+    "body": "## 环境与初始材料\n平台提供隔离Prometheus与合成Counter端点queue_input_total。每个样本显式时间戳比请求时刻落后4秒，抓取每秒一次；这些时间戳是材料刻意给定的事件时间，不应改成抓取时间。当前三秒rate窗口没有样本，单纯加快500ms规则评估无法解决。\n\n## 操作任务\n修复rules.yaml的delayed-input组，使规则在过去4秒的评估时刻计算最近3秒Counter速率，输出queue:input_rate:per_second，只保留job标签。保持500ms规则间隔，正确设置query_offset为4s或等价4000ms，而不是把表达式offset后却在当前时刻写入伪新鲜记录。不要把缺失窗口填成零，也不要无理由延迟到8秒。指标第一阶段为随机正速率，第二阶段增加11并保持Counter连续。\n\n## 产物\n提交完整rules.yaml。组名、记录指标名、评估间隔保持材料定义，PromQL允许等价写法。不得改目标端时间戳或扩大采集频率绕过迟到语义。\n\n## 验收方法\n运行python3 checks/check.py。真实启动采集与规则评估，读取记录规则原始样本时间戳，把该时刻的记录数值与原生rate结果比较完整标签和值，记录年龄须反映约4秒偏移。第一阶段及提高速率后的第二阶段都须通过；未偏移的当前窗口应为空而不是零。query_offset=0无结果，8秒偏移的记录过旧均失败。底层抓取必须保持up=1。\n\n## 边界\n本题只验证固定迟到模型的原生规则偏移，不处理任意延迟、时钟错误、乱序重写或历史告警重放。生产偏移需根据数据到达延迟和可接受告警时延选定；500ms与4秒是训练参数，不是通用生产建议。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-delayed-rule-evaluation",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "为延迟采集数据设置正确的规则评估时刻并保留记录时间语义",
+      "verification": "真实显式时间戳采集、两速率阶段、原生记录时间和值对账",
+      "capability_gap": [
+        "不代表任意延迟或生产容量验收"
+      ],
+      "failure_examples": [
+        "只加快评估而窗口仍无样本",
+        "用固定值或零替代缺失",
+        "表达式offset却写成当前记录",
+        "过大的query_offset延迟结果"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import secrets\nimport pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1s'},'scrape_configs':[JOB],'rule_files':[str(root/'delayed-rules.yaml')]}\n (root/'delayed-rules.yaml').write_text(yaml.safe_dump(RULES),encoding='utf-8')\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\n\nRULES=yaml.load(pathlib.Path('rules.yaml').read_text(encoding='utf-8'),Loader=Strict)\nassert isinstance(RULES,dict) and set(RULES)=={'groups'} and len(RULES['groups'])==1\ng=RULES['groups'][0];assert set(g)=={'name','interval','query_offset','rules'} and g['name']=='delayed-input' and g['interval']=='500ms' and g['query_offset'] in ['0s','4s','4000ms','8s'] and len(g['rules'])==1\nr=g['rules'][0];assert set(r)=={'record','expr'} and r['record']=='queue:input_rate:per_second' and isinstance(r['expr'],str) and 0<len(r['expr'])<=1000\nstate={'at':time.time()-4,'base':1000.,'slope':float(secrets.choice([3,5,7]))}\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  at=time.time()-4;value=state['base']+(at-state['at'])*state['slope']\n  body=('# TYPE queue_input_total counter\\nqueue_input_total '+repr(value)+' '+str(round(at*1000))+'\\n').encode()\n  self.send_response(200);self.send_header('Content-Type','text/plain; version=0.0.4');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n def log_message(self,*args):pass\nhttpd=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()\nJOB={'job_name':'delayed','scrape_interval':'1s','static_configs':[{'targets':['127.0.0.1:'+str(httpd.server_port)]}]}\ndef verify(api,rate):\n rows=vector(api,'queue:input_rate:per_second[8s]')\n if len(rows)!=1 or not rows[0].get('values'):return False\n assert rows[0]['metric']=={'__name__':'queue:input_rate:per_second','job':'delayed'}\n at,value=rows[0]['values'][-1];value=float(value)\n expected=vector(api,'sum by(job) (rate(queue_input_total[3s]))',at)\n if len(expected)!=1 or not math.isclose(float(expected[0]['value'][1]),rate,rel_tol=.01):return False\n assert math.isfinite(value) and math.isclose(value,float(expected[0]['value'][1]),rel_tol=1e-6,abs_tol=1e-6),'record value must equal native expression at its own recorded timestamp'\n age=time.time()-float(at);assert 3.8<=age<=5.2,'recording timestamp must reflect four-second evaluation offset, not current-time relabeling or excessive delay'\n assert not vector(api,'rate(queue_input_total[3s])'),'unshifted current window must be missing, not a false zero'\n return {'value':value,'sample_age_seconds':age}\ndef wait(fn):\n end=time.monotonic()+11\n while time.monotonic()<end:\n  result=fn()\n  if result:return result\n  time.sleep(.15)\n raise AssertionError('delayed input rule failed to produce the required nonzero native rate')\ntry:\n with tempfile.TemporaryDirectory(prefix='trusted-prom-query-offset-') as d:\n  try:\n   with server(pathlib.Path(d),'source') as (url,api):\n    first=wait(lambda:verify(api,state['slope']))\n    at=time.time()-4;value=state['base']+(at-state['at'])*state['slope'];state.update(at=at,base=value,slope=state['slope']+11)\n    second=wait(lambda:verify(api,state['slope']))\n    assert second['value']>first['value']+10\n    up=vector(api,'up');assert len(up)==1 and float(up[0]['value'][1])==1\n    print('native delayed-rule evidence:',json.dumps({'phase1':first,'phase2':second}))\n  finally:print('native lifecycle:',json.dumps(STATS))\nfinally:httpd.shutdown();httpd.server_close();thread.join(timeout=2)\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "rule_query_offset_preserves_event_time_for_late_samples_and_record_timestamps",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-048",
+      "original_type": "interview",
+      "original_title": "规则组评估耗时超过间隔会带来什么风险？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

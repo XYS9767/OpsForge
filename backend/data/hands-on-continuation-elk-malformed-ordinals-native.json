@@ -1,0 +1,156 @@
+[
+  {
+    "id": "src-2fcacb905e949e57",
+    "title": "真实ignore_malformed：坏标量原文保留且进入_ignored，拒绝对象结构",
+    "answer": "```python\ndef create(request,index):\n    body={'settings':{'number_of_shards':1,'number_of_replicas':0},'mappings':{'dynamic':'strict','properties':{'amount':{'type':'integer','coerce':False,'ignore_malformed':True},'tag':{'type':'keyword'}}}}\n    status,value=request('PUT','/'+index,body)\n    if status not in (200,201):raise RuntimeError('owned index creation failed')\n```\n\n原题知识说明：\nElasticsearch mapping 定义字段类型、分析器和索引行为，可显式声明或动态推断。错误类型可能导致写入拒绝或查询不符合预期；已建字段通常不能直接任意改变类型，应规划新索引与 reindex/别名切换。",
+    "category": "ELK / EFK",
+    "difficulty": "入门",
+    "section": "Elasticsearch",
+    "type": "code",
+    "has_answer": true,
+    "source": "README.md",
+    "sources": [
+      "README.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "original_category": "Elasticsearch / ELK",
+    "original_title": "解释映射",
+    "module": "elk",
+    "topic": "查询聚合与可视化",
+    "level": 1,
+    "body": "## 操作任务\n实现create(request,index)，只PUT指定新索引：1shard/0replica，dynamic=strict，amount为integer、coerce=false、ignore_malformed=true，tag为keyword。失败RuntimeError。真实服务端验证坏标量与数字字符串的amount不入索引但整份_source及tag保留、_ignored标注；数值17可索引，null不是被忽略的坏值；对象结构不能靠ignore_malformed吞掉。不得通过把字段改keyword、预清洗原文或对全索引放宽类型代替。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Elasticsearch8.19.7字段级坏标量处理、_source/_ignored/exists区分及结构错误拒绝；只创建私有索引，不迁移生产mapping或丢弃原始事件。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "elk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "src-2fcacb905e949e57",
+      "original_title": "Elasticsearch mapping 如何约束字段类型与索引行为？",
+      "original_type": "source"
+    },
+    "references": [
+      "https://www.elastic.co/guide/en/elasticsearch/reference/8.19/ignore-malformed.html"
+    ],
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def create(request,index):\n    body={'settings':{'number_of_shards':1,'number_of_replicas':0},'mappings':{'dynamic':'strict','properties':{'amount':{'type':'integer','coerce':False,'ignore_malformed':True},'tag':{'type':'keyword'}}}}\n    status,value=request('PUT','/'+index,body)\n    if status not in (200,201):raise RuntimeError('owned index creation failed')\n"
+    },
+    "negative_files": {
+      "task.py": "def create(request,index):\n    body={'settings':{'number_of_shards':1,'number_of_replicas':0},'mappings':{'dynamic':'strict','properties':{'amount':{'type':'integer','coerce':False,'ignore_malformed':False},'tag':{'type':'keyword'}}}}\n    status,value=request('PUT','/'+index,body)\n    if status not in (200,201):raise RuntimeError('owned index creation failed')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root现有lab镜像、只读Elasticsearch8.19.7分发、私有节点及2GiB预算，不构建镜像",
+      "operation": "实现create(request,index)，只PUT指定新索引：1shard/0replica，dynamic=strict，amount为integer、coerce=false、ignore_malformed=true，tag为keyword。失败RuntimeError。真实服务端验证坏标量与数字字符串的amount不入索引但整份_source及tag保留、_ignored标注；数值17可索引，null不是被忽略的坏值；对象结构不能靠ignore_malformed吞掉。不得通过把字段改keyword、预清洗原文或对全索引放宽类型代替。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Elasticsearch8.19.7字段级坏标量处理、_source/_ignored/exists区分及结构错误拒绝；只创建私有索引，不迁移生产mapping或丢弃原始事件。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "elasticsearch"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/elasticsearch_native.py": "\"\"\"Owned nonroot Elasticsearch8.19.7, private config/data/ports and bounded Java memory.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.error\nimport yaml\n\ndef free_port():\n    with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Elasticsearch:\n    def __enter__(self):\n        executable=shutil.which('elasticsearch')\n        if not executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned Elasticsearch8.19.7 required')\n        if os.geteuid()==0:raise RuntimeError('nonroot Elasticsearch fixture required')\n        self.temp=tempfile.TemporaryDirectory(prefix='of-elasticsearch-');self.root=pathlib.Path(self.temp.name);self.process=None;self.log=None\n        try:\n            tool=pathlib.Path(os.environ.get('OPSF_ELASTICSEARCH_HOME',str(pathlib.Path(executable).resolve().parents[1]))).resolve()\n            config=self.root/'config';shutil.copytree(tool/'config',config)\n            for folder in ('data','logs','tmp'):(self.root/folder).mkdir()\n            self.port=free_port();transport=free_port()\n            while transport==self.port:transport=free_port()\n            settings={'cluster.name':'opsforge-private','node.name':'owned-node','path.data':str(self.root/'data'),'path.logs':str(self.root/'logs'),\n                'network.host':'127.0.0.1','http.port':self.port,'transport.port':transport,'discovery.type':'single-node',\n                'xpack.security.enabled':False,'xpack.ml.enabled':False,'xpack.watcher.enabled':False,\n                'node.roles':['master','data','ingest'],'node.store.allow_mmap':False,'ingest.geoip.downloader.enabled':False,\n                'cluster.routing.allocation.disk.threshold_enabled':False,'http.max_content_length':'8mb'}\n            (config/'elasticsearch.yml').write_text(yaml.safe_dump(settings,sort_keys=False))\n            hostname=socket.gethostname();assert not any(c in hostname for c in '\\r\\n')\n            hosts=self.root/'jvm-hosts';hosts.write_text('127.0.0.1 localhost '+hostname+'\\n')\n            env={**os.environ,'CLI_JAVA_OPTS':'-Djdk.net.hosts.file='+str(hosts),'ES_PATH_CONF':str(config),'ES_TMPDIR':str(self.root/'tmp'),\n                'ES_JAVA_OPTS':'-Xms256m -Xmx256m -XX:MaxDirectMemorySize=128m -XX:ActiveProcessorCount=2 -Djdk.net.hosts.file='+str(hosts)}\n            # Keystore contains only this disposable node's bootstrap metadata, no external credentials.\n            initialized=subprocess.run([str(tool/'bin/elasticsearch-keystore'),'create'],env=env,cwd=self.root,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15)\n            if initialized.returncode:raise RuntimeError('private empty keystore initialization failed: '+initialized.stderr[-1500:])\n            self.log=(self.root/'startup.log').open('wb')\n            self.process=subprocess.Popen([executable],env=env,cwd=self.root,stdin=subprocess.DEVNULL,stdout=self.log,stderr=self.log)\n            self.base='http://127.0.0.1:'+str(self.port);deadline=time.monotonic()+65\n            while time.monotonic()<deadline:\n                if self.process.poll() is not None:raise RuntimeError('private Elasticsearch startup failed: '+(self.root/'startup.log').read_text(errors='replace')[-6000:])\n                try:\n                    status,document=self.request('GET','/')\n                    if status==200:\n                        assert document['version']['number']=='8.19.7';break\n                except (OSError,urllib.error.URLError):pass\n                time.sleep(.15)\n            else:raise RuntimeError('private Elasticsearch readiness deadline: '+(self.root/'startup.log').read_text(errors='replace')[-4000:])\n            print('NATIVE_ELASTICSEARCH_READY:8.19.7',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,method,path,body=None,content_type='application/json'):\n        data=body.encode() if isinstance(body,str) else (json.dumps(body).encode() if body is not None else None)\n        request=urllib.request.Request(self.base+path,data=data,method=method,headers={'Content-Type':content_type})\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        try:\n            with opener.open(request,timeout=5) as response:raw=response.read();return response.status,json.loads(raw) if raw else None\n        except urllib.error.HTTPError as response:\n            try:return response.code,json.loads(response.read())\n            finally:response.close()\n    def __exit__(self,*args):\n        if self.process is not None:\n            if self.process.poll() is None:self.process.terminate()\n            try:self.process.wait(timeout=8)\n            except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=3)\n        if self.log:self.log.close()\n        self.temp.cleanup()\n",
+        "checks/check.py": "import copy,json,os,pathlib,secrets,sys\nsys.path[:0]=[os.getcwd(),str(pathlib.Path.cwd()/'checks')]\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nimport task\nfrom elasticsearch_native import Elasticsearch\ndef call(server,method,path,body=None):\n status,value=server.request(method,path,body)\n assert status in (200,201),(method,path,status,value)\n return value\ndef search(server,index,query):return call(server,'POST','/'+index+'/_search',{'size':100,'query':query})['hits']['hits']\nwith Elasticsearch() as server:\n index='ignored_'+secrets.token_hex(5);control='strict_'+secrets.token_hex(5)\n call(server,'PUT','/'+control,{'settings':{'number_of_shards':1,'number_of_replicas':0},'mappings':{'properties':{'amount':{'type':'integer','coerce':False}}}})\n status,value=server.request('PUT','/'+control+'/_doc/rejected?refresh=true',{'amount':'not-a-number'})\n assert status==400 and server.request('GET','/'+control+'/_doc/rejected')[0]==404\n original=call(server,'GET','/'+control+'/_mapping')\n print('NATIVE_ELASTICSEARCH_STRICT_BAD_INTEGER_REJECTS_ENTIRE_DOCUMENT',flush=True)\n print('STUDENT_OPERATION_ENTERED:create_numeric_field_ignore_malformed_without_coercing_strings',flush=True)\n calls=[]\n def request(method,path,body=None):\n  assert method=='PUT' and path=='/'+index,'only owned new index may be configured'\n  calls.append((method,path));return server.request(method,path,body)\n try:task.create(request,index)\n except Exception as error:raise AssertionError('malformed-value mapping configuration failed') from error\n assert calls==[('PUT','/'+index)]\n props=call(server,'GET','/'+index+'/_mapping')[index]['mappings']['properties']\n assert props['amount']['type']=='integer' and props['amount']['coerce'] is False and props['amount']['ignore_malformed'] is True\n bodies={'bad':{'amount':'bad-'+secrets.token_hex(6),'tag':'kept'},'numeric-string':{'amount':'17','tag':'kept'},'valid':{'amount':17,'tag':'kept'},'null':{'amount':None,'tag':'kept'}}\n for ident,body in bodies.items():\n  status,value=server.request('PUT','/'+index+'/_doc/'+ident+'?refresh=true',body)\n  assert status in (200,201),'malformed scalar must preserve the remainder of its document'\n actual={row['_id']:row['_source'] for row in search(server,index,{'match_all':{}})};assert actual==bodies\n assert sorted(row['_id'] for row in search(server,index,{'term':{'_ignored':'amount'}}))==['bad','numeric-string']\n assert [row['_id'] for row in search(server,index,{'exists':{'field':'amount'}})]==['valid']\n status,value=server.request('PUT','/'+index+'/_doc/object-value?refresh=true',{'amount':{'unexpected':1},'tag':'must-not-land'})\n assert status==400 and server.request('GET','/'+index+'/_doc/object-value')[0]==404,'objects are not covered by scalar ignore_malformed'\n assert call(server,'GET','/'+control+'/_mapping')==original\n assert {row['_id']:row['_source'] for row in search(server,index,{'match_all':{}})}==bodies\n print('NATIVE_IGNORED_SCALAR_SOURCE_PRESERVED_NONCOERCED_NUMERIC_STRING_AND_OBJECT_REJECTION',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-advanced-elk-004",
+    "module": "elk",
+    "category": "ELK / EFK",
+    "level": 4,
+    "topic": "集群资源与运维",
+    "title": "真实全局序号预加载：refresh后先占堆，lazy对照首次聚合后才加载",
+    "body": "## 操作任务\n实现enable(request,index)，只PUT指定索引_mapping，将category keyword的eager_global_ordinals设True，随后POST该索引_refresh，HTTP非200 RuntimeError。其他字段、对照索引及原文不改。夹具在多个真实segment上比较：后续refresh后、首次聚合前eager索引已有category fielddata堆占用，lazy对照仍0；首次terms聚合后lazy也加载，两者32桶/每桶6条结果一致。该试验观察加载阶段，不以耗时阈值宣称性能提升。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Elasticsearch8.19.7私有多segment keyword字段与fielddata统计；只证明受控数据下全局序号加载阶段及结果保持，不证明任意基数、吞吐、GC或生产SLO改善。",
+    "answer": "```python\ndef enable(request,index):\n    status,value=request('PUT','/'+index+'/_mapping',{'properties':{'category':{'type':'keyword','eager_global_ordinals':True}}})\n    if status!=200:raise RuntimeError('owned mapping update failed')\n    status,value=request('POST','/'+index+'/_refresh')\n    if status!=200:raise RuntimeError('owned refresh failed')\n```\n\n原题知识说明：\n全局序数有助某些聚合与父子查询，但提前构建会增加refresh耗时和内存，尤其高基数字段或频繁更新时。应把首个聚合的冷启动延迟、稳定查询延迟、refresh时间和堆占用分别记录，不能仅报告一次查询变快。验收使用真实字段基数与刷新频率，比较预热前后，以及索引滚动后的首次请求。若用户只偶尔聚合，提前成本可能得不偿失。交付按字段而非全局一刀切的选择依据，并确认目标版本和查询确实使用该机制；缓存命中导致的速度改善不能误归给序数策略。",
+    "type": "code",
+    "source": "advanced-expansion-20261022:data:elk",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "正确解释计数或确认语义",
+      "证据覆盖异常数据与并发变化",
+      "交付完整性及资源失败边界"
+    ],
+    "references": [
+      "https://www.elastic.co/guide/en/elasticsearch/reference/8.19/eager-global-ordinals.html"
+    ],
+    "related_modules": [
+      "elk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-elk-004",
+      "original_title": "eager global ordinals把成本移到refresh阶段后，应如何评价收益？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def enable(request,index):\n    status,value=request('PUT','/'+index+'/_mapping',{'properties':{'category':{'type':'keyword','eager_global_ordinals':True}}})\n    if status!=200:raise RuntimeError('owned mapping update failed')\n    status,value=request('POST','/'+index+'/_refresh')\n    if status!=200:raise RuntimeError('owned refresh failed')\n"
+    },
+    "negative_files": {
+      "task.py": "def enable(request,index):\n    status,value=request('PUT','/'+index+'/_mapping',{'properties':{'category':{'type':'keyword','eager_global_ordinals':False}}})\n    if status!=200:raise RuntimeError('owned mapping update failed')\n    status,value=request('POST','/'+index+'/_refresh')\n    if status!=200:raise RuntimeError('owned refresh failed')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root现有lab镜像、只读Elasticsearch8.19.7分发、私有节点及2GiB预算，不构建镜像",
+      "operation": "实现enable(request,index)，只PUT指定索引_mapping，将category keyword的eager_global_ordinals设True，随后POST该索引_refresh，HTTP非200 RuntimeError。其他字段、对照索引及原文不改。夹具在多个真实segment上比较：后续refresh后、首次聚合前eager索引已有category fielddata堆占用，lazy对照仍0；首次terms聚合后lazy也加载，两者32桶/每桶6条结果一致。该试验观察加载阶段，不以耗时阈值宣称性能提升。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Elasticsearch8.19.7私有多segment keyword字段与fielddata统计；只证明受控数据下全局序号加载阶段及结果保持，不证明任意基数、吞吐、GC或生产SLO改善。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "elasticsearch"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/elasticsearch_native.py": "\"\"\"Owned nonroot Elasticsearch8.19.7, private config/data/ports and bounded Java memory.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.error\nimport yaml\n\ndef free_port():\n    with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Elasticsearch:\n    def __enter__(self):\n        executable=shutil.which('elasticsearch')\n        if not executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned Elasticsearch8.19.7 required')\n        if os.geteuid()==0:raise RuntimeError('nonroot Elasticsearch fixture required')\n        self.temp=tempfile.TemporaryDirectory(prefix='of-elasticsearch-');self.root=pathlib.Path(self.temp.name);self.process=None;self.log=None\n        try:\n            tool=pathlib.Path(os.environ.get('OPSF_ELASTICSEARCH_HOME',str(pathlib.Path(executable).resolve().parents[1]))).resolve()\n            config=self.root/'config';shutil.copytree(tool/'config',config)\n            for folder in ('data','logs','tmp'):(self.root/folder).mkdir()\n            self.port=free_port();transport=free_port()\n            while transport==self.port:transport=free_port()\n            settings={'cluster.name':'opsforge-private','node.name':'owned-node','path.data':str(self.root/'data'),'path.logs':str(self.root/'logs'),\n                'network.host':'127.0.0.1','http.port':self.port,'transport.port':transport,'discovery.type':'single-node',\n                'xpack.security.enabled':False,'xpack.ml.enabled':False,'xpack.watcher.enabled':False,\n                'node.roles':['master','data','ingest'],'node.store.allow_mmap':False,'ingest.geoip.downloader.enabled':False,\n                'cluster.routing.allocation.disk.threshold_enabled':False,'http.max_content_length':'8mb'}\n            (config/'elasticsearch.yml').write_text(yaml.safe_dump(settings,sort_keys=False))\n            hostname=socket.gethostname();assert not any(c in hostname for c in '\\r\\n')\n            hosts=self.root/'jvm-hosts';hosts.write_text('127.0.0.1 localhost '+hostname+'\\n')\n            env={**os.environ,'CLI_JAVA_OPTS':'-Djdk.net.hosts.file='+str(hosts),'ES_PATH_CONF':str(config),'ES_TMPDIR':str(self.root/'tmp'),\n                'ES_JAVA_OPTS':'-Xms256m -Xmx256m -XX:MaxDirectMemorySize=128m -XX:ActiveProcessorCount=2 -Djdk.net.hosts.file='+str(hosts)}\n            # Keystore contains only this disposable node's bootstrap metadata, no external credentials.\n            initialized=subprocess.run([str(tool/'bin/elasticsearch-keystore'),'create'],env=env,cwd=self.root,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15)\n            if initialized.returncode:raise RuntimeError('private empty keystore initialization failed: '+initialized.stderr[-1500:])\n            self.log=(self.root/'startup.log').open('wb')\n            self.process=subprocess.Popen([executable],env=env,cwd=self.root,stdin=subprocess.DEVNULL,stdout=self.log,stderr=self.log)\n            self.base='http://127.0.0.1:'+str(self.port);deadline=time.monotonic()+65\n            while time.monotonic()<deadline:\n                if self.process.poll() is not None:raise RuntimeError('private Elasticsearch startup failed: '+(self.root/'startup.log').read_text(errors='replace')[-6000:])\n                try:\n                    status,document=self.request('GET','/')\n                    if status==200:\n                        assert document['version']['number']=='8.19.7';break\n                except (OSError,urllib.error.URLError):pass\n                time.sleep(.15)\n            else:raise RuntimeError('private Elasticsearch readiness deadline: '+(self.root/'startup.log').read_text(errors='replace')[-4000:])\n            print('NATIVE_ELASTICSEARCH_READY:8.19.7',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,method,path,body=None,content_type='application/json'):\n        data=body.encode() if isinstance(body,str) else (json.dumps(body).encode() if body is not None else None)\n        request=urllib.request.Request(self.base+path,data=data,method=method,headers={'Content-Type':content_type})\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        try:\n            with opener.open(request,timeout=5) as response:raw=response.read();return response.status,json.loads(raw) if raw else None\n        except urllib.error.HTTPError as response:\n            try:return response.code,json.loads(response.read())\n            finally:response.close()\n    def __exit__(self,*args):\n        if self.process is not None:\n            if self.process.poll() is None:self.process.terminate()\n            try:self.process.wait(timeout=8)\n            except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=3)\n        if self.log:self.log.close()\n        self.temp.cleanup()\n",
+        "checks/check.py": "import copy,json,os,pathlib,secrets,sys\nsys.path[:0]=[os.getcwd(),str(pathlib.Path.cwd()/'checks')]\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nimport task\nfrom elasticsearch_native import Elasticsearch\ndef call(server,method,path,body=None):\n status,value=server.request(method,path,body)\n assert status in (200,201),(method,path,status,value)\n return value\ndef search(server,index,query):return call(server,'POST','/'+index+'/_search',{'size':100,'query':query})['hits']['hits']\nwith Elasticsearch() as server:\n eager='eager_'+secrets.token_hex(4);lazy='lazy_'+secrets.token_hex(4)\n def create(index):call(server,'PUT','/'+index,{'settings':{'number_of_shards':1,'number_of_replicas':0,'refresh_interval':'-1'},'mappings':{'properties':{'category':{'type':'keyword'},'payload':{'type':'text'}}}})\n def write(index,chunk):\n  lines=[]\n  for number in range(64):lines.extend([json.dumps({'index':{'_index':index,'_id':str(chunk)+'-'+str(number)}}),json.dumps({'category':'key'+str(number%32).zfill(2),'payload':'unchanged content'})])\n  status,value=server.request('POST','/_bulk?refresh=true','\\n'.join(lines)+'\\n',content_type='application/x-ndjson');assert status==200 and not value['errors']\n def memory(index):\n  stats=call(server,'GET','/'+index+'/_stats/fielddata?fields=category')['indices'][index]['total']['fielddata']\n  return stats.get('fields',{}).get('category',{}).get('memory_size_in_bytes',0)\n for index in (eager,lazy):\n  create(index);write(index,0);write(index,1)\n  shards=call(server,'GET','/'+index+'/_segments')['indices'][index]['shards']['0'];assert len(shards[0]['segments'])>=2\n assert memory(eager)==memory(lazy)==0,'no first aggregation may run before observation'\n lazy_mapping=call(server,'GET','/'+lazy+'/_mapping');before=call(server,'GET','/'+eager+'/_mapping')[eager]['mappings']['properties']\n print('NATIVE_ELASTICSEARCH_MULTISEGMENT_KEYWORD_LAZY_FIELDDATA_ZERO_BEFORE_QUERY',flush=True)\n print('STUDENT_OPERATION_ENTERED:enable_owned_category_eager_ordinals_and_refresh',flush=True)\n trace=[]\n def request(method,path,body=None):\n  assert (method,path) in [('PUT','/'+eager+'/_mapping'),('POST','/'+eager+'/_refresh')],'unapproved mapping or index request'\n  trace.append((method,path));return server.request(method,path,body)\n try:task.enable(request,eager)\n except Exception as error:raise AssertionError('owned eager ordinal configuration failed') from error\n assert trace==[('PUT','/'+eager+'/_mapping'),('POST','/'+eager+'/_refresh')]\n props=call(server,'GET','/'+eager+'/_mapping')[eager]['mappings']['properties']\n assert props['category'].get('eager_global_ordinals') is True and props['payload']==before['payload']\n for index in (eager,lazy):write(index,2)\n eager_before_query=memory(eager);lazy_before_query=memory(lazy)\n assert eager_before_query>0 and lazy_before_query==0,('ordinal loading was not shifted to refresh',eager_before_query,lazy_before_query)\n def aggregate(index):\n  result=call(server,'POST','/'+index+'/_search',{'size':0,'aggs':{'groups':{'terms':{'field':'category','size':32,'execution_hint':'global_ordinals'}}}})\n  return {row['key']:row['doc_count'] for row in result['aggregations']['groups']['buckets']}\n assert aggregate(eager)==aggregate(lazy)=={'key'+str(i).zfill(2):6 for i in range(32)}\n assert memory(lazy)>0,'lazy control must load on actual first terms query'\n assert call(server,'GET','/'+lazy+'/_mapping')==lazy_mapping\n for index in (eager,lazy):assert call(server,'GET','/'+index+'/_count')['count']==192\n print('NATIVE_EAGER_ORDINAL_HEAP_BEFORE_QUERY_LAZY_HEAP_AFTER_QUERY_IDENTICAL_BUCKET_COUNTS',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

@@ -1,0 +1,76 @@
+[
+  {
+    "id": "curated-advanced-node_exporter-012",
+    "module": "node_exporter",
+    "category": "node_exporter",
+    "level": 4,
+    "topic": "网络与硬件指标",
+    "title": "原生 PromQL 重传诊断：按 TCP 段口径比较，不把 HTTP 请求比值称丢包率",
+    "answer": "```python\ndef expression():\n    retrans='rate(node_netstat_Tcp_RetransSegs{job=\"node\"}[5m])'\n    out='rate(node_netstat_Tcp_OutSegs{job=\"node\"}[5m])'\n    return '('+retrans+' / '+out+') and on(job,instance) ('+out+' > 0)'\n```\n\n原题知识说明：\nTCP段与HTTP请求不是一一对应关系，一个请求可能跨多个段，连接上还可能承载多个请求或其他协议。重传也不总能等同网络物理丢包，乱序与超时估计会影响行为。应选择同层分母并解释方向和范围，例如段相关计数只能形成该层近似比例；业务失败率从应用结果计算。验收大小响应、连接复用和不同协议负载，观察该比值如何变化。不能用统一阈值把它标为用户请求丢包率，诊断应关联重传、RTT及应用错误三条证据。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://docs.kernel.org/networking/snmp_counter.html",
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/#rate"
+    ],
+    "related_modules": [
+      "node_exporter"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-node_exporter-012",
+      "original_title": "用TCP重传段速率除以HTTP请求速率得到“丢包率”，为什么这个指标在连接复用后失真？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现expression()返回PromQL，生成retrans_per_outseg。仅job=\"node\"，逐(job,instance)计算同一5分钟窗口rate(node_netstat_Tcp_RetransSegs)/rate(node_netstat_Tcp_OutSegs)，不能使用HTTP请求数。发送段rate为0或缺失时不输出样本，不能填0、1或无穷；counter reset使用rate处理，不把累计值直接相除。合法结果可能大于1，不得clamp成概率。本题诊断比值为每个OutSegs计数对应的重传段数量，并非物理丢包概率：Linux OutSegs排除重传段且包含SYN/ACK/RST，应用请求与TCP段也不是一对一。真实promtool输入覆盖HTTP速率变化、2倍比值、同步reset、零/缺测与其他job。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n使用真实Prometheus3.5 promtool执行规则与多时刻样本测试，计数输入为明确受控时序，不制造内核重传或物理丢包。此处只验证指标维度/查询，不定位具体网卡、驱动或网络故障；不能把该比值宣称丢包率、HTTP错误率或全链路SLO。不构建镜像。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def expression():\n    retrans='rate(node_netstat_Tcp_RetransSegs{job=\"node\"}[5m])'\n    out='rate(node_netstat_Tcp_OutSegs{job=\"node\"}[5m])'\n    return '('+retrans+' / '+out+') and on(job,instance) ('+out+' > 0)'\n"
+    },
+    "negative_files": {
+      "task.py": "def expression():\n    retrans='rate(node_netstat_Tcp_RetransSegs{job=\"node\"}[5m])'\n    out='rate(http_requests_total{job=\"node\"}[5m])'\n    return '('+retrans+' / '+out+') and on(job,instance) ('+out+' > 0)'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现expression()返回PromQL，生成retrans_per_outseg。仅job=\"node\"，逐(job,instance)计算同一5分钟窗口rate(node_netstat_Tcp_RetransSegs)/rate(node_netstat_Tcp_OutSegs)，不能使用HTTP请求数。发送段rate为0或缺失时不输出样本，不能填0、1或无穷；counter reset使用rate处理，不把累计值直接相除。合法结果可能大于1，不得clamp成概率。本题诊断比值为每个OutSegs计数对应的重传段数量，并非物理丢包概率：Linux OutSegs排除重传段且包含SYN/ACK/RST，应用请求与TCP段也不是一对一。真实promtool输入覆盖HTTP速率变化、2倍比值、同步reset、零/缺测与其他job。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "使用真实Prometheus3.5 promtool执行规则与多时刻样本测试，计数输入为明确受控时序，不制造内核重传或物理丢包。此处只验证指标维度/查询，不定位具体网卡、驱动或网络故障；不能把该比值宣称丢包率、HTTP错误率或全链路SLO。不构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "promtool"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac",
+          "promtool:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,pathlib,subprocess,sys\nsys.path.insert(0,os.getcwd());assert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nimport task\nprint('STUDENT_OPERATION_ENTERED:tcp_retrans_per_outgoing_segment_not_http_requests_or_packet_loss_probability',flush=True)\nexpression=task.expression();assert isinstance(expression,str) and expression.strip()\npathlib.Path('rules.yml').write_text(json.dumps({'groups':[{'name':'tcp','rules':[{'record':'retrans_per_outseg','expr':expression}]}]}))\ninputs=[]\ndef series(metric,instance,values,job='node'):\n inputs.append({'series':metric+'{job=\"'+job+'\",instance=\"'+instance+'\"}','values':values})\nfor instance,retrans,out,http in [('a','0+6x8','0+600x8','0+60000x8'),('b','0+120x8','0+60x8','0+6000x8'),\n ('reset','0 60 120 0 60 120 180 240','0 600 1200 0 600 1200 1800 2400','0+600000x8'),('zero','0+6x8','0+0x8','0+60x8')]:\n series('node_netstat_Tcp_RetransSegs',instance,retrans);series('node_netstat_Tcp_OutSegs',instance,out);series('http_requests_total',instance,http)\nseries('node_netstat_Tcp_RetransSegs','missing','0+6x8')\nseries('http_requests_total','missing','0+60x8')\nseries('node_netstat_Tcp_RetransSegs','a','0+99999x8','other')\nseries('node_netstat_Tcp_OutSegs','a','0+1x8','other')\nexpected=[{'labels':'retrans_per_outseg{instance=\"'+instance+'\",job=\"node\"}','value':value} for instance,value in [('a',.01),('b',2),('reset',.1)]]\ntests={'rule_files':['rules.yml'],'evaluation_interval':'1m','tests':[{'interval':'1m','input_series':inputs,\n 'promql_expr_test':[{'expr':'retrans_per_outseg','eval_time':when,'exp_samples':expected} for when in ('6m','7m')]}]}\npathlib.Path('tests.yml').write_text(json.dumps(tests))\nrun=subprocess.run(['promtool','test','rules','tests.yml'],capture_output=True,text=True,timeout=10)\nprint(run.stdout,flush=True)\nassert run.returncode==0,(run.stdout+run.stderr)[-1800:]\nprint('NATIVE_REAL_PROMQL_SEGMENT_RATIO_HTTP_INDEPENDENT_RESET_VALID_ZERO_MISSING_ABSENT_AND_RATIO_ABOVE_ONE',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "practice"
+  }
+]

@@ -1,0 +1,801 @@
+[
+  {
+    "id": "curated-parallel-git-105",
+    "module": "git",
+    "category": "Git",
+    "level": 3,
+    "topic": "用负 refspec 排除私有发布分支",
+    "title": "用负 refspec 排除私有发布分支",
+    "answer": "```python\nimport os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,remote):\n    git(repo,'config','--replace-all','remote.'+remote+'.fetch','+refs/heads/release/*:refs/remotes/'+remote+'/release/*')\n    git(repo,'config','--add','remote.'+remote+'.fetch','^refs/heads/release/private/*');git(repo,'fetch',remote)\n    return git(repo,'for-each-ref','--format=%(refname)','refs/remotes/'+remote).splitlines()\n```\n\n实现说明：实现 execute(repo,remote)，配置包含release/*但排除release/private/*的fetch规则再fetch；返回所有跟踪引用。必须保留允许的release/public分支，排除main及private子树。\n\n原理补充（保留原题）：\n核对远端URL和完整refspec，区分访问权限、浅克隆和负refspec过滤。以^开头的负规则排除匹配引用，即使正规则也匹配仍会被排除；fetch成功不承诺抓取全部远端分支。由授权维护者按最小范围调整抓取映射后重取目标，禁止扩大到无关秘密refs。验收目标OID与远端一致且其他排除规则仍按预期生效，发布固定OID而非依赖分支展示。",
+    "type": "case",
+    "incident_signature": "git:negative-fetch-refspec-excludes-release-branch",
+    "source": "OpsForge 原题实质改编；原理及原始来源保留在答案和 conversion 中",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；原生验证结果另附，独审待会话05或会话10调度，未计完成量。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "证明具体Git根因",
+      "保全工作区与历史证据",
+      "给出可复现恢复验收"
+    ],
+    "references": [
+      "https://git-scm.com/docs/git-fetch"
+    ],
+    "related_modules": [
+      "git"
+    ],
+    "body": "## 环境与初始材料\nPython 3.11+ 与 Git 2.39+；隔离的本地临时仓库，不使用远程网络和用户真实仓库。初始 task.py 是未实现骨架。平台验收时自动注入 checks/check.py，按题目要求创建真实仓库、提交及文件素材；每个用例使用独立仓库。无需自行提交验收脚本。\n\n## 操作任务\n实现 execute(repo,remote)，配置包含release/*但排除release/private/*的fetch规则再fetch；返回所有跟踪引用。必须保留允许的release/public分支，排除main及private子树。\n\n## 提交产物\ntask.py 中可调用的 execute 函数；按任务返回真实 Git 对象/文件检查结果，或在指定临时仓库产生要求的 Git 工件。不得只提交操作说明或硬编码示例结果。\n\n## 验收方法\n执行 python3 checks/check.py：在实际本地 Git 仓库运行正常、边界与失败用例，所有断言通过且返回 0。初始骨架、典型错误实现必须失败。测试材料仅作用于新建的临时仓库；不验证线上托管平台、真实凭据或生产发布。\n\n失败示例：只写正向release通配规则会同时拉取private子树。\n\n## 本会话验证边界\n只在一次性本地练习仓库验证，分支/提交/本地bare推送均已获明确授权；禁止修改OpsForge源码仓库历史、全局Git设置或真实远程。\n",
+    "files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "solution_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,remote):\n    git(repo,'config','--replace-all','remote.'+remote+'.fetch','+refs/heads/release/*:refs/remotes/'+remote+'/release/*')\n    git(repo,'config','--add','remote.'+remote+'.fetch','^refs/heads/release/private/*');git(repo,'fetch',remote)\n    return git(repo,'for-each-ref','--format=%(refname)','refs/remotes/'+remote).splitlines()\n"
+    },
+    "negative_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,remote):\n    git(repo,'config','--replace-all','remote.'+remote+'.fetch','+refs/heads/release/*:refs/remotes/'+remote+'/release/*');git(repo,'fetch',remote);return git(repo,'for-each-ref','--format=%(refname)','refs/remotes/'+remote).splitlines()\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import subprocess,json\n\n_native_run=subprocess.run\ndef _audited_run(*args,**kwargs):\n p=_native_run(*args,**kwargs)\n def safe(v):return v.decode('utf8',errors='replace') if isinstance(v,bytes) else v\n with open('native-commands.jsonl','a') as f:f.write(json.dumps({'command':args[0] if args else kwargs.get('args'),'cwd':str(kwargs.get('cwd','')),'rc':p.returncode,'stdout':safe(p.stdout),'stderr':safe(p.stderr)},ensure_ascii=True)+'\\n')\n return p\nsubprocess.run=_audited_run\nimport os,sys,pathlib,subprocess,tempfile,json,shutil\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef g(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8')\n    if check and p.returncode: raise AssertionError((args,p.returncode,p.stdout,p.stderr))\n    return p.stdout.strip()\ndef put(repo,name,content):\n    p=pathlib.Path(repo)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8',newline='')\ndef init(name='repo',bare=False):\n    p=pathlib.Path(name).resolve();p.mkdir(parents=True,exist_ok=True)\n    g(p,'init','-b','main',*(['--bare'] if bare else []))\n    g(p,'config','user.name','Exercise Author');g(p,'config','user.email','exercise@example.invalid')\n    g(p,'config','core.autocrlf','false');g(p,'config','commit.gpgsign','false')\n    return p\ndef commit(repo,files,msg='fixture'):\n    for name,content in files.items(): put(repo,name,content)\n    g(repo,'add','--all');g(repo,'commit','-m',msg)\n    return g(repo,'rev-parse','HEAD')\ndef before(repo):\n    return (g(repo,'rev-parse','HEAD'),g(repo,'diff','--binary'),g(repo,'diff','--cached','--binary'),g(repo,'status','--porcelain=v1','--untracked-files=all'))\nb=init('remote',True);s=init('source');commit(s,{'x':'x'});g(s,'branch','release/public');g(s,'branch','release/private/secret');g(s,'push','--all',str(b));r=init();g(r,'remote','add','vendor',str(b));assert task.execute(r,'vendor')==['refs/remotes/vendor/release/public']\n\ng(s,\"branch\",\"release/next\");g(s,\"push\",str(b),\"refs/heads/release/next\");assert task.execute(r,\"vendor\")==[\"refs/remotes/vendor/release/next\",\"refs/remotes/vendor/release/public\"]\n\nassert g(r,'for-each-ref','--format=%(refname)','refs/remotes/vendor').splitlines()==['refs/remotes/vendor/release/next','refs/remotes/vendor/release/public'],'must actually fetch allowed refs'\nspecs=g(r,'config','--get-all','remote.vendor.fetch').splitlines()\nassert '^refs/heads/release/private/*' in specs\nassert any(x.lstrip('+')=='refs/heads/release/*:refs/remotes/vendor/release/*' for x in specs)\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(repo,remote)，配置包含release/*但排除release/private/*的fetch规则再fetch；返回所有跟踪引用。必须保留允许的release/public分支，排除main及private子树。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "在独立临时 Git 仓库执行 checks/check.py 的完整断言，返回0；不以文字自评代替",
+      "failure_examples": [
+        "只写正向release通配规则会同时拉取private子树。"
+      ]
+    },
+    "case_signature": "git-original-converted|curated-parallel-git-105|用负 refspec 排除私有发布分支",
+    "conversion": {
+      "original_id": "curated-parallel-git-105",
+      "original_type": "case",
+      "original_title": "远端ls-remote能看到release/v3，fetch成功却始终没有对应跟踪引用，配置含^refs/heads/release/*。如何演练处置？",
+      "original_source": "独立编审：Git特有历史与交付故障",
+      "preserve_history": true
+    },
+    "question_format": "case"
+  },
+  {
+    "id": "src-3235b80acf73ef8c",
+    "title": "把私有功能分支变基到最新主线",
+    "answer": "```python\nimport os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,upstream):\n    if git(repo,'status','--porcelain'):raise ValueError('dirty')\n    git(repo,'rebase',upstream);return git(repo,'rev-parse','HEAD')\n```\n\n实现说明：实现 execute(repo,upstream)，在干净私有分支执行rebase，返回新HEAD；保留功能补丁并使upstream成为祖先，不能merge或reset丢补丁。只在无冲突测试材料执行，不推远端。\n\n原理补充（保留原题）：\ngit rebase 将一串提交重放到新基线，适合整理未共享分支或同步开发基线。它会改写提交 ID，已共享分支需团队约定，不能擅自强推覆盖他人历史。操作前检查工作区和备份引用，冲突解决后运行验证；merge 可保留原分支拓扑。",
+    "category": "Git",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "case",
+    "has_answer": true,
+    "source": "OpsForge 原题实质改编；原理及原始来源保留在答案和 conversion 中",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "pending",
+    "review_note": "会话04作者候选；原生验证结果另附，独审待会话05或会话10调度，未计完成量。",
+    "original_category": "Git",
+    "original_title": "那种情形你会使用 `git rebase`?",
+    "module": "git",
+    "topic": "把私有功能分支变基到最新主线",
+    "level": 2,
+    "body": "## 环境与初始材料\nPython 3.11+ 与 Git 2.39+；隔离的本地临时仓库，不使用远程网络和用户真实仓库。初始 task.py 是未实现骨架。平台验收时自动注入 checks/check.py，按题目要求创建真实仓库、提交及文件素材；每个用例使用独立仓库。无需自行提交验收脚本。\n\n## 操作任务\n实现 execute(repo,upstream)，在干净私有分支执行rebase，返回新HEAD；保留功能补丁并使upstream成为祖先，不能merge或reset丢补丁。只在无冲突测试材料执行，不推远端。\n\n## 提交产物\ntask.py 中可调用的 execute 函数；按任务返回真实 Git 对象/文件检查结果，或在指定临时仓库产生要求的 Git 工件。不得只提交操作说明或硬编码示例结果。\n\n## 验收方法\n执行 python3 checks/check.py：在实际本地 Git 仓库运行正常、边界与失败用例，所有断言通过且返回 0。初始骨架、典型错误实现必须失败。测试材料仅作用于新建的临时仓库；不验证线上托管平台、真实凭据或生产发布。\n\n失败示例：merge会产生双亲节点，不能达到功能补丁重放到新基线的要求。\n\n## 本会话验证边界\n只在一次性本地练习仓库验证，分支/提交/本地bare推送均已获明确授权；禁止修改OpsForge源码仓库历史、全局Git设置或真实远程。\n",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "git"
+    ],
+    "files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "solution_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,upstream):\n    if git(repo,'status','--porcelain'):raise ValueError('dirty')\n    git(repo,'rebase',upstream);return git(repo,'rev-parse','HEAD')\n"
+    },
+    "negative_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,upstream):\n    git(repo,'merge',upstream,'-m','merge instead');return git(repo,'rev-parse','HEAD')\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import subprocess,json\n\n_native_run=subprocess.run\ndef _audited_run(*args,**kwargs):\n p=_native_run(*args,**kwargs)\n def safe(v):return v.decode('utf8',errors='replace') if isinstance(v,bytes) else v\n with open('native-commands.jsonl','a') as f:f.write(json.dumps({'command':args[0] if args else kwargs.get('args'),'cwd':str(kwargs.get('cwd','')),'rc':p.returncode,'stdout':safe(p.stdout),'stderr':safe(p.stderr)},ensure_ascii=True)+'\\n')\n return p\nsubprocess.run=_audited_run\nimport os,sys,pathlib,subprocess,tempfile,json,shutil\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef g(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8')\n    if check and p.returncode: raise AssertionError((args,p.returncode,p.stdout,p.stderr))\n    return p.stdout.strip()\ndef put(repo,name,content):\n    p=pathlib.Path(repo)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8',newline='')\ndef init(name='repo',bare=False):\n    p=pathlib.Path(name).resolve();p.mkdir(parents=True,exist_ok=True)\n    g(p,'init','-b','main',*(['--bare'] if bare else []))\n    g(p,'config','user.name','Exercise Author');g(p,'config','user.email','exercise@example.invalid')\n    g(p,'config','core.autocrlf','false');g(p,'config','commit.gpgsign','false')\n    return p\ndef commit(repo,files,msg='fixture'):\n    for name,content in files.items(): put(repo,name,content)\n    g(repo,'add','--all');g(repo,'commit','-m',msg)\n    return g(repo,'rev-parse','HEAD')\ndef before(repo):\n    return (g(repo,'rev-parse','HEAD'),g(repo,'diff','--binary'),g(repo,'diff','--cached','--binary'),g(repo,'status','--porcelain=v1','--untracked-files=all'))\nr=init();commit(r,{'base':'b'});g(r,'checkout','-b','feature');old=commit(r,{'feature':'f'});g(r,'checkout','main');base=commit(r,{'main':'m'});g(r,'checkout','feature');new=task.execute(r,'main');assert new!=old and g(r,'rev-parse','HEAD^')==base;assert (r/'feature').read_text()=='f' and (r/'main').read_text()=='m';assert len(g(r,'rev-list','--parents','-n','1','HEAD').split())==2\n\nassert task.execute(r,\"main\")==g(r,\"rev-parse\",\"HEAD\"),\"must return actual new HEAD\"\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(repo,upstream)，在干净私有分支执行rebase，返回新HEAD；保留功能补丁并使upstream成为祖先，不能merge或reset丢补丁。只在无冲突测试材料执行，不推远端。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "在独立临时 Git 仓库执行 checks/check.py 的完整断言，返回0；不以文字自评代替",
+      "failure_examples": [
+        "merge会产生双亲节点，不能达到功能补丁重放到新基线的要求。"
+      ]
+    },
+    "case_signature": "git-original-converted|src-3235b80acf73ef8c|把私有功能分支变基到最新主线",
+    "conversion": {
+      "original_id": "src-3235b80acf73ef8c",
+      "original_type": "source",
+      "original_title": "那种情形你会使用 `git rebase`?",
+      "original_source": "README-zh_CN.md",
+      "preserve_history": true
+    },
+    "question_format": "case"
+  },
+  {
+    "id": "src-764c1445c09a0d7d",
+    "title": "将私有分支的两个提交压成一个",
+    "answer": "```python\nimport os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,message):\n    if git(repo,'status','--porcelain'):raise ValueError('dirty working tree')\n    base=git(repo,'rev-parse','--verify','HEAD~2')\n    author=git(repo,'show','-s','--format=%an <%ae>','HEAD')\n    git(repo,'reset','--soft',base);git(repo,'commit','--author='+author,'-m',message);return git(repo,'rev-parse','HEAD')\n```\n\n实现说明：实现 execute(repo,message)，仅在给定干净的私有练习分支将最后两个提交压为一个；保留HEAD树与作者，父提交应变为原HEAD~2，不推送远程。少于两个提交应拒绝且保持原HEAD。\n\n原理补充（保留原题）：\n常见方法是对尚未共享的提交执行交互式 rebase，将第二条标为 squash/fixup 后编辑提交信息并验证。也可软重置到前两条之前重新提交，但会改历史。这里只说明方法，不执行仓库操作；共享分支必须遵守团队授权，不能擅自强推。",
+    "category": "Git",
+    "difficulty": "入门",
+    "section": "变基",
+    "type": "case",
+    "has_answer": true,
+    "source": "OpsForge 原题实质改编；原理及原始来源保留在答案和 conversion 中",
+    "sources": [
+      "topics/git/README.md"
+    ],
+    "version": 5,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "pending",
+    "review_note": "会话04作者候选；原生验证结果另附，独审待会话05或会话10调度，未计完成量。",
+    "original_category": "Git",
+    "original_title": "如何压缩最后两次提交？",
+    "module": "git",
+    "topic": "将私有分支的两个提交压成一个",
+    "level": 2,
+    "body": "## 环境与初始材料\nPython 3.11+ 与 Git 2.39+；隔离的本地临时仓库，不使用远程网络和用户真实仓库。初始 task.py 是未实现骨架。平台验收时自动注入 checks/check.py，按题目要求创建真实仓库、提交及文件素材；每个用例使用独立仓库。无需自行提交验收脚本。\n\n## 操作任务\n实现 execute(repo,message)，仅在给定干净的私有练习分支将最后两个提交压为一个；保留HEAD树与作者，父提交应变为原HEAD~2，不推送远程。少于两个提交应拒绝且保持原HEAD。\n\n## 提交产物\ntask.py 中可调用的 execute 函数；按任务返回真实 Git 对象/文件检查结果，或在指定临时仓库产生要求的 Git 工件。不得只提交操作说明或硬编码示例结果。\n\n## 验收方法\n执行 python3 checks/check.py：在实际本地 Git 仓库运行正常、边界与失败用例，所有断言通过且返回 0。初始骨架、典型错误实现必须失败。测试材料仅作用于新建的临时仓库；不验证线上托管平台、真实凭据或生产发布。\n\n失败示例：hard reset会丢掉要压缩的文件内容。\n\n## 本会话验证边界\n只在一次性本地练习仓库验证，分支/提交/本地bare推送均已获明确授权；禁止修改OpsForge源码仓库历史、全局Git设置或真实远程。\n",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "git"
+    ],
+    "files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "solution_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,message):\n    if git(repo,'status','--porcelain'):raise ValueError('dirty working tree')\n    base=git(repo,'rev-parse','--verify','HEAD~2')\n    author=git(repo,'show','-s','--format=%an <%ae>','HEAD')\n    git(repo,'reset','--soft',base);git(repo,'commit','--author='+author,'-m',message);return git(repo,'rev-parse','HEAD')\n"
+    },
+    "negative_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,message):\n    git(repo,'reset','--hard','HEAD~2');git(repo,'commit','--allow-empty','-m',message);return git(repo,'rev-parse','HEAD')\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import subprocess,json\n\n_native_run=subprocess.run\ndef _audited_run(*args,**kwargs):\n p=_native_run(*args,**kwargs)\n def safe(v):return v.decode('utf8',errors='replace') if isinstance(v,bytes) else v\n with open('native-commands.jsonl','a') as f:f.write(json.dumps({'command':args[0] if args else kwargs.get('args'),'cwd':str(kwargs.get('cwd','')),'rc':p.returncode,'stdout':safe(p.stdout),'stderr':safe(p.stderr)},ensure_ascii=True)+'\\n')\n return p\nsubprocess.run=_audited_run\nimport os,sys,pathlib,subprocess,tempfile,json,shutil\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef g(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8')\n    if check and p.returncode: raise AssertionError((args,p.returncode,p.stdout,p.stderr))\n    return p.stdout.strip()\ndef put(repo,name,content):\n    p=pathlib.Path(repo)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8',newline='')\ndef init(name='repo',bare=False):\n    p=pathlib.Path(name).resolve();p.mkdir(parents=True,exist_ok=True)\n    g(p,'init','-b','main',*(['--bare'] if bare else []))\n    g(p,'config','user.name','Exercise Author');g(p,'config','user.email','exercise@example.invalid')\n    g(p,'config','core.autocrlf','false');g(p,'config','commit.gpgsign','false')\n    return p\ndef commit(repo,files,msg='fixture'):\n    for name,content in files.items(): put(repo,name,content)\n    g(repo,'add','--all');g(repo,'commit','-m',msg)\n    return g(repo,'rev-parse','HEAD')\ndef before(repo):\n    return (g(repo,'rev-parse','HEAD'),g(repo,'diff','--binary'),g(repo,'diff','--cached','--binary'),g(repo,'status','--porcelain=v1','--untracked-files=all'))\nr=init();base=commit(r,{'a':'base'});commit(r,{'b':'one'});commit(r,{'a':'changed','c':'two'});g(r,'-c','user.name=Different Author','-c','user.email=different@example.invalid','commit','--amend','--no-edit');author=g(r,'show','-s','--format=%an <%ae>','HEAD');tree=g(r,'rev-parse','HEAD^{tree}');new=task.execute(r,'combined');assert isinstance(new,str) and new,'commit OID required';assert g(r,'rev-parse',new+'^')==base and g(r,'rev-parse','HEAD^{tree}')==tree and g(r,'rev-list','--count','HEAD')=='2'\nsmall=init('small');head=commit(small,{'x':'x'})\ntry:task.execute(small,'bad')\nexcept Exception:pass\nelse:raise AssertionError('insufficient history accepted')\nassert g(small,'rev-parse','HEAD')==head\n\nassert g(r,\"show\",\"-s\",\"--format=%an <%ae>\",new)==author\nassert g(r,\"show\",\"-s\",\"--format=%B\",new)==\"combined\"\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(repo,message)，仅在给定干净的私有练习分支将最后两个提交压为一个；保留HEAD树与作者，父提交应变为原HEAD~2，不推送远程。少于两个提交应拒绝且保持原HEAD。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "在独立临时 Git 仓库执行 checks/check.py 的完整断言，返回0；不以文字自评代替",
+      "failure_examples": [
+        "hard reset会丢掉要压缩的文件内容。"
+      ]
+    },
+    "case_signature": "git-original-converted|src-764c1445c09a0d7d|将私有分支的两个提交压成一个",
+    "conversion": {
+      "original_id": "src-764c1445c09a0d7d",
+      "original_type": "source",
+      "original_title": "如何压缩最后两次提交？",
+      "original_source": "topics/git/README.md",
+      "preserve_history": true
+    },
+    "question_format": "case"
+  },
+  {
+    "id": "verified-git-delete-remote",
+    "module": "git",
+    "category": "Git",
+    "title": "只删除指定远程分支并保留本地分支",
+    "answer": "```python\nimport os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,remote,branch):\n    ref='refs/heads/'+branch;git(repo,'push',remote,':'+ref)\n    return bool(git(repo,'ls-remote','--heads',remote,ref))\n```\n\n实现说明：实现 execute(repo,remote,branch)，以完整refspec删除远端refs/heads/<branch>；返回远端同名引用是否仍存在（应False）。不能误删本地分支、远程main或同名标签。\n\n原理补充（保留原题）：\n先确认目标分支可删除，然后执行 `git push origin --delete feature/demo`。这是请求删除远端分支，本地同名分支不会随之自动删除；受保护分支可能被服务端拒绝。需要查看远端实际分支时可用 `git ls-remote --heads origin`。",
+    "body": "## 环境与初始材料\nPython 3.11+ 与 Git 2.39+；隔离的本地临时仓库，不使用远程网络和用户真实仓库。初始 task.py 是未实现骨架。平台验收时自动注入 checks/check.py，按题目要求创建真实仓库、提交及文件素材；每个用例使用独立仓库。无需自行提交验收脚本。\n\n## 操作任务\n实现 execute(repo,remote,branch)，以完整refspec删除远端refs/heads/<branch>；返回远端同名引用是否仍存在（应False）。不能误删本地分支、远程main或同名标签。\n\n## 提交产物\ntask.py 中可调用的 execute 函数；按任务返回真实 Git 对象/文件检查结果，或在指定临时仓库产生要求的 Git 工件。不得只提交操作说明或硬编码示例结果。\n\n## 验收方法\n执行 python3 checks/check.py：在实际本地 Git 仓库运行正常、边界与失败用例，所有断言通过且返回 0。初始骨架、典型错误实现必须失败。测试材料仅作用于新建的临时仓库；不验证线上托管平台、真实凭据或生产发布。\n\n失败示例：branch -D删的是本地分支，并没有删除远端引用。\n\n## 本会话验证边界\n只在一次性本地练习仓库验证，分支/提交/本地bare推送均已获明确授权；禁止修改OpsForge源码仓库历史、全局Git设置或真实远程。\n",
+    "source": "OpsForge 原题实质改编；原理及原始来源保留在答案和 conversion 中",
+    "references": [
+      "https://git-scm.com/docs/git-push",
+      "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb"
+    ],
+    "type": "case",
+    "level": 2,
+    "version": 3,
+    "has_answer": true,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；原生验证结果另附，独审待会话05或会话10调度，未计完成量。",
+    "hints": [
+      "区分操作对象与使用前提。"
+    ],
+    "rubric": [
+      "概念与操作一致",
+      "指出限制"
+    ],
+    "answer_style": "spoken",
+    "related_modules": [
+      "git"
+    ],
+    "difficulty": "进阶",
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "Unpmdi6ijotllnxIBFDcIcXcnMb",
+          "HERGd87g2ovh8VxuaDecnCz7nae"
+        ]
+      }
+    ],
+    "topic": "只删除指定远程分支并保留本地分支",
+    "files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "solution_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,remote,branch):\n    ref='refs/heads/'+branch;git(repo,'push',remote,':'+ref)\n    return bool(git(repo,'ls-remote','--heads',remote,ref))\n"
+    },
+    "negative_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,remote,branch):\n    git(repo,'branch','-D',branch);return False\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import subprocess,json\n\n_native_run=subprocess.run\ndef _audited_run(*args,**kwargs):\n p=_native_run(*args,**kwargs)\n def safe(v):return v.decode('utf8',errors='replace') if isinstance(v,bytes) else v\n with open('native-commands.jsonl','a') as f:f.write(json.dumps({'command':args[0] if args else kwargs.get('args'),'cwd':str(kwargs.get('cwd','')),'rc':p.returncode,'stdout':safe(p.stdout),'stderr':safe(p.stderr)},ensure_ascii=True)+'\\n')\n return p\nsubprocess.run=_audited_run\nimport os,sys,pathlib,subprocess,tempfile,json,shutil\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef g(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8')\n    if check and p.returncode: raise AssertionError((args,p.returncode,p.stdout,p.stderr))\n    return p.stdout.strip()\ndef put(repo,name,content):\n    p=pathlib.Path(repo)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8',newline='')\ndef init(name='repo',bare=False):\n    p=pathlib.Path(name).resolve();p.mkdir(parents=True,exist_ok=True)\n    g(p,'init','-b','main',*(['--bare'] if bare else []))\n    g(p,'config','user.name','Exercise Author');g(p,'config','user.email','exercise@example.invalid')\n    g(p,'config','core.autocrlf','false');g(p,'config','commit.gpgsign','false')\n    return p\ndef commit(repo,files,msg='fixture'):\n    for name,content in files.items(): put(repo,name,content)\n    g(repo,'add','--all');g(repo,'commit','-m',msg)\n    return g(repo,'rev-parse','HEAD')\ndef before(repo):\n    return (g(repo,'rev-parse','HEAD'),g(repo,'diff','--binary'),g(repo,'diff','--cached','--binary'),g(repo,'status','--porcelain=v1','--untracked-files=all'))\nr=init();head=commit(r,{'x':'x'});g(r,'branch','feature/demo');g(r,'tag','feature/demo');b=init('bare',True);g(r,'remote','add','origin',str(b));g(r,'push','--all','origin');g(r,'push','--tags','origin')\nassert task.execute(r,'origin','feature/demo') is False;assert g(r,'rev-parse','refs/heads/feature/demo')==head and g(b,'rev-parse','refs/heads/main')==head and g(b,'rev-parse','refs/tags/feature/demo')==head\n\nassert g(r,\"ls-remote\",\"--heads\",\"origin\",\"refs/heads/feature/demo\")==\"\",\"remote branch still exists despite false return value\"\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(repo,remote,branch)，以完整refspec删除远端refs/heads/<branch>；返回远端同名引用是否仍存在（应False）。不能误删本地分支、远程main或同名标签。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "在独立临时 Git 仓库执行 checks/check.py 的完整断言，返回0；不以文字自评代替",
+      "failure_examples": [
+        "branch -D删的是本地分支，并没有删除远端引用。"
+      ]
+    },
+    "case_signature": "git-original-converted|verified-git-delete-remote|只删除指定远程分支并保留本地分支",
+    "conversion": {
+      "original_id": "verified-git-delete-remote",
+      "original_type": "interview",
+      "original_title": "如何删除 origin 上的 feature/demo 分支？",
+      "original_source": "OpsForge 独立编写 · 官方资料核对",
+      "preserve_history": true
+    },
+    "question_format": "case"
+  },
+  {
+    "id": "verified-git-tracked",
+    "module": "git",
+    "category": "Git",
+    "title": "判断跟踪状态并仅添加未跟踪指定文件",
+    "answer": "```python\nimport os,pathlib,subprocess\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef execute(repo,path):\n    command=[GIT,'--literal-pathspecs','-C',str(repo)]\n    p=subprocess.run(command+['ls-files','--error-unmatch','--',path],capture_output=True)\n    if p.returncode==0:return 'existing'\n    if not (pathlib.Path(repo)/path).is_file():raise FileNotFoundError(path)\n    subprocess.run(command+['add','--',path],capture_output=True,check=True)\n    return 'added'\n```\n\n实现说明：实现 execute(repo,path)，已被跟踪返回existing且不重新暂存；未跟踪但实际存在返回added并只add该路径；不存在抛FileNotFoundError。精确处理有空格路径与部分暂存区。\n\n原理补充（保留原题）：\n在仓库内执行 `git ls-files --error-unmatch -- config.yaml`；匹配索引中的文件时成功，找不到匹配时返回非零。单用 `git ls-files config.yaml` 没有输出不能靠退出码 0 判断已跟踪。确认不是路径/仓库错误后，用 `git add -- config.yaml` 暂存文件，再看 `git status --short`。对被忽略的文件先核实忽略规则，不要盲目强制添加。 单一目标使用Git全局--literal-pathspecs，不能将文件名中的*、?或[]解释为路径模式。",
+    "body": "## 环境与初始材料\nPython 3.11+ 与 Git 2.39+；隔离的本地临时仓库，不使用远程网络和用户真实仓库。初始 task.py 是未实现骨架。平台验收时自动注入 checks/check.py，按题目要求创建真实仓库、提交及文件素材；每个用例使用独立仓库。无需自行提交验收脚本。\n\n## 操作任务\n实现 execute(repo,path)，已被跟踪返回existing且不重新暂存；未跟踪但实际存在返回added并只add该路径；不存在抛FileNotFoundError。精确处理有空格路径与部分暂存区。\n\n## 提交产物\ntask.py 中可调用的 execute 函数；按任务返回真实 Git 对象/文件检查结果，或在指定临时仓库产生要求的 Git 工件。不得只提交操作说明或硬编码示例结果。\n\n## 验收方法\n执行 python3 checks/check.py：在实际本地 Git 仓库运行正常、边界与失败用例，所有断言通过且返回 0。初始骨架、典型错误实现必须失败。测试材料仅作用于新建的临时仓库；不验证线上托管平台、真实凭据或生产发布。\n\n失败示例：无条件add会覆盖已有文件的部分暂存状态。\n\n## 本会话验证边界\n只在一次性本地练习仓库验证，分支/提交/本地bare推送均已获明确授权；禁止修改OpsForge源码仓库历史、全局Git设置或真实远程。\n",
+    "source": "OpsForge 原题实质改编；原理及原始来源保留在答案和 conversion 中",
+    "references": [
+      "https://git-scm.com/docs/git-ls-files",
+      "https://git-scm.com/docs/git-add"
+    ],
+    "type": "practice",
+    "level": 2,
+    "version": 4,
+    "has_answer": true,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；原生验证结果另附，独审待会话05或会话10调度，未计完成量。",
+    "hints": [
+      "区分操作对象与使用前提。"
+    ],
+    "rubric": [
+      "概念与操作一致",
+      "指出限制"
+    ],
+    "answer_style": "spoken",
+    "related_modules": [
+      "git"
+    ],
+    "difficulty": "进阶",
+    "topic": "判断跟踪状态并仅添加未跟踪指定文件",
+    "files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "solution_files": {
+      "task.py": "import os,pathlib,subprocess\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef execute(repo,path):\n    command=[GIT,'--literal-pathspecs','-C',str(repo)]\n    p=subprocess.run(command+['ls-files','--error-unmatch','--',path],capture_output=True)\n    if p.returncode==0:return 'existing'\n    if not (pathlib.Path(repo)/path).is_file():raise FileNotFoundError(path)\n    subprocess.run(command+['add','--',path],capture_output=True,check=True)\n    return 'added'\n"
+    },
+    "negative_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,path):\n    git(repo,'add','--',path);return 'added'\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import subprocess,json\n\n_native_run=subprocess.run\ndef _audited_run(*args,**kwargs):\n p=_native_run(*args,**kwargs)\n def safe(v):return v.decode('utf8',errors='replace') if isinstance(v,bytes) else v\n with open('native-commands.jsonl','a') as f:f.write(json.dumps({'command':args[0] if args else kwargs.get('args'),'cwd':str(kwargs.get('cwd','')),'rc':p.returncode,'stdout':safe(p.stdout),'stderr':safe(p.stderr)},ensure_ascii=True)+'\\n')\n return p\nsubprocess.run=_audited_run\nimport os,sys,pathlib,subprocess,tempfile,json,shutil\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef g(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8')\n    if check and p.returncode: raise AssertionError((args,p.returncode,p.stdout,p.stderr))\n    return p.stdout.strip()\ndef put(repo,name,content):\n    p=pathlib.Path(repo)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8',newline='')\ndef init(name='repo',bare=False):\n    p=pathlib.Path(name).resolve();p.mkdir(parents=True,exist_ok=True)\n    g(p,'init','-b','main',*(['--bare'] if bare else []))\n    g(p,'config','user.name','Exercise Author');g(p,'config','user.email','exercise@example.invalid')\n    g(p,'config','core.autocrlf','false');g(p,'config','commit.gpgsign','false')\n    return p\ndef commit(repo,files,msg='fixture'):\n    for name,content in files.items(): put(repo,name,content)\n    g(repo,'add','--all');g(repo,'commit','-m',msg)\n    return g(repo,'rev-parse','HEAD')\ndef before(repo):\n    return (g(repo,'rev-parse','HEAD'),g(repo,'diff','--binary'),g(repo,'diff','--cached','--binary'),g(repo,'status','--porcelain=v1','--untracked-files=all'))\nr=init();commit(r,{'config':'base'});put(r,'config','staged');g(r,'add','config');put(r,'config','dirty');put(r,'new file','new');put(r,'other','leave');assert task.execute(r,'config')=='existing' and g(r,'show',':config')=='staged';assert task.execute(r,'new file')=='added' and g(r,'show',':new file')=='new';assert '?? other' in g(r,'status','--porcelain')\ntry:task.execute(r,'missing')\nexcept FileNotFoundError:pass\nelse:raise AssertionError('missing accepted')\n\n# Regression: a single literal target must not be interpreted as a pathspec glob.\nfor case,target,tracked_name,other_new in [\n ('literal-star','cfg*.env','cfgReal.env','cfgNew.env'),\n ('literal-question','cfg?.env','cfgX.env','cfgY.env'),\n ('literal-brackets','cfg[prod].env','cfgp.env','cfgr.env')]:\n repo=init(case);commit(repo,{tracked_name:'base','keep':'base'})\n put(repo,tracked_name,'staged');g(repo,'--literal-pathspecs','add','--',tracked_name);put(repo,tracked_name,'dirty')\n put(repo,target,'literal target');put(repo,other_new,'leave untracked')\n assert task.execute(repo,target)=='added','untracked literal target confused with matching tracked filename'\n indexed=subprocess.run([GIT,'-C',str(repo),'ls-files','-z'],capture_output=True,check=True).stdout.split(b'\\0')\n assert target.encode() in indexed and other_new.encode() not in indexed,'pathspec expanded to other files'\n assert g(repo,'show',':'+tracked_name)=='staged','other tracked index was overwritten'\n assert task.execute(repo,target)=='existing'\nrepo=init('already-tracked-brackets');commit(repo,{'tracked[prod].env':'base','keep':'base'})\nput(repo,'tracked[prod].env','staged');g(repo,'--literal-pathspecs','add','--','tracked[prod].env');put(repo,'tracked[prod].env','dirty')\nassert task.execute(repo,'tracked[prod].env')=='existing'\nassert g(repo,'show',':tracked[prod].env')=='staged','existing target must not be restaged'\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(repo,path)，已被跟踪返回existing且不重新暂存；未跟踪但实际存在返回added并只add该路径；不存在抛FileNotFoundError。精确处理有空格路径与部分暂存区。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "在独立临时 Git 仓库执行 checks/check.py 的完整断言，返回0；不以文字自评代替",
+      "failure_examples": [
+        "无条件add会覆盖已有文件的部分暂存状态。"
+      ]
+    },
+    "case_signature": "git-original-converted|verified-git-tracked|判断跟踪状态并仅添加未跟踪指定文件",
+    "conversion": {
+      "original_id": "verified-git-tracked",
+      "original_type": "interview",
+      "original_title": "如何可靠判断 config.yaml 是否已被 Git 跟踪，并跟踪一个未跟踪文件？",
+      "original_source": "OpsForge 独立编写 · 官方资料核对",
+      "preserve_history": true
+    },
+    "question_format": "project"
+  },
+  {
+    "id": "verified-git-untrack",
+    "module": "git",
+    "category": "Git",
+    "title": "停止跟踪本地配置并保留文件与其他暂存内容",
+    "answer": "```python\nimport os,pathlib,subprocess\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef execute(repo,path):\n    data=(pathlib.Path(repo)/path).read_bytes()\n    command=[GIT,'--literal-pathspecs','-C',str(repo)]\n    p=subprocess.run(command+['ls-files','--error-unmatch','--',path],capture_output=True)\n    if p.returncode==0:\n        subprocess.run(command+['rm','--cached','--',path],capture_output=True,check=True)\n    ignore=pathlib.Path(repo)/'.gitignore'\n    old=ignore.read_bytes() if ignore.exists() else b''\n    rule=('/'+''.join(('\\\\'+char) if char in '\\\\*?[] ' else char for char in path)).encode('utf-8')\n    if rule not in old.splitlines():\n        with ignore.open('ab') as stream:\n            stream.write((b'' if not old or old.endswith(b'\\n') else b'\\n')+rule+b'\\n')\n    return data\n```\n\n实现 execute(repo,path)，git rm --cached指定配置文件，再在.gitignore追加精确根路径规则；不删工作区文件，不提交，不重新add其他文件。已有忽略规则必须保留，返回保留文件的原始字节。 已有ignore文件无末尾换行时先补分隔换行；重复调用不重复追加规则。 单一路径的索引操作使用--literal-pathspecs；根ignore规则对反斜杠、*、?、[、]及空格转义，按字节保留原ignore内容和无末尾LF分隔，重复不追加。",
+    "body": "## 环境与初始材料\nPython 3.11+ 与 Git 2.39+；隔离的本地临时仓库，不使用远程网络和用户真实仓库。初始 task.py 是未实现骨架。平台验收时自动注入 checks/check.py，按题目要求创建真实仓库、提交及文件素材；每个用例使用独立仓库。无需自行提交验收脚本。\n\n## 操作任务\n实现 execute(repo,path)，git rm --cached指定配置文件，再在.gitignore追加精确根路径规则；不删工作区文件，不提交，不重新add其他文件。已有忽略规则必须保留，返回保留文件的原始字节。\n\n## 提交产物\ntask.py 中可调用的 execute 函数；按任务返回真实 Git 对象/文件检查结果，或在指定临时仓库产生要求的 Git 工件。不得只提交操作说明或硬编码示例结果。\n\n## 验收方法\n执行 python3 checks/check.py：在实际本地 Git 仓库运行正常、边界与失败用例，所有断言通过且返回 0。初始骨架、典型错误实现必须失败。测试材料仅作用于新建的临时仓库；不验证线上托管平台、真实凭据或生产发布。\n\n失败示例：git rm会删除本地配置，应该只从索引移除。\n\n## 本会话验证边界\n只在一次性本地练习仓库验证，分支/提交/本地bare推送均已获明确授权；禁止修改OpsForge源码仓库历史、全局Git设置或真实远程。\n",
+    "source": "OpsForge 原题实质改编；原理及原始来源保留在答案和 conversion 中",
+    "references": [
+      "https://git-scm.com/docs/git-rm",
+      "https://git-scm.com/docs/gitignore"
+    ],
+    "type": "practice",
+    "level": 2,
+    "version": 4,
+    "has_answer": true,
+    "review_status": "pending",
+    "review_note": "会话04作者候选；原生验证结果另附，独审待会话05或会话10调度，未计完成量。",
+    "hints": [
+      "区分操作对象与使用前提。"
+    ],
+    "rubric": [
+      "概念与操作一致",
+      "指出限制"
+    ],
+    "answer_style": "spoken",
+    "related_modules": [
+      "git"
+    ],
+    "difficulty": "进阶",
+    "topic": "停止跟踪本地配置并保留文件与其他暂存内容",
+    "files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "solution_files": {
+      "task.py": "import os,pathlib,subprocess\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef execute(repo,path):\n    data=(pathlib.Path(repo)/path).read_bytes()\n    command=[GIT,'--literal-pathspecs','-C',str(repo)]\n    p=subprocess.run(command+['ls-files','--error-unmatch','--',path],capture_output=True)\n    if p.returncode==0:\n        subprocess.run(command+['rm','--cached','--',path],capture_output=True,check=True)\n    ignore=pathlib.Path(repo)/'.gitignore'\n    old=ignore.read_bytes() if ignore.exists() else b''\n    rule=('/'+''.join(('\\\\'+char) if char in '\\\\*?[] ' else char for char in path)).encode('utf-8')\n    if rule not in old.splitlines():\n        with ignore.open('ab') as stream:\n            stream.write((b'' if not old or old.endswith(b'\\n') else b'\\n')+rule+b'\\n')\n    return data\n"
+    },
+    "negative_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,path):\n    data=(pathlib.Path(repo)/path).read_bytes();git(repo,'rm','--',path);return data\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import subprocess,json\n\n_native_run=subprocess.run\ndef _audited_run(*args,**kwargs):\n p=_native_run(*args,**kwargs)\n def safe(v):return v.decode('utf8',errors='replace') if isinstance(v,bytes) else v\n with open('native-commands.jsonl','a') as f:f.write(json.dumps({'command':args[0] if args else kwargs.get('args'),'cwd':str(kwargs.get('cwd','')),'rc':p.returncode,'stdout':safe(p.stdout),'stderr':safe(p.stderr)},ensure_ascii=True)+'\\n')\n return p\nsubprocess.run=_audited_run\nimport os,sys,pathlib,subprocess,tempfile,json,shutil\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef g(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8')\n    if check and p.returncode: raise AssertionError((args,p.returncode,p.stdout,p.stderr))\n    return p.stdout.strip()\ndef put(repo,name,content):\n    p=pathlib.Path(repo)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8',newline='')\ndef init(name='repo',bare=False):\n    p=pathlib.Path(name).resolve();p.mkdir(parents=True,exist_ok=True)\n    g(p,'init','-b','main',*(['--bare'] if bare else []))\n    g(p,'config','user.name','Exercise Author');g(p,'config','user.email','exercise@example.invalid')\n    g(p,'config','core.autocrlf','false');g(p,'config','commit.gpgsign','false')\n    return p\ndef commit(repo,files,msg='fixture'):\n    for name,content in files.items(): put(repo,name,content)\n    g(repo,'add','--all');g(repo,'commit','-m',msg)\n    return g(repo,'rev-parse','HEAD')\ndef before(repo):\n    return (g(repo,'rev-parse','HEAD'),g(repo,'diff','--binary'),g(repo,'diff','--cached','--binary'),g(repo,'status','--porcelain=v1','--untracked-files=all'))\nr=init();commit(r,{'config.env':'local-secret=fixture','.gitignore':'*.tmp\\n','keep':'base'});put(r,'keep','staged');g(r,'add','keep');put(r,'keep','work');assert task.execute(r,'config.env')==b'local-secret=fixture';assert (r/'config.env').exists();assert g(r,'ls-files','--','config.env')=='' and g(r,'show',':keep')=='staged';assert (r/'.gitignore').read_text()=='*.tmp\\n/config.env\\n';assert g(r,'check-ignore','config.env')=='config.env';assert g(r,'rev-list','--count','HEAD')=='1'\n\nr2=init('without-final-newline');commit(r2,{'config.env':'local','.gitignore':'*.tmp','keep':'base'});put(r2,'keep','staged');g(r2,'add','keep');put(r2,'keep','dirty')\nassert task.execute(r2,'config.env')==b'local'\nassert (r2/'.gitignore').read_text()=='*.tmp\\n/config.env\\n'\nassert g(r2,'check-ignore','config.env')=='config.env' and g(r2,'show',':keep')=='staged'\nsnapshot=before(r2);assert task.execute(r2,'config.env')==b'local';assert before(r2)==snapshot and (r2/'.gitignore').read_text()=='*.tmp\\n/config.env\\n'\n\n# Actual ignore matching, exact literal index removal and byte-preserving append.\nfor number,target,decoy in [\n (0,'config[prod].env','configp.env'),(1,'config*.env','configOther.env'),\n (2,'config?.env','configX.env'),(3,'config\\\\prod.env','configprod.env'),\n (4,' config with spaces.env ','config with spaces.env')]:\n repo=init('ignore-literal-'+str(number))\n commit(repo,{target:'secret bytes',decoy:'decoy','.gitignore':'*.tmp','keep':'base'})\n put(repo,'keep','staged');g(repo,'add','keep');put(repo,'keep','dirty')\n assert task.execute(repo,target)==b'secret bytes'\n assert (repo/target).read_bytes()==b'secret bytes'\n indexed=subprocess.run([GIT,'-C',str(repo),'ls-files','-z'],capture_output=True,check=True).stdout.split(b'\\0')\n assert target.encode() not in indexed and decoy.encode() in indexed,'wrong index entry removed'\n ignored=subprocess.run([GIT,'-C',str(repo),'check-ignore','--no-index','-q','--',target],capture_output=True)\n not_ignored=subprocess.run([GIT,'-C',str(repo),'check-ignore','--no-index','-q','--',decoy],capture_output=True)\n assert ignored.returncode==0,'literal target rule does not actually match'\n assert not_ignored.returncode==1,'literal ignore rule unexpectedly matches a different filename'\n assert (repo/'.gitignore').read_bytes().startswith(b'*.tmp\\n'),'old no-LF ignore content not separated'\n assert g(repo,'show',':keep')=='staged' and (repo/'keep').read_text()=='dirty'\n old_ignore=(repo/'.gitignore').read_bytes();old_index=g(repo,'diff','--cached','--binary')\n assert task.execute(repo,target)==b'secret bytes'\n assert (repo/'.gitignore').read_bytes()==old_ignore and g(repo,'diff','--cached','--binary')==old_index,'repeat changed ignore or index'\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(repo,path)，git rm --cached指定配置文件，再在.gitignore追加精确根路径规则；不删工作区文件，不提交，不重新add其他文件。已有忽略规则必须保留，返回保留文件的原始字节。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "在独立临时 Git 仓库执行 checks/check.py 的完整断言，返回0；不以文字自评代替",
+      "failure_examples": [
+        "git rm会删除本地配置，应该只从索引移除。"
+      ]
+    },
+    "case_signature": "git-original-converted|verified-git-untrack|停止跟踪本地配置并保留文件与其他暂存内容",
+    "conversion": {
+      "original_id": "verified-git-untrack",
+      "original_type": "interview",
+      "original_title": "怎样从 Git 索引移除已跟踪文件，同时保留工作区文件？",
+      "original_source": "OpsForge 独立编写 · 官方资料核对",
+      "preserve_history": true
+    },
+    "question_format": "project"
+  },
+  {
+    "id": "src-43e482711c361062",
+    "module": "git",
+    "category": "Git",
+    "topic": "重排私有线性提交：把指定提交移到最新并保留其他提交顺序",
+    "title": "重排私有线性提交：把指定提交移到最新并保留其他提交顺序",
+    "type": "practice",
+    "question_format": "project",
+    "level": 2,
+    "version": 2,
+    "source": "topics/git/README.md",
+    "pack": "session04-git-20261029",
+    "language": "python",
+    "body": "## 操作环境\n真实Git/Python，普通用户隔离临时仓库，不访问网络或默认账号配置。\n\n## 操作任务\n实现 execute(repo,base,chosen)：已检出未发布线性分支，工作树干净，base是分叉基点。把base之后指定chosen提交移到最新，其余提交保持相对顺序；所有变更内容保留，不修改main。题设各提交修改独立文件，无冲突。不得推送或改全局配置。\n\n## 产物\ntask.py。另附思路说明，说明不参与自动判分，由独立复核评审。\n\n## 验收方法\n真实Git建夹具并执行提交图、索引、工作树与内容断言；参考、初始、错解、投机及合法替代均分别运行。",
+    "answer": "```python\nimport os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo,base,chosen):\n commits=git(repo,'rev-list','--reverse',base+'..HEAD').splitlines()\n if chosen not in commits:raise ValueError('chosen outside private range')\n order=[c for c in commits if c!=chosen]+[chosen]\n git(repo,'reset','--hard',base)\n for c in order:git(repo,'cherry-pick',c)\n```\n\nrebase重放提交并通常改变OID，不会自动丢弃功能历史。重排仅适用于获准改写的私有分支；合并已发布历史要另行协调。",
+    "has_answer": true,
+    "hints": [],
+    "rubric": [
+      "实现 execute(repo,base,chosen)：已检出未发布线性分支，工作树干净，base是分叉基点。把base之后指定chosen提交移到最新，其余提交保持相对顺序；所有变更内容保留，不修改main。题设各提交修改独立文件，无冲突。不得推送或改全局配置。",
+      "rebase重放提交并通常改变OID，不会自动丢弃功能历史。重排仅适用于获准改写的私有分支；合并已发布历史要另行协调。"
+    ],
+    "references": [
+      "https://git-scm.com/docs/git-rebase",
+      "https://git-scm.com/docs/git-diff",
+      "https://git-scm.com/docs/gitattributes",
+      "https://git-scm.com/docs/git-merge"
+    ],
+    "files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(*args,**kwargs):\n raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo,base,chosen):\n commits=git(repo,'rev-list','--reverse',base+'..HEAD').splitlines()\n if chosen not in commits:raise ValueError('chosen outside private range')\n order=[c for c in commits if c!=chosen]+[chosen]\n git(repo,'reset','--hard',base)\n for c in order:git(repo,'cherry-pick',c)\n"
+    },
+    "negative_files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo,base,chosen):\n git(repo,'rebase',base)\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "真实Git/Python，student隔离临时仓库，无网络。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "实际执行Git并断言提交图、文件字节、暂存区及边界，不用模型。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 90,
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import subprocess,json\n\n_native_run=subprocess.run\ndef _audited_run(*args,**kwargs):\n p=_native_run(*args,**kwargs)\n def safe(v):return v.decode('utf8',errors='replace') if isinstance(v,bytes) else v\n with open('native-commands.jsonl','a') as f:f.write(json.dumps({'command':args[0] if args else kwargs.get('args'),'cwd':str(kwargs.get('cwd','')),'rc':p.returncode,'stdout':safe(p.stdout),'stderr':safe(p.stderr)},ensure_ascii=True)+'\\n')\n return p\nsubprocess.run=_audited_run\nimport json,os,pathlib,subprocess,sys,tempfile\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef g(repo,*args,ok=True):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n assert not ok or p.returncode==0,(args,p.stdout,p.stderr)\n print(json.dumps({'command':['git','-C',str(repo),*args],'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr}),flush=True)\n return p.stdout.strip() if ok else p\ndef init(root):\n root.mkdir();g(root,'init','-b','main');g(root,'config','user.name','Session04 Fixture');g(root,'config','user.email','session04@example.invalid');g(root,'config','commit.gpgsign','false');g(root,'config','core.autocrlf','false');return root\ndef commit(r,name,value):\n (r/name).write_text(value);g(r,'add','--',name);g(r,'commit','-m',name);return g(r,'rev-parse','HEAD')\nfor chosen_index in [0,1,2]:\n with tempfile.TemporaryDirectory(prefix='opsforge-session04-git-reorder-') as d:\n  r=init(pathlib.Path(d)/'repo');base=commit(r,'base','base');g(r,'switch','-c','private')\n  commits=[commit(r,n,n+'\\n') for n in ['first','middle','last']]\n  main=g(r,'rev-parse','main');task.execute(r,base,commits[chosen_index])\n  assert g(r,'symbolic-ref','--short','HEAD')=='private'\n  assert g(r,'log','--reverse','--format=%s',base+'..HEAD').splitlines()==[n for i,n in enumerate(['first','middle','last']) if i!=chosen_index]+[['first','middle','last'][chosen_index]]\n  assert g(r,'rev-parse','main')==main and g(r,'status','--porcelain')==''\n  for n in ['first','middle','last']:assert (r/n).read_text()==n+'\\n'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-43e482711c361062",
+      "original_sha256": "8d32275d5302d8adaa05326d68462d61f495da39710017bd0c53564f2958ec91",
+      "mode": "same_id_native_project_conversion",
+      "preserve_history": true
+    },
+    "review_status": "pending",
+    "review_note": "会话04作者候选；原生验证结果另附，独审待会话05或会话10调度，未计完成量。"
+  },
+  {
+    "id": "src-48a4a193dac44f3b",
+    "module": "git",
+    "category": "Git",
+    "topic": "用真实Git区分工作树、索引与提交的差异",
+    "title": "用真实Git区分工作树、索引与提交的差异",
+    "type": "practice",
+    "question_format": "project",
+    "level": 2,
+    "version": 3,
+    "source": "topics/git/README.md",
+    "pack": "session04-git-20261029",
+    "language": "python",
+    "body": "## 操作环境\n真实Git/Python，普通用户隔离临时仓库，不访问网络或默认账号配置。\n\n## 操作任务\n实现 execute(repo)，返回dict键 worktree、staged、committed，值均为按字典序排序的相对文件名列表。分别表示工作树与索引、索引与HEAD、HEAD^与HEAD间的已跟踪差异；不包括未跟踪文件且不得改变索引或工作区。解释git diff与diff-files/diff-index/diff-tree的比较对象，不要求断言内部总会派生执行某命令。\n\n## 产物\ntask.py。另附思路说明，说明不参与自动判分，由独立复核评审。\n\n## 验收方法\n真实Git建夹具并执行提交图、索引、工作树与内容断言；参考、初始、错解、投机及合法替代均分别运行。",
+    "answer": "```python\nimport os,subprocess\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef execute(repo):\n    def names(*args):\n        p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,check=True)\n        return sorted(os.fsdecode(name) for name in p.stdout.split(b'\\0') if name)\n    return {'worktree':names('diff','--name-only','-z'),\n            'staged':names('diff','--cached','--name-only','-z'),\n            'committed':names('diff','--name-only','-z','HEAD^','HEAD')}\n```\n\n原参考将git status混入答案且没有说明比较对象。本题用实际差异证明三种比较，未跟踪文件不属于git diff默认范围。 文件名输出必须使用-z及NUL分隔解析；保留Unicode、内嵌换行与首尾空白，不对文件名strip或splitlines。",
+    "has_answer": true,
+    "hints": [],
+    "rubric": [
+      "实现 execute(repo)，返回dict键 worktree、staged、committed，值均为按字典序排序的相对文件名列表。分别表示工作树与索引、索引与HEAD、HEAD^与HEAD间的已跟踪差异；不包括未跟踪文件且不得改变索引或工作区。解释git diff与diff-files/diff-index/diff-tree的比较对象，不要求断言内部总会派生执行某命令。",
+      "原参考将git status混入答案且没有说明比较对象。本题用实际差异证明三种比较，未跟踪文件不属于git diff默认范围。"
+    ],
+    "references": [
+      "https://git-scm.com/docs/git-rebase",
+      "https://git-scm.com/docs/git-diff",
+      "https://git-scm.com/docs/gitattributes",
+      "https://git-scm.com/docs/git-merge"
+    ],
+    "files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(*args,**kwargs):\n raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import os,subprocess\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef execute(repo):\n    def names(*args):\n        p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,check=True)\n        return sorted(os.fsdecode(name) for name in p.stdout.split(b'\\0') if name)\n    return {'worktree':names('diff','--name-only','-z'),\n            'staged':names('diff','--cached','--name-only','-z'),\n            'committed':names('diff','--name-only','-z','HEAD^','HEAD')}\n"
+    },
+    "negative_files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo):\n return {k:git(repo,'diff','--name-only').splitlines() for k in ['worktree','staged','committed']}\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "真实Git/Python，student隔离临时仓库，无网络。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "实际执行Git并断言提交图、文件字节、暂存区及边界，不用模型。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 90,
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import subprocess,json\n\n_native_run=subprocess.run\ndef _audited_run(*args,**kwargs):\n p=_native_run(*args,**kwargs)\n def safe(v):return v.decode('utf8',errors='replace') if isinstance(v,bytes) else v\n with open('native-commands.jsonl','a') as f:f.write(json.dumps({'command':args[0] if args else kwargs.get('args'),'cwd':str(kwargs.get('cwd','')),'rc':p.returncode,'stdout':safe(p.stdout),'stderr':safe(p.stderr)},ensure_ascii=True)+'\\n')\n return p\nsubprocess.run=_audited_run\nimport json,os,pathlib,subprocess,sys,tempfile\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef g(repo,*args,ok=True):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n assert not ok or p.returncode==0,(args,p.stdout,p.stderr)\n print(json.dumps({'command':['git','-C',str(repo),*args],'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr}),flush=True)\n return p.stdout.strip() if ok else p\ndef init(root):\n root.mkdir();g(root,'init','-b','main');g(root,'config','user.name','Session04 Fixture');g(root,'config','user.email','session04@example.invalid');g(root,'config','commit.gpgsign','false');g(root,'config','core.autocrlf','false');return root\ndef commit(r,name,value):\n (r/name).write_text(value);g(r,'add','--',name);g(r,'commit','-m',name);return g(r,'rev-parse','HEAD')\nwith tempfile.TemporaryDirectory(prefix='opsforge-session04-git-diff-') as d:\n r=init(pathlib.Path(d)/'repo');commit(r,'a','base');commit(r,'committed','committed')\n (r/'a').write_text('staged');g(r,'add','a');(r/'a').write_text('dirty');(r/'untracked').write_text('keep')\n before=(g(r,'diff','--binary'),g(r,'diff','--cached','--binary'),g(r,'status','--porcelain'))\n assert task.execute(r)=={'worktree':['a'],'staged':['a'],'committed':['committed']}\n assert before==(g(r,'diff','--binary'),g(r,'diff','--cached','--binary'),g(r,'status','--porcelain'))\n assert task.execute(r)=={'worktree':['a'],'staged':['a'],'committed':['committed']}\n\n (r/'committed').write_text('staged second');g(r,'add','committed')\n assert task.execute(r)=={'worktree':['a'],'staged':['a','committed'],'committed':['committed']}\n g(r,'restore','a')\n assert task.execute(r)=={'worktree':[],'staged':['a','committed'],'committed':['committed']}\n\n# NUL-delimited paths preserve Unicode, embedded LF/tab and leading/trailing space.\nwith tempfile.TemporaryDirectory(prefix='opsforge-session04-git-author-diff-') as d:\n r=init(pathlib.Path(d)/'repo')\n work=['部署.cfg','line\\nbreak.cfg',' leading.cfg','trailing.cfg ']\n staged=['部署.cfg','tab\\tindex.cfg',' index trailing.cfg ']\n committed=['历史\\n项.cfg',' 提交.cfg ']\n for name in set(work+staged+committed):(r/name).write_text('base')\n g(r,'add','--all');g(r,'commit','-m','special path base')\n for name in committed:(r/name).write_text('committed')\n g(r,'--literal-pathspecs','add','--',*committed);g(r,'commit','-m','special committed names')\n for name in staged:(r/name).write_text('staged')\n g(r,'--literal-pathspecs','add','--',*staged)\n for name in work:(r/name).write_text('dirty')\n (r/'untracked\\nfile').write_text('leave')\n def exact_snapshot():\n  commands=[['diff','--binary'],['diff','--cached','--binary'],['status','--porcelain=v1','-z'],['rev-parse','HEAD']]\n  return tuple(subprocess.run(['git','-C',str(r),*args],capture_output=True,check=True).stdout for args in commands)\n snapshot=exact_snapshot();want={'worktree':sorted(work),'staged':sorted(staged),'committed':sorted(committed)}\n assert task.execute(r)==want,'diff must return original filenames, not quotePath syntax or split lines'\n assert task.execute(r)==want and exact_snapshot()==snapshot,'read-only diff changed repository state'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-48a4a193dac44f3b",
+      "original_sha256": "01d3aadc6bdd9eb4f88755400eae56a67e69cc24634a80cb759ab45b2b6e6402",
+      "mode": "same_id_native_project_conversion",
+      "preserve_history": true
+    },
+    "review_status": "pending",
+    "review_note": "会话04作者候选；原生验证结果另附，独审待会话05或会话10调度，未计完成量。"
+  },
+  {
+    "id": "src-5571ffcd51f86ff5",
+    "module": "git",
+    "category": "Git",
+    "topic": "在私有分支安全重放功能提交并验证历史边界",
+    "title": "在私有分支安全重放功能提交并验证历史边界",
+    "type": "practice",
+    "question_format": "project",
+    "level": 2,
+    "version": 2,
+    "source": "topics/git/README.md",
+    "pack": "session04-git-20261029",
+    "language": "python",
+    "body": "## 操作环境\n真实Git/Python，普通用户隔离临时仓库，不访问网络或默认账号配置。\n\n## 操作任务\n实现 execute(repo,upstream)，对干净且尚未发布的当前功能分支执行rebase，使upstream成为祖先、保留功能提交与主线新增内容，不修改upstream分支。已跟踪工作树或索引不干净时必须抛ValueError并完全保留现场。解释为何rebase不等于删除功能历史，禁止推送。\n\n## 产物\ntask.py。另附思路说明，说明不参与自动判分，由独立复核评审。\n\n## 验收方法\n真实Git建夹具并执行提交图、索引、工作树与内容断言；参考、初始、错解、投机及合法替代均分别运行。",
+    "answer": "```python\nimport os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo,upstream):\n if git(repo,'status','--porcelain','--untracked-files=no'):raise ValueError('dirty worktree')\n git(repo,'rebase',upstream)\n```\n\n只在未共享或团队明确授权的历史上rebase。rebase重放功能提交，一般改变提交OID，既不自动丢弃功能历史，也不完成对main的合并。",
+    "has_answer": true,
+    "hints": [],
+    "rubric": [
+      "实现 execute(repo,upstream)，对干净且尚未发布的当前功能分支执行rebase，使upstream成为祖先、保留功能提交与主线新增内容，不修改upstream分支。已跟踪工作树或索引不干净时必须抛ValueError并完全保留现场。解释为何rebase不等于删除功能历史，禁止推送。",
+      "只在未共享或团队明确授权的历史上rebase。rebase重放功能提交，一般改变提交OID，既不自动丢弃功能历史，也不完成对main的合并。"
+    ],
+    "references": [
+      "https://git-scm.com/docs/git-rebase",
+      "https://git-scm.com/docs/git-diff",
+      "https://git-scm.com/docs/gitattributes",
+      "https://git-scm.com/docs/git-merge"
+    ],
+    "files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(*args,**kwargs):\n raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo,upstream):\n if git(repo,'status','--porcelain','--untracked-files=no'):raise ValueError('dirty worktree')\n git(repo,'rebase',upstream)\n"
+    },
+    "negative_files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo,upstream):\n git(repo,'merge','--no-edit',upstream)\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "真实Git/Python，student隔离临时仓库，无网络。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "实际执行Git并断言提交图、文件字节、暂存区及边界，不用模型。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 90,
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import subprocess,json\n\n_native_run=subprocess.run\ndef _audited_run(*args,**kwargs):\n p=_native_run(*args,**kwargs)\n def safe(v):return v.decode('utf8',errors='replace') if isinstance(v,bytes) else v\n with open('native-commands.jsonl','a') as f:f.write(json.dumps({'command':args[0] if args else kwargs.get('args'),'cwd':str(kwargs.get('cwd','')),'rc':p.returncode,'stdout':safe(p.stdout),'stderr':safe(p.stderr)},ensure_ascii=True)+'\\n')\n return p\nsubprocess.run=_audited_run\nimport json,os,pathlib,subprocess,sys,tempfile\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef g(repo,*args,ok=True):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n assert not ok or p.returncode==0,(args,p.stdout,p.stderr)\n print(json.dumps({'command':['git','-C',str(repo),*args],'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr}),flush=True)\n return p.stdout.strip() if ok else p\ndef init(root):\n root.mkdir();g(root,'init','-b','main');g(root,'config','user.name','Session04 Fixture');g(root,'config','user.email','session04@example.invalid');g(root,'config','commit.gpgsign','false');g(root,'config','core.autocrlf','false');return root\ndef commit(r,name,value):\n (r/name).write_text(value);g(r,'add','--',name);g(r,'commit','-m',name);return g(r,'rev-parse','HEAD')\nwith tempfile.TemporaryDirectory(prefix='opsforge-session04-git-rebase-') as d:\n r=init(pathlib.Path(d)/'repo');base=commit(r,'base','base');g(r,'switch','-c','feature');old=commit(r,'feature','functional');g(r,'switch','main');up=commit(r,'main-file','new');g(r,'switch','feature')\n (r/'feature').write_text('dirty');before=g(r,'status','--porcelain');head=g(r,'rev-parse','HEAD')\n try:task.execute(r,'main')\n except ValueError:pass\n else:raise AssertionError('dirty worktree accepted')\n assert g(r,'rev-parse','HEAD')==head and g(r,'status','--porcelain')==before\n g(r,'restore','feature');task.execute(r,'main')\n assert g(r,'merge-base','HEAD','main')==up and g(r,'rev-parse','main')==up\n assert g(r,'rev-list','--count','main..HEAD')=='1' and not g(r,'rev-list','--merges','main..HEAD')\n assert (r/'feature').read_text()=='functional' and (r/'main-file').read_text()=='new'\n assert g(r,'rev-parse','HEAD')!=old;second=g(r,'rev-parse','HEAD');task.execute(r,'main');assert g(r,'rev-parse','HEAD')==second\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-5571ffcd51f86ff5",
+      "original_sha256": "b8c67fc992ef4ee9f081d8b9879bbd0b99529de828c82440bd587a6a2c24f5c9",
+      "mode": "same_id_native_project_conversion",
+      "preserve_history": true
+    },
+    "review_status": "pending",
+    "review_note": "会话04作者候选；原生验证结果另附，独审待会话05或会话10调度，未计完成量。"
+  },
+  {
+    "id": "src-6fc7e754505be9af",
+    "module": "git",
+    "category": "Git",
+    "topic": "用gitattributes固定文本LF并保持二进制字节不变",
+    "title": "用gitattributes固定文本LF并保持二进制字节不变",
+    "type": "practice",
+    "question_format": "project",
+    "level": 2,
+    "version": 3,
+    "source": "topics/git/README.md",
+    "pack": "session04-git-20261029",
+    "language": "python",
+    "body": "## 操作环境\n真实Git/Python，普通用户隔离临时仓库，不访问网络或默认账号配置。\n\n## 操作任务\n实现 execute(repo)：写入根.gitattributes规则 *.txt text eol=lf 与 *.bin -text（允许等价更严格规则），仅暂存.gitattributes、note.txt和asset.bin。note.txt工作区含CRLF，索引blob必须是LF；二进制asset.bin必须逐字节保留。保留另一个文件既有的部分暂存状态，不提交。\n\n## 产物\ntask.py。另附思路说明，说明不参与自动判分，由独立复核评审。\n\n## 验收方法\n真实Git建夹具并执行提交图、索引、工作树与内容断言；参考、初始、错解、投机及合法替代均分别运行。",
+    "answer": "```python\nimport os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo):\n (pathlib.Path(repo)/'.gitattributes').write_text('*.txt text eol=lf\\n*.bin -text\\n')\n git(repo,'add','--','.gitattributes','note.txt','asset.bin')\n```\n\ntext=auto只决定自动文本检测和索引规范化，不独自保证所有系统checkout换行；eol=lf明确工作树策略。二进制路径应排除文本转换，既有blob规范化需谨慎评审。 .gitattributes必须真实进入index，验收同时读取其index blob及--cached属性，不能只凭工作区规则通过。",
+    "has_answer": true,
+    "hints": [],
+    "rubric": [
+      "实现 execute(repo)：写入根.gitattributes规则 *.txt text eol=lf 与 *.bin -text（允许等价更严格规则），仅暂存.gitattributes、note.txt和asset.bin。note.txt工作区含CRLF，索引blob必须是LF；二进制asset.bin必须逐字节保留。保留另一个文件既有的部分暂存状态，不提交。",
+      "text=auto只决定自动文本检测和索引规范化，不独自保证所有系统checkout换行；eol=lf明确工作树策略。二进制路径应排除文本转换，既有blob规范化需谨慎评审。"
+    ],
+    "references": [
+      "https://git-scm.com/docs/git-rebase",
+      "https://git-scm.com/docs/git-diff",
+      "https://git-scm.com/docs/gitattributes",
+      "https://git-scm.com/docs/git-merge"
+    ],
+    "files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(*args,**kwargs):\n raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo):\n (pathlib.Path(repo)/'.gitattributes').write_text('*.txt text eol=lf\\n*.bin -text\\n')\n git(repo,'add','--','.gitattributes','note.txt','asset.bin')\n"
+    },
+    "negative_files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo):\n (pathlib.Path(repo)/'.gitattributes').write_text('* text eol=lf\\n')\n git(repo,'add','--','.gitattributes','note.txt','asset.bin')\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "真实Git/Python，student隔离临时仓库，无网络。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "实际执行Git并断言提交图、文件字节、暂存区及边界，不用模型。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 90,
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import subprocess,json\n\n_native_run=subprocess.run\ndef _audited_run(*args,**kwargs):\n p=_native_run(*args,**kwargs)\n def safe(v):return v.decode('utf8',errors='replace') if isinstance(v,bytes) else v\n with open('native-commands.jsonl','a') as f:f.write(json.dumps({'command':args[0] if args else kwargs.get('args'),'cwd':str(kwargs.get('cwd','')),'rc':p.returncode,'stdout':safe(p.stdout),'stderr':safe(p.stderr)},ensure_ascii=True)+'\\n')\n return p\nsubprocess.run=_audited_run\nimport json,os,pathlib,subprocess,sys,tempfile\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef g(repo,*args,ok=True):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n assert not ok or p.returncode==0,(args,p.stdout,p.stderr)\n print(json.dumps({'command':['git','-C',str(repo),*args],'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr}),flush=True)\n return p.stdout.strip() if ok else p\ndef init(root):\n root.mkdir();g(root,'init','-b','main');g(root,'config','user.name','Session04 Fixture');g(root,'config','user.email','session04@example.invalid');g(root,'config','commit.gpgsign','false');g(root,'config','core.autocrlf','false');return root\ndef commit(r,name,value):\n (r/name).write_text(value);g(r,'add','--',name);g(r,'commit','-m',name);return g(r,'rev-parse','HEAD')\nwith tempfile.TemporaryDirectory(prefix='opsforge-session04-git-attributes-') as d:\n r=init(pathlib.Path(d)/'repo');commit(r,'keep','base');(r/'keep').write_text('staged');g(r,'add','keep');(r/'keep').write_text('dirty')\n (r/'note.txt').write_bytes(b'one\\r\\ntwo\\r\\n');binary=b'asset\\r\\nbytes';(r/'asset.bin').write_bytes(binary)\n head=g(r,'rev-parse','HEAD');task.execute(r)\n def blob(name):\n  p=subprocess.run(['git','-C',str(r),'show',':'+name],capture_output=True)\n  assert p.returncode==0,'required staged artifact missing: '+name\n  return p.stdout\n assert blob('note.txt')==b'one\\ntwo\\n' and blob('asset.bin')==binary\n assert blob('keep')==b'staged' and (r/'keep').read_text()=='dirty' and g(r,'rev-parse','HEAD')==head\n attrs=g(r,'check-attr','text','eol','--','note.txt');assert 'text: set' in attrs and 'eol: lf' in attrs\n snapshot=g(r,'diff','--cached','--binary');task.execute(r);assert g(r,'diff','--cached','--binary')==snapshot\n\n assert 'text: unset' in g(r,'check-attr','text','--','asset.bin'),'binary path must explicitly disable text conversion'\n\n # A worktree-only attributes file must not be accepted as delivered index policy.\n staged_policy=blob('.gitattributes')\n assert staged_policy,'staged .gitattributes policy must not be empty'\n cached_text=g(r,'check-attr','--cached','text','eol','--','note.txt')\n assert 'text: set' in cached_text and 'eol: lf' in cached_text,'index attributes do not preserve text policy'\n assert 'text: unset' in g(r,'check-attr','--cached','text','--','asset.bin'),'index attributes do not preserve binary policy'\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-6fc7e754505be9af",
+      "original_sha256": "8e7cd18e477f51e5cebc97c01bf8adf251cac010a1708e08bbed280a8b8f280d",
+      "mode": "same_id_native_project_conversion",
+      "preserve_history": true
+    },
+    "review_status": "pending",
+    "review_note": "会话04作者候选；原生验证结果另附，独审待会话05或会话10调度，未计完成量。"
+  },
+  {
+    "id": "src-74c63ecbd26e416e",
+    "module": "git",
+    "category": "Git",
+    "topic": "解决真实merge冲突并保留双方业务配置",
+    "title": "解决真实merge冲突并保留双方业务配置",
+    "type": "practice",
+    "question_format": "project",
+    "level": 2,
+    "version": 2,
+    "source": "topics/git/README.md",
+    "pack": "session04-git-20261029",
+    "language": "python",
+    "body": "## 操作环境\n真实Git/Python，普通用户隔离临时仓库，不访问网络或默认账号配置。\n\n## 操作任务\n实现 execute(repo)，仓库已在merge冲突中：settings.txt的color两边分别改red/green，业务约定结果为color=purple，其余base=yes必须保留。只解决并暂存settings.txt，保留另一个已跟踪文件的未暂存修改，不把它纳入merge提交；完成当前merge，保留两个父提交，不得改用rebase --continue或abort丢弃合并。\n\n## 产物\ntask.py。另附思路说明，说明不参与自动判分，由独立复核评审。\n\n## 验收方法\n真实Git建夹具并执行提交图、索引、工作树与内容断言；参考、初始、错解、投机及合法替代均分别运行。",
+    "answer": "```python\nimport os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo):\n (pathlib.Path(repo)/'settings.txt').write_text('color=purple\\nbase=yes\\n')\n git(repo,'add','--','settings.txt')\n git(repo,'-c','core.editor=true','merge','--continue')\n```\n\n先分辨merge或rebase当前状态。merge冲突解决并add后用merge --continue或commit；rebase冲突才使用rebase --continue。原题答案把二者混用，现已明确。",
+    "has_answer": true,
+    "hints": [],
+    "rubric": [
+      "实现 execute(repo)，仓库已在merge冲突中：settings.txt的color两边分别改red/green，业务约定结果为color=purple，其余base=yes必须保留。只解决并暂存settings.txt，保留另一个已跟踪文件的未暂存修改，不把它纳入merge提交；完成当前merge，保留两个父提交，不得改用rebase --continue或abort丢弃合并。",
+      "先分辨merge或rebase当前状态。merge冲突解决并add后用merge --continue或commit；rebase冲突才使用rebase --continue。原题答案把二者混用，现已明确。"
+    ],
+    "references": [
+      "https://git-scm.com/docs/git-rebase",
+      "https://git-scm.com/docs/git-diff",
+      "https://git-scm.com/docs/gitattributes",
+      "https://git-scm.com/docs/git-merge"
+    ],
+    "files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(*args,**kwargs):\n raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo):\n (pathlib.Path(repo)/'settings.txt').write_text('color=purple\\nbase=yes\\n')\n git(repo,'add','--','settings.txt')\n git(repo,'-c','core.editor=true','merge','--continue')\n"
+    },
+    "negative_files": {
+      "task.py": "import os,pathlib,subprocess,json\ndef git(repo,*args):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n if p.returncode: raise RuntimeError(p.stderr)\n return p.stdout.strip()\ndef execute(repo):\n git(repo,'checkout','--ours','settings.txt');git(repo,'add','settings.txt');git(repo,'commit','-m','discard other side')\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "真实Git/Python，student隔离临时仓库，无网络。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "实际执行Git并断言提交图、文件字节、暂存区及边界，不用模型。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 90,
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import subprocess,json\n\n_native_run=subprocess.run\ndef _audited_run(*args,**kwargs):\n p=_native_run(*args,**kwargs)\n def safe(v):return v.decode('utf8',errors='replace') if isinstance(v,bytes) else v\n with open('native-commands.jsonl','a') as f:f.write(json.dumps({'command':args[0] if args else kwargs.get('args'),'cwd':str(kwargs.get('cwd','')),'rc':p.returncode,'stdout':safe(p.stdout),'stderr':safe(p.stderr)},ensure_ascii=True)+'\\n')\n return p\nsubprocess.run=_audited_run\nimport json,os,pathlib,subprocess,sys,tempfile\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ndef g(repo,*args,ok=True):\n p=subprocess.run(['git','-C',str(repo),*args],capture_output=True,text=True,timeout=15)\n assert not ok or p.returncode==0,(args,p.stdout,p.stderr)\n print(json.dumps({'command':['git','-C',str(repo),*args],'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr}),flush=True)\n return p.stdout.strip() if ok else p\ndef init(root):\n root.mkdir();g(root,'init','-b','main');g(root,'config','user.name','Session04 Fixture');g(root,'config','user.email','session04@example.invalid');g(root,'config','commit.gpgsign','false');g(root,'config','core.autocrlf','false');return root\ndef commit(r,name,value):\n (r/name).write_text(value);g(r,'add','--',name);g(r,'commit','-m',name);return g(r,'rev-parse','HEAD')\nwith tempfile.TemporaryDirectory(prefix='opsforge-session04-git-conflict-') as d:\n r=init(pathlib.Path(d)/'repo');commit(r,'settings.txt','color=blue\\nbase=yes\\n');commit(r,'keep','base');g(r,'switch','-c','feature');feature=commit(r,'settings.txt','color=green\\nbase=yes\\n');g(r,'switch','main');main=commit(r,'settings.txt','color=red\\nbase=yes\\n')\n p=g(r,'merge','--no-edit','feature',ok=False);assert p.returncode!=0 and g(r,'ls-files','-u')\n # Unrelated staged changes would enter a normal merge commit. Keep the unrelated\n # tracked file dirty only; the learner must not stage it via add --all.\n (r/'keep').write_text('unrelated-dirty');task.execute(r)\n assert (r/'settings.txt').read_text()=='color=purple\\nbase=yes\\n'\n assert g(r,'rev-list','--parents','-n','1','HEAD').split()[1:]==[main,feature]\n assert g(r,'ls-files','-u')=='' and g(r,'show','HEAD:keep')=='base'\n assert (r/'keep').read_text()=='unrelated-dirty' and 'M keep' in g(r,'status','--porcelain')\n"
+      }
+    },
+    "conversion": {
+      "original_id": "src-74c63ecbd26e416e",
+      "original_sha256": "13e6373ad9b9c641badcbb4c4d3984902c086c992338addcd656a67fd13c325e",
+      "mode": "same_id_native_project_conversion",
+      "preserve_history": true
+    },
+    "review_status": "pending",
+    "review_note": "会话04作者候选；原生验证结果另附，独审待会话05或会话10调度，未计完成量。"
+  }
+]

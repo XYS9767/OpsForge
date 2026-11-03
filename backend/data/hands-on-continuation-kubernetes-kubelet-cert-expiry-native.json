@@ -1,0 +1,82 @@
+[
+  {
+    "id": "curated-kubernetes-completion-043",
+    "source": "OpsForge 原创生产故障方案题",
+    "version": 2,
+    "level": 4,
+    "topic": "身份、准入与安全",
+    "title": "检查kubelet客户端证书有效期与节点身份并验证续签CSR",
+    "incident_signature": "k8s-kubelet-client-certificate-rotation-expired",
+    "answer": "```python\nimport pathlib,re,subprocess\n\ndef _run(args):\n    result=subprocess.run(args,capture_output=True,text=True,timeout=10)\n    if result.returncode:raise ValueError((result.stderr or result.stdout).strip())\n    return result.stdout\n\ndef make_node_csr(private_key,node_name,csr_path):\n    if not re.fullmatch(r\"[a-z0-9][a-z0-9.-]{0,62}\",node_name):raise ValueError(\"invalid node name\")\n    subject=\"/CN=system:node:\"+node_name+\"/O=system:nodes\"\n    _run([\"openssl\",\"req\",\"-new\",\"-key\",str(private_key),\"-subj\",subject,\"-out\",str(csr_path)])\n    return pathlib.Path(csr_path)\n\ndef validate_node_certificate(certificate,ca_file,node_name,at_time):\n    expected=\"CN=system:node:\"+node_name\n    subject=_run([\"openssl\",\"x509\",\"-in\",str(certificate),\"-noout\",\"-subject\",\"-nameopt\",\"RFC2253\"]).strip()\n    if expected not in subject or \"O=system:nodes\" not in subject:raise ValueError(\"node certificate identity mismatch: \"+subject)\n    _run([\"openssl\",\"verify\",\"-attime\",str(int(at_time)),\"-CAfile\",str(ca_file),str(certificate)])\n    return {\"subject\":subject,\"valid_at\":int(at_time)}\n```\n\n原题知识说明：\n关联 kubelet 日志、证书有效期、时钟、CSR 与批准策略，确认身份和轮换链路。按发行版的节点证书恢复流程重新建立合法身份，避免复制其他节点私钥或随意批准未知 CSR。恢复后核对节点 Ready、租约更新、已有 Pod 和新增测试 Pod，再修复轮换权限/网络问题。过程中保留业务副本并防止失联有状态实例双写。",
+    "module": "kubernetes",
+    "category": "Kubernetes",
+    "has_answer": true,
+    "review_status": "reviewed",
+    "pack": "kubernetes-completion-20261021",
+    "type": "code",
+    "body": "## 操作任务\n实现make_node_csr(private_key,node_name,csr_path)及validate_node_certificate(certificate,ca_file,node_name,at_time)：生成独立节点私钥对应的system:node:<name>/system:nodes CSR；校验签发CA、明确时点有效期和精确CN/O身份。旧证书过期时拒绝，不能复制另一节点私钥或放宽信任。\n\n## 提交产物\ntask.py\n\n## 验收方法\n临时CA签发短期证书并用openssl verify -attime复现过期；生成新节点CSR，验证CA、期限、CN与O，并拒绝错误组。\n\n## 能力边界\n用临时OpenSSL CA与节点证书，通过openssl verify -attime在明确未来时点重现旧客户端证书过期；重新生成节点私钥/CSR并由测试CA签发后验证身份、链与时效。不连接或修改Kubernetes集群，不自动批准生产CSR。",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "rubric": [
+      "结论与题目证据相符",
+      "处理限定范围并考虑恢复",
+      "验证覆盖实际业务结果"
+    ],
+    "exercise_mode": "tabletop",
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh",
+        "block_ids": [
+          "Q1CAdtjpnoGnTMxwS8ycm9rEnYf"
+        ]
+      }
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-kubernetes-completion-043",
+      "original_title": "只有一个节点 NotReady，kubelet 访问 API 被拒绝，客户端证书已到期且自动轮换曾失败。如何修复？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import pathlib,re,subprocess\n\ndef _run(args):\n    result=subprocess.run(args,capture_output=True,text=True,timeout=10)\n    if result.returncode:raise ValueError((result.stderr or result.stdout).strip())\n    return result.stdout\n\ndef make_node_csr(private_key,node_name,csr_path):\n    if not re.fullmatch(r\"[a-z0-9][a-z0-9.-]{0,62}\",node_name):raise ValueError(\"invalid node name\")\n    subject=\"/CN=system:node:\"+node_name+\"/O=system:nodes\"\n    _run([\"openssl\",\"req\",\"-new\",\"-key\",str(private_key),\"-subj\",subject,\"-out\",str(csr_path)])\n    return pathlib.Path(csr_path)\n\ndef validate_node_certificate(certificate,ca_file,node_name,at_time):\n    expected=\"CN=system:node:\"+node_name\n    subject=_run([\"openssl\",\"x509\",\"-in\",str(certificate),\"-noout\",\"-subject\",\"-nameopt\",\"RFC2253\"]).strip()\n    if expected not in subject or \"O=system:nodes\" not in subject:raise ValueError(\"node certificate identity mismatch: \"+subject)\n    _run([\"openssl\",\"verify\",\"-attime\",str(int(at_time)),\"-CAfile\",str(ca_file),str(certificate)])\n    return {\"subject\":subject,\"valid_at\":int(at_time)}\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib,re,subprocess\n\ndef _run(args):\n    result=subprocess.run(args,capture_output=True,text=True,timeout=10)\n    if result.returncode:raise ValueError((result.stderr or result.stdout).strip())\n    return result.stdout\n\ndef make_node_csr(private_key,node_name,csr_path):\n    if not re.fullmatch(r\"[a-z0-9][a-z0-9.-]{0,62}\",node_name):raise ValueError(\"invalid node name\")\n    subject=\"/CN=system:node:\"+node_name+\"/O=system:nodes\"\n    _run([\"openssl\",\"req\",\"-new\",\"-key\",str(private_key),\"-subj\",subject,\"-out\",str(csr_path)])\n    return pathlib.Path(csr_path)\n\ndef validate_node_certificate(certificate,ca_file,node_name,at_time):\n    expected=\"CN=system:node:\"+node_name\n    subject=_run([\"openssl\",\"x509\",\"-in\",str(certificate),\"-noout\",\"-subject\",\"-nameopt\",\"RFC2253\"]).strip()\n    if expected not in subject or \"O=system:nodes\" not in subject:raise ValueError(\"node certificate identity mismatch: \"+subject)\n    pass\n    return {\"subject\":subject,\"valid_at\":int(at_time)}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现make_node_csr(private_key,node_name,csr_path)及validate_node_certificate(certificate,ca_file,node_name,at_time)：生成独立节点私钥对应的system:node:<name>/system:nodes CSR；校验签发CA、明确时点有效期和精确CN/O身份。旧证书过期时拒绝，不能复制另一节点私钥或放宽信任。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "用临时OpenSSL CA与节点证书，通过openssl verify -attime在明确未来时点重现旧客户端证书过期；重新生成节点私钥/CSR并由测试CA签发后验证身份、链与时效。不连接或修改Kubernetes集群，不自动批准生产CSR。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "requires": {
+        "commands": [
+          "openssl"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib,subprocess,tempfile,time\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'));task=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED: validate and renew node client identity',flush=True)\nwith tempfile.TemporaryDirectory(prefix='kubelet cert rotation ') as d:\n root=pathlib.Path(d);ca_key=root/'ca.key';ca=root/'ca.crt'\n def run(*args):return subprocess.run(['openssl',*args],capture_output=True,text=True,check=True,timeout=10)\n run('req','-x509','-newkey','rsa:2048','-nodes','-keyout',str(ca_key),'-out',str(ca),'-subj','/CN=OpsForge Node CA','-days','3650')\n def issue(name,days,subject):\n  key=root/(name+'.key');csr=root/(name+'.csr');cert=root/(name+'.crt')\n  run('genpkey','-algorithm','RSA','-pkeyopt','rsa_keygen_bits:2048','-out',str(key))\n  run('req','-new','-key',str(key),'-subj',subject,'-out',str(csr))\n  run('x509','-req','-in',str(csr),'-CA',str(ca),'-CAkey',str(ca_key),'-CAcreateserial','-out',str(cert),'-days',str(days))\n  return key,csr,cert\n node='node-a.example';at=int(time.time())+2*86400\n oldkey,oldcsr,oldcert=issue('old',1,'/CN=system:node:'+node+'/O=system:nodes')\n print('NATIVE_OPERATION_ENTERED: kubelet-style client certificate expired at controlled validation time',flush=True)\n try:task.validate_node_certificate(oldcert,ca,node,at)\n except ValueError as e:assert 'expired' in str(e).lower(),e\n else:raise AssertionError('expired node credential accepted')\n newkey=root/'renewed.key';subprocess.run(['openssl','genpkey','-algorithm','RSA','-pkeyopt','rsa_keygen_bits:2048','-out',str(newkey)],capture_output=True,text=True,check=True,timeout=10)\n newcsr=task.make_node_csr(newkey,node,root/'renewed.csr');subject=run('req','-in',str(newcsr),'-noout','-subject','-nameopt','RFC2253').stdout;assert 'CN=system:node:'+node in subject and 'O=system:nodes' in subject,subject\n newcert=root/'renewed.crt';run('x509','-req','-in',str(newcsr),'-CA',str(ca),'-CAkey',str(ca_key),'-CAcreateserial','-out',str(newcert),'-days','365')\n report=task.validate_node_certificate(newcert,ca,node,at);assert report['valid_at']==at\n _,_,wrong=issue('wrong-group',365,'/CN=system:node:'+node+'/O=system:masters')\n try:task.validate_node_certificate(wrong,ca,node,at)\n except ValueError as e:assert 'identity mismatch' in str(e),e\n else:raise AssertionError('wrong node group accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "kubernetes"
+    ]
+  }
+]

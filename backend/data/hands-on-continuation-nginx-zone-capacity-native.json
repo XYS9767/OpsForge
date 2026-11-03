@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-advanced-nginx-007",
+    "module": "nginx",
+    "category": "Nginx",
+    "level": 4,
+    "topic": "性能、容量与限制",
+    "title": "真实Nginx同为503的两种根因：共享区分配失败与单键超速分别验证",
+    "body": "## 操作任务\n实现repair(config)，只把唯一的zone=keys:32k rate=1r/m改为zone=keys:1m rate=1r/m，其余字节原样，不存在或多处时ValueError。平台真实Nginx先验证同key超速产生503与excess日志，再以小状态占用共享区后请求大新key产生真实could not allocate node错误和503；不能用状态码独判根因。按批准预算增区后，新建隔离进程重放负载必须接受大key且仍拒绝hot key。不得加速率、删limit_req、把key设空或仅改错误码；不声称共享区增容能原位重载保持旧状态。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实非root现有Nginx和私有静态文件/端口，固定教学负载证明slab容量与单key速率原因不同。增容用新建私有进程，未对生产平滑迁移、所有键分布和全局配额作证明；不构建镜像或修改主机服务。",
+    "answer": "```python\ndef repair(config):\n    old='zone=keys:32k rate=1r/m'\n    if config.count(old)!=1:raise ValueError('expected one approved zone')\n    return config.replace(old,'zone=keys:1m rate=1r/m')\n```\n\n原题知识说明：\n速率限制是某个key的请求节奏超额，共享区耗尽则可能来自大量不同key状态占用，两者对正常用户的影响和治理手段不同。应关联error日志、限制状态、key基数及zone容量，检查key是否由不受信任的任意字符串构成。验收稳定少量key突发与高基数低速请求两组负载，分别观察拒绝和资源使用。不能只增加burst处理状态空间不足，也不能把zone无限放大当长期治理。交付可信归并键、空间预算和异常基数告警，空key的行为也需测试，防止请求绕过计数却被误认为正常受限。",
+    "type": "code",
+    "source": "advanced-expansion-20261022:data:nginx",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "区分进程、请求、连接和缓存作用范围",
+      "验收含题述协议及数据边界",
+      "注明模块版本与不可保证的能力"
+    ],
+    "references": [
+      "https://nginx.org/en/docs/http/ngx_http_limit_req_module.html"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-nginx-007",
+      "original_title": "Nginx限流共享区耗尽与某个key超过速率，怎样从证据区分？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def repair(config):\n    old='zone=keys:32k rate=1r/m'\n    if config.count(old)!=1:raise ValueError('expected one approved zone')\n    return config.replace(old,'zone=keys:1m rate=1r/m')\n"
+    },
+    "negative_files": {
+      "task.py": "def repair(config):\n    old='zone=keys:32k rate=1r/m'\n    if config.count(old)!=1:raise ValueError('expected one approved zone')\n    return config.replace(old,'zone=keys:32k rate=1r/m')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现repair(config)，只把唯一的zone=keys:32k rate=1r/m改为zone=keys:1m rate=1r/m，其余字节原样，不存在或多处时ValueError。平台真实Nginx先验证同key超速产生503与excess日志，再以小状态占用共享区后请求大新key产生真实could not allocate node错误和503；不能用状态码独判根因。按批准预算增区后，新建隔离进程重放负载必须接受大key且仍拒绝hot key。不得加速率、删limit_req、把key设空或仅改错误码；不声称共享区增容能原位重载保持旧状态。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实非root现有Nginx和私有静态文件/端口，固定教学负载证明slab容量与单key速率原因不同。增容用新建私有进程，未对生产平滑迁移、所有键分布和全局配额作证明；不构建镜像或修改主机服务。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "nginx"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,tempfile,socket,subprocess,time,signal,http.client,contextlib\nsys.path.insert(0,os.getcwd());import task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\n@contextlib.contextmanager\ndef serve(root,zone):\n root.mkdir();(root/'public').mkdir();(root/'public'/'probe').write_bytes(b'actual-static-response')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n config=('daemon off; master_process off; worker_processes 1; pid '+str(root/'pid')+'; error_log '+str(root/'error.log')+' info; events { worker_connections 128; } http { access_log off; client_body_temp_path '+str(root/'body')+'; proxy_temp_path '+str(root/'proxy')+'; fastcgi_temp_path '+str(root/'fastcgi')+'; uwsgi_temp_path '+str(root/'uwsgi')+'; scgi_temp_path '+str(root/'scgi')+'; large_client_header_buffers 4 32k; limit_req_zone $arg_key '+zone+'; server { listen 127.0.0.1:'+str(port)+'; location / { root '+str(root/'public')+'; limit_req zone=keys burst=1 nodelay; } } }')\n path=root/'config';path.write_text(config)\n args=['nginx','-p',str(root)+'/', '-c',str(path)]\n syntax=subprocess.run(args+['-t'],capture_output=True,text=True,timeout=3);assert syntax.returncode==0,syntax.stderr\n log=(root/'process.log').open('wb');process=subprocess.Popen(args,stdout=log,stderr=log)\n try:\n  for _ in range(100):\n   assert process.poll() is None,(root/'process.log').read_text()\n   try:\n    with socket.create_connection(('127.0.0.1',port),timeout=.02):break\n   except OSError:time.sleep(.01)\n  else:raise AssertionError('nginx not listening')\n  def request(key):\n   connection=http.client.HTTPConnection('127.0.0.1',port,timeout=3)\n   try:\n    connection.request('GET','/probe?key='+key);response=connection.getresponse();body=response.read();return response.status,body\n   finally:connection.close()\n  yield config,request,lambda:(root/'error.log').read_text()\n finally:\n  if process.poll() is None:process.send_signal(signal.SIGQUIT)\n  try:process.wait(timeout=3)\n  except subprocess.TimeoutExpired:process.kill();process.wait()\n  log.close();assert process.returncode==0\nwith tempfile.TemporaryDirectory(prefix='of-nginx-slab-') as directory:\n root=pathlib.Path(directory)\n with serve(root/'tiny','zone=keys:32k rate=1r/m') as (config,request,logs):\n  assert request('hot')[0]==request('hot')[0]==200 and request('hot')[0]==503\n  rate_logs=logs();assert 'limiting requests, excess:' in rate_logs and 'could not allocate node' not in rate_logs\n  # Fixed small keys fill slab classes. LRU can recycle one old small node, but this cannot\n  # satisfy a much larger node allocation; the second allocation must actually fail.\n  for index in range(700):assert request('small-'+str(index))[0]==200\n  boundary=len(logs());assert request('large-'+'x'*12000)[0]==503\n  allocation_logs=logs()[boundary:]\n  assert 'could not allocate node' in allocation_logs and 'limit_req zone \"keys\"' in allocation_logs,allocation_logs[:300]\n  assert 'limiting requests, excess:' not in allocation_logs,'large new key was rejected as per-key rate instead of allocation failure'\n  print('NATIVE_NGINX_SAME_503_RATE_EXCESS_AND_REAL_SLAB_ALLOCATION_DIFFERENT_LOGS',flush=True)\n print('STUDENT_OPERATION_ENTERED:increase_zone_capacity_without_weakening_per_key_rate',flush=True)\n try:fixed=task.repair(config)\n except Exception as error:raise AssertionError('student approved zone capacity repair failed') from error\n assert fixed==config.replace('zone=keys:32k rate=1r/m','zone=keys:1m rate=1r/m'),'key/rate/burst or unrelated configuration changed'\n # Fresh owned process is required: changing the size of an existing named shared zone\n # is not presented as a reload that preserves all old state.\n zone=fixed.split('limit_req_zone $arg_key ',1)[1].split(';',1)[0]\n with serve(root/'larger',zone) as (_,request,logs):\n  for index in range(700):assert request('small-'+str(index))[0]==200\n  status,body=request('large-'+'x'*12000);assert status==200 and body==b'actual-static-response'\n  assert request('hot')[0]==request('hot')[0]==200 and request('hot')[0]==503\n  assert 'could not allocate node' not in logs() and 'limiting requests, excess:' in logs()\n print('NATIVE_NGINX_LARGER_ZONE_ACCEPTS_NEW_LARGE_KEY_STILL_REJECTS_HOT_KEY',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "nginx"
+    ]
+  }
+]

@@ -1,0 +1,770 @@
+[
+  {
+    "id": "curated-parallel-prometheus-005",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 1,
+    "topic": "只加快规则评估而保持采集预算",
+    "title": "Prometheus 配置实作：只加快规则评估而保持采集预算",
+    "answer": "### prometheus.yaml\n```yaml\nglobal:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 15s\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n```\n\n采集时钟与规则评估时钟独立，变更评估不应额外增加目标采集负载。\n\n### 原题说明\n前者决定采集目标频率，后者决定规则组默认评估频率。更快评估可能重复使用同一抓取样本，并不会产生新观测。告警发现时延需考虑两者及for和通知等待。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "前者决定采集目标频率，后者决定规则组默认评估频率。",
+      "更快评估可能重复使用同一抓取样本，并不会产生新观测。",
+      "告警发现时延需考虑两者及for和通知等待。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器、Python/PyYAML 配置合同验收器。字段采用 Prometheus 2.53 配置；无需学员部署服务，不访问实际目标。\n\n## 操作任务\n规则评估从1分钟改为15秒；所有作业继续默认每30秒抓取、超时10秒。只改 global.evaluation_interval，不能连带提升采集频率；保留目标与其他字段。\n\n## 产物\n提交 prometheus.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析提交文件，验证配置约束、字段类型和保留内容，拒绝重复键。此验收不执行 promtool、PromQL 或实际抓取，不代表原生效果已通过；真实运行待平台隔离服务接入。\n\n## 原理复习\nscrape_interval与evaluation_interval各影响什么？\n",
+    "files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n"
+    },
+    "solution_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 15s\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n"
+    },
+    "negative_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 15s\n  scrape_timeout: 10s\n  evaluation_interval: 15s\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "prometheus.yaml"
+      ],
+      "operation": "规则评估从1分钟改为15秒；所有作业继续默认每30秒抓取、超时10秒。只改 global.evaluation_interval，不能连带提升采集频率；保留目标与其他字段。",
+      "verification": "实际配置文件的离线语义合同验收，不执行 Prometheus 服务。",
+      "capability_gap": [
+        "未执行 promtool、真实抓取与规则计算。"
+      ],
+      "failure_examples": [
+        "典型错误配置见 negative_files，须被验收拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'scrape_interval': '30s', 'scrape_timeout': '10s', 'evaluation_interval': '1m'}, 'scrape_configs': [{'job_name': 'api', 'static_configs': [{'targets': ['api-1.example.test:9100'], 'labels': {'env': 'prod'}}]}]}\nd=load(\"prometheus.yaml\");b=copy.deepcopy(BASE)\nassert d['global']['evaluation_interval']=='15s'\nassert d['global']['scrape_interval']=='30s' and d['global']['scrape_timeout']=='10s'\nb['global']['evaluation_interval']='15s';assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-005",
+      "original_title": "scrape_interval与evaluation_interval各影响什么？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "src-c44a0ff3ed627c1f",
+    "title": "Prometheus 配置实作：修复作业重名并保留不同实例端点",
+    "answer": "### prometheus.yaml\n```yaml\nglobal:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n- job_name: database\n  static_configs:\n  - targets:\n    - db-1.example.test:9104\n    labels:\n      env: prod\n```\n\njob 代表采集配置分组，instance 端点仍保持各自实际地址。\n\n### 原题说明\ninstance 通常标识一个抓取目标，job 是具有共同用途的一组抓取目标。它们是时间序列标签，重标记可以改变值；不要认为 job 必然等于 Kubernetes Job 资源，也不要用不稳定标签造成大量新序列。",
+    "category": "Prometheus",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "case",
+    "has_answer": true,
+    "source": "OpsForge 原题配置实作转换",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "Prometheus",
+    "original_title": "什么是一个实例? 什么是一个作业?",
+    "module": "prometheus",
+    "topic": "修复作业重名并保留不同实例端点",
+    "level": 1,
+    "body": "## 环境与初始材料\n平台提供Python/PyYAML及批准的private Prometheus/promtool3.5.0。保持原配置字段与逻辑端点，不访问真实example.test目标；只启动自有非root临时实例。\n\n## 操作任务\n第一个 job_name=api、target=api-1.example.test:9100 不变；第二个 job_name 改为 database，仍抓取 db-1.example.test:9104。保证作业名唯一，不把两个不同实例合成同一目标，也不更改 env 标签。\n\n## 产物\n提交 prometheus.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析提交文件，验证配置约束、字段类型和保留内容，拒绝重复键。随后以真实promtool检查原文件。在teacher运行副本内，将两个已严格核定的逻辑端点分别映射到两个自有127.0.0.1端点；不改提交文件、不解析外部DNS。真实Prometheus拒绝duplicate-job reload且保留旧有效配置，再接受修复配置并真实采集/查询两端不同值，核job、原逻辑instance、env与独立origin身份。此受控映射不证明原example.test可达。\n\n## 原理复习\n什么是一个实例? 什么是一个作业?\n依据题目给出的前提作答，说明原理、适用条件及验证方法。参考答案为文本审校内容；涉及操作的示例仅用于获准的隔离环境，不代表已在生产执行。\n\n## 公开故障复现\npython3 demonstrate.py：错误初态由真正promtool报重复job；正确配置进入自有Prometheus真实失败/恢复reload及两目标scrape/query。两端点业务值分别7/11，保证不是仅检查配置壳。所有服务/线程/临时TSDB按owned PID关闭回收；不接系统默认9090/9100。\n",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "configuration",
+    "files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n- job_name: api\n  static_configs:\n  - targets:\n    - db-1.example.test:9104\n    labels:\n      env: prod\n",
+      "native_case.py": "import copy,hashlib,http.server,json,pathlib,queue,socket,subprocess,tempfile,threading,time,urllib.error,urllib.parse,urllib.request,yaml\nPROM='/tmp/opsforge-prometheus-3.5.0/prometheus-3.5.0.linux-amd64/prometheus'\nTOOL='/tmp/opsforge-prometheus-3.5.0/prometheus-3.5.0.linux-amd64/promtool'\nPINS={PROM:'4ee49f574d80682b6571f017c8f42f2532aa3603b725b51ecb0cb864f06c2282',TOOL:'e59210d5474e2c811a4460fb1593d708b94d58107ae62e9d44e88029bb7e5805'}\n\ndef run_native(path):\n    for file,pin in PINS.items():\n        if not pathlib.Path(file).is_file()or hashlib.sha256(pathlib.Path(file).read_bytes()).hexdigest()!=pin:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: approved private executable absent/changed')\n    original=pathlib.Path(path).read_bytes();checked=subprocess.run([TOOL,'check','config',str(path)],capture_output=True,text=True,timeout=8)\n    if checked.returncode:return {'native_config_valid':False,'config_exit_code':checked.returncode,'config_output':checked.stdout+checked.stderr,'verified':False,'network_started':False}\n    candidate=yaml.safe_load(original);expected=[('api','api-1.example.test:9100'),('database','db-1.example.test:9104')]\n    assert candidate['global']=={'scrape_interval':'30s','scrape_timeout':'10s','evaluation_interval':'1m'}\n    assert len(candidate['scrape_configs'])==2 and set(candidate)=={'global','scrape_configs'}\n    for job,(name,address)in zip(candidate['scrape_configs'],expected):assert job=={'job_name':name,'static_configs':[{'targets':[address],'labels':{'env':'prod'}}]}\n    servers=[];threads=[];process=None;reader=None;logs=[];counts={'api':0,'database':0};state={};before={'uid':__import__('os').getuid(),'home':__import__('os').environ.get('HOME'),'path':__import__('os').environ.get('PATH')}\n    with tempfile.TemporaryDirectory(prefix='opsforge-job-native-')as directory:\n      root=pathlib.Path(directory)\n      try:\n        endpoints=[]\n        for name,value in [('api',7),('database',11)]:\n          def handler(origin,value):\n            class Handler(http.server.BaseHTTPRequestHandler):\n              def log_message(self,*args):pass\n              def do_GET(self):\n                assert self.path=='/metrics';counts[origin]+=1;body=('# TYPE owned_endpoint_value gauge\\nowned_endpoint_value{origin=\"'+origin+'\"} '+str(value)+'\\n').encode();self.send_response(200);self.send_header('Content-Type','text/plain; version=0.0.4; charset=utf-8');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n            return Handler\n          server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler(name,value));server.daemon_threads=True;thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.05},daemon=True);thread.start();servers.append(server);threads.append(thread);endpoints.append('127.0.0.1:'+str(server.server_port))\n        config=root/'prometheus.yml';config.write_text(json.dumps({'global':{'scrape_interval':'100ms','scrape_timeout':'80ms'},'scrape_configs':[]}));process=subprocess.Popen([PROM,'--config.file='+str(config),'--storage.tsdb.path='+str(root/'tsdb'),'--web.listen-address=127.0.0.1:0','--web.enable-lifecycle','--storage.tsdb.retention.time=1h','--log.format=json'],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)\n        def read_logs():\n          for line in process.stderr:\n            logs.append(line)\n            try:\n              item=json.loads(line)\n              if item.get('msg')=='Listening on':state['url']='http://'+item['address']\n            except ValueError:pass\n        reader=threading.Thread(target=read_logs,daemon=True);reader.start()\n        def api(route):\n          with urllib.request.urlopen(state['url']+route,timeout=2)as response:return json.load(response)\n        deadline=time.monotonic()+12\n        while time.monotonic()<deadline:\n          if process.poll()is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: owned Prometheus stopped '+''.join(logs[-5:]))\n          try:\n            if state.get('url'):\n              with urllib.request.urlopen(state['url']+'/-/ready',timeout=.2)as response:\n                if response.status==200:break\n          except(urllib.error.URLError,TimeoutError):pass\n          time.sleep(.03)\n        else:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: owned Prometheus readiness deadline')\n        # The exact public input is never sent to DNS. This private runtime-only copy maps\n        # its two validated logical endpoints to two distinct owned loopback servers.\n        projected=copy.deepcopy(candidate);projected['global']={'scrape_interval':'100ms','scrape_timeout':'80ms','evaluation_interval':'1s'}\n        for job,address,(_,logical)in zip(projected['scrape_configs'],endpoints,expected):\n          job['static_configs'][0]['targets']=[address];job['static_configs'][0]['labels']['instance']=logical\n        bad=copy.deepcopy(projected);bad['scrape_configs'][1]['job_name']='api';config.write_text(json.dumps(bad))\n        def reload():\n          request=urllib.request.Request(state['url']+'/-/reload',data=b'',method='POST')\n          try:\n            with urllib.request.urlopen(request,timeout=3)as response:return response.status,response.read().decode()\n          except urllib.error.HTTPError as error:return error.code,error.read().decode()\n        rejected=reload();assert rejected[0]==500,'native duplicate-job reload must fail';assert api('/api/v1/targets')['data']['activeTargets']==[],'failed reload replaced last valid no-target config'\n        config.write_text(json.dumps(projected));loaded=reload();assert loaded[0]==200,'native repaired reload failed'\n        deadline=time.monotonic()+12;targets=[];samples=[]\n        while time.monotonic()<deadline:\n          targets=api('/api/v1/targets')['data']['activeTargets'];samples=api('/api/v1/query?query='+urllib.parse.quote('owned_endpoint_value'))['data']['result']\n          if len(targets)==2 and all(t['health']=='up'and not t['lastError']for t in targets)and len(samples)==2:break\n          time.sleep(.05)\n        else:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: owned repaired targets/query did not converge '+repr((targets,samples)))\n        actual={(sample['metric']['job'],sample['metric']['instance'],sample['metric']['env'],sample['metric']['origin']):float(sample['value'][1])for sample in samples};wanted={('api',expected[0][1],'prod','api'):7,('database',expected[1][1],'prod','database'):11};assert actual==wanted,'different native instance data were collapsed or mislabeled'\n        assert all(counts[name]>0 for name in counts);assert pathlib.Path(path).read_bytes()==original\n        result={'native_config_valid':True,'config_exit_code':checked.returncode,'duplicate_reload_status':rejected[0],'duplicate_reload_error':rejected[1],'failed_reload_kept_previous_config':True,'repaired_reload_status':loaded[0],'targets':[{'labels':t['labels'],'scrape_url':t['scrapeUrl'],'health':t['health'],'last_error':t['lastError']}for t in targets],'query':samples,'actual_endpoint_request_counts':counts.copy(),'declared_file_unchanged':True,'verified':True,'scope':'Logical example.test endpoints mapped only in teacher runtime copy to two owned loopback servers; no DNS/remote availability claim'}\n      finally:\n        if process is not None:\n          if process.poll()is None:\n            process.terminate()\n            try:process.wait(timeout=5)\n            except subprocess.TimeoutExpired:process.kill();process.wait(timeout=2)\n          if reader is not None:reader.join(timeout=2)\n          process.stderr.close();print('OWNED_PROM_JOB_CLEANUP:'+json.dumps({'pid':process.pid,'exit_code':process.returncode,'reaped':process.poll()is not None}),flush=True)\n        for server in servers:server.shutdown();server.server_close()\n        for thread in threads:thread.join(timeout=2)\n      after={'uid':__import__('os').getuid(),'home':__import__('os').environ.get('HOME'),'path':__import__('os').environ.get('PATH')};assert after==before;result['parent_identity_environment_unchanged']=True;return result\n",
+      "demonstrate.py": "import json,sys\nfrom native_case import run_native\nif __name__=='__main__':\n result=run_native('prometheus.yaml');print('PUBLIC_NATIVE_JOB_CASE:'+json.dumps(result,ensure_ascii=False),flush=True);sys.exit(0 if result['verified']else 1)\n"
+    },
+    "solution_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n- job_name: database\n  static_configs:\n  - targets:\n    - db-1.example.test:9104\n    labels:\n      env: prod\n"
+    },
+    "negative_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n- job_name: database\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "Nonroot Linux, private pinned Prometheus/promtool3.5.0, owned loopback/TSDB only",
+      "deliverables": [
+        "prometheus.yaml"
+      ],
+      "operation": "第一个 job_name=api、target=api-1.example.test:9100 不变；第二个 job_name 改为 database，仍抓取 db-1.example.test:9104。保证作业名唯一，不把两个不同实例合成同一目标，也不更改 env 标签。",
+      "verification": "Original strict configuration contract plus actual promtool, failed/repaired reload, two owned endpoint scrapes/query",
+      "capability_gap": [
+        "Runtime copy maps logical example.test endpoints to two owned loopback servers; does not verify DNS, those remote endpoints, HA or production health."
+      ],
+      "failure_examples": [
+        "典型错误配置见 negative_files，须被验收拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "/tmp/opsforge-prometheus-3.5.0/prometheus-3.5.0.linux-amd64/prometheus",
+          "/tmp/opsforge-prometheus-3.5.0/prometheus-3.5.0.linux-amd64/promtool"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,pathlib,runpy,sys\nROOT=pathlib.Path.cwd();sys.path.insert(0,str(ROOT/'checks'))\nrunpy.run_path(str(ROOT/'checks/legacy.py'),run_name='trusted_original_configuration_contract')\nfrom native_case import run_native\nresult=run_native(ROOT/'prometheus.yaml');assert result['verified']\nprint('NATIVE_JOB_IDENTITY_VERIFIED:'+json.dumps(result,ensure_ascii=False),flush=True)\n",
+        "checks/legacy.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'scrape_interval': '30s', 'scrape_timeout': '10s', 'evaluation_interval': '1m'}, 'scrape_configs': [{'job_name': 'api', 'static_configs': [{'targets': ['api-1.example.test:9100'], 'labels': {'env': 'prod'}}]}, {'job_name': 'api', 'static_configs': [{'targets': ['db-1.example.test:9104'], 'labels': {'env': 'prod'}}]}]}\nd=load(\"prometheus.yaml\");b=copy.deepcopy(BASE)\njobs=d['scrape_configs'];assert [j['job_name'] for j in jobs]==['api','database']\nassert len({j['job_name'] for j in jobs})==len(jobs)\nb['scrape_configs'][1]['job_name']='database';assert d==b\n",
+        "checks/native_case.py": "import copy,hashlib,http.server,json,pathlib,queue,socket,subprocess,tempfile,threading,time,urllib.error,urllib.parse,urllib.request,yaml\nPROM='/tmp/opsforge-prometheus-3.5.0/prometheus-3.5.0.linux-amd64/prometheus'\nTOOL='/tmp/opsforge-prometheus-3.5.0/prometheus-3.5.0.linux-amd64/promtool'\nPINS={PROM:'4ee49f574d80682b6571f017c8f42f2532aa3603b725b51ecb0cb864f06c2282',TOOL:'e59210d5474e2c811a4460fb1593d708b94d58107ae62e9d44e88029bb7e5805'}\n\ndef run_native(path):\n    for file,pin in PINS.items():\n        if not pathlib.Path(file).is_file()or hashlib.sha256(pathlib.Path(file).read_bytes()).hexdigest()!=pin:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: approved private executable absent/changed')\n    original=pathlib.Path(path).read_bytes();checked=subprocess.run([TOOL,'check','config',str(path)],capture_output=True,text=True,timeout=8)\n    if checked.returncode:return {'native_config_valid':False,'config_exit_code':checked.returncode,'config_output':checked.stdout+checked.stderr,'verified':False,'network_started':False}\n    candidate=yaml.safe_load(original);expected=[('api','api-1.example.test:9100'),('database','db-1.example.test:9104')]\n    assert candidate['global']=={'scrape_interval':'30s','scrape_timeout':'10s','evaluation_interval':'1m'}\n    assert len(candidate['scrape_configs'])==2 and set(candidate)=={'global','scrape_configs'}\n    for job,(name,address)in zip(candidate['scrape_configs'],expected):assert job=={'job_name':name,'static_configs':[{'targets':[address],'labels':{'env':'prod'}}]}\n    servers=[];threads=[];process=None;reader=None;logs=[];counts={'api':0,'database':0};state={};before={'uid':__import__('os').getuid(),'home':__import__('os').environ.get('HOME'),'path':__import__('os').environ.get('PATH')}\n    with tempfile.TemporaryDirectory(prefix='opsforge-job-native-')as directory:\n      root=pathlib.Path(directory)\n      try:\n        endpoints=[]\n        for name,value in [('api',7),('database',11)]:\n          def handler(origin,value):\n            class Handler(http.server.BaseHTTPRequestHandler):\n              def log_message(self,*args):pass\n              def do_GET(self):\n                assert self.path=='/metrics';counts[origin]+=1;body=('# TYPE owned_endpoint_value gauge\\nowned_endpoint_value{origin=\"'+origin+'\"} '+str(value)+'\\n').encode();self.send_response(200);self.send_header('Content-Type','text/plain; version=0.0.4; charset=utf-8');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n            return Handler\n          server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler(name,value));server.daemon_threads=True;thread=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.05},daemon=True);thread.start();servers.append(server);threads.append(thread);endpoints.append('127.0.0.1:'+str(server.server_port))\n        config=root/'prometheus.yml';config.write_text(json.dumps({'global':{'scrape_interval':'100ms','scrape_timeout':'80ms'},'scrape_configs':[]}));process=subprocess.Popen([PROM,'--config.file='+str(config),'--storage.tsdb.path='+str(root/'tsdb'),'--web.listen-address=127.0.0.1:0','--web.enable-lifecycle','--storage.tsdb.retention.time=1h','--log.format=json'],stdout=subprocess.DEVNULL,stderr=subprocess.PIPE,text=True)\n        def read_logs():\n          for line in process.stderr:\n            logs.append(line)\n            try:\n              item=json.loads(line)\n              if item.get('msg')=='Listening on':state['url']='http://'+item['address']\n            except ValueError:pass\n        reader=threading.Thread(target=read_logs,daemon=True);reader.start()\n        def api(route):\n          with urllib.request.urlopen(state['url']+route,timeout=2)as response:return json.load(response)\n        deadline=time.monotonic()+12\n        while time.monotonic()<deadline:\n          if process.poll()is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: owned Prometheus stopped '+''.join(logs[-5:]))\n          try:\n            if state.get('url'):\n              with urllib.request.urlopen(state['url']+'/-/ready',timeout=.2)as response:\n                if response.status==200:break\n          except(urllib.error.URLError,TimeoutError):pass\n          time.sleep(.03)\n        else:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: owned Prometheus readiness deadline')\n        # The exact public input is never sent to DNS. This private runtime-only copy maps\n        # its two validated logical endpoints to two distinct owned loopback servers.\n        projected=copy.deepcopy(candidate);projected['global']={'scrape_interval':'100ms','scrape_timeout':'80ms','evaluation_interval':'1s'}\n        for job,address,(_,logical)in zip(projected['scrape_configs'],endpoints,expected):\n          job['static_configs'][0]['targets']=[address];job['static_configs'][0]['labels']['instance']=logical\n        bad=copy.deepcopy(projected);bad['scrape_configs'][1]['job_name']='api';config.write_text(json.dumps(bad))\n        def reload():\n          request=urllib.request.Request(state['url']+'/-/reload',data=b'',method='POST')\n          try:\n            with urllib.request.urlopen(request,timeout=3)as response:return response.status,response.read().decode()\n          except urllib.error.HTTPError as error:return error.code,error.read().decode()\n        rejected=reload();assert rejected[0]==500,'native duplicate-job reload must fail';assert api('/api/v1/targets')['data']['activeTargets']==[],'failed reload replaced last valid no-target config'\n        config.write_text(json.dumps(projected));loaded=reload();assert loaded[0]==200,'native repaired reload failed'\n        deadline=time.monotonic()+12;targets=[];samples=[]\n        while time.monotonic()<deadline:\n          targets=api('/api/v1/targets')['data']['activeTargets'];samples=api('/api/v1/query?query='+urllib.parse.quote('owned_endpoint_value'))['data']['result']\n          if len(targets)==2 and all(t['health']=='up'and not t['lastError']for t in targets)and len(samples)==2:break\n          time.sleep(.05)\n        else:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: owned repaired targets/query did not converge '+repr((targets,samples)))\n        actual={(sample['metric']['job'],sample['metric']['instance'],sample['metric']['env'],sample['metric']['origin']):float(sample['value'][1])for sample in samples};wanted={('api',expected[0][1],'prod','api'):7,('database',expected[1][1],'prod','database'):11};assert actual==wanted,'different native instance data were collapsed or mislabeled'\n        assert all(counts[name]>0 for name in counts);assert pathlib.Path(path).read_bytes()==original\n        result={'native_config_valid':True,'config_exit_code':checked.returncode,'duplicate_reload_status':rejected[0],'duplicate_reload_error':rejected[1],'failed_reload_kept_previous_config':True,'repaired_reload_status':loaded[0],'targets':[{'labels':t['labels'],'scrape_url':t['scrapeUrl'],'health':t['health'],'last_error':t['lastError']}for t in targets],'query':samples,'actual_endpoint_request_counts':counts.copy(),'declared_file_unchanged':True,'verified':True,'scope':'Logical example.test endpoints mapped only in teacher runtime copy to two owned loopback servers; no DNS/remote availability claim'}\n      finally:\n        if process is not None:\n          if process.poll()is None:\n            process.terminate()\n            try:process.wait(timeout=5)\n            except subprocess.TimeoutExpired:process.kill();process.wait(timeout=2)\n          if reader is not None:reader.join(timeout=2)\n          process.stderr.close();print('OWNED_PROM_JOB_CLEANUP:'+json.dumps({'pid':process.pid,'exit_code':process.returncode,'reaped':process.poll()is not None}),flush=True)\n        for server in servers:server.shutdown();server.server_close()\n        for thread in threads:thread.join(timeout=2)\n      after={'uid':__import__('os').getuid(),'home':__import__('os').environ.get('HOME'),'path':__import__('os').environ.get('PATH')};assert after==before;result['parent_identity_environment_unchanged']=True;return result\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "src-c44a0ff3ed627c1f",
+      "original_title": "什么是一个实例? 什么是一个作业?",
+      "original_type": "source",
+      "theory_retained": true
+    },
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/"
+    ],
+    "question_format": "case"
+  },
+  {
+    "id": "curated-parallel-prometheus-012",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "把变化数值移出告警身份标签",
+    "title": "Prometheus 配置实作：把变化数值移出告警身份标签",
+    "answer": "### prometheus.yaml\n```yaml\nglobal:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\nrule_files:\n- rules.yaml\n```\n\n### rules.yaml\n```yaml\ngroups:\n- name: cpu\n  rules:\n  - alert: HighCPU\n    expr: cpu_usage_ratio > 0.9\n    for: 5m\n    labels:\n      severity: warning\n    annotations:\n      summary: CPU high\n      current: '{{ $value }}'\n```\n\n身份标签保持稳定，变化值放在描述性 annotations；不通过 Python 模拟 pending 状态。\n\n### 原题说明\nlabels参与告警身份、路由和分组；annotations适合摘要、描述和运行手册链接。把不断变化的数值放labels会改变身份，通常应放annotations。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "labels参与告警身份、路由和分组；annotations适合摘要、描述和运行手册链接。",
+      "把不断变化的数值放labels会改变身份，通常应放annotations。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器、Python/PyYAML 配置合同验收器。字段采用 Prometheus 2.53 配置；无需学员部署服务，不访问实际目标。\n\n## 操作任务\nprometheus.yaml 保持不变。rules.yaml 中 HighCPU 的 labels 仅保留 severity=warning；把 current=\"{{ $value }}\" 移到 annotations，summary、expr、for、group 保持不变。不能把数值写成静态常量或同时留在 labels。\n\n## 产物\n提交 prometheus.yaml 以及 rules.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析提交文件，验证配置约束、字段类型和保留内容，拒绝重复键。此验收不执行 promtool、PromQL 或实际抓取，不代表原生效果已通过；真实运行待平台隔离服务接入。\n\n## 原理复习\n告警labels与annotations为什么应承担不同职责？\n",
+    "files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\nrule_files:\n- rules.yaml\n",
+      "rules.yaml": "groups:\n- name: cpu\n  rules:\n  - alert: HighCPU\n    expr: cpu_usage_ratio > 0.9\n    for: 5m\n    labels:\n      severity: warning\n      current: '{{ $value }}'\n    annotations:\n      summary: CPU high\n"
+    },
+    "solution_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\nrule_files:\n- rules.yaml\n",
+      "rules.yaml": "groups:\n- name: cpu\n  rules:\n  - alert: HighCPU\n    expr: cpu_usage_ratio > 0.9\n    for: 5m\n    labels:\n      severity: warning\n    annotations:\n      summary: CPU high\n      current: '{{ $value }}'\n"
+    },
+    "negative_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\nrule_files:\n- rules.yaml\n",
+      "rules.yaml": "groups:\n- name: cpu\n  rules:\n  - alert: HighCPU\n    expr: cpu_usage_ratio > 0.9\n    for: 5m\n    labels:\n      severity: warning\n      current: '{{ $value }}'\n    annotations:\n      summary: CPU high\n      current: '{{ $value }}'\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "prometheus.yaml",
+        "rules.yaml"
+      ],
+      "operation": "prometheus.yaml 保持不变。rules.yaml 中 HighCPU 的 labels 仅保留 severity=warning；把 current=\"{{ $value }}\" 移到 annotations，summary、expr、for、group 保持不变。不能把数值写成静态常量或同时留在 labels。",
+      "verification": "实际配置文件的离线语义合同验收，不执行 Prometheus 服务。",
+      "capability_gap": [
+        "未执行 promtool、真实抓取与规则计算。"
+      ],
+      "failure_examples": [
+        "典型错误配置见 negative_files，须被验收拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'scrape_interval': '30s', 'scrape_timeout': '10s', 'evaluation_interval': '1m'}, 'scrape_configs': [{'job_name': 'api', 'static_configs': [{'targets': ['api-1.example.test:9100'], 'labels': {'env': 'prod'}}]}], 'rule_files': ['rules.yaml']}\nd=load(\"prometheus.yaml\");b=copy.deepcopy(BASE)\nassert d==b\nrules=load('rules.yaml');assert rules=={'groups':[{'name':'cpu','rules':[{'alert':'HighCPU','expr':'cpu_usage_ratio > 0.9','for':'5m','labels':{'severity':'warning'},'annotations':{'summary':'CPU high','current':'{{ $value }}'}}]}]}\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-012",
+      "original_title": "告警labels与annotations为什么应承担不同职责？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-advanced-prometheus-007",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "把副本元数据放到 external_labels",
+    "title": "Prometheus 配置实作：把副本元数据放到 external_labels",
+    "answer": "### prometheus.yaml\n```yaml\nglobal:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\n  external_labels:\n    cluster: east\n    replica: a\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n```\n\nexternal_labels 与采集目标 labels 处于不同阶段，按本题元数据合同分离。\n\n### 原题说明\nexternal_labels主要在与外部系统通信时附加，不等同把标签写入所有本地存储序列。应确认查询入口是本地、联邦还是远端，并核对遇到已有同名标签时的具体行为，避免用本地不存在标签过滤所有数据。若业务需要本地按cluster选择，可在采集或记录规则中建立明确标签合同，但要防冲突和重复。验收本地查询、告警发送及远端查询三条路径，确认集群身份一致且不会改变原有序列含义。不能只为修查询而盲加所有外部标签，导致重名覆盖或高基数。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器、Python/PyYAML 配置合同验收器。字段采用 Prometheus 2.53 配置；无需学员部署服务，不访问实际目标。\n\n## 操作任务\n本项目要求 cluster=east、replica=a 只用于外部通信元数据，不作为这个静态目标的采集标签。将两项移入 global.external_labels，目标 labels 仅保留 env=prod；其余配置不变。注意：本题不承诺本地 PromQL 出现这些外部标签。\n\n## 产物\n提交 prometheus.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析提交文件，验证配置约束、字段类型和保留内容，拒绝重复键。此验收不执行 promtool、PromQL 或实际抓取，不代表原生效果已通过；真实运行待平台隔离服务接入。\n\n## 原理复习\nexternal_labels中的cluster标签为何在本地PromQL看不到，却在远端或联邦结果出现？\n",
+    "files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n      cluster: east\n      replica: a\n"
+    },
+    "solution_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\n  external_labels:\n    cluster: east\n    replica: a\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n"
+    },
+    "negative_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\n  external_labels:\n    cluster: east\n    replica: a\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n      replica: a\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "prometheus.yaml"
+      ],
+      "operation": "本项目要求 cluster=east、replica=a 只用于外部通信元数据，不作为这个静态目标的采集标签。将两项移入 global.external_labels，目标 labels 仅保留 env=prod；其余配置不变。注意：本题不承诺本地 PromQL 出现这些外部标签。",
+      "verification": "实际配置文件的离线语义合同验收，不执行 Prometheus 服务。",
+      "capability_gap": [
+        "未执行 promtool、真实抓取与规则计算。"
+      ],
+      "failure_examples": [
+        "典型错误配置见 negative_files，须被验收拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'scrape_interval': '30s', 'scrape_timeout': '10s', 'evaluation_interval': '1m'}, 'scrape_configs': [{'job_name': 'api', 'static_configs': [{'targets': ['api-1.example.test:9100'], 'labels': {'env': 'prod', 'cluster': 'east', 'replica': 'a'}}]}]}\nd=load(\"prometheus.yaml\");b=copy.deepcopy(BASE)\nassert d['global']['external_labels']=={'cluster':'east','replica':'a'}\nassert d['scrape_configs'][0]['static_configs'][0]['labels']=={'env':'prod'}\nb['global']['external_labels']={'cluster':'east','replica':'a'}\nb['scrape_configs'][0]['static_configs'][0]['labels']={'env':'prod'};assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-advanced-prometheus-007",
+      "original_title": "external_labels中的cluster标签为何在本地PromQL看不到，却在远端或联邦结果出现？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-040",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "保留采集端权威标签的冲突策略",
+    "title": "Prometheus 配置实作：保留采集端权威标签的冲突策略",
+    "answer": "### prometheus.yaml\n```yaml\nglobal:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  honor_labels: false\n```\n\n显式关闭 honor_labels，冲突标签遵循 Prometheus 的 exported_ 重命名机制；未运行原生抓取验证。\n\n### 原题说明\n它决定保留目标暴露的冲突标签还是使用服务端目标标签并重命名冲突标签。应根据联合抓取等场景选择，防止不可信目标伪装job/instance。查看最终标签而非只看原始输出。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它决定保留目标暴露的冲突标签还是使用服务端目标标签并重命名冲突标签。",
+      "应根据联合抓取等场景选择，防止不可信目标伪装job/instance。",
+      "查看最终标签而非只看原始输出。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器、Python/PyYAML 配置合同验收器。字段采用 Prometheus 2.53 配置；无需学员部署服务，不访问实际目标。\n\n## 操作任务\n这个作业以 Prometheus 配置的 job/instance 为权威，目标暴露的同名标签不得覆盖。将 api 作业 honor_labels 设置为布尔 false，不改变目标、job_name 或其它配置。字符串 \"false\" 不是本题接受的布尔值。\n\n## 产物\n提交 prometheus.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析提交文件，验证配置约束、字段类型和保留内容，拒绝重复键。此验收不执行 promtool、PromQL 或实际抓取，不代表原生效果已通过；真实运行待平台隔离服务接入。\n\n## 原理复习\nhonor_labels如何处理抓取目标与服务端标签冲突？\n",
+    "files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  honor_labels: true\n",
+      "target-metrics.txt": "demo_requests_total{job=\"producer\",instance=\"local\"} 7\n"
+    },
+    "solution_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  honor_labels: false\n"
+    },
+    "negative_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  honor_labels: 'false'\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "prometheus.yaml"
+      ],
+      "operation": "这个作业以 Prometheus 配置的 job/instance 为权威，目标暴露的同名标签不得覆盖。将 api 作业 honor_labels 设置为布尔 false，不改变目标、job_name 或其它配置。字符串 \"false\" 不是本题接受的布尔值。",
+      "verification": "实际配置文件的离线语义合同验收，不执行 Prometheus 服务。",
+      "capability_gap": [
+        "未执行 promtool、真实抓取与规则计算。"
+      ],
+      "failure_examples": [
+        "典型错误配置见 negative_files，须被验收拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'scrape_interval': '30s', 'scrape_timeout': '10s', 'evaluation_interval': '1m'}, 'scrape_configs': [{'job_name': 'api', 'static_configs': [{'targets': ['api-1.example.test:9100'], 'labels': {'env': 'prod'}}], 'honor_labels': True}]}\nd=load(\"prometheus.yaml\");b=copy.deepcopy(BASE)\nassert d['scrape_configs'][0]['honor_labels'] is False\nb['scrape_configs'][0]['honor_labels']=False;assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-040",
+      "original_title": "honor_labels如何处理抓取目标与服务端标签冲突？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-043",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "给采集样本设置有界容量预算",
+    "title": "Prometheus 配置实作：给采集样本设置有界容量预算",
+    "answer": "### prometheus.yaml\n```yaml\nglobal:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  sample_limit: 1000\n```\n\n样本限制既要容纳批准峰值又要有界，超限时整次抓取失败而非只截取部分样本。\n\n### 原题说明\n样本数在指标重标记后仍超过配置上限时，整次抓取被视为失败。应先定位新增指标族与基数，缩减不必要数据或评估容量后提高限制。不能只看HTTP200就认定已入库。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "样本数在指标重标记后仍超过配置上限时，整次抓取被视为失败。",
+      "应先定位新增指标族与基数，缩减不必要数据或评估容量后提高限制。",
+      "不能只看HTTP200就认定已入库。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器、Python/PyYAML 配置合同验收器。字段采用 Prometheus 2.53 配置；无需学员部署服务，不访问实际目标。\n\n## 操作任务\n当前正常峰值750样本，批准最多1000；把 api 作业 sample_limit 调整为整数750..1000，任何区间内值都接受。不能设0无限制，也不能低于正常峰值；不改变 metric relabel 或其他配置。样本数量来自提供的容量记录，不模拟抓取。\n\n## 产物\n提交 prometheus.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析提交文件，验证配置约束、字段类型和保留内容，拒绝重复键。此验收不执行 promtool、PromQL 或实际抓取，不代表原生效果已通过；真实运行待平台隔离服务接入。\n\n## 原理复习\nsample_limit为何可能让一个大目标完全抓取失败？\n",
+    "files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  sample_limit: 100\n",
+      "capacity.json": "{\"observed_peak\": 750, \"approved_limit\": 1000}"
+    },
+    "solution_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  sample_limit: 1000\n"
+    },
+    "negative_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  sample_limit: 0\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "prometheus.yaml"
+      ],
+      "operation": "当前正常峰值750样本，批准最多1000；把 api 作业 sample_limit 调整为整数750..1000，任何区间内值都接受。不能设0无限制，也不能低于正常峰值；不改变 metric relabel 或其他配置。样本数量来自提供的容量记录，不模拟抓取。",
+      "verification": "实际配置文件的离线语义合同验收，不执行 Prometheus 服务。",
+      "capability_gap": [
+        "未执行 promtool、真实抓取与规则计算。"
+      ],
+      "failure_examples": [
+        "典型错误配置见 negative_files，须被验收拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'scrape_interval': '30s', 'scrape_timeout': '10s', 'evaluation_interval': '1m'}, 'scrape_configs': [{'job_name': 'api', 'static_configs': [{'targets': ['api-1.example.test:9100'], 'labels': {'env': 'prod'}}], 'sample_limit': 100}]}\nd=load(\"prometheus.yaml\");b=copy.deepcopy(BASE)\nv=d['scrape_configs'][0]['sample_limit'];assert type(v) is int and 750<=v<=1000\nb['scrape_configs'][0]['sample_limit']=v;assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-043",
+      "original_title": "sample_limit为何可能让一个大目标完全抓取失败？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-044",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "同时限制标签数量与字段字节长度",
+    "title": "Prometheus 配置实作：同时限制标签数量与字段字节长度",
+    "answer": "### prometheus.yaml\n```yaml\nglobal:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  label_limit: 20\n  label_name_length_limit: 64\n  label_value_length_limit: 256\n```\n\n数量、名称长度、值长度分别受不同参数约束；配置合同不等同业务指标已被原生采集验证。\n\n### 原题说明\n它们限制单样本标签数量或标签值长度，避免异常输出消耗资源。超限可导致抓取失败，且不能替代总体时序基数治理。验收需包括合法边界与超限错误。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它们限制单样本标签数量或标签值长度，避免异常输出消耗资源。",
+      "超限可导致抓取失败，且不能替代总体时序基数治理。",
+      "验收需包括合法边界与超限错误。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器、Python/PyYAML 配置合同验收器。字段采用 Prometheus 2.53 配置；无需学员部署服务，不访问实际目标。\n\n## 操作任务\n采集策略批准每样本最多20个标签，名称最长64字节，值最长256字节。将 api 作业对应三个 limit 设为整数20/64/256；禁止任一字段保留0无限制，其他设置保持原样。约束按字节，不把中文字符数当字节。\n\n## 产物\n提交 prometheus.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析提交文件，验证配置约束、字段类型和保留内容，拒绝重复键。此验收不执行 promtool、PromQL 或实际抓取，不代表原生效果已通过；真实运行待平台隔离服务接入。\n\n## 原理复习\nlabel_limit与label_value_length_limit能防止哪些问题？\n",
+    "files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  label_limit: 0\n  label_name_length_limit: 0\n  label_value_length_limit: 0\n"
+    },
+    "solution_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  label_limit: 20\n  label_name_length_limit: 64\n  label_value_length_limit: 256\n"
+    },
+    "negative_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  label_limit: 20\n  label_name_length_limit: 64\n  label_value_length_limit: 0\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "prometheus.yaml"
+      ],
+      "operation": "采集策略批准每样本最多20个标签，名称最长64字节，值最长256字节。将 api 作业对应三个 limit 设为整数20/64/256；禁止任一字段保留0无限制，其他设置保持原样。约束按字节，不把中文字符数当字节。",
+      "verification": "实际配置文件的离线语义合同验收，不执行 Prometheus 服务。",
+      "capability_gap": [
+        "未执行 promtool、真实抓取与规则计算。"
+      ],
+      "failure_examples": [
+        "典型错误配置见 negative_files，须被验收拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'scrape_interval': '30s', 'scrape_timeout': '10s', 'evaluation_interval': '1m'}, 'scrape_configs': [{'job_name': 'api', 'static_configs': [{'targets': ['api-1.example.test:9100'], 'labels': {'env': 'prod'}}], 'label_limit': 0, 'label_name_length_limit': 0, 'label_value_length_limit': 0}]}\nd=load(\"prometheus.yaml\");b=copy.deepcopy(BASE)\nj=d['scrape_configs'][0]\nfor k,v in {'label_limit':20,'label_name_length_limit':64,'label_value_length_limit':256}.items():\n assert type(j[k]) is int and j[k]==v\n b['scrape_configs'][0][k]=v\nassert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-044",
+      "original_title": "label_limit与label_value_length_limit能防止哪些问题？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-045",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "忽略不可信目标时间戳而保持抓取频率",
+    "title": "Prometheus 配置实作：忽略不可信目标时间戳而保持抓取频率",
+    "answer": "### prometheus.yaml\n```yaml\nglobal:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  honor_timestamps: false\n```\n\n关闭 honor_timestamps 使这一作业不使用目标显式时间戳；真正历史影响仍需独立运行验证。\n\n### 原题说明\n服务端可能采用目标提供的时间戳，错误未来/过去值或重复次序会影响入库与查询。一般exporter宜避免自行附时间戳，确需使用则验证时钟和语义。不要随意放宽乱序窗口掩盖时间错误。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "服务端可能采用目标提供的时间戳，错误未来/过去值或重复次序会影响入库与查询。",
+      "一般exporter宜避免自行附时间戳，确需使用则验证时钟和语义。",
+      "不要随意放宽乱序窗口掩盖时间错误。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器、Python/PyYAML 配置合同验收器。字段采用 Prometheus 2.53 配置；无需学员部署服务，不访问实际目标。\n\n## 操作任务\n已明确这个旧 exporter 的显式时间戳不可信，项目选择以采集时刻为准。api honor_timestamps 改为布尔 false，不改变 interval/timeout、target 或其他设置。不能靠加快抓取频率掩盖目标时间戳问题。\n\n## 产物\n提交 prometheus.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析提交文件，验证配置约束、字段类型和保留内容，拒绝重复键。此验收不执行 promtool、PromQL 或实际抓取，不代表原生效果已通过；真实运行待平台隔离服务接入。\n\n## 原理复习\nhonor_timestamps开启时目标时间戳错误会造成什么？\n",
+    "files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  honor_timestamps: true\n",
+      "target-metrics.txt": "legacy_temperature 42 946684800000\n"
+    },
+    "solution_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  honor_timestamps: false\n"
+    },
+    "negative_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 1s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\n  honor_timestamps: true\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "prometheus.yaml"
+      ],
+      "operation": "已明确这个旧 exporter 的显式时间戳不可信，项目选择以采集时刻为准。api honor_timestamps 改为布尔 false，不改变 interval/timeout、target 或其他设置。不能靠加快抓取频率掩盖目标时间戳问题。",
+      "verification": "实际配置文件的离线语义合同验收，不执行 Prometheus 服务。",
+      "capability_gap": [
+        "未执行 promtool、真实抓取与规则计算。"
+      ],
+      "failure_examples": [
+        "典型错误配置见 negative_files，须被验收拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'scrape_interval': '30s', 'scrape_timeout': '10s', 'evaluation_interval': '1m'}, 'scrape_configs': [{'job_name': 'api', 'static_configs': [{'targets': ['api-1.example.test:9100'], 'labels': {'env': 'prod'}}], 'honor_timestamps': True}]}\nd=load(\"prometheus.yaml\");b=copy.deepcopy(BASE)\nassert d['scrape_configs'][0]['honor_timestamps'] is False\nb['scrape_configs'][0]['honor_timestamps']=False;assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-045",
+      "original_title": "honor_timestamps开启时目标时间戳错误会造成什么？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-047",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "把记录规则放在同组下游告警之前",
+    "title": "Prometheus 配置实作：把记录规则放在同组下游告警之前",
+    "answer": "### prometheus.yaml\n```yaml\nglobal:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\nrule_files:\n- rules.yaml\n```\n\n### rules.yaml\n```yaml\ngroups:\n- name: service\n  interval: 30s\n  rules:\n  - record: job:requests:rate5m\n    expr: sum by (job) (rate(requests_total[5m]))\n  - alert: BusyService\n    expr: job:requests:rate5m > 100\n    for: 2m\n```\n\n同组内顺序决定下游规则是否先看到本轮记录规则结果；这里仅验证交付顺序，不宣称数值计算通过。\n\n### 原题说明\n同组规则按顺序评估，后续规则可依赖前面生成的结果；跨组执行时间不保证同样顺序。设计依赖需考虑评估时间和延迟，避免隐式循环。验收比较原表达式与记录结果时间戳。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "同组规则按顺序评估，后续规则可依赖前面生成的结果；跨组执行时间不保证同样顺序。",
+      "设计依赖需考虑评估时间和延迟，避免隐式循环。",
+      "验收比较原表达式与记录结果时间戳。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器、Python/PyYAML 配置合同验收器。字段采用 Prometheus 2.53 配置；无需学员部署服务，不访问实际目标。\n\n## 操作任务\nprometheus.yaml 不变；同一 service 规则组内先计算 job:requests:rate5m，再判断 BusyService。只调整 rules.yaml 中两条规则的顺序，名称、表达式、for、interval 都不能改。不能通过重命名记录指标“修复”依赖。\n\n## 产物\n提交 prometheus.yaml 以及 rules.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析提交文件，验证配置约束、字段类型和保留内容，拒绝重复键。此验收不执行 promtool、PromQL 或实际抓取，不代表原生效果已通过；真实运行待平台隔离服务接入。\n\n## 原理复习\n同一规则组内顺序为何影响记录规则依赖？\n",
+    "files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\nrule_files:\n- rules.yaml\n",
+      "rules.yaml": "groups:\n- name: service\n  interval: 30s\n  rules:\n  - alert: BusyService\n    expr: job:requests:rate5m > 100\n    for: 2m\n  - record: job:requests:rate5m\n    expr: sum by (job) (rate(requests_total[5m]))\n"
+    },
+    "solution_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\nrule_files:\n- rules.yaml\n",
+      "rules.yaml": "groups:\n- name: service\n  interval: 30s\n  rules:\n  - record: job:requests:rate5m\n    expr: sum by (job) (rate(requests_total[5m]))\n  - alert: BusyService\n    expr: job:requests:rate5m > 100\n    for: 2m\n"
+    },
+    "negative_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\nrule_files:\n- rules.yaml\n",
+      "rules.yaml": "groups:\n- name: service\n  interval: 30s\n  rules:\n  - record: renamed:rate5m\n    expr: sum by (job) (rate(requests_total[5m]))\n  - alert: BusyService\n    expr: job:requests:rate5m > 100\n    for: 2m\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "prometheus.yaml",
+        "rules.yaml"
+      ],
+      "operation": "prometheus.yaml 不变；同一 service 规则组内先计算 job:requests:rate5m，再判断 BusyService。只调整 rules.yaml 中两条规则的顺序，名称、表达式、for、interval 都不能改。不能通过重命名记录指标“修复”依赖。",
+      "verification": "实际配置文件的离线语义合同验收，不执行 Prometheus 服务。",
+      "capability_gap": [
+        "未执行 promtool、真实抓取与规则计算。"
+      ],
+      "failure_examples": [
+        "典型错误配置见 negative_files，须被验收拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'scrape_interval': '30s', 'scrape_timeout': '10s', 'evaluation_interval': '1m'}, 'scrape_configs': [{'job_name': 'api', 'static_configs': [{'targets': ['api-1.example.test:9100'], 'labels': {'env': 'prod'}}]}], 'rule_files': ['rules.yaml']}\nd=load(\"prometheus.yaml\");b=copy.deepcopy(BASE)\nassert d==b\nrules=load('rules.yaml');assert rules=={'groups':[{'name':'service','interval':'30s','rules':[{'record':'job:requests:rate5m','expr':'sum by (job) (rate(requests_total[5m]))'},{'alert':'BusyService','expr':'job:requests:rate5m > 100','for':'2m'}]}]}\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-047",
+      "original_title": "同一规则组内顺序为何影响记录规则依赖？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-060",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 3,
+    "topic": "只在发送告警前移除副本标签",
+    "title": "Prometheus 配置实作：只在发送告警前移除副本标签",
+    "answer": "### prometheus.yaml\n```yaml\nglobal:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\n  external_labels:\n    cluster: east\n    replica: a\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\nalerting:\n  alertmanagers:\n  - static_configs:\n    - targets:\n      - am-a.example.test:9093\n      - am-b.example.test:9093\n  alert_relabel_configs:\n  - action: labeldrop\n    regex: replica\n```\n\n在告警发送阶段去掉副本区分，同时保留集群身份与远端存储元数据。\n\n### 原题说明\n保留共同环境标签，发送给Alertmanager前移除只区分副本且不应影响告警身份的标签。两个副本都应发送给所有Alertmanager节点，具体发现方式按部署设计。移除前确认不会合并本应独立的集群。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "保留共同环境标签，发送给Alertmanager前移除只区分副本且不应影响告警身份的标签。",
+      "两个副本都应发送给所有Alertmanager节点，具体发现方式按部署设计。",
+      "移除前确认不会合并本应独立的集群。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器、Python/PyYAML 配置合同验收器。字段采用 Prometheus 2.53 配置；无需学员部署服务，不访问实际目标。\n\n## 操作任务\n高可用两副本只有 replica 不同。保留 global.external_labels（供远端存储使用）和两个 Alertmanager 地址；仅在 alerting.alert_relabel_configs 添加 labeldrop regex=replica。禁止丢 cluster 或将规则放到 metric_relabel_configs；此题不声称实际通知去重已验证。\n\n## 产物\n提交 prometheus.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析提交文件，验证配置约束、字段类型和保留内容，拒绝重复键。此验收不执行 promtool、PromQL 或实际抓取，不代表原生效果已通过；真实运行待平台隔离服务接入。\n\n## 原理复习\n两个Prometheus副本发同一告警时怎样统一身份？\n",
+    "files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\n  external_labels:\n    cluster: east\n    replica: a\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\nalerting:\n  alertmanagers:\n  - static_configs:\n    - targets:\n      - am-a.example.test:9093\n      - am-b.example.test:9093\n"
+    },
+    "solution_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\n  external_labels:\n    cluster: east\n    replica: a\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\nalerting:\n  alertmanagers:\n  - static_configs:\n    - targets:\n      - am-a.example.test:9093\n      - am-b.example.test:9093\n  alert_relabel_configs:\n  - action: labeldrop\n    regex: replica\n"
+    },
+    "negative_files": {
+      "prometheus.yaml": "global:\n  scrape_interval: 30s\n  scrape_timeout: 10s\n  evaluation_interval: 1m\n  external_labels:\n    cluster: east\n    replica: a\nscrape_configs:\n- job_name: api\n  static_configs:\n  - targets:\n    - api-1.example.test:9100\n    labels:\n      env: prod\nalerting:\n  alertmanagers:\n  - static_configs:\n    - targets:\n      - am-a.example.test:9093\n      - am-b.example.test:9093\n  alert_relabel_configs:\n  - action: labeldrop\n    regex: replica|cluster\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "prometheus.yaml"
+      ],
+      "operation": "高可用两副本只有 replica 不同。保留 global.external_labels（供远端存储使用）和两个 Alertmanager 地址；仅在 alerting.alert_relabel_configs 添加 labeldrop regex=replica。禁止丢 cluster 或将规则放到 metric_relabel_configs；此题不声称实际通知去重已验证。",
+      "verification": "实际配置文件的离线语义合同验收，不执行 Prometheus 服务。",
+      "capability_gap": [
+        "未执行 promtool、真实抓取与规则计算。"
+      ],
+      "failure_examples": [
+        "典型错误配置见 negative_files，须被验收拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'scrape_interval': '30s', 'scrape_timeout': '10s', 'evaluation_interval': '1m', 'external_labels': {'cluster': 'east', 'replica': 'a'}}, 'scrape_configs': [{'job_name': 'api', 'static_configs': [{'targets': ['api-1.example.test:9100'], 'labels': {'env': 'prod'}}]}], 'alerting': {'alertmanagers': [{'static_configs': [{'targets': ['am-a.example.test:9093', 'am-b.example.test:9093']}]}]}}\nd=load(\"prometheus.yaml\");b=copy.deepcopy(BASE)\nassert d['alerting']['alert_relabel_configs']==[{'action':'labeldrop','regex':'replica'}]\nassert d['global']['external_labels']=={'cluster':'east','replica':'a'}\nb['alerting']['alert_relabel_configs']=[{'action':'labeldrop','regex':'replica'}];assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-060",
+      "original_title": "两个Prometheus副本发同一告警时怎样统一身份？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  }
+]

@@ -1,0 +1,231 @@
+[
+  {
+    "id": "curated-parallel-zabbix-007",
+    "module": "zabbix",
+    "category": "Zabbix",
+    "level": 0,
+    "topic": "预处理与采集数据质量",
+    "title": "真实Agent支持状态：0、空值与文字标记合法，未知key保留具体Unsupported原因",
+    "answer": "```python\ndef collect(query,key):\n    raw=query(key)\n    if not isinstance(raw,bytes):raise ValueError('framed agent payload must be bytes')\n    if raw.startswith(b'ZBX_NOTSUPPORTED\\x00'):\n        return {'supported':False,'value':None,'error':raw.partition(b'\\x00')[2].decode('utf8')}\n    return {'supported':True,'value':raw.decode('utf8'),'error':None}\n```\n\n原题知识说明：\nSupported表示监控项可按当前条件正常处理，Unsupported提示采集或处理错误。查看具体错误和最近成功值，旧值仍显示不代表当前采集恢复。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "Supported表示监控项可按当前条件正常处理，Unsupported提示采集或处理错误。",
+      "查看具体错误和最近成功值，旧值仍显示不代表当前采集恢复。"
+    ],
+    "references": [
+      "https://www.zabbix.com/documentation/7.0/en/manual/config/items/itemtypes/zabbix_agent",
+      "https://www.zabbix.com/documentation/7.0/en/manual/config/items/unsupported"
+    ],
+    "related_modules": [
+      "zabbix"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-zabbix-007",
+      "original_title": "Supported与Unsupported分别说明什么？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现collect(query,key)，恰好调用一次可信query读取原生ZBXD协议已拆帧的bytes载荷。仅当载荷以b\"ZBX_NOTSUPPORTED\\x00\"开头时返回{supported:False,value:None,error:其后UTF8错误文本}；其他UTF8载荷返回{supported:True,value:原始文本,error:None}，包括0、空字符串及不带NUL的普通文字ZBX_NOTSUPPORTED。非bytes ValueError；连接拒绝/来源拒绝等传输异常必须传播，不能冒充监控项Unsupported。实际未知key后agent.ping仍可用，不能将单项失败认定整机Agent宕机。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实classic zabbix_agentd7.0.32私有被动检查与本地文件；仅检查Agent层状态和具体错误，不证明Server预处理/存储、旧last值、触发器或通知已恢复。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def collect(query,key):\n    raw=query(key)\n    if not isinstance(raw,bytes):raise ValueError('framed agent payload must be bytes')\n    if raw.startswith(b'ZBX_NOTSUPPORTED\\x00'):\n        return {'supported':False,'value':None,'error':raw.partition(b'\\x00')[2].decode('utf8')}\n    return {'supported':True,'value':raw.decode('utf8'),'error':None}\n"
+    },
+    "negative_files": {
+      "task.py": "def collect(query,key):\n    raw=query(key)\n    if not isinstance(raw,bytes):raise ValueError('framed agent payload must be bytes')\n    if not raw or raw==b'0' or raw.startswith(b'ZBX_NOTSUPPORTED\\x00'):\n        return {'supported':False,'value':None,'error':raw.partition(b'\\x00')[2].decode('utf8')}\n    return {'supported':True,'value':raw.decode('utf8'),'error':None}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现collect(query,key)，恰好调用一次可信query读取原生ZBXD协议已拆帧的bytes载荷。仅当载荷以b\"ZBX_NOTSUPPORTED\\x00\"开头时返回{supported:False,value:None,error:其后UTF8错误文本}；其他UTF8载荷返回{supported:True,value:原始文本,error:None}，包括0、空字符串及不带NUL的普通文字ZBX_NOTSUPPORTED。非bytes ValueError；连接拒绝/来源拒绝等传输异常必须传播，不能冒充监控项Unsupported。实际未知key后agent.ping仍可用，不能将单项失败认定整机Agent宕机。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实classic zabbix_agentd7.0.32私有被动检查与本地文件；仅检查Agent层状态和具体错误，不证明Server预处理/存储、旧last值、触发器或通知已恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "zabbix_agentd"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/zabbix_native.py": "\"\"\"Private Zabbix classic agent 7.0.32 with bounded framed passive requests.\"\"\"\nimport json,os,pathlib,secrets,shutil,signal,socket,struct,subprocess,tempfile,time,zlib\n\nclass Rejected(Exception):pass\n\ndef free_port():\n for _ in range(64):\n  port=20000+secrets.randbelow(10000)\n  with socket.socket() as endpoint:\n   try:endpoint.bind(('127.0.0.1',port));return port\n   except OSError:pass\n raise RuntimeError('private agent port allocation exhausted')\n\ndef recv_exact(conn,n):\n out=b''\n while len(out)<n:\n  chunk=conn.recv(n-len(out))\n  if not chunk:raise Rejected('agent closed the framed request, including source access rejection')\n  out+=chunk\n return out\n\ndef exchange(port,key,source='127.0.0.1'):\n payload=key.encode('utf8')\n with socket.create_connection(('127.0.0.1',port),timeout=2,source_address=(source,0)) as endpoint:\n  endpoint.sendall(b'ZBXD\\x01'+struct.pack('<Q',len(payload))+payload)\n  try:header=recv_exact(endpoint,5)\n  except ConnectionResetError as error:raise Rejected('agent reset the unapproved source') from error\n  if header[:4]!=b'ZBXD' or header[4] not in (1,3):raise RuntimeError('unexpected native Zabbix protocol')\n  first,second=struct.unpack('<II',recv_exact(endpoint,8))\n  if first>1048576 or second>1048576:raise RuntimeError('bounded native frame exceeded')\n  raw=recv_exact(endpoint,first)\n  return zlib.decompress(raw) if header[4]==3 else raw\n\nclass Agent:\n def __init__(self,settings=None):self.settings=dict(settings or {});self.process=None;self.temp=None;self.log=None\n def __enter__(self):\n  binary=shutil.which('zabbix_agentd')\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: static zabbix_agentd required')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '(Zabbix) 7.0.32' not in version.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: exact Zabbix7.0.32 required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-zabbix-');self.root=pathlib.Path(self.temp.name);self.port=free_port()\n  values={'PidFile':str(self.root/'agent.pid'),'LogFile':str(self.root/'agent.log'),'DebugLevel':'3','Server':'127.0.0.1','ListenIP':'127.0.0.1','ListenPort':str(self.port),'StartAgents':'1','Hostname':'opsforge-private-agent','Timeout':'1',**self.settings}\n  self.config=self.root/'agent.conf';lines=[]\n  for key,value in values.items():\n   if value is not None:\n    if '\\n' in key+str(value) or '\\r' in key+str(value):raise ValueError('literal bounded agent configuration')\n    lines.append(key+'='+str(value))\n  self.config.write_text('\\n'.join(lines)+'\\n',encoding='utf8');self.log=(self.root/'foreground.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--foreground','--config',str(self.config)],stdout=self.log,stderr=self.log,start_new_session=True)\n   deadline=time.monotonic()+4\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:\n     detail=(self.root/'foreground.log').read_text(errors='replace')[-1600:]\n     if (self.root/'agent.log').exists():detail+=(self.root/'agent.log').read_text(errors='replace')[-1600:]\n     raise RuntimeError('agent rejected config: '+detail)\n    try:\n     with socket.create_connection(('127.0.0.1',self.port),timeout=.1):break\n    except OSError:time.sleep(.02)\n   else:raise RuntimeError('agent private listener readiness deadline')\n   print('NATIVE_ZABBIX_AGENT_READY:7.0.32',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def query(self,key,source='127.0.0.1'):return exchange(self.port,key,source)\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:os.killpg(self.process.pid,signal.SIGTERM)\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:os.killpg(self.process.pid,signal.SIGKILL);self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student agent operation failed: '+type(error).__name__) from error\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,copy,json,secrets\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom zabbix_native import Agent,Rejected,student\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith tempfile.TemporaryDirectory() as directory,Agent() as agent:\n root=pathlib.Path(directory);empty=root/'empty';empty.write_bytes(b'');literal=root/'literal';literal.write_text('ZBX_NOTSUPPORTED',encoding='utf8');missing=root/'missing';calls=[]\n def query(key):calls.append(key);return agent.query(key)\n result=student(task.collect,query,'agent.ping');assert result=={'supported':True,'value':'1','error':None} and calls==['agent.ping']\n for key,value in [('vfs.file.exists['+str(missing)+']','0'),('vfs.file.contents['+str(empty)+']',''),('vfs.file.contents['+str(literal)+']','ZBX_NOTSUPPORTED')]:\n  calls.clear();assert task.collect(query,key)=={'supported':True,'value':value,'error':None} and calls==[key],'zero/empty/literal value is not an unsupported item'\n key='opsforge.nonexistent.'+secrets.token_hex(5);raw=agent.query(key);assert raw.startswith(b'ZBX_NOTSUPPORTED\\x00')\n calls.clear();result=task.collect(query,key);assert result=={'supported':False,'value':None,'error':raw.partition(b'\\x00')[2].decode()} and calls==[key]\n assert agent.query('agent.ping')==b'1','an unsupported key does not mean the entire agent is down'\n def denied(key):raise Rejected('source rejected before item evaluation')\n try:task.collect(denied,'agent.ping')\n except Rejected:pass\n else:raise AssertionError('transport/source failure was mislabeled as item unsupported')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-zabbix-015",
+    "module": "zabbix",
+    "category": "Zabbix",
+    "level": 1,
+    "topic": "Agent与Proxy采集架构",
+    "title": "真实Agent权限叠加：Server新增被动来源，ServerActive目标不能替代入站许可",
+    "answer": "```python\nimport copy,ipaddress\ndef add_passive_source(settings,source):\n    ip=ipaddress.ip_address(source)\n    if ip.version!=4:raise ValueError('approved literal IPv4 required')\n    result=copy.deepcopy(settings);old=result.get('Server')\n    if not isinstance(old,str) or not old:raise ValueError('preserve an existing source baseline')\n    parts=old.split(',')\n    if not any(ip in ipaddress.ip_network(part.strip(),strict=False) for part in parts):result['Server']=old+','+str(ip)\n    return result\n```\n\n原题知识说明：\nServer用于限制被动请求等允许来源，ServerActive指定主动检查服务端/代理端点。主动采集需匹配技术Host name，网络方向也不同。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "Server用于限制被动请求等允许来源，ServerActive指定主动检查服务端/代理端点。",
+      "主动采集需匹配技术Host name，网络方向也不同。"
+    ],
+    "references": [
+      "https://www.zabbix.com/documentation/7.0/en/manual/appendix/config/zabbix_agentd"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+        "block_ids": [
+          "AH0kdX3y7omqMtxYwV8cr1Xzn2d",
+          "JJ4zd9MTpo3O2jxkYSWcWsZLn9d",
+          "Khwsdri2qoCyVKxSr5xc61ymnRd",
+          "CEvUdaBl0oeFYOxMQqXc8Lz6nn3",
+          "CiG9dX9E5o3Ml4x6W8EcIf3Inne",
+          "XKwMdyU51o4JCmxlPttcA225nmc",
+          "XueMd4isSo58J5x4iIQcdO9Znsc",
+          "P1PVd8lqIoGBdaxCHYicyrtanLe"
+        ]
+      }
+    ],
+    "related_modules": [
+      "zabbix"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-zabbix-015",
+      "original_title": "Server参数与ServerActive为何不能互相替代？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现add_passive_source(settings,source)，source是批准新增的IPv4字面地址；settings含现有非空Server列表（IPv4或CIDR）和其他参数。深拷贝后仅当现有范围未覆盖source时，在Server末尾追加该精确地址，保留原文本、原来源、ServerActive、Hostname及其他配置；已覆盖则原样返回深拷贝，禁止把列表替换为新来源或放宽成/0。IPv6 ValueError。原配置Server只允许127.0.0.1/2，而ServerActive已指向127.0.0.3；实际证明3仍无法被动查询，修复后1/2/3都可查询且4继续拒绝。重复调用不得重复添加。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Agent7.0.32按TCP源地址执行被动访问检查，只绑定私有loopback；ServerActive配置保留，但未搭建真实Server/Proxy或验证主动任务调度。不更改宿主机默认账号、网络或访问配置。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy,ipaddress\ndef add_passive_source(settings,source):\n    ip=ipaddress.ip_address(source)\n    if ip.version!=4:raise ValueError('approved literal IPv4 required')\n    result=copy.deepcopy(settings);old=result.get('Server')\n    if not isinstance(old,str) or not old:raise ValueError('preserve an existing source baseline')\n    parts=old.split(',')\n    if not any(ip in ipaddress.ip_network(part.strip(),strict=False) for part in parts):result['Server']=old+','+str(ip)\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "import copy,ipaddress\ndef add_passive_source(settings,source):\n    ip=ipaddress.ip_address(source)\n    if ip.version!=4:raise ValueError('approved literal IPv4 required')\n    result=copy.deepcopy(settings);old=result.get('Server')\n    if not isinstance(old,str) or not old:raise ValueError('preserve an existing source baseline')\n    parts=old.split(',')\n    if not any(ip in ipaddress.ip_network(part.strip(),strict=False) for part in parts):result['Server']=str(ip)\n    return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现add_passive_source(settings,source)，source是批准新增的IPv4字面地址；settings含现有非空Server列表（IPv4或CIDR）和其他参数。深拷贝后仅当现有范围未覆盖source时，在Server末尾追加该精确地址，保留原文本、原来源、ServerActive、Hostname及其他配置；已覆盖则原样返回深拷贝，禁止把列表替换为新来源或放宽成/0。IPv6 ValueError。原配置Server只允许127.0.0.1/2，而ServerActive已指向127.0.0.3；实际证明3仍无法被动查询，修复后1/2/3都可查询且4继续拒绝。重复调用不得重复添加。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Agent7.0.32按TCP源地址执行被动访问检查，只绑定私有loopback；ServerActive配置保留，但未搭建真实Server/Proxy或验证主动任务调度。不更改宿主机默认账号、网络或访问配置。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "zabbix_agentd"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/zabbix_native.py": "\"\"\"Private Zabbix classic agent 7.0.32 with bounded framed passive requests.\"\"\"\nimport json,os,pathlib,secrets,shutil,signal,socket,struct,subprocess,tempfile,time,zlib\n\nclass Rejected(Exception):pass\n\ndef free_port():\n for _ in range(64):\n  port=20000+secrets.randbelow(10000)\n  with socket.socket() as endpoint:\n   try:endpoint.bind(('127.0.0.1',port));return port\n   except OSError:pass\n raise RuntimeError('private agent port allocation exhausted')\n\ndef recv_exact(conn,n):\n out=b''\n while len(out)<n:\n  chunk=conn.recv(n-len(out))\n  if not chunk:raise Rejected('agent closed the framed request, including source access rejection')\n  out+=chunk\n return out\n\ndef exchange(port,key,source='127.0.0.1'):\n payload=key.encode('utf8')\n with socket.create_connection(('127.0.0.1',port),timeout=2,source_address=(source,0)) as endpoint:\n  endpoint.sendall(b'ZBXD\\x01'+struct.pack('<Q',len(payload))+payload)\n  try:header=recv_exact(endpoint,5)\n  except ConnectionResetError as error:raise Rejected('agent reset the unapproved source') from error\n  if header[:4]!=b'ZBXD' or header[4] not in (1,3):raise RuntimeError('unexpected native Zabbix protocol')\n  first,second=struct.unpack('<II',recv_exact(endpoint,8))\n  if first>1048576 or second>1048576:raise RuntimeError('bounded native frame exceeded')\n  raw=recv_exact(endpoint,first)\n  return zlib.decompress(raw) if header[4]==3 else raw\n\nclass Agent:\n def __init__(self,settings=None):self.settings=dict(settings or {});self.process=None;self.temp=None;self.log=None\n def __enter__(self):\n  binary=shutil.which('zabbix_agentd')\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: static zabbix_agentd required')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '(Zabbix) 7.0.32' not in version.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: exact Zabbix7.0.32 required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-zabbix-');self.root=pathlib.Path(self.temp.name);self.port=free_port()\n  values={'PidFile':str(self.root/'agent.pid'),'LogFile':str(self.root/'agent.log'),'DebugLevel':'3','Server':'127.0.0.1','ListenIP':'127.0.0.1','ListenPort':str(self.port),'StartAgents':'1','Hostname':'opsforge-private-agent','Timeout':'1',**self.settings}\n  self.config=self.root/'agent.conf';lines=[]\n  for key,value in values.items():\n   if value is not None:\n    if '\\n' in key+str(value) or '\\r' in key+str(value):raise ValueError('literal bounded agent configuration')\n    lines.append(key+'='+str(value))\n  self.config.write_text('\\n'.join(lines)+'\\n',encoding='utf8');self.log=(self.root/'foreground.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--foreground','--config',str(self.config)],stdout=self.log,stderr=self.log,start_new_session=True)\n   deadline=time.monotonic()+4\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:\n     detail=(self.root/'foreground.log').read_text(errors='replace')[-1600:]\n     if (self.root/'agent.log').exists():detail+=(self.root/'agent.log').read_text(errors='replace')[-1600:]\n     raise RuntimeError('agent rejected config: '+detail)\n    try:\n     with socket.create_connection(('127.0.0.1',self.port),timeout=.1):break\n    except OSError:time.sleep(.02)\n   else:raise RuntimeError('agent private listener readiness deadline')\n   print('NATIVE_ZABBIX_AGENT_READY:7.0.32',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def query(self,key,source='127.0.0.1'):return exchange(self.port,key,source)\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:os.killpg(self.process.pid,signal.SIGTERM)\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:os.killpg(self.process.pid,signal.SIGKILL);self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student agent operation failed: '+type(error).__name__) from error\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,copy,json,secrets\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom zabbix_native import Agent,Rejected,student\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nbase={'Server':'127.0.0.1,127.0.0.2','ServerActive':'127.0.0.3:20051','Hostname':'approved-agent'};before=copy.deepcopy(base)\ndef allowed(agent,ip):\n try:value=agent.query('agent.ping',ip)\n except Rejected as error:raise AssertionError('approved original or added source lost access: '+ip) from error\n assert value==b'1'\ndef rejected(agent,ip):\n try:agent.query('agent.ping',ip)\n except Rejected:return\n raise AssertionError('source beyond approved scope gained access: '+ip)\nwith Agent(base) as original:\n allowed(original,'127.0.0.1');allowed(original,'127.0.0.2');rejected(original,'127.0.0.3')\n print('NATIVE_ZABBIX_SERVERACTIVE_DOES_NOT_AUTHORIZE_PASSIVE_SOURCE',flush=True)\nfixed=student(task.add_passive_source,base,'127.0.0.3');assert base==before and fixed.get('ServerActive')==before['ServerActive']\nleft=copy.deepcopy(fixed);right=copy.deepcopy(base);left.pop('Server');right.pop('Server');assert left==right\nwith Agent(fixed) as agent:\n for ip in ('127.0.0.1','127.0.0.2','127.0.0.3'):allowed(agent,ip)\n rejected(agent,'127.0.0.4')\nassert task.add_passive_source(fixed,'127.0.0.3')==fixed,'repeat add must not duplicate configuration'\nnetwork={**base,'Server':'127.0.0.0/30'};assert task.add_passive_source(network,'127.0.0.2')==network,'already-covered CIDR should remain exact'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-zabbix-016",
+    "module": "zabbix",
+    "category": "Zabbix",
+    "level": 1,
+    "topic": "Agent与Proxy采集架构",
+    "title": "真实Agent名称优先级：显式Hostname覆盖HostnameItem，系统hostname保持原值",
+    "answer": "```python\nimport copy,re\ndef set_static_hostname(settings,name):\n    if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}',name):raise ValueError('exercise technical hostname policy')\n    fixed=copy.deepcopy(settings);fixed['Hostname']=name;return fixed\n```\n\n原题知识说明：\n静态Hostname及动态生成设置有优先级，具体以Agent版本规则为准。用日志确认实际声明名称，避免克隆主机都注册同一身份。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "静态Hostname及动态生成设置有优先级，具体以Agent版本规则为准。",
+      "用日志确认实际声明名称，避免克隆主机都注册同一身份。"
+    ],
+    "references": [
+      "https://www.zabbix.com/documentation/7.0/en/manual/appendix/config/zabbix_agentd"
+    ],
+    "related_modules": [
+      "zabbix"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-zabbix-016",
+      "original_title": "HostnameItem与Hostname同时设置时为何要查有效配置？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现set_static_hostname(settings,name)返回深拷贝，仅设置Hostname为批准技术名称，保留原HostnameItem=system.hostname及其他配置。题定名称策略为1..64个ASCII字母/数字/下划线/点/连字符，首字符字母或数字；其他输入ValueError。settings中的None表示不写该配置行。验收先以Hostname未设置时实际比较agent.hostname与system.hostname，再保留HostnameItem并设置静态Hostname，实际agent.hostname必须成为批准值，而system.hostname仍是原系统值。禁止把技术名称写成HostnameItem的item key、改变OS名称或删除其他原参数。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实classic Agent7.0.32有效名称查询；名称策略是本练习的受限合同，不声称Zabbix本身只允许此子集。没有真实Server自动注册、克隆主机身份迁移或系统hostname修改。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy,re\ndef set_static_hostname(settings,name):\n    if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}',name):raise ValueError('exercise technical hostname policy')\n    fixed=copy.deepcopy(settings);fixed['Hostname']=name;return fixed\n"
+    },
+    "negative_files": {
+      "task.py": "import copy,re\ndef set_static_hostname(settings,name):\n    if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}',name):raise ValueError('exercise technical hostname policy')\n    fixed=copy.deepcopy(settings);pass # left HostnameItem effective;return fixed\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现set_static_hostname(settings,name)返回深拷贝，仅设置Hostname为批准技术名称，保留原HostnameItem=system.hostname及其他配置。题定名称策略为1..64个ASCII字母/数字/下划线/点/连字符，首字符字母或数字；其他输入ValueError。settings中的None表示不写该配置行。验收先以Hostname未设置时实际比较agent.hostname与system.hostname，再保留HostnameItem并设置静态Hostname，实际agent.hostname必须成为批准值，而system.hostname仍是原系统值。禁止把技术名称写成HostnameItem的item key、改变OS名称或删除其他原参数。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实classic Agent7.0.32有效名称查询；名称策略是本练习的受限合同，不声称Zabbix本身只允许此子集。没有真实Server自动注册、克隆主机身份迁移或系统hostname修改。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 35,
+      "requires": {
+        "commands": [
+          "zabbix_agentd"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/zabbix_native.py": "\"\"\"Private Zabbix classic agent 7.0.32 with bounded framed passive requests.\"\"\"\nimport json,os,pathlib,secrets,shutil,signal,socket,struct,subprocess,tempfile,time,zlib\n\nclass Rejected(Exception):pass\n\ndef free_port():\n for _ in range(64):\n  port=20000+secrets.randbelow(10000)\n  with socket.socket() as endpoint:\n   try:endpoint.bind(('127.0.0.1',port));return port\n   except OSError:pass\n raise RuntimeError('private agent port allocation exhausted')\n\ndef recv_exact(conn,n):\n out=b''\n while len(out)<n:\n  chunk=conn.recv(n-len(out))\n  if not chunk:raise Rejected('agent closed the framed request, including source access rejection')\n  out+=chunk\n return out\n\ndef exchange(port,key,source='127.0.0.1'):\n payload=key.encode('utf8')\n with socket.create_connection(('127.0.0.1',port),timeout=2,source_address=(source,0)) as endpoint:\n  endpoint.sendall(b'ZBXD\\x01'+struct.pack('<Q',len(payload))+payload)\n  try:header=recv_exact(endpoint,5)\n  except ConnectionResetError as error:raise Rejected('agent reset the unapproved source') from error\n  if header[:4]!=b'ZBXD' or header[4] not in (1,3):raise RuntimeError('unexpected native Zabbix protocol')\n  first,second=struct.unpack('<II',recv_exact(endpoint,8))\n  if first>1048576 or second>1048576:raise RuntimeError('bounded native frame exceeded')\n  raw=recv_exact(endpoint,first)\n  return zlib.decompress(raw) if header[4]==3 else raw\n\nclass Agent:\n def __init__(self,settings=None):self.settings=dict(settings or {});self.process=None;self.temp=None;self.log=None\n def __enter__(self):\n  binary=shutil.which('zabbix_agentd')\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: static zabbix_agentd required')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '(Zabbix) 7.0.32' not in version.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: exact Zabbix7.0.32 required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-zabbix-');self.root=pathlib.Path(self.temp.name);self.port=free_port()\n  values={'PidFile':str(self.root/'agent.pid'),'LogFile':str(self.root/'agent.log'),'DebugLevel':'3','Server':'127.0.0.1','ListenIP':'127.0.0.1','ListenPort':str(self.port),'StartAgents':'1','Hostname':'opsforge-private-agent','Timeout':'1',**self.settings}\n  self.config=self.root/'agent.conf';lines=[]\n  for key,value in values.items():\n   if value is not None:\n    if '\\n' in key+str(value) or '\\r' in key+str(value):raise ValueError('literal bounded agent configuration')\n    lines.append(key+'='+str(value))\n  self.config.write_text('\\n'.join(lines)+'\\n',encoding='utf8');self.log=(self.root/'foreground.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--foreground','--config',str(self.config)],stdout=self.log,stderr=self.log,start_new_session=True)\n   deadline=time.monotonic()+4\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:\n     detail=(self.root/'foreground.log').read_text(errors='replace')[-1600:]\n     if (self.root/'agent.log').exists():detail+=(self.root/'agent.log').read_text(errors='replace')[-1600:]\n     raise RuntimeError('agent rejected config: '+detail)\n    try:\n     with socket.create_connection(('127.0.0.1',self.port),timeout=.1):break\n    except OSError:time.sleep(.02)\n   else:raise RuntimeError('agent private listener readiness deadline')\n   print('NATIVE_ZABBIX_AGENT_READY:7.0.32',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def query(self,key,source='127.0.0.1'):return exchange(self.port,key,source)\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:os.killpg(self.process.pid,signal.SIGTERM)\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:os.killpg(self.process.pid,signal.SIGKILL);self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student agent operation failed: '+type(error).__name__) from error\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,copy,json,secrets\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom zabbix_native import Agent,Rejected,student\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nbase={'Hostname':None,'HostnameItem':'system.hostname','Server':'127.0.0.1'};before=copy.deepcopy(base);name='approved-'+secrets.token_hex(6)\nwith Agent(base) as original:\n osname=original.query('system.hostname').decode();assert original.query('agent.hostname').decode()==osname and osname!=name\nfixed=student(task.set_static_hostname,base,name);assert base==before\ntry:\n with Agent(fixed) as agent:\n  assert agent.query('agent.hostname').decode()==name,'effective advertised name did not use explicit Hostname'\n  assert agent.query('system.hostname').decode()==osname,'OS hostname was changed rather than agent configuration'\nexcept RuntimeError as error:raise AssertionError('submitted agent configuration could not provide an effective hostname') from error\nassert fixed.get('HostnameItem')=='system.hostname','original dynamic item was removed instead of proving static precedence'\nleft=copy.deepcopy(fixed);right=copy.deepcopy(base);left.pop('Hostname');right.pop('Hostname');assert left==right\nfor invalid in ('','../host','name\\nServer=0.0.0.0/0',True):\n try:task.set_static_hostname(base,invalid)\n except ValueError:pass\n else:raise AssertionError('exercise hostname policy accepted malformed input')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

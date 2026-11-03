@@ -1,0 +1,75 @@
+[
+  {
+    "id": "curated-parallel-redis-095",
+    "module": "redis",
+    "category": "Redis",
+    "level": 4,
+    "topic": "事务脚本与协调",
+    "title": "真实Lua BUSY处置：只读脚本可终止，已写脚本UNKILLABLE后限时观察且不重放",
+    "answer": "```python\nimport time\ndef recover(command,budget):\n    if type(budget) not in (int,float) or not 0.01<=budget<=4:raise ValueError('bounded recovery observation')\n    deadline=time.monotonic()+budget\n    try:\n        command('SCRIPT','KILL')\n        return 'killed'\n    except Exception as error:\n        message=str(error)\n        if not (message.startswith('UNKILLABLE') or message.startswith('NOTBUSY')):raise\n    while True:\n        try:\n            if command('PING')=='PONG':return 'completed'\n            raise ValueError('unexpected readiness response')\n        except Exception as error:\n            if not str(error).startswith('BUSY'):raise\n        remaining=deadline-time.monotonic()\n        if remaining<=0:return 'pending'\n        time.sleep(min(0.02,remaining))\n```\n\n原题知识说明：\n桌面推演，未在生产执行。保存脚本SHA、输入规模和执行状态；已写入的脚本通常不能安全用SCRIPT KILL终止，不能盲目强杀宣称无损。按影响与恢复方案决策，由开发拆分有界工作；验收最大输入延迟、错误部分写入和重试幂等。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Redis官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现recover(command,budget)。command只允许SCRIPT KILL和PING，返回原生响应或抛出以Redis错误码开头的异常。budget为0.01..4秒int/float（拒绝bool）；先校验，使用monotonic观察期限。SCRIPT KILL成功返回killed；UNKILLABLE表示脚本已有写入，不得宣称完成，应轮询PING；NOTBUSY也要核对PING就绪。PONG返回completed，持续BUSY到期限返回pending，每次等待不超过20ms，其他错误传播。不得SHUTDOWN、发送信号、更改阈值/配置、重放脚本或写数据。单次命令的网络超时由调用者约束，budget不承诺强行中断一个正在阻塞的底层调用。题内先真实运行有限时只读脚本，再运行已INCR一次的有限时脚本，保留计数且不重复写。生产脚本无界时pending只表示升级处置，不能由本函数保证最终完成。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实隔离Redis7.2进程、BUSY和UNKILLABLE响应、只读SCRIPT KILL及已写脚本自然完成；题设有限循环保证夹具收尾，不强杀生产、不宣称任意无界脚本无损恢复。",
+    "hints": [],
+    "rubric": [
+      "识别题设具体根因并提供对应证据",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://redis.io/docs/latest/commands/script-kill/",
+      "https://redis.io/docs/latest/develop/programmability/"
+    ],
+    "incident_signature": "redis:lua-unbounded-execution",
+    "related_modules": [
+      "redis"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-redis-095",
+      "original_title": "上线Lua脚本遍历无界集合后Redis报BUSY，已有写操作发生，如何处理？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import time\ndef recover(command,budget):\n    if type(budget) not in (int,float) or not 0.01<=budget<=4:raise ValueError('bounded recovery observation')\n    deadline=time.monotonic()+budget\n    try:\n        command('SCRIPT','KILL')\n        return 'killed'\n    except Exception as error:\n        message=str(error)\n        if not (message.startswith('UNKILLABLE') or message.startswith('NOTBUSY')):raise\n    while True:\n        try:\n            if command('PING')=='PONG':return 'completed'\n            raise ValueError('unexpected readiness response')\n        except Exception as error:\n            if not str(error).startswith('BUSY'):raise\n        remaining=deadline-time.monotonic()\n        if remaining<=0:return 'pending'\n        time.sleep(min(0.02,remaining))\n"
+    },
+    "negative_files": {
+      "task.py": "import time\ndef recover(command,budget):\n    if type(budget) not in (int,float) or not 0.01<=budget<=4:raise ValueError('bounded recovery observation')\n    deadline=time.monotonic()+budget\n    try:\n        command('SCRIPT','KILL')\n        return 'killed'\n    except Exception as error:\n        message=str(error)\n        if message.startswith('UNKILLABLE'):return 'completed'\n        if not (message.startswith('UNKILLABLE') or message.startswith('NOTBUSY')):raise\n    while True:\n        try:\n            if command('PING')=='PONG':return 'completed'\n            raise ValueError('unexpected readiness response')\n        except Exception as error:\n            if not str(error).startswith('BUSY'):raise\n        remaining=deadline-time.monotonic()\n        if remaining<=0:return 'pending'\n        time.sleep(min(0.02,remaining))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现recover(command,budget)。command只允许SCRIPT KILL和PING，返回原生响应或抛出以Redis错误码开头的异常。budget为0.01..4秒int/float（拒绝bool）；先校验，使用monotonic观察期限。SCRIPT KILL成功返回killed；UNKILLABLE表示脚本已有写入，不得宣称完成，应轮询PING；NOTBUSY也要核对PING就绪。PONG返回completed，持续BUSY到期限返回pending，每次等待不超过20ms，其他错误传播。不得SHUTDOWN、发送信号、更改阈值/配置、重放脚本或写数据。单次命令的网络超时由调用者约束，budget不承诺强行中断一个正在阻塞的底层调用。题内先真实运行有限时只读脚本，再运行已INCR一次的有限时脚本，保留计数且不重复写。生产脚本无界时pending只表示升级处置，不能由本函数保证最终完成。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实隔离Redis7.2进程、BUSY和UNKILLABLE响应、只读SCRIPT KILL及已写脚本自然完成；题设有限循环保证夹具收尾，不强杀生产、不宣称任意无界脚本无损恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "redis-server"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/redis_native.py": "\"\"\"Private Redis7.2 process over a Unix socket; no network, package or image changes.\"\"\"\nimport pathlib,secrets,socket,subprocess,tempfile,time\n\n\nclass RedisError(Exception):pass\n\n\nclass Client:\n    def __init__(self,path):\n        self.socket=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n        self.socket.settimeout(3);self.socket.connect(str(path));self.stream=self.socket.makefile('rb');self.closed=False\n    def command(self,*parts):\n        values=[part if isinstance(part,bytes) else str(part).encode() for part in parts]\n        self.socket.sendall(('*'+str(len(values))+'\\r\\n').encode()+b''.join(('$'+str(len(value))+'\\r\\n').encode()+value+b'\\r\\n' for value in values))\n        return self.read()\n    def read(self):\n        line=self.stream.readline()\n        if not line:raise ConnectionError('native Redis closed the connection')\n        kind,value=line[:1],line[1:-2]\n        if kind==b'+':return value.decode()\n        if kind==b'-':raise RedisError(value.decode())\n        if kind==b':':return int(value)\n        if kind==b'$':\n            size=int(value)\n            if size<0:return None\n            body=self.stream.read(size)\n            if len(body)!=size or self.stream.read(2)!=b'\\r\\n':raise ConnectionError('short RESP payload')\n            return body.decode('utf8')\n        if kind==b'*':\n            size=int(value)\n            return None if size<0 else [self.read() for _ in range(size)]\n        raise RuntimeError('unexpected RESP type')\n    def close(self):\n        if not self.closed:self.closed=True;self.stream.close();self.socket.close()\n\n\nclass NativeRedis:\n    def __enter__(self):\n        self.temp=tempfile.TemporaryDirectory(prefix='of-r2-');self.root=pathlib.Path(self.temp.name)\n        self.path=self.root/'redis.sock';self.config=self.root/'redis.conf';self.proc=None;self.admin=None\n        self.config.write_text('port 0\\nunixsocket '+str(self.path)+'\\nunixsocketperm 700\\ndir '+str(self.root)+\n            '\\nsave \"\"\\nappendonly no\\ndbfilename snapshot.rdb\\nlogfile '+str(self.root/'redis.log')+'\\nloglevel warning\\n',encoding='utf8')\n        try:self.start();return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def start(self):\n        self.proc=subprocess.Popen(['redis-server',str(self.config)],stdout=subprocess.DEVNULL,stderr=subprocess.STDOUT)\n        for _ in range(250):\n            if self.proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis exited during startup')\n            if self.path.exists():\n                try:\n                    admin=Client(self.path)\n                    if admin.command('PING')=='PONG':self.admin=admin;break\n                    admin.close()\n                except (OSError,ConnectionError):pass\n            time.sleep(.01)\n        if self.admin is None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Redis startup deadline')\n        version=dict(line.split(':',1) for line in self.admin.command('INFO','server').splitlines() if ':' in line)['redis_version']\n        if not version.startswith('7.2.'):raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Redis7.2 required')\n        print('NATIVE_REDIS_READY:'+version,flush=True)\n    def command(self,*args):return self.admin.command(*args)\n    def client(self,user=None,password=None):\n        client=Client(self.path)\n        try:\n            if user is not None:client.command('AUTH',user,password)\n            return client\n        except BaseException:client.close();raise\n    def stop(self):\n        if self.admin is not None:self.admin.close();self.admin=None\n        if self.proc is not None:\n            if self.proc.poll() is None:\n                self.proc.terminate()\n                try:self.proc.wait(timeout=4)\n                except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait(timeout=3)\n            self.proc=None\n    def __exit__(self,*args):\n        try:self.stop()\n        finally:self.temp.cleanup()\n\n\ndef student(function,*args):\n    print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n    try:return function(*args)\n    except Exception as error:raise AssertionError('student operation failed: '+type(error).__name__) from error\n\n\ndef token(prefix='x'):return prefix+'_'+secrets.token_hex(8)\n\n\ndef acl_profile(command,user):\n    value=command('ACL','GETUSER',user)\n    return None if value is None else dict(zip(value[::2],value[1::2]))\n",
+        "checks/check.py": "import os,sys,pathlib,time,threading,secrets\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom redis_native import NativeRedis,RedisError\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith NativeRedis() as server:\n c=server.command;c('CONFIG','SET','busy-reply-threshold',20)\n key='counter-'+secrets.token_hex(8);c('SET',key,0);calls=[]\n def controlled(*parts):\n  calls.append(parts)\n  assert parts in [('SCRIPT','KILL'),('PING',)],'recovery attempted an unapproved side effect or script replay'\n  return c(*parts)\n def launch(writes,duration):\n  client=server.client();client.socket.settimeout(8);out=[]\n  script=(\"redis.call('INCR',KEYS[1]);\" if writes else '')+\"local t=redis.call('TIME');local start=tonumber(t[1])*1000000+tonumber(t[2]);while true do local n=redis.call('TIME');if tonumber(n[1])*1000000+tonumber(n[2])-start>tonumber(ARGV[1]) then break end end;return 1\"\n  def run():\n   try:out.append(('ok',client.command('EVAL',script,1,key,int(duration*1000000))))\n   except RedisError as error:out.append(('error',str(error)))\n   finally:client.close()\n  thread=threading.Thread(target=run);thread.start();deadline=time.monotonic()+2\n  while time.monotonic()<deadline:\n   try:c('PING')\n   except RedisError as error:\n    if str(error).startswith('BUSY'):return thread,out\n    raise\n   time.sleep(.005)\n  thread.join(6);raise AssertionError('expected actual native BUSY was not reproduced')\n thread,out=launch(False,4)\n try:\n  print('NATIVE_READONLY_SCRIPT_BUSY',flush=True);print('STUDENT_OPERATION_ENTERED:recover',flush=True)\n  assert task.recover(controlled,1)=='killed','read-only script termination was confused with natural completion'\n finally:thread.join(6)\n assert not thread.is_alive() and len(out)==1 and out[0][0]=='error' and 'killed' in out[0][1].lower()\n assert c('GET',key)=='0' and c('PING')=='PONG'\n thread,out=launch(True,2)\n try:\n  try:c('SCRIPT','KILL')\n  except RedisError as error:assert str(error).startswith('UNKILLABLE')\n  else:raise AssertionError('write script unexpectedly killable')\n  print('NATIVE_WRITTEN_SCRIPT_UNKILLABLE',flush=True)\n  started=time.monotonic();result=task.recover(controlled,.05)\n  assert result=='pending' and time.monotonic()-started<.6,'UNKILLABLE must remain pending within the observation budget'\n  assert task.recover(controlled,3)=='completed','bounded script did not recover naturally'\n finally:thread.join(6)\n assert not thread.is_alive() and out==[('ok',1)] and c('GET',key)=='1','write was lost or script replayed'\n assert task.recover(controlled,.05)=='completed' and c('GET',key)=='1'\n assert c('CONFIG','GET','busy-reply-threshold')==['busy-reply-threshold','20'],'changing the threshold is not termination'\n for invalid in (0,-1,5,True,'1'):\n  before=len(calls)\n  try:task.recover(controlled,invalid)\n  except ValueError:pass\n  else:raise AssertionError('invalid observation budget accepted')\n  assert len(calls)==before\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

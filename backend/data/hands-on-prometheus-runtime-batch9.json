@@ -1,0 +1,85 @@
+[
+  {
+    "id": "curated-advanced-prometheus-008",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 4,
+    "topic": "抓取配置与采集质量",
+    "title": "分别限制抓取响应体与入库样本并验证两类故障恢复",
+    "answer": "```yaml\njob_name: bounded\nscrape_interval: 1s\nscrape_timeout: 500ms\nbody_size_limit: 1KB\nsample_limit: 3\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    origin: wide\n    __metrics_path__: /wide\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    origin: many\n    __metrics_path__: /many\nmetric_relabel_configs:\n- source_labels:\n  - kind\n  regex: critical\n  action: keep\n```\n样本过滤不能撤销读取超大响应的成本；两个预算所在阶段不同。many先丢掉2条debug，只剩3条critical，符合样本预算；wide的大注释仍占响应体而不是样本数。新增第4条critical必须使本次抓取整体失败，不能通过随意丢一条业务数据凑预算。最后恢复证明过滤和资源限制可共同满足。\n\n原题原理：响应体大小、解析样本数量、标签长度与最终序列数是不同资源边界。指标丢弃不能自动消除下载和解析成本，应按支持版本配置body_size_limit、sample_limit及标签相关限制，并在源端治理。限制触发可能使整次抓取失败，不能假定只丢超出部分。验收大body、长标签、重复样本及正常峰值，观察up、lastError、抓取耗时和内存；门槛需留有合法增长余量。发现误伤先恢复已验证上限或缩减源端指标，不永久关闭所有保护，也不把HTTP200当采集成功。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "响应字节与样本数分阶段约束",
+      "原生故障原因和恢复",
+      "不截断critical业务数据",
+      "识别历史样本可见与新部分入库的区别"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/#scrape_config"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "job.yaml": "job_name: bounded\nscrape_interval: 1s\nscrape_timeout: 500ms\nbody_size_limit: 1KB\nsample_limit: 3\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    origin: wide\n    __metrics_path__: /wide\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    origin: many\n    __metrics_path__: /many\nmetric_relabel_configs:\n- source_labels:\n  - kind\n  regex: critcal\n  action: keep\n",
+      "materials.json": "{\n  \"wide\": \"5000-byte comment plus one critical sample; later comment removed\",\n  \"many\": \"3 critical values 1/2/3 and 2 debug values99; later a fourth critical sample appears, then is removed\"\n}\n"
+    },
+    "solution_files": {
+      "job.yaml": "job_name: bounded\nscrape_interval: 1s\nscrape_timeout: 500ms\nbody_size_limit: 1KB\nsample_limit: 3\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    origin: wide\n    __metrics_path__: /wide\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    origin: many\n    __metrics_path__: /many\nmetric_relabel_configs:\n- source_labels:\n  - kind\n  regex: critical\n  action: keep\n"
+    },
+    "negative_files": {
+      "job.yaml": "job_name: bounded\nscrape_interval: 1s\nscrape_timeout: 500ms\nbody_size_limit: 1KB\nsample_limit: 3\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    origin: wide\n    __metrics_path__: /wide\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    origin: many\n    __metrics_path__: /many\nmetric_relabel_configs: []\n"
+    },
+    "body": "## 环境与初始材料\n平台提供原生Prometheus和隔离HTTP指标端。job.yaml中wide目标返回超5000字节注释但只有1条critical样本；many目标返回3条critical样本（a/b/c值1/2/3）和2条debug样本。占位地址会由平台换成本工作区随机端口，无需外部服务。\n\n## 操作任务\n修复metric_relabel_configs，仅保留kind=critical的demo_queue。保持body_size_limit=1KB、sample_limit=3及给定作业/间隔/超时/完整目标不变，不得放宽预算或删目标。响应体预算在后续指标过滤之前生效，所以wide不能因为最终仅1条样本就绕过响应大小限制；many的样本预算在metric relabel之后计算，3条critical应该正常入库。平台随后缩小wide响应，应恢复抓取并入库值5；再让many出现第4条critical，应整次抓取失败，不得截取前三条伪装成功；最后移除第4条，再恢复。只修改过滤规则，不能根据origin绕过预算。\n\n## 产物\n提交job.yaml。metric_relabel_configs至多6条，仅允许keep/drop，source_labels只使用kind或__name__，不得改地址、路径或其他标签；允许等价标签匹配方式。\n\n## 验收方法\n执行python3 checks/check.py。真实原生Targets错误和up应依次为wide=0/many=1、1/1、1/0、1/1。核验many的scrape_samples_post_metric_relabeling先3、后4超限、再3；核验actual demo_queue只有critical，初始3条，wide恢复后4条总和11。第4条many数据d必须从未入库；失败时旧序列可能仍受查询回看窗口影响，本题不把旧样本暂时可见误判为部分新数据入库。恢复后再次确认标签和值。两个端点和Prometheus仅本地限资源运行，finally关闭。\n\n## 边界\n这是有限HTTP响应、单job双目标的真实验收，不证明生产压测容量，也不将body_size_limit当操作系统内存硬上限。sample_limit限制单次抓取样本数，不等价于TSDB历史总基数预算。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-resource-budgets",
+      "deliverables": [
+        "job.yaml"
+      ],
+      "operation": "修复保留业务样本的过滤规则，并真实验证响应体与样本两类资源限制及恢复",
+      "verification": "原生Targets/up/抓取样本计数/实际入库数值及标签/恢复",
+      "capability_gap": [
+        "不覆盖TSDB历史基数、生产吞吐或操作系统硬内存上限"
+      ],
+      "failure_examples": [
+        "过滤拼错丢掉全部业务样本",
+        "保留debug导致样本数超预算",
+        "放宽body budget掩盖超大响应"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1s'},'scrape_configs':[JOB]}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\nEXPECTED={'job_name': 'bounded', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'body_size_limit': '1KB', 'sample_limit': 3, 'static_configs': [{'targets': ['127.0.0.1:19100'], 'labels': {'origin': 'wide', '__metrics_path__': '/wide'}}, {'targets': ['127.0.0.1:19100'], 'labels': {'origin': 'many', '__metrics_path__': '/many'}}], 'metric_relabel_configs': [{'source_labels': ['kind'], 'regex': 'critical', 'action': 'keep'}]}\n\ncandidate=yaml.load(pathlib.Path('job.yaml').read_text(encoding='utf-8'),Loader=Strict)\nassert isinstance(candidate,dict) and set(candidate)==set(EXPECTED)\nfor k in EXPECTED:\n if k!='metric_relabel_configs':assert candidate[k]==EXPECTED[k],'keep requested inventory and explicit resource budgets'\nrules=candidate['metric_relabel_configs']\nassert isinstance(rules,list) and len(rules)<=6\nfor r in rules:\n assert isinstance(r,dict) and set(r)<={'source_labels','regex','action','separator'}\n assert r.get('action','replace') in {'keep','drop'}\n assert set(r.get('source_labels',[]))<={'kind','__name__'} and len(str(r.get('regex','')))<=200\nstate={'wide':True,'extra':False}\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  if self.path=='/wide':\n   body='# TYPE demo_queue gauge\\n'+('# '+('x'*5000)+'\\n' if state['wide'] else '')+'demo_queue{kind=\"critical\",id=\"body\"} 5\\n'\n  elif self.path=='/many':\n   body='# TYPE demo_queue gauge\\n'+''.join('demo_queue{kind=\"critical\",id=\"'+c+'\"} '+str(n)+'\\n' for c,n in [('a',1),('b',2),('c',3)]+([('d',4)] if state['extra'] else []))\n   body+='demo_queue{kind=\"debug\",id=\"d1\"} 99\\ndemo_queue{kind=\"debug\",id=\"d2\"} 99\\n'\n  else:self.send_error(404);return\n  data=body.encode();self.send_response(200);self.send_header('Content-Type','text/plain; version=0.0.4');self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)\n def log_message(self,*args):pass\nhttpd=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()\ndef sample_map(api,expr):\n result=api('/api/v1/query',{'query':expr})['data'];assert result['resultType']=='vector'\n return {r['metric'].get('origin'):float(r['value'][1]) for r in result['result']}\ndef wait(api,fn):\n end=time.monotonic()+6\n while time.monotonic()<end:\n  if fn():return\n  time.sleep(.12)\n raise AssertionError('native scrape state did not satisfy requested budget contract')\ndef critical_series(api):\n items=api('/api/v1/query',{'query':'demo_queue'})['data']['result']\n out={}\n for r in items:\n  m=r['metric'];assert m['kind']=='critical' and set(m)=={'__name__','origin','instance','job','kind','id'}\n  key=(m['origin'],m['id']);assert key not in out;out[key]=float(r['value'][1])\n return out\ntry:\n with tempfile.TemporaryDirectory(prefix='trusted-dual-scrape-budget-') as d:\n  root=pathlib.Path(d);JOB=copy.deepcopy(candidate)\n  for g in JOB['static_configs']:g['targets']=['127.0.0.1:'+str(httpd.server_port)]\n  try:\n   with server(root,'source') as (url,api):\n    wait(api,lambda:sample_map(api,'up')=={'wide':0,'many':1} and sample_map(api,'scrape_samples_post_metric_relabeling').get('many')==3)\n    assert critical_series(api)=={('many','a'):1,('many','b'):2,('many','c'):3}\n    targets=api('/api/v1/targets')['data']['activeTargets']\n    body_error=next(t['lastError'] for t in targets if t['labels']['origin']=='wide')\n    assert 'body' in body_error.lower() and ('limit' in body_error.lower() or 'exceed' in body_error.lower()),body_error\n    state['wide']=False\n    wait(api,lambda:sample_map(api,'up')=={'wide':1,'many':1} and critical_series(api)=={('many','a'):1,('many','b'):2,('many','c'):3,('wide','body'):5})\n    state['extra']=True\n    wait(api,lambda:sample_map(api,'up')=={'wide':1,'many':0} and sample_map(api,'scrape_samples_post_metric_relabeling').get('many')==4)\n    targets=api('/api/v1/targets')['data']['activeTargets']\n    sample_error=next(t['lastError'] for t in targets if t['labels']['origin']=='many')\n    assert 'sample' in sample_error.lower() and ('limit' in sample_error.lower() or 'exceed' in sample_error.lower()),sample_error\n    assert ('many','d') not in critical_series(api),'failed whole scrape must not partly ingest new sample'\n    state['extra']=False\n    wait(api,lambda:sample_map(api,'up')=={'wide':1,'many':1} and sample_map(api,'scrape_samples_post_metric_relabeling').get('many')==3)\n    assert critical_series(api)=={('many','a'):1,('many','b'):2,('many','c'):3,('wide','body'):5}\n  finally:print('native lifecycle:',json.dumps(STATS))\nfinally:\n httpd.shutdown();httpd.server_close();thread.join(timeout=2)\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "response_body_budget_precedes_metric_filter_post_filter_sample_budget_and_recovery",
+    "conversion": {
+      "original_id": "curated-advanced-prometheus-008",
+      "original_type": "interview",
+      "original_title": "目标返回超大响应体但只有少量最终保留样本，如何分别限制抓取资源和TSDB基数？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

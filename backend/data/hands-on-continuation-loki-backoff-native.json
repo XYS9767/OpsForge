@@ -1,0 +1,76 @@
+[
+  {
+    "id": "curated-parallel-loki-033",
+    "module": "loki",
+    "category": "Loki",
+    "level": 2,
+    "topic": "分布式写入与恢复",
+    "title": "真实Loki429背压：有界指数等待后重发原批次，拒绝或耗尽不伪装成功",
+    "answer": "```python\nimport math,numbers\nclass PushFailure(Exception):\n    def __init__(self,status,retry_after=None):\n        self.status=status;self.retry_after=retry_after\n        super().__init__('push HTTP '+str(status))\ndef retry_push(send,sleep,attempts):\n    if not callable(send) or not callable(sleep) or type(attempts) is not int or not 1<=attempts<=5:raise ValueError('callables and bounded attempts required')\n    for index in range(attempts):\n        try:return send()\n        except PushFailure as failure:\n            if failure.status!=429 or index+1==attempts:raise\n            delay=min(.25*(2**index),2.0)\n            requested=failure.retry_after\n            if requested is not None:\n                if isinstance(requested,bool) or not isinstance(requested,numbers.Real) or not math.isfinite(requested) or not 0<=requested<=2:raise\n                delay=max(delay,float(requested))\n            sleep(delay)\n```\n\n原题知识说明：\n按可重试错误采用有界指数退避与抖动，持久缓冲需覆盖故障窗口且有容量告警。验收恢复后净发送速率与缺号，不能无限内存排队。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Grafana Loki官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n定义PushFailure(status,retry_after=None)和retry_push(send,sleep,attempts)。attempts须非bool整数1..5；send/sleep可调用。send成功原样返回；仅PushFailure.status=429可重试，其他状态或其他异常立即传播。失败后且仍有次数时依次等待min(0.25*2^index,2)秒；retry_after若为有限非bool数值0..2，则至少等待该值；无效或超过本题等待预算的提示立即保留原失败。最后失败必须原异常抛出，不返回None表示成功。实际Loki全局写预算0.5MiB/s、burst1MiB，预热900KiB后当前900KiB批次真实429，有限等待后同stream/纳秒/正文批次才接受。验收真实存储恰有两条正确身份，拒绝记录不能丢弃、改时间或忙重试。夹具一次只保留一个有限批次，后续明确标注的回调测试覆盖永久错误、耗尽与等待提示；不把模拟提示说成Loki已发送Retry-After。生产抖动和持久队列另行设计，不在本题承诺内。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Loki3.5.5限流429、单批次有限缓冲、实际等待和存储身份核对；另有明确回调边界测试。不是TimeoutError通用重试题，也不保证响应丢失后的exactly-once、无限故障可恢复或生产持久采集队列。现有隔离容器，无镜像构建。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://grafana.com/docs/loki/latest/operations/request-validation-rate-limits/#rate_limited",
+      "https://grafana.com/docs/loki/latest/reference/loki-http-api/#ingest-logs"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-loki-033",
+      "original_title": "采集端收到Loki 429时怎样设计退避和缓冲？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import math,numbers\nclass PushFailure(Exception):\n    def __init__(self,status,retry_after=None):\n        self.status=status;self.retry_after=retry_after\n        super().__init__('push HTTP '+str(status))\ndef retry_push(send,sleep,attempts):\n    if not callable(send) or not callable(sleep) or type(attempts) is not int or not 1<=attempts<=5:raise ValueError('callables and bounded attempts required')\n    for index in range(attempts):\n        try:return send()\n        except PushFailure as failure:\n            if failure.status!=429 or index+1==attempts:raise\n            delay=min(.25*(2**index),2.0)\n            requested=failure.retry_after\n            if requested is not None:\n                if isinstance(requested,bool) or not isinstance(requested,numbers.Real) or not math.isfinite(requested) or not 0<=requested<=2:raise\n                delay=max(delay,float(requested))\n            sleep(delay)\n"
+    },
+    "negative_files": {
+      "task.py": "import math,numbers\nclass PushFailure(Exception):\n    def __init__(self,status,retry_after=None):\n        self.status=status;self.retry_after=retry_after\n        super().__init__('push HTTP '+str(status))\ndef retry_push(send,sleep,attempts):\n    if not callable(send) or not callable(sleep) or type(attempts) is not int or not 1<=attempts<=5:raise ValueError('callables and bounded attempts required')\n    for index in range(attempts):\n        try:return send()\n        except PushFailure as failure:\n            if failure.status!=429 or index+1==attempts:raise\n            delay=min(.25*(2**index),2.0)\n            requested=failure.retry_after\n            if requested is not None:\n                if isinstance(requested,bool) or not isinstance(requested,numbers.Real) or not math.isfinite(requested) or not 0<=requested<=2:raise\n                delay=max(delay,float(requested))\n            sleep(0)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "定义PushFailure(status,retry_after=None)和retry_push(send,sleep,attempts)。attempts须非bool整数1..5；send/sleep可调用。send成功原样返回；仅PushFailure.status=429可重试，其他状态或其他异常立即传播。失败后且仍有次数时依次等待min(0.25*2^index,2)秒；retry_after若为有限非bool数值0..2，则至少等待该值；无效或超过本题等待预算的提示立即保留原失败。最后失败必须原异常抛出，不返回None表示成功。实际Loki全局写预算0.5MiB/s、burst1MiB，预热900KiB后当前900KiB批次真实429，有限等待后同stream/纳秒/正文批次才接受。验收真实存储恰有两条正确身份，拒绝记录不能丢弃、改时间或忙重试。夹具一次只保留一个有限批次，后续明确标注的回调测试覆盖永久错误、耗尽与等待提示；不把模拟提示说成Loki已发送Retry-After。生产抖动和持久队列另行设计，不在本题承诺内。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Loki3.5.5限流429、单批次有限缓冲、实际等待和存储身份核对；另有明确回调边界测试。不是TimeoutError通用重试题，也不保证响应丢失后的exactly-once、无限故障可恢复或生产持久采集队列。现有隔离容器，无镜像构建。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "loki"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/loki_native.py": "\"\"\"Private standalone Loki 3.5.5, filesystem storage and loopback-only HTTP/gRPC.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.parse,urllib.error\nimport yaml\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Loki:\n def __init__(self,auth=False,structured=False,configurator=None,directory=None):\n  self.binary=shutil.which('loki');self.process=None;self.auth=auth;self.structured=structured;self.configurator=configurator;self.directory=directory\n  if not self.binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 executable missing')\n  version=subprocess.run([self.binary,'-version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '3.5.5' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-loki-') if self.directory is None else None;self.root=pathlib.Path(self.temp.name if self.temp else self.directory);self.root.mkdir(parents=True,exist_ok=True);http=free_port();grpc=free_port()\n  while grpc==http:grpc=free_port()\n  self.base='http://127.0.0.1:'+str(http);self.log=(self.root/'server.log').open('wb')\n  config={'auth_enabled':self.auth,'server':{'http_listen_address':'127.0.0.1','http_listen_port':http,'grpc_listen_address':'127.0.0.1','grpc_listen_port':grpc,'log_level':'error'},\n   'common':{'instance_addr':'127.0.0.1','path_prefix':str(self.root),'replication_factor':1,'storage':{'filesystem':{'chunks_directory':str(self.root/'chunks'),'rules_directory':str(self.root/'rules')}},'ring':{'kvstore':{'store':'inmemory'}}},\n   'schema_config':{'configs':[{'from':'2020-10-24','store':'tsdb','object_store':'filesystem','schema':'v13','index':{'prefix':'index_','period':'24h'}}]},\n   'ingester':{'lifecycler':{'min_ready_duration':'0s','final_sleep':'0s','heartbeat_period':'100ms'},'wal':{'enabled':False}},\n   'limits_config':{'allow_structured_metadata':self.structured,'max_query_parallelism':2,'tsdb_max_query_parallelism':2,'split_queries_by_interval':'0s','query_timeout':'5s'},\n   'querier':{'max_concurrent':2},'analytics':{'reporting_enabled':False},'pattern_ingester':{'enabled':False},'compactor':{'working_directory':str(self.root/'compactor')}}\n  if self.configurator:self.configurator(config,self.root)\n  self.config=config;path=self.root/'config.yaml';path.write_text(yaml.safe_dump(config,sort_keys=False),encoding='utf8')\n  try:\n   self.process=subprocess.Popen([self.binary,'-config.file='+str(path)],cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'192MiB','HOME':str(self.root)})\n   self.wait(lambda:self.request('/ready')==b'ready\\n','private HTTP readiness',seconds=12)\n   print('NATIVE_LOKI_READY:3.5.5',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,data=None,tenant=None,headers=None):\n  outgoing={'Content-Type':'application/json',**(headers or {})}\n  if tenant is not None:outgoing['X-Scope-OrgID']=tenant\n  request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data,ensure_ascii=False).encode(),headers=outgoing)\n  with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as response:\n   raw=response.read();return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n def wait(self,predicate,description,seconds=5):\n  deadline=time.monotonic()+seconds\n  while time.monotonic()<deadline:\n   if self.process.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki exited: '+(self.root/'server.log').read_text(errors='replace')[-2500:])\n   try:\n    value=predicate()\n    if value:return value\n   except (OSError,urllib.error.URLError):pass\n   time.sleep(.04)\n  raise AssertionError('native Loki deadline: '+description)\n def push(self,streams,tenant=None):\n  result=self.request('/loki/api/v1/push',{'streams':streams},tenant=tenant);assert result==b''\n def logs(self,query,start,end,tenant=None):\n  params={'query':query,'start':str(start),'end':str(end),'direction':'forward','limit':'1000'}\n  result=self.request('/loki/api/v1/query_range?'+urllib.parse.urlencode(params),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='streams';return result['data']['result']\n def metric(self,query,at,tenant=None):\n  result=self.request('/loki/api/v1/query?'+urllib.parse.urlencode({'query':query,'time':str(at)}),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='vector';return result['data']['result']\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=4)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if getattr(self,'log',None):self.log.close()\n  if self.temp:self.temp.cleanup()\n",
+        "checks/check.py": "import sys,pathlib,time,copy,json,secrets,hashlib,urllib.error\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom loki_native import Loki\nprint('NATIVE_LINUX_READY',flush=True)\ndef configure(config,root):config['limits_config'].update(ingestion_rate_mb=.5,ingestion_burst_size_mb=1,max_line_size='1MB',max_line_size_truncate=False)\nwith Loki(configurator=configure) as server:\n stamp=time.time_ns();nonce=secrets.token_hex(5);warm='warm-'+nonce;warm+='a'*(900*1024-len(warm));line='pending-'+nonce;line+='b'*(900*1024-len(line))\n server.push([{'stream':{'job':'backoff-exercise'},'values':[[str(stamp),warm]]}])\n pending=[{'stream':{'job':'backoff-exercise'},'values':[[str(stamp+10**9),line]]}];original=copy.deepcopy(pending);calls=[];denied=[];delays=[]\n def send():\n  calls.append(time.monotonic())\n  try:server.push(pending)\n  except urllib.error.HTTPError as error:\n   detail=error.read().decode();status=error.code;error.close();denied.append(status)\n   assert status==429 and 'Ingestion rate limit exceeded' in detail,'unexpected native write failure'\n   raise task.PushFailure(status)\n  return {'accepted':True,'timestamp':str(stamp+10**9)}\n def pause(delay):delays.append(delay);time.sleep(delay)\n print('STUDENT_OPERATION_ENTERED:bounded 429 backoff retaining original batch',flush=True)\n try:result=task.retry_push(send,pause,4)\n except Exception as error:raise AssertionError('submitted bounded push did not recover: '+type(error).__name__) from error\n assert result=={'accepted':True,'timestamp':str(stamp+10**9)} and denied and set(denied)=={429}\n assert 2<=len(calls)<=4 and len(delays)==len(calls)-1 and all(delay>=.25 for delay in delays),'no actual bounded waiting'\n assert pending==original,'batch timestamp, body or stream identity changed during retries'\n actual=server.logs('{job=\"backoff-exercise\"}',stamp-1,stamp+10**9+1)\n identities=sorted((entry[0],hashlib.sha256(entry[1].encode()).hexdigest()) for stream in actual for entry in stream['values'])\n expected=sorted([(str(stamp),hashlib.sha256(warm.encode()).hexdigest()),(str(stamp+10**9),hashlib.sha256(line.encode()).hexdigest())])\n assert identities==expected,'rejected batch lost or duplicate accepted rows appeared'\n print('NATIVE_LOKI_429_BACKOFF_ACCEPTED_UNCHANGED_BATCH_AND_EXACT_LOG_IDENTITIES',flush=True)\n# The following are explicitly isolated callback contracts, not fabricated Loki responses.\nfor status in [400,401,403,500]:\n failure=task.PushFailure(status);count=[];waits=[]\n def permanent():count.append(1);raise failure\n try:task.retry_push(permanent,waits.append,4)\n except task.PushFailure as caught:assert caught is failure and len(count)==1 and waits==[]\n else:raise AssertionError('permanent push failure became success')\nlast=[];waits=[]\ndef exhausted():\n failure=task.PushFailure(429);last.append(failure);raise failure\ntry:task.retry_push(exhausted,waits.append,3)\nexcept task.PushFailure as caught:assert caught is last[-1] and len(last)==3 and waits==[.25,.5]\nelse:raise AssertionError('exhausted batch marked acknowledged')\nattempted=[];waits=[]\ndef hinted():\n attempted.append(1)\n if len(attempted)==1:raise task.PushFailure(429,1.5)\n return 'ack'\nassert task.retry_push(hinted,waits.append,2)=='ack' and waits==[1.5]\nfor hint in [float('nan'),-1,3,True]:\n failure=task.PushFailure(429,hint);waits=[]\n def invalid_hint():raise failure\n try:task.retry_push(invalid_hint,waits.append,4)\n except task.PushFailure as caught:assert caught is failure and not waits\n else:raise AssertionError('unbounded or invalid Retry-After accepted')\nfor attempts in [True,0,6,1.5]:\n try:task.retry_push(lambda:'ack',lambda delay:None,attempts)\n except ValueError:pass\n else:raise AssertionError('invalid attempt budget')\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "loki"
+    ]
+  }
+]

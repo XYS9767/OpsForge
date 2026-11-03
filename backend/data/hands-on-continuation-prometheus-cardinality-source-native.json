@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-parallel-prometheus-083",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 5,
+    "topic": "高可用容量与运行治理",
+    "title": "真实Prometheus基数削减：源端聚合66条为4条，保留总量和分方法规则，拒绝直接删标签碰撞",
+    "answer": "```python\nimport math,re\ndef normalize(rows):\n    totals={}\n    for row in rows:\n        method=row[\"method\"];route=row[\"route\"];value=row[\"value\"]\n        if method not in (\"GET\",\"POST\") or isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value<0:raise ValueError(\"invalid counter sample\")\n        if re.fullmatch(r\"/items/[0-9]+\",route):route=\"/items/{id}\"\n        elif route!=\"/health\":raise ValueError(\"route outside approved bounded taxonomy\")\n        key=(method,route);totals[key]=totals.get(key,0)+value\n    return [{\"method\":method,\"route\":route,\"value\":value} for (method,route),value in sorted(totals.items())]\n```\n\n原题知识说明：\n找出增长的标签和值域，关联消费者后在源端规范化或丢弃无用指标，避免删除区分标签制造冲突。对照样本速率、Head序列、内存和规则输出，记录减少量及保留能力。必要知识点无法由配置解决时交开发。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "找出增长的标签和值域，关联消费者后在源端规范化或丢弃无用指标，避免删除区分标签制造冲突。",
+      "对照样本速率、Head序列、内存和规则输出，记录减少量及保留能力。",
+      "必要知识点无法由配置解决时交开发。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/practices/naming/#labels",
+      "https://prometheus.io/docs/prometheus/latest/configuration/#metric_relabel_configs"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-083",
+      "original_title": "制定一次高基数指标削减的验收流程。",
+      "original_type": "practice"
+    },
+    "body": "## 操作任务\n实现normalize(rows)，输入是同一采样时刻不同原始(method,route)计数器系列，每项method/route/value；业务已审批只保留GET/POST及/health、/items/{id}两类路由，不需要逐对象ID查询。仅将/items/十进制数字ID规范成/items/{id}，/health原样保留，其他route、非GET/POST、负数/非有限数/布尔value均ValueError。按(method,规范route)先累加全部counter再按键排序，每项输出method/route/value，不改原输入，不能覆盖丢数或合并GET/POST。本题静态可重放快照，生产动态counter还需独立设计重置、生命周期和滚动兼容，不能直接按此例保证任意动态流单调性。真实66系列采集与参考4系列采集使用独立冷启动Prometheus，核对up、样本数、Head系列、进程RSS及两个method记录规则输出；另验证只删route标签造成真实重复样本拒绝。不得承诺旧Head历史立刻消失或RSS必然同比下降，消费者已批准失去对象ID维度。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n官方Prometheus3.2.1 Windows原生进程、真实采集/TSDB/PromQL和记录规则，Python受控静态counter端点，独立raw/错误删标签/fixed临时数据库。观察Head、每秒采样量和进程RSS，不把瞬时RSS大小当性能收益证明。仅验证这组静态快照和已批准聚合维度，不代表线上长时容量、动态counter重置、远端存储或原故障编号验收完成；未调整宿主网络/身份、未部署或构建镜像。\n版本边界：本题Prometheus3.2.1在直接删标签的负例中up仍可为1，但冲突样本被丢弃，prometheus_target_scrapes_sample_duplicate_timestamp_total增加且总量错误；不能以up=1证明样本完整，也不把负例伪写成整个目标必然down。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import math,re\ndef normalize(rows):\n    totals={}\n    for row in rows:\n        method=row[\"method\"];route=row[\"route\"];value=row[\"value\"]\n        if method not in (\"GET\",\"POST\") or isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value<0:raise ValueError(\"invalid counter sample\")\n        if re.fullmatch(r\"/items/[0-9]+\",route):route=\"/items/{id}\"\n        elif route!=\"/health\":raise ValueError(\"route outside approved bounded taxonomy\")\n        key=(method,route);totals[key]=totals.get(key,0)+value\n    return [{\"method\":method,\"route\":route,\"value\":value} for (method,route),value in sorted(totals.items())]\n"
+    },
+    "negative_files": {
+      "task.py": "import math,re\ndef normalize(rows):\n    totals={}\n    for row in rows:\n        method=row[\"method\"];route=row[\"route\"];value=row[\"value\"]\n        if method not in (\"GET\",\"POST\") or isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or value<0:raise ValueError(\"invalid counter sample\")\n        if re.fullmatch(r\"/items/[0-9]+\",route):route=\"/items/{id}\"\n        elif route!=\"/health\":raise ValueError(\"route outside approved bounded taxonomy\")\n        key=(method,route);totals[key]=value\n    return [{\"method\":method,\"route\":route,\"value\":value} for (method,route),value in sorted(totals.items())]\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "官方Prometheus3.2.1与Python，Windows独立TSDB和受控回环指标端点，需可观察进程RSS",
+      "operation": "实现normalize(rows)，输入是同一采样时刻不同原始(method,route)计数器系列，每项method/route/value；业务已审批只保留GET/POST及/health、/items/{id}两类路由，不需要逐对象ID查询。仅将/items/十进制数字ID规范成/items/{id}，/health原样保留，其他route、非GET/POST、负数/非有限数/布尔value均ValueError。按(method,规范route)先累加全部counter再按键排序，每项输出method/route/value，不改原输入，不能覆盖丢数或合并GET/POST。本题静态可重放快照，生产动态counter还需独立设计重置、生命周期和滚动兼容，不能直接按此例保证任意动态流单调性。真实66系列采集与参考4系列采集使用独立冷启动Prometheus，核对up、样本数、Head系列、进程RSS及两个method记录规则输出；另验证只删route标签造成真实重复样本拒绝。不得承诺旧Head历史立刻消失或RSS必然同比下降，消费者已批准失去对象ID维度。 Prometheus3.2.1负例须观察up=1仍丢冲突样本的实际行为，核对重复时间戳丢弃计数和错误总量。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "官方Prometheus3.2.1 Windows原生进程、真实采集/TSDB/PromQL和记录规则，Python受控静态counter端点，独立raw/错误删标签/fixed临时数据库。观察Head、每秒采样量和进程RSS，不把瞬时RSS大小当性能收益证明。仅验证这组静态快照和已批准聚合维度，不代表线上长时容量、动态counter重置、远端存储或原故障编号验收完成；未调整宿主网络/身份、未部署或构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/cardinality_fixture.py": "\"\"\"Private Windows/Linux Prometheus servers, actual scrape/query and observed RSS.\"\"\"\nimport contextlib,json,os,pathlib,shutil,socket,subprocess,time,urllib.parse,urllib.request\ndef request(base,path):\n with urllib.request.urlopen(base+path,timeout=3) as r:return r.read().decode()\ndef wait_for(condition,seconds=9):\n end=time.monotonic()+seconds\n while time.monotonic()<end:\n  if condition():return\n  time.sleep(.1)\n raise AssertionError('native Prometheus scrape/query witness missing')\ndef query(base,expr):\n result=json.loads(request(base,'/api/v1/query?'+urllib.parse.urlencode({'query':expr})));assert result['status']=='success'\n return result['data']['result']\ndef value(base,expr):\n rows=query(base,expr);return float(rows[0]['value'][1]) if len(rows)==1 else None\ndef memory(proc):\n if os.name=='nt':\n  import ctypes\n  from ctypes import wintypes\n  class Counters(ctypes.Structure):\n   _fields_=[('cb',wintypes.DWORD),('faults',wintypes.DWORD),*[(n,ctypes.c_size_t) for n in ['peak','rss','peak_paged','paged','peak_nonpaged','nonpaged','pagefile','peak_pagefile']]]\n  counters=Counters();counters.cb=ctypes.sizeof(counters);api=ctypes.WinDLL('psapi',use_last_error=True).GetProcessMemoryInfo\n  api.argtypes=[wintypes.HANDLE,ctypes.POINTER(Counters),wintypes.DWORD];api.restype=wintypes.BOOL\n  assert api(wintypes.HANDLE(int(proc._handle)),ctypes.byref(counters),counters.cb)\n  return int(counters.rss)\n for line in pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines():\n  if line.startswith('VmRSS:'):return int(line.split()[1])*1024\n raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: child RSS unavailable')\n@contextlib.contextmanager\ndef native(root,target,metrics_path):\n root=pathlib.Path(root);root.mkdir();rule=root/'rules.json';rule.write_text(json.dumps({'groups':[{'name':'private','interval':'1s','rules':[{'record':'training:requests:by_method','expr':'sum by (method) (training_requests_total)'}]}]}),encoding='utf8')\n config={'global':{'scrape_interval':'1s','evaluation_interval':'1s'},'rule_files':[str(rule)],'scrape_configs':[{'job_name':'private-cardinality','metrics_path':metrics_path,'static_configs':[{'targets':[target]}]}]}\n path=root/'config.json';path.write_text(json.dumps(config),encoding='utf8')\n with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]\n base='http://127.0.0.1:'+str(port);binary=shutil.which('prometheus') or shutil.which('prometheus.exe')\n with (root/'native.log').open('wb') as log:\n  proc=subprocess.Popen([binary,'--config.file='+str(path),'--storage.tsdb.path='+str(root/'data'),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=subprocess.STDOUT)\n  try:\n   def ready():\n    if proc.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: private Prometheus startup')\n    try:return request(base,'/-/ready').strip()=='Prometheus Server is Ready.'\n    except OSError:return False\n   wait_for(ready,15);yield base,proc\n  finally:\n   if proc.poll() is None:proc.terminate()\n   try:proc.wait(timeout=5)\n   except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=5)\ndef observed(base,proc):\n head=[float(x.split()[-1]) for x in request(base,'/metrics').splitlines() if x.startswith('prometheus_tsdb_head_series ')]\n assert len(head)==1\n return dict(head_series=head[0],rss_bytes=memory(proc),scraped_samples=value(base,'scrape_samples_scraped{job=\"private-cardinality\"}'),target_up=value(base,'up{job=\"private-cardinality\"}'),series=value(base,'count(training_requests_total)'),sum=value(base,'sum(training_requests_total)'))\n",
+        "checks/check.py": "import contextlib,copy,json,pathlib,shutil,subprocess,sys,tempfile,threading\nfrom http.server import BaseHTTPRequestHandler,ThreadingHTTPServer\nsys.path.insert(0,str(pathlib.Path.cwd()/\"checks\"))\nimport task\nfrom cardinality_fixture import native,wait_for,query,value,request,observed\nbinary=shutil.which(\"prometheus\") or shutil.which(\"prometheus.exe\")\nassert binary and \"3.2.1\" in subprocess.check_output([binary,\"--version\"],stderr=subprocess.STDOUT,text=True,timeout=5)\nprint(\"NATIVE_PLATFORM_READY\",flush=True)\nrows=[dict(method=method,route=\"/items/\"+str(i),value=100+i) for method in [\"GET\",\"POST\"] for i in range(1,33)]+[dict(method=m,route=\"/health\",value=500) for m in [\"GET\",\"POST\"]]\nunchanged=copy.deepcopy(rows);calls={\"/raw\":0,\"/fixed\":0,\"/drop-label\":0}\nclass Metrics(BaseHTTPRequestHandler):\n def do_GET(self):\n  calls[self.path]+=1\n  data=task.normalize(copy.deepcopy(rows)) if self.path==\"/fixed\" else copy.deepcopy(rows)\n  if self.path==\"/drop-label\":\n   for row in data:row[\"route\"]=\"removed\"\n  text=\"# TYPE training_requests_total counter\\n\"+\"\".join('training_requests_total{method='+json.dumps(r[\"method\"])+',route='+json.dumps(r[\"route\"])+\"} \"+str(r[\"value\"])+\"\\n\" for r in data)\n  body=text.encode();self.send_response(200);self.send_header(\"Content-Type\",\"text/plain; version=0.0.4\");self.send_header(\"Content-Length\",str(len(body)));self.end_headers();self.wfile.write(body)\n def log_message(self,*args):pass\nserver=ThreadingHTTPServer((\"127.0.0.1\",0),Metrics);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()\ntry:\n with tempfile.TemporaryDirectory(prefix=\"opsforge-prom-cardinality-\") as temp,contextlib.ExitStack() as stack:\n  root=pathlib.Path(temp);target=\"127.0.0.1:\"+str(server.server_port)\n  raw,rp=stack.enter_context(native(root/\"raw\",target,\"/raw\"))\n  bad,bp=stack.enter_context(native(root/\"drop-label\",target,\"/drop-label\"))\n  wait_for(lambda:value(raw,\"count(training_requests_total)\")==66)\n  wait_for(lambda:value(bad,'up{job=\"private-cardinality\"}')==1)\n  def duplicate_drops():\n   return any(x.startswith(\"prometheus_target_scrapes_sample_duplicate_timestamp_total \") and float(x.split()[-1])>0 for x in request(bad,\"/metrics\").splitlines())\n  wait_for(duplicate_drops)\n  assert value(bad,\"sum(training_requests_total)\")!=8456\n  print(\"NATIVE_PROMETHEUS_66_RAW_SERIES_NAIVE_LABEL_REMOVAL_UP_ONE_BUT_DUPLICATE_SAMPLES_DROPPED_TOTAL_WRONG\",flush=True)\n  print(\"STUDENT_OPERATION_ENTERED: source-side bounded aggregation consumed by actual Prometheus\",flush=True)\n  fixed,fp=stack.enter_context(native(root/\"fixed\",target,\"/fixed\"))\n  wait_for(lambda:value(fixed,\"count(training_requests_total)\") is not None)\n  expected=8456\n  assert value(fixed,\"count(training_requests_total)\")==4\n  assert value(fixed,\"sum(training_requests_total)\")==value(raw,\"sum(training_requests_total)\")==expected\n  wait_for(lambda:len(query(raw,\"training:requests:by_method\"))==len(query(fixed,\"training:requests:by_method\"))==2)\n  def results(base):return {r[\"metric\"][\"method\"]:float(r[\"value\"][1]) for r in query(base,\"training:requests:by_method\")}\n  assert results(raw)==results(fixed)=={\"GET\":4228,\"POST\":4228}\n  before,after=observed(raw,rp),observed(fixed,fp)\n  assert before[\"head_series\"]>after[\"head_series\"] and before[\"rss_bytes\"]>0 and after[\"rss_bytes\"]>0\n  assert before[\"scraped_samples\"]==66 and after[\"scraped_samples\"]==4 and after[\"target_up\"]==1\n  assert rows==unchanged and all(v>0 for v in calls.values())\n  print(\"NATIVE_PROMETHEUS_CARDINALITY_OBSERVATIONS \"+json.dumps({\"before\":before,\"after\":after,\"rss_reduction_not_assumed\":True},sort_keys=True),flush=True)\n  print(\"NATIVE_PROMETHEUS_SOURCE_AGGREGATION_66_TO_4_SUM_AND_BOTH_METHOD_RECORDING_RULES_PRESERVED_HEAD_SAMPLES_RSS_OBSERVED\",flush=True)\n  try:task.normalize([dict(method=\"GET\",route=\"/unapproved\",value=1)])\n  except ValueError:pass\n  else:raise AssertionError(\"unbounded route taxonomy accepted\")\nfinally:server.shutdown();server.server_close();thread.join(timeout=3)\nprint(\"NATIVE_SEMANTIC_ASSERTIONS_PASSED\",flush=True)\n"
+      }
+    },
+    "question_format": "case"
+  }
+]

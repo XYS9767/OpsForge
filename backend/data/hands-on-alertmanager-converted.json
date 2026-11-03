@@ -1,0 +1,738 @@
+[
+  {
+    "id": "curated-parallel-alertmanager-003",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 1,
+    "topic": "根路由接受全部告警并保留默认渠道",
+    "title": "Alertmanager 配置实作：根路由接受全部告警并保留默认渠道",
+    "answer": "### alertmanager.yaml\n```yaml\nglobal:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: critical\n    matchers:\n    - severity=\"critical\"\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n- name: critical\n  webhook_configs:\n  - url: https://hooks.example.test/critical\n    send_resolved: true\n```\n\n根节点接收所有告警，子节点做具体筛选，未命中子节点仍有默认处理。\n\n### 原题说明\n它承接没有匹配到更具体子路由的告警，形成兜底行为。默认接收器应有明确责任人，并测试未知标签样本不会无声丢失。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它承接没有匹配到更具体子路由的告警，形成兜底行为。",
+      "默认接收器应有明确责任人，并测试未知标签样本不会无声丢失。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器及 Python/PyYAML 配置验收器。采用 Alertmanager 0.27+ 配置字段；无需学员搭建服务，不向任何渠道发通知。\n\n## 操作任务\n根路由不能带 matchers，必须保留 receiver=default；critical 筛选只在原子路由中生效，所有 receiver 定义、分组与间隔不变。只删根 matcher 但把默认接收器改成 critical 是负例。\n\n## 产物\n提交 alertmanager.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析实际 YAML，检查本题配置语义与保留项，拒绝重复键。仅配置合同验证，不等于 amtool 原生解析、实际路由、时区执行或通知投递验证；这些须由后续平台隔离运行时完成。\n\n## 原理复习\n路由树根节点为什么需要一个默认receiver？\n",
+    "files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  matchers:\n  - severity=\"critical\"\n  routes:\n  - receiver: critical\n    matchers:\n    - severity=\"critical\"\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n- name: critical\n  webhook_configs:\n  - url: https://hooks.example.test/critical\n    send_resolved: true\n"
+    },
+    "solution_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: critical\n    matchers:\n    - severity=\"critical\"\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n- name: critical\n  webhook_configs:\n  - url: https://hooks.example.test/critical\n    send_resolved: true\n"
+    },
+    "negative_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: critical\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: critical\n    matchers:\n    - severity=\"critical\"\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n- name: critical\n  webhook_configs:\n  - url: https://hooks.example.test/critical\n    send_resolved: true\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "alertmanager.yaml"
+      ],
+      "verification": "实际配置文件的离线语义合同验证；不执行原生服务。",
+      "operation": "根路由不能带 matchers，必须保留 receiver=default；critical 筛选只在原子路由中生效，所有 receiver 定义、分组与间隔不变。只删根 matcher 但把默认接收器改成 critical 是负例。",
+      "capability_gap": [
+        "未执行 amtool、真实路由与通知渠道。"
+      ],
+      "failure_examples": [
+        "negative_files 提供容易漏改的错误配置，应被拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node); out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError('duplicate key')\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'resolve_timeout': '5m'}, 'route': {'receiver': 'default', 'group_by': ['alertname', 'cluster'], 'group_wait': '30s', 'group_interval': '5m', 'repeat_interval': '4h', 'matchers': ['severity=\"critical\"'], 'routes': [{'receiver': 'critical', 'matchers': ['severity=\"critical\"']}]}, 'receivers': [{'name': 'default', 'webhook_configs': [{'url': 'https://hooks.example.test/default', 'send_resolved': True}]}, {'name': 'critical', 'webhook_configs': [{'url': 'https://hooks.example.test/critical', 'send_resolved': True}]}]}\nd=load(\"alertmanager.yaml\")\nb=copy.deepcopy(BASE)\nassert 'matchers' not in d['route'] and d['route']['receiver']=='default'\nb['route'].pop('matchers');assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-003",
+      "original_title": "路由树根节点为什么需要一个默认receiver？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-alertmanager-005",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 1,
+    "topic": "给同一接收器追加邮件并保留 webhook",
+    "title": "Alertmanager 配置实作：给同一接收器追加邮件并保留 webhook",
+    "answer": "### alertmanager.yaml\n```yaml\nglobal:\n  resolve_timeout: 5m\n  smtp_smarthost: smtp.example.test:587\n  smtp_from: alerts@example.test\n  smtp_require_tls: true\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n  email_configs:\n  - to: oncall@example.test\n    send_resolved: true\n```\n\n接收器可包含多个通知集成，增加渠道应叠加保留现有通知。\n\n### 原题说明\n可按配置支持组合多个通知集成。每个渠道有自己的结果与重试行为，某一路成功不证明其他渠道成功，验收要逐路核对。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "可按配置支持组合多个通知集成。",
+      "每个渠道有自己的结果与重试行为，某一路成功不证明其他渠道成功，验收要逐路核对。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器及 Python/PyYAML 配置验收器。采用 Alertmanager 0.27+ 配置字段；无需学员搭建服务，不向任何渠道发通知。\n\n## 操作任务\ndefault 原 webhook 必须完整保留；在同一 receiver 添加一条 email_configs，to=oncall@example.test 且 send_resolved=true。使用已有 global SMTP 设置，不添加新的 receiver 或新路由。不能把原 webhook 替换成邮件。\n\n## 产物\n提交 alertmanager.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析实际 YAML，检查本题配置语义与保留项，拒绝重复键。仅配置合同验证，不等于 amtool 原生解析、实际路由、时区执行或通知投递验证；这些须由后续平台隔离运行时完成。\n\n## 原理复习\n一个receiver是否只能配置一个通知渠道？\n",
+    "files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\n  smtp_smarthost: smtp.example.test:587\n  smtp_from: alerts@example.test\n  smtp_require_tls: true\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n"
+    },
+    "solution_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\n  smtp_smarthost: smtp.example.test:587\n  smtp_from: alerts@example.test\n  smtp_require_tls: true\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n  email_configs:\n  - to: oncall@example.test\n    send_resolved: true\n"
+    },
+    "negative_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\n  smtp_smarthost: smtp.example.test:587\n  smtp_from: alerts@example.test\n  smtp_require_tls: true\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  email_configs:\n  - to: oncall@example.test\n    send_resolved: true\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "alertmanager.yaml"
+      ],
+      "verification": "实际配置文件的离线语义合同验证；不执行原生服务。",
+      "operation": "default 原 webhook 必须完整保留；在同一 receiver 添加一条 email_configs，to=oncall@example.test 且 send_resolved=true。使用已有 global SMTP 设置，不添加新的 receiver 或新路由。不能把原 webhook 替换成邮件。",
+      "capability_gap": [
+        "未执行 amtool、真实路由与通知渠道。"
+      ],
+      "failure_examples": [
+        "negative_files 提供容易漏改的错误配置，应被拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node); out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError('duplicate key')\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'resolve_timeout': '5m', 'smtp_smarthost': 'smtp.example.test:587', 'smtp_from': 'alerts@example.test', 'smtp_require_tls': True}, 'route': {'receiver': 'default', 'group_by': ['alertname', 'cluster'], 'group_wait': '30s', 'group_interval': '5m', 'repeat_interval': '4h'}, 'receivers': [{'name': 'default', 'webhook_configs': [{'url': 'https://hooks.example.test/default', 'send_resolved': True}]}]}\nd=load(\"alertmanager.yaml\")\nb=copy.deepcopy(BASE)\nr=d['receivers'][0];assert r['name']=='default' and r['email_configs']==[{'to':'oncall@example.test','send_resolved':True}]\nassert r['webhook_configs']==b['receivers'][0]['webhook_configs']\nb['receivers'][0]['email_configs']=r['email_configs'];assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-005",
+      "original_title": "一个receiver是否只能配置一个通知渠道？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-alertmanager-015",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 2,
+    "topic": "把特定规则放在宽泛规则之前",
+    "title": "Alertmanager 配置实作：把特定规则放在宽泛规则之前",
+    "answer": "### alertmanager.yaml\n```yaml\nglobal:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: prod-critical\n    matchers:\n    - env=\"prod\"\n    - severity=\"critical\"\n    continue: false\n  - receiver: prod-all\n    matchers:\n    - env=\"prod\"\n    continue: false\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n- name: prod-all\n  webhook_configs:\n  - url: https://hooks.example.test/prod-all\n- name: prod-critical\n  webhook_configs:\n  - url: https://hooks.example.test/prod-critical\n```\n\n先匹配更具体条件且停止同级匹配，避免宽泛规则遮挡；这里只验收配置顺序。\n\n### 原题说明\n在不继续匹配时，前面命中的路由会截断后续选择。通用匹配放过早可遮挡精细规则。测试具体告警和兜底样本后再调整顺序。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "在不继续匹配时，前面命中的路由会截断后续选择。",
+      "通用匹配放过早可遮挡精细规则。",
+      "测试具体告警和兜底样本后再调整顺序。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器及 Python/PyYAML 配置验收器。采用 Alertmanager 0.27+ 配置字段；无需学员搭建服务，不向任何渠道发通知。\n\n## 操作任务\n生产 critical 仅发 prod-critical，其余生产告警发 prod-all，其他环境走 default。只调整两条子路由顺序，原 matcher 和 continue=false 均不变；不能加 continue=true 导致 critical 同时进入 prod-all。\n\n## 产物\n提交 alertmanager.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析实际 YAML，检查本题配置语义与保留项，拒绝重复键。仅配置合同验证，不等于 amtool 原生解析、实际路由、时区执行或通知投递验证；这些须由后续平台隔离运行时完成。\n\n## 原理复习\n同级路由顺序为什么是业务配置的一部分？\n",
+    "files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: prod-all\n    matchers:\n    - env=\"prod\"\n    continue: false\n  - receiver: prod-critical\n    matchers:\n    - env=\"prod\"\n    - severity=\"critical\"\n    continue: false\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n- name: prod-all\n  webhook_configs:\n  - url: https://hooks.example.test/prod-all\n- name: prod-critical\n  webhook_configs:\n  - url: https://hooks.example.test/prod-critical\n"
+    },
+    "solution_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: prod-critical\n    matchers:\n    - env=\"prod\"\n    - severity=\"critical\"\n    continue: false\n  - receiver: prod-all\n    matchers:\n    - env=\"prod\"\n    continue: false\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n- name: prod-all\n  webhook_configs:\n  - url: https://hooks.example.test/prod-all\n- name: prod-critical\n  webhook_configs:\n  - url: https://hooks.example.test/prod-critical\n"
+    },
+    "negative_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: prod-critical\n    matchers:\n    - env=\"prod\"\n    - severity=\"critical\"\n    continue: true\n  - receiver: prod-all\n    matchers:\n    - env=\"prod\"\n    continue: false\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n- name: prod-all\n  webhook_configs:\n  - url: https://hooks.example.test/prod-all\n- name: prod-critical\n  webhook_configs:\n  - url: https://hooks.example.test/prod-critical\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "alertmanager.yaml"
+      ],
+      "verification": "实际配置文件的离线语义合同验证；不执行原生服务。",
+      "operation": "生产 critical 仅发 prod-critical，其余生产告警发 prod-all，其他环境走 default。只调整两条子路由顺序，原 matcher 和 continue=false 均不变；不能加 continue=true 导致 critical 同时进入 prod-all。",
+      "capability_gap": [
+        "未执行 amtool、真实路由与通知渠道。"
+      ],
+      "failure_examples": [
+        "negative_files 提供容易漏改的错误配置，应被拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node); out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError('duplicate key')\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'resolve_timeout': '5m'}, 'route': {'receiver': 'default', 'group_by': ['alertname', 'cluster'], 'group_wait': '30s', 'group_interval': '5m', 'repeat_interval': '4h', 'routes': [{'receiver': 'prod-all', 'matchers': ['env=\"prod\"'], 'continue': False}, {'receiver': 'prod-critical', 'matchers': ['env=\"prod\"', 'severity=\"critical\"'], 'continue': False}]}, 'receivers': [{'name': 'default', 'webhook_configs': [{'url': 'https://hooks.example.test/default', 'send_resolved': True}]}, {'name': 'prod-all', 'webhook_configs': [{'url': 'https://hooks.example.test/prod-all'}]}, {'name': 'prod-critical', 'webhook_configs': [{'url': 'https://hooks.example.test/prod-critical'}]}]}\nd=load(\"alertmanager.yaml\")\nb=copy.deepcopy(BASE)\nroutes=d['route']['routes'];assert [r['receiver'] for r in routes]==['prod-critical','prod-all']\nassert all(r['continue'] is False for r in routes)\nb['route']['routes'].reverse();assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-015",
+      "original_title": "同级路由顺序为什么是业务配置的一部分？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-alertmanager-016",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 2,
+    "topic": "去掉子路由覆盖以继承父分组",
+    "title": "Alertmanager 配置实作：去掉子路由覆盖以继承父分组",
+    "answer": "### alertmanager.yaml\n```yaml\nglobal:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  - service\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: default\n    matchers:\n    - team=\"payments\"\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n```\n\n缺省继承和显式空分组是不同语义。\n\n### 原题说明\n未覆盖的子路由通常继承父设置，显式配置则按自身分组。需看最终有效路径，不能只审查子节点的receiver而忽略继承的分组和时间参数。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "未覆盖的子路由通常继承父设置，显式配置则按自身分组。",
+      "需看最终有效路径，不能只审查子节点的receiver而忽略继承的分组和时间参数。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器及 Python/PyYAML 配置验收器。采用 Alertmanager 0.27+ 配置字段；无需学员搭建服务，不向任何渠道发通知。\n\n## 操作任务\npayments 子路由必须继承父级 alertname/cluster/service 分组，删除它的 group_by 字段；不能写空列表（空列表不是继承）。父级 group_by 与其他配置不变。\n\n## 产物\n提交 alertmanager.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析实际 YAML，检查本题配置语义与保留项，拒绝重复键。仅配置合同验证，不等于 amtool 原生解析、实际路由、时区执行或通知投递验证；这些须由后续平台隔离运行时完成。\n\n## 原理复习\n父节点配置的group_by如何被子节点使用？\n",
+    "files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  - service\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: default\n    matchers:\n    - team=\"payments\"\n    group_by:\n    - instance\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n"
+    },
+    "solution_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  - service\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: default\n    matchers:\n    - team=\"payments\"\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n"
+    },
+    "negative_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  - service\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: default\n    matchers:\n    - team=\"payments\"\n    group_by: []\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "alertmanager.yaml"
+      ],
+      "verification": "实际配置文件的离线语义合同验证；不执行原生服务。",
+      "operation": "payments 子路由必须继承父级 alertname/cluster/service 分组，删除它的 group_by 字段；不能写空列表（空列表不是继承）。父级 group_by 与其他配置不变。",
+      "capability_gap": [
+        "未执行 amtool、真实路由与通知渠道。"
+      ],
+      "failure_examples": [
+        "negative_files 提供容易漏改的错误配置，应被拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node); out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError('duplicate key')\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'resolve_timeout': '5m'}, 'route': {'receiver': 'default', 'group_by': ['alertname', 'cluster', 'service'], 'group_wait': '30s', 'group_interval': '5m', 'repeat_interval': '4h', 'routes': [{'receiver': 'default', 'matchers': ['team=\"payments\"'], 'group_by': ['instance']}]}, 'receivers': [{'name': 'default', 'webhook_configs': [{'url': 'https://hooks.example.test/default', 'send_resolved': True}]}]}\nd=load(\"alertmanager.yaml\")\nb=copy.deepcopy(BASE)\nassert 'group_by' not in d['route']['routes'][0]\nassert d['route']['group_by']==['alertname','cluster','service']\nb['route']['routes'][0].pop('group_by');assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-016",
+      "original_title": "父节点配置的group_by如何被子节点使用？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-alertmanager-021",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 1,
+    "topic": "配置按全部标签分组的特殊值",
+    "title": "Alertmanager 配置实作：配置按全部标签分组的特殊值",
+    "answer": "### alertmanager.yaml\n```yaml\nglobal:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - '...'\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n```\n\n特殊省略号作为唯一元素表示全部标签，不能与普通标签并列。\n\n### 原题说明\n它按所有标签分组，等于基本禁用跨标签不同告警的聚合。适合少量特定场景，但动态标签会显著增加分组数。上线前估计通知规模。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它按所有标签分组，等于基本禁用跨标签不同告警的聚合。",
+      "适合少量特定场景，但动态标签会显著增加分组数。",
+      "上线前估计通知规模。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器及 Python/PyYAML 配置验收器。采用 Alertmanager 0.27+ 配置字段；无需学员搭建服务，不向任何渠道发通知。\n\n## 操作任务\n本场景由下游自行聚合，要求 Alertmanager 使用所有标签分组：根 group_by 仅能为一个元素 [\"...\"]。不得与 cluster 混用，也不能误改成空列表；保留全部接收器和定时设置。\n\n## 产物\n提交 alertmanager.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析实际 YAML，检查本题配置语义与保留项，拒绝重复键。仅配置合同验证，不等于 amtool 原生解析、实际路由、时区执行或通知投递验证；这些须由后续平台隔离运行时完成。\n\n## 原理复习\ngroup_by使用特殊值...意味着什么？\n",
+    "files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - '...'\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n"
+    },
+    "solution_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - '...'\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n"
+    },
+    "negative_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - '...'\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "alertmanager.yaml"
+      ],
+      "verification": "实际配置文件的离线语义合同验证；不执行原生服务。",
+      "operation": "本场景由下游自行聚合，要求 Alertmanager 使用所有标签分组：根 group_by 仅能为一个元素 [\"...\"]。不得与 cluster 混用，也不能误改成空列表；保留全部接收器和定时设置。",
+      "capability_gap": [
+        "未执行 amtool、真实路由与通知渠道。"
+      ],
+      "failure_examples": [
+        "negative_files 提供容易漏改的错误配置，应被拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node); out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError('duplicate key')\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'resolve_timeout': '5m'}, 'route': {'receiver': 'default', 'group_by': ['...', 'cluster'], 'group_wait': '30s', 'group_interval': '5m', 'repeat_interval': '4h'}, 'receivers': [{'name': 'default', 'webhook_configs': [{'url': 'https://hooks.example.test/default', 'send_resolved': True}]}]}\nd=load(\"alertmanager.yaml\")\nb=copy.deepcopy(BASE)\nassert d['route']['group_by']==['...']\nb['route']['group_by']=['...'];assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-021",
+      "original_title": "group_by使用特殊值...意味着什么？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-alertmanager-040",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 2,
+    "topic": "将办公时段从静默改为允许通知",
+    "title": "Alertmanager 配置实作：将办公时段从静默改为允许通知",
+    "answer": "### alertmanager.yaml\n```yaml\nglobal:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: default\n    matchers:\n    - team=\"desk\"\n    active_time_intervals:\n    - office\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\ntime_intervals:\n- name: office\n  time_intervals:\n  - weekdays:\n    - monday:friday\n    times:\n    - start_time: 09:00\n      end_time: '18:00'\n    location: Asia/Shanghai\n```\n\n允许窗口与静默窗口不能相互混淆，也不能假设静默会继续匹配其他路由。\n\n### 原题说明\n前者限定路由通知活跃时间，后者在指定时间段禁用该路由通知；匹配与continue行为仍需测试。它们不停止源规则评估，也不自动转移到另一路由。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "前者限定路由通知活跃时间，后者在指定时间段禁用该路由通知；匹配与continue行为仍需测试。",
+      "它们不停止源规则评估，也不自动转移到另一路由。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器及 Python/PyYAML 配置验收器。采用 Alertmanager 0.27+ 配置字段；无需学员搭建服务，不向任何渠道发通知。\n\n## 操作任务\ndesk 子路由仅在已定义 office 时段允许通知：把 mute_time_intervals 改成 active_time_intervals，值仍为 [office]，不可两个字段同时存在。原时间段、matcher 和默认路由保持不变。本题不要求时段外自动切换到其他 receiver。\n\n## 产物\n提交 alertmanager.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析实际 YAML，检查本题配置语义与保留项，拒绝重复键。仅配置合同验证，不等于 amtool 原生解析、实际路由、时区执行或通知投递验证；这些须由后续平台隔离运行时完成。\n\n## 原理复习\nactive_time_intervals与mute_time_intervals如何区分？\n",
+    "files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: default\n    matchers:\n    - team=\"desk\"\n    mute_time_intervals:\n    - office\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\ntime_intervals:\n- name: office\n  time_intervals:\n  - weekdays:\n    - monday:friday\n    times:\n    - start_time: 09:00\n      end_time: '18:00'\n    location: Asia/Shanghai\n"
+    },
+    "solution_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: default\n    matchers:\n    - team=\"desk\"\n    active_time_intervals:\n    - office\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\ntime_intervals:\n- name: office\n  time_intervals:\n  - weekdays:\n    - monday:friday\n    times:\n    - start_time: 09:00\n      end_time: '18:00'\n    location: Asia/Shanghai\n"
+    },
+    "negative_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: default\n    matchers:\n    - team=\"desk\"\n    active_time_intervals:\n    - office\n    mute_time_intervals:\n    - office\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\ntime_intervals:\n- name: office\n  time_intervals:\n  - weekdays:\n    - monday:friday\n    times:\n    - start_time: 09:00\n      end_time: '18:00'\n    location: Asia/Shanghai\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "alertmanager.yaml"
+      ],
+      "verification": "实际配置文件的离线语义合同验证；不执行原生服务。",
+      "operation": "desk 子路由仅在已定义 office 时段允许通知：把 mute_time_intervals 改成 active_time_intervals，值仍为 [office]，不可两个字段同时存在。原时间段、matcher 和默认路由保持不变。本题不要求时段外自动切换到其他 receiver。",
+      "capability_gap": [
+        "未执行 amtool、真实路由与通知渠道。"
+      ],
+      "failure_examples": [
+        "negative_files 提供容易漏改的错误配置，应被拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node); out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError('duplicate key')\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'resolve_timeout': '5m'}, 'route': {'receiver': 'default', 'group_by': ['alertname', 'cluster'], 'group_wait': '30s', 'group_interval': '5m', 'repeat_interval': '4h', 'routes': [{'receiver': 'default', 'matchers': ['team=\"desk\"'], 'mute_time_intervals': ['office']}]}, 'receivers': [{'name': 'default', 'webhook_configs': [{'url': 'https://hooks.example.test/default', 'send_resolved': True}]}], 'time_intervals': [{'name': 'office', 'time_intervals': [{'weekdays': ['monday:friday'], 'times': [{'start_time': '09:00', 'end_time': '18:00'}], 'location': 'Asia/Shanghai'}]}]}\nd=load(\"alertmanager.yaml\")\nb=copy.deepcopy(BASE)\nr=d['route']['routes'][0];assert r['active_time_intervals']==['office'] and 'mute_time_intervals' not in r\nr0=b['route']['routes'][0];r0['active_time_intervals']=r0.pop('mute_time_intervals');assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-040",
+      "original_title": "active_time_intervals与mute_time_intervals如何区分？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-alertmanager-042",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 2,
+    "topic": "把每日跨午夜窗口拆成两个区间",
+    "title": "Alertmanager 配置实作：把每日跨午夜窗口拆成两个区间",
+    "answer": "### alertmanager.yaml\n```yaml\nglobal:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: default\n    matchers:\n    - severity=\"warning\"\n    mute_time_intervals:\n    - night\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\ntime_intervals:\n- name: night\n  time_intervals:\n  - times:\n    - start_time: 00:00\n      end_time: 01:00\n    - start_time: '23:00'\n      end_time: '24:00'\n    location: Asia/Shanghai\n```\n\n跨午夜区间需拆分；结束时间24:00覆盖当日末尾，时区显式保留。\n\n### 原题说明\n检查开始/结束边界、日期与星期条件如何组合，必要时按支持语法拆为两个区间。用午夜前后和周边界样本测试，不能只看时刻字符串。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "检查开始/结束边界、日期与星期条件如何组合，必要时按支持语法拆为两个区间。",
+      "用午夜前后和周边界样本测试，不能只看时刻字符串。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器及 Python/PyYAML 配置验收器。采用 Alertmanager 0.27+ 配置字段；无需学员搭建服务，不向任何渠道发通知。\n\n## 操作任务\n每日23:00到次日01:00、Asia/Shanghai 的 warning 静默窗口拆成当天00:00-01:00与23:00-24:00两个范围，按 start_time 升序。必须完整覆盖最后一分钟，不能写23:59结束；不新增星期限制，route 及其他内容保留。\n\n## 产物\n提交 alertmanager.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析实际 YAML，检查本题配置语义与保留项，拒绝重复键。仅配置合同验证，不等于 amtool 原生解析、实际路由、时区执行或通知投递验证；这些须由后续平台隔离运行时完成。\n\n## 原理复习\n跨午夜维护窗口应怎样验证？\n",
+    "files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: default\n    matchers:\n    - severity=\"warning\"\n    mute_time_intervals:\n    - night\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\ntime_intervals:\n- name: night\n  time_intervals:\n  - times:\n    - start_time: '23:00'\n      end_time: 01:00\n    location: Asia/Shanghai\n"
+    },
+    "solution_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: default\n    matchers:\n    - severity=\"warning\"\n    mute_time_intervals:\n    - night\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\ntime_intervals:\n- name: night\n  time_intervals:\n  - times:\n    - start_time: 00:00\n      end_time: 01:00\n    - start_time: '23:00'\n      end_time: '24:00'\n    location: Asia/Shanghai\n"
+    },
+    "negative_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: default\n    matchers:\n    - severity=\"warning\"\n    mute_time_intervals:\n    - night\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\ntime_intervals:\n- name: night\n  time_intervals:\n  - times:\n    - start_time: 00:00\n      end_time: 01:00\n    - start_time: '23:00'\n      end_time: '23:59'\n    location: Asia/Shanghai\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "alertmanager.yaml"
+      ],
+      "verification": "实际配置文件的离线语义合同验证；不执行原生服务。",
+      "operation": "每日23:00到次日01:00、Asia/Shanghai 的 warning 静默窗口拆成当天00:00-01:00与23:00-24:00两个范围，按 start_time 升序。必须完整覆盖最后一分钟，不能写23:59结束；不新增星期限制，route 及其他内容保留。",
+      "capability_gap": [
+        "未执行 amtool、真实路由与通知渠道。"
+      ],
+      "failure_examples": [
+        "negative_files 提供容易漏改的错误配置，应被拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node); out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError('duplicate key')\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'resolve_timeout': '5m'}, 'route': {'receiver': 'default', 'group_by': ['alertname', 'cluster'], 'group_wait': '30s', 'group_interval': '5m', 'repeat_interval': '4h', 'routes': [{'receiver': 'default', 'matchers': ['severity=\"warning\"'], 'mute_time_intervals': ['night']}]}, 'receivers': [{'name': 'default', 'webhook_configs': [{'url': 'https://hooks.example.test/default', 'send_resolved': True}]}], 'time_intervals': [{'name': 'night', 'time_intervals': [{'times': [{'start_time': '23:00', 'end_time': '01:00'}], 'location': 'Asia/Shanghai'}]}]}\nd=load(\"alertmanager.yaml\")\nb=copy.deepcopy(BASE)\nperiod=d['time_intervals'][0]['time_intervals'][0]\nassert period=={'times':[{'start_time':'00:00','end_time':'01:00'},{'start_time':'23:00','end_time':'24:00'}],'location':'Asia/Shanghai'}\nb['time_intervals'][0]['time_intervals'][0]=period;assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-042",
+      "original_title": "跨午夜维护窗口应怎样验证？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-alertmanager-054",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 3,
+    "topic": "让保留期覆盖一周重复提醒窗口",
+    "title": "Alertmanager 配置实作：让保留期覆盖一周重复提醒窗口",
+    "answer": "### alertmanager.yaml\n```yaml\nglobal:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 168h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n```\n\n### arguments.json\n```yaml\n[\"--config.file=/etc/alertmanager/alertmanager.yaml\", \"--data.retention=240h\", \"--web.listen-address=:9093\"]```\n\n保留周期长于重复提醒间隔，避免状态提前过期；未在真实进程中等待一周验证。\n\n### 原题说明\n通知记录保留时间限制去重记忆；repeat间隔长于保留时，记录过期可能导致更早重发。应协调两者并测持续告警，不能假定repeat任意大都严格生效。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "通知记录保留时间限制去重记忆；repeat间隔长于保留时，记录过期可能导致更早重发。",
+      "应协调两者并测持续告警，不能假定repeat任意大都严格生效。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器及 Python/PyYAML 配置验收器。采用 Alertmanager 0.27+ 配置字段；无需学员搭建服务，不向任何渠道发通知。\n\n## 操作任务\n保留 repeat_interval=168h，不通过缩短提醒周期掩盖问题。只把 arguments.json 中唯一 data.retention 参数从120h提升到240h，其他参数顺序和值保持原样；不得新增第二个 retention 参数。JSON 文件是部署启动参数清单，不是 Shell 脚本。\n\n## 产物\n提交 alertmanager.yaml 以及 arguments.json，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析实际 YAML，检查本题配置语义与保留项，拒绝重复键。仅配置合同验证，不等于 amtool 原生解析、实际路由、时区执行或通知投递验证；这些须由后续平台隔离运行时完成。\n\n## 原理复习\n--data.retention与repeat_interval有什么关联？\n",
+    "files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 168h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n",
+      "arguments.json": "[\"--config.file=/etc/alertmanager/alertmanager.yaml\", \"--data.retention=120h\", \"--web.listen-address=:9093\"]"
+    },
+    "solution_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 168h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n",
+      "arguments.json": "[\"--config.file=/etc/alertmanager/alertmanager.yaml\", \"--data.retention=240h\", \"--web.listen-address=:9093\"]"
+    },
+    "negative_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 168h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n",
+      "arguments.json": "[\"--config.file=/etc/alertmanager/alertmanager.yaml\", \"--data.retention=120h\", \"--web.listen-address=:9093\"]"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "alertmanager.yaml",
+        "arguments.json"
+      ],
+      "verification": "实际配置文件的离线语义合同验证；不执行原生服务。",
+      "operation": "保留 repeat_interval=168h，不通过缩短提醒周期掩盖问题。只把 arguments.json 中唯一 data.retention 参数从120h提升到240h，其他参数顺序和值保持原样；不得新增第二个 retention 参数。JSON 文件是部署启动参数清单，不是 Shell 脚本。",
+      "capability_gap": [
+        "未执行 amtool、真实路由与通知渠道。"
+      ],
+      "failure_examples": [
+        "negative_files 提供容易漏改的错误配置，应被拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node); out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError('duplicate key')\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'resolve_timeout': '5m'}, 'route': {'receiver': 'default', 'group_by': ['alertname', 'cluster'], 'group_wait': '30s', 'group_interval': '5m', 'repeat_interval': '168h'}, 'receivers': [{'name': 'default', 'webhook_configs': [{'url': 'https://hooks.example.test/default', 'send_resolved': True}]}]}\nd=load(\"alertmanager.yaml\")\nb=copy.deepcopy(BASE)\nassert d==b\nargs=load('arguments.json');assert args==['--config.file=/etc/alertmanager/alertmanager.yaml','--data.retention=240h','--web.listen-address=:9093']\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-054",
+      "original_title": "--data.retention与repeat_interval有什么关联？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-alertmanager-058",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 2,
+    "topic": "按邮件网关合同启用 STARTTLS",
+    "title": "Alertmanager 配置实作：按邮件网关合同启用 STARTTLS",
+    "answer": "### alertmanager.yaml\n```yaml\nglobal:\n  resolve_timeout: 5m\n  smtp_smarthost: smtp.example.test:587\n  smtp_from: alerts@example.test\n  smtp_require_tls: true\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n  email_configs:\n  - to: oncall@example.test\n    send_resolved: true\n```\n\n按已知服务合同选择 STARTTLS 端口并强制 TLS；真实凭据与投递需后续隔离验收。\n\n### 原题说明\n它们的握手时机不同，地址端口与客户端支持配置需匹配。验证证书名称/信任和服务端要求，不通过关闭TLS校验掩盖协议配置错误。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它们的握手时机不同，地址端口与客户端支持配置需匹配。",
+      "验证证书名称/信任和服务端要求，不通过关闭TLS校验掩盖协议配置错误。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器及 Python/PyYAML 配置验收器。采用 Alertmanager 0.27+ 配置字段；无需学员搭建服务，不向任何渠道发通知。\n\n## 操作任务\n已知网关提供 smtp.example.test:587 的 STARTTLS，而非隐式TLS465。修改 global.smtp_smarthost 为该主机端口并保持 smtp_require_tls=true，不更改 From、收件人或 webhook。不能关闭TLS来绕过连接错误。未执行真实SMTP投递。\n\n## 产物\n提交 alertmanager.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析实际 YAML，检查本题配置语义与保留项，拒绝重复键。仅配置合同验证，不等于 amtool 原生解析、实际路由、时区执行或通知投递验证；这些须由后续平台隔离运行时完成。\n\n## 原理复习\nSMTP STARTTLS与直接TLS端口配置应怎样核对？\n",
+    "files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\n  smtp_smarthost: smtp.example.test:465\n  smtp_from: alerts@example.test\n  smtp_require_tls: false\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n  email_configs:\n  - to: oncall@example.test\n    send_resolved: true\n"
+    },
+    "solution_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\n  smtp_smarthost: smtp.example.test:587\n  smtp_from: alerts@example.test\n  smtp_require_tls: true\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n  email_configs:\n  - to: oncall@example.test\n    send_resolved: true\n"
+    },
+    "negative_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\n  smtp_smarthost: smtp.example.test:587\n  smtp_from: alerts@example.test\n  smtp_require_tls: false\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n  email_configs:\n  - to: oncall@example.test\n    send_resolved: true\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "alertmanager.yaml"
+      ],
+      "verification": "实际配置文件的离线语义合同验证；不执行原生服务。",
+      "operation": "已知网关提供 smtp.example.test:587 的 STARTTLS，而非隐式TLS465。修改 global.smtp_smarthost 为该主机端口并保持 smtp_require_tls=true，不更改 From、收件人或 webhook。不能关闭TLS来绕过连接错误。未执行真实SMTP投递。",
+      "capability_gap": [
+        "未执行 amtool、真实路由与通知渠道。"
+      ],
+      "failure_examples": [
+        "negative_files 提供容易漏改的错误配置，应被拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node); out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError('duplicate key')\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'resolve_timeout': '5m', 'smtp_smarthost': 'smtp.example.test:465', 'smtp_from': 'alerts@example.test', 'smtp_require_tls': False}, 'route': {'receiver': 'default', 'group_by': ['alertname', 'cluster'], 'group_wait': '30s', 'group_interval': '5m', 'repeat_interval': '4h'}, 'receivers': [{'name': 'default', 'webhook_configs': [{'url': 'https://hooks.example.test/default', 'send_resolved': True}], 'email_configs': [{'to': 'oncall@example.test', 'send_resolved': True}]}]}\nd=load(\"alertmanager.yaml\")\nb=copy.deepcopy(BASE)\nassert d['global']['smtp_smarthost']=='smtp.example.test:587' and d['global']['smtp_require_tls'] is True\nb['global'].update(smtp_smarthost='smtp.example.test:587',smtp_require_tls=True);assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-058",
+      "original_title": "SMTP STARTTLS与直接TLS端口配置应怎样核对？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-alertmanager-061",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 2,
+    "topic": "恢复 webhook 的证书主机名校验配置",
+    "title": "Alertmanager 配置实作：恢复 webhook 的证书主机名校验配置",
+    "answer": "### alertmanager.yaml\n```yaml\nglobal:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n    http_config:\n      tls_config:\n        server_name: hooks.example.test\n        insecure_skip_verify: false\n      follow_redirects: false\n```\n\n把主机名校验恢复到配置的实际接收端，不用跳过证书验证规避问题。\n\n### 原题说明\n记录目标主机名、证书链与有效期、信任库和代理路径，区分名称不匹配、缺中间链或不可信CA。修复正确证书/信任配置后测试，不以skip_verify作为常规修复。",
+    "type": "code",
+    "source": "OpsForge 原题配置实作转换",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "记录目标主机名、证书链与有效期、信任库和代理路径，区分名称不匹配、缺中间链或不可信CA。",
+      "修复正确证书/信任配置后测试，不以skip_verify作为常规修复。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "configuration",
+    "body": "## 环境与初始材料\n平台文件编辑器及 Python/PyYAML 配置验收器。采用 Alertmanager 0.27+ 配置字段；无需学员搭建服务，不向任何渠道发通知。\n\n## 操作任务\n当前 webhook URL 使用 hooks.example.test，证书及平台信任链按前提已覆盖该域名。把 tls_config.server_name 修复为 hooks.example.test，insecure_skip_verify 必须为 false；保留 URL、follow_redirects=false 和所有其他设置。不生成或替换证书，不声称完成握手验证。\n\n## 产物\n提交 alertmanager.yaml，不提交 Python 程序。\n\n## 验收方法\n运行 python3 checks/check.py，严格解析实际 YAML，检查本题配置语义与保留项，拒绝重复键。仅配置合同验证，不等于 amtool 原生解析、实际路由、时区执行或通知投递验证；这些须由后续平台隔离运行时完成。\n\n## 原理复习\nWebhook证书校验失败时应收集哪些具体证据？\n",
+    "files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n    http_config:\n      tls_config:\n        server_name: old.example.test\n        insecure_skip_verify: true\n      follow_redirects: false\n"
+    },
+    "solution_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n    http_config:\n      tls_config:\n        server_name: hooks.example.test\n        insecure_skip_verify: false\n      follow_redirects: false\n"
+    },
+    "negative_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: default\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\nreceivers:\n- name: default\n  webhook_configs:\n  - url: https://hooks.example.test/default\n    send_resolved: true\n    http_config:\n      tls_config:\n        server_name: hooks.example.test\n        insecure_skip_verify: true\n      follow_redirects: false\n"
+    },
+    "exercise": {
+      "kind": "configuration",
+      "environment": "offline-files",
+      "deliverables": [
+        "alertmanager.yaml"
+      ],
+      "verification": "实际配置文件的离线语义合同验证；不执行原生服务。",
+      "operation": "当前 webhook URL 使用 hooks.example.test，证书及平台信任链按前提已覆盖该域名。把 tls_config.server_name 修复为 hooks.example.test，insecure_skip_verify 必须为 false；保留 URL、follow_redirects=false 和所有其他设置。不生成或替换证书，不声称完成握手验证。",
+      "capability_gap": [
+        "未执行 amtool、真实路由与通知渠道。"
+      ],
+      "failure_examples": [
+        "negative_files 提供容易漏改的错误配置，应被拒绝。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,re\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node); out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError('duplicate key')\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nBASE={'global': {'resolve_timeout': '5m'}, 'route': {'receiver': 'default', 'group_by': ['alertname', 'cluster'], 'group_wait': '30s', 'group_interval': '5m', 'repeat_interval': '4h'}, 'receivers': [{'name': 'default', 'webhook_configs': [{'url': 'https://hooks.example.test/default', 'send_resolved': True, 'http_config': {'tls_config': {'server_name': 'old.example.test', 'insecure_skip_verify': True}, 'follow_redirects': False}}]}]}\nd=load(\"alertmanager.yaml\")\nb=copy.deepcopy(BASE)\nh=d['receivers'][0]['webhook_configs'][0]['http_config'];assert h['tls_config']=={'server_name':'hooks.example.test','insecure_skip_verify':False}\nassert h['follow_redirects'] is False\nb['receivers'][0]['webhook_configs'][0]['http_config']['tls_config']=h['tls_config'];assert d==b\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-061",
+      "original_title": "Webhook证书校验失败时应收集哪些具体证据？",
+      "original_type": "interview",
+      "theory_retained": true
+    }
+  }
+]

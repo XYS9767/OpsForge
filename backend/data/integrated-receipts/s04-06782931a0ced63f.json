@@ -1,0 +1,145 @@
+[
+  {
+    "id": "curated-parallel-gcp-100",
+    "module": "gcp",
+    "category": "GCP",
+    "level": 3,
+    "topic": "对象存储",
+    "title": "离线GCS删除计划：到期且无hold才列入，携带精确generation防止误删新版本",
+    "answer": "```python\nimport datetime\ndef deletion_plan(objects,now):\n    current=datetime.datetime.fromisoformat(now.replace('Z','+00:00'))\n    if current.tzinfo is None:raise ValueError('aware time required')\n    plan=[];seen=set()\n    for item in objects:\n        if not isinstance(item.get('name'),str) or not item['name'] or not isinstance(item.get('generation'),str) or not item['generation'].isascii() or not item['generation'].isdigit() or int(item['generation'])<=0 or any(type(item.get(key)) is not bool for key in ('temporaryHold','eventBasedHold')):raise ValueError('finite object metadata')\n        identity=(item['name'],item['generation'])\n        if identity in seen:raise ValueError('duplicate object generation')\n        seen.add(identity)\n        expiry=item.get('retentionExpirationTime')\n        if expiry is not None:\n            expiry=datetime.datetime.fromisoformat(expiry.replace('Z','+00:00'))\n            if expiry.tzinfo is None:raise ValueError('aware retention deadline')\n        if item['temporaryHold'] or item['eventBasedHold'] or expiry is not None and current<expiry:continue\n        plan.append({'name':item['name'],'ifGenerationMatch':item['generation']})\n    return plan\n```\n\n原题知识说明：\n桌面推演，未在生产执行。检查错误中的retentionPolicyNotMet、对象保留到期时间及桶策略isLocked，确认IAM允许但保留锁阻止删除。锁定策略不能缩短或移除，恢复方案是停止无效重试、等待合法到期并调整清理计划，不建议删桶绕过。验收到期前拒绝和到期后允许均符合策略，核算暂存成本。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Google Cloud官方文档核对",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "pending",
+    "review_note": "会话04作者补强离线原题边界；真实本地Python原生验证另附，独审待调度，不声明云端原故障恢复。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 deletion_plan(objects,now)。对象归一化记录含name、正数字符串generation、两个严格bool字段temporaryHold/eventBasedHold及可空retentionExpirationTime；now/到期时间须为带时区ISO时间。未到期或任意hold的对象不列入，恰到期可列；返回按输入顺序的name/ifGenerationMatch计划，拒绝重复同一对象代次，不修改元数据或实际删除对象。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；本地文件/数据库及离线Google Cloud有限模型，不访问云API。\n\n## 能力边界\n本地保留期限/hold/代次计划模型，不发GCS删除请求，不解除锁，不计算完整bucket/object保留策略，也不计作真实云恢复验收。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://cloud.google.com/storage/docs/object-lock",
+      "https://cloud.google.com/storage/docs/request-preconditions"
+    ],
+    "incident_signature": "gcs-retention-lock-prevents-delete",
+    "related_modules": [
+      "gcp"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-gcp-100",
+      "original_title": "GCS清理任务具备删除权限仍无法删除未到保留期的对象，怎样闭环？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import datetime\ndef deletion_plan(objects,now):\n    current=datetime.datetime.fromisoformat(now.replace('Z','+00:00'))\n    if current.tzinfo is None:raise ValueError('aware time required')\n    plan=[];seen=set()\n    for item in objects:\n        if not isinstance(item.get('name'),str) or not item['name'] or not isinstance(item.get('generation'),str) or not item['generation'].isascii() or not item['generation'].isdigit() or int(item['generation'])<=0 or any(type(item.get(key)) is not bool for key in ('temporaryHold','eventBasedHold')):raise ValueError('finite object metadata')\n        identity=(item['name'],item['generation'])\n        if identity in seen:raise ValueError('duplicate object generation')\n        seen.add(identity)\n        expiry=item.get('retentionExpirationTime')\n        if expiry is not None:\n            expiry=datetime.datetime.fromisoformat(expiry.replace('Z','+00:00'))\n            if expiry.tzinfo is None:raise ValueError('aware retention deadline')\n        if item['temporaryHold'] or item['eventBasedHold'] or expiry is not None and current<expiry:continue\n        plan.append({'name':item['name'],'ifGenerationMatch':item['generation']})\n    return plan\n"
+    },
+    "negative_files": {
+      "task.py": "import datetime\ndef deletion_plan(objects,now):\n    current=datetime.datetime.fromisoformat(now.replace('Z','+00:00'))\n    if current.tzinfo is None:raise ValueError('aware time required')\n    plan=[];seen=set()\n    for item in objects:\n        if not isinstance(item.get('name'),str) or not item['name'] or not isinstance(item.get('generation'),str) or not item['generation'].isascii() or not item['generation'].isdigit() or int(item['generation'])<=0 or any(type(item.get(key)) is not bool for key in ('temporaryHold','eventBasedHold')):raise ValueError('finite object metadata')\n        identity=(item['name'],item['generation'])\n        if identity in seen:raise ValueError('duplicate object generation')\n        seen.add(identity)\n        expiry=item.get('retentionExpirationTime')\n        if expiry is not None:\n            expiry=datetime.datetime.fromisoformat(expiry.replace('Z','+00:00'))\n            if expiry.tzinfo is None:raise ValueError('aware retention deadline')\n        if item['temporaryHold'] or item['eventBasedHold'] :continue\n        plan.append({'name':item['name'],'ifGenerationMatch':item['generation']})\n    return plan\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "Python3.11离线GCP训练模型，无云账号或云API",
+      "operation": "实现 deletion_plan(objects,now)。对象归一化记录含name、正数字符串generation、两个严格bool字段temporaryHold/eventBasedHold及可空retentionExpirationTime；now/到期时间须为带时区ISO时间。未到期或任意hold的对象不列入，恰到期可列；返回按输入顺序的name/ifGenerationMatch计划，拒绝重复同一对象代次，不修改元数据或实际删除对象。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "本地保留期限/hold/代次计划模型，不发GCS删除请求，不解除锁，不计算完整bucket/object保留策略，也不计作真实云恢复验收。",
+      "validation_kind": "offline_cloud_model"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,secrets,json,copy,sqlite3,tempfile,subprocess,base64,hashlib,datetime,re\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('OFFLINE_CLOUD_SCOPE:NO_CLOUD_API_REQUESTS',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('offline GCP contract failed') from error\nbase={'name':'logs/due','generation':'42','temporaryHold':False,'eventBasedHold':False,'retentionExpirationTime':'2026-11-01T00:00:00Z'}\nfuture=copy.deepcopy(base);future.update(name='logs/not-due',generation='43',retentionExpirationTime='2026-11-02T00:00:00Z')\nheld=copy.deepcopy(base);held.update(name='logs/held',generation='44',temporaryHold=True)\nevent_held=copy.deepcopy(base);event_held.update(name='logs/event-held',generation='45',eventBasedHold=True)\nitems=[base,future,held,event_held];before=copy.deepcopy(items)\nassert student(task.deletion_plan,items,'2026-11-01T08:00:00+08:00')==[{'name':'logs/due','ifGenerationMatch':'42'}],'IAM deletion permission was mistaken for bypassing retention/holds or generation safety'\nassert task.deletion_plan(items,'2026-10-31T23:59:59Z')==[]\nassert items==before\ntry:task.deletion_plan(items,'2026-11-01T00:00:00')\nexcept ValueError:pass\nelse:raise AssertionError('naive time accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n\n# Exact normalized-metadata contract, including validation and no mutation.\nfree=dict(base,name='free',generation='0009',retentionExpirationTime=None)\nother=dict(free,generation='10')\nassert task.deletion_plan([free,other],'2026-01-01T00:00:00Z')==[{'name':'free','ifGenerationMatch':'0009'},{'name':'free','ifGenerationMatch':'10'}]\nassert task.deletion_plan([],'2026-01-01T00:00:00Z')==[]\nassert task.deletion_plan([base],'2026-10-31T20:00:00-04:00')==[{'name':base['name'],'ifGenerationMatch':base['generation']}]\nfor invalid in [dict(free,generation='0'),dict(free,generation='-1'),dict(free,generation=9),dict(free,generation='٩'),dict(free,temporaryHold=0),dict(free,eventBasedHold='false'),dict(free,name=''),dict(free,retentionExpirationTime='2026-01-01T00:00:00')]:\n snapshot=copy.deepcopy(invalid)\n try:task.deletion_plan([invalid],'2026-01-01T00:00:00Z')\n except ValueError:pass\n else:raise AssertionError('invalid metadata accepted')\n assert invalid==snapshot\ntry:task.deletion_plan([free,copy.deepcopy(free)],'2026-01-01T00:00:00Z')\nexcept ValueError:pass\nelse:raise AssertionError('duplicate identity accepted')\nsaved=copy.deepcopy([free,other]);a=task.deletion_plan(saved,'2026-01-01T00:00:00Z');assert a==task.deletion_plan(saved,'2026-01-01T00:00:00Z') and saved==[free,other]\n"
+      }
+    },
+    "question_format": "code"
+  },
+  {
+    "id": "curated-parallel-gcp-105",
+    "module": "gcp",
+    "category": "GCP",
+    "level": 4,
+    "topic": "对象存储",
+    "title": "本地GCS下载完整性：真实计算CRC32C，兼容无MD5的compose对象",
+    "answer": "```python\nimport base64,hashlib\ndef verify_download(path,metadata):\n    if not isinstance(metadata,dict) or not isinstance(metadata.get('size'),str) or not metadata['size'].isascii() or not metadata['size'].isdigit():raise ValueError('decimal size')\n    try:expected_crc=base64.b64decode(metadata['crc32c'],validate=True)\n    except Exception as error:raise ValueError('CRC32C metadata') from error\n    if len(expected_crc)!=4:raise ValueError('four CRC32C bytes')\n    expected_md5=None\n    if 'md5Hash' in metadata:\n        try:expected_md5=base64.b64decode(metadata['md5Hash'],validate=True)\n        except Exception as error:raise ValueError('MD5 metadata') from error\n        if len(expected_md5)!=16:raise ValueError('MD5 bytes')\n    crc=0xffffffff;count=0;md5=hashlib.md5(usedforsecurity=False)\n    with open(path,'rb') as stream:\n        while True:\n            block=stream.read(4096)\n            if not block:break\n            count+=len(block);md5.update(block)\n            for byte in block:\n                crc^=byte\n                for _ in range(8):crc=(crc>>1)^(0x82f63b78 if crc&1 else 0)\n    actual_crc=((crc^0xffffffff)&0xffffffff).to_bytes(4,'big')\n    if count!=int(metadata['size']) or actual_crc!=expected_crc or expected_md5 is not None and md5.digest()!=expected_md5:raise ValueError('download checksum mismatch')\n    return {'bytes':count,'crc32c':base64.b64encode(actual_crc).decode(),'md5_verified':expected_md5 is not None}\n```\n\n原题知识说明：\n桌面推演，未在生产执行。核对对象componentCount、generation和校验元数据，确认composite object没有MD5字段，旧客户端把缺字段误当损坏且不能把ETag当MD5。保留源组件和组合顺序，由开发使用受支持的CRC32C校验路径或适配客户端。验收普通与组合对象均能验证完整性，篡改样本仍被拒绝；不以关闭所有校验恢复下载。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Google Cloud官方文档核对",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "pending",
+    "review_note": "会话04作者补强离线原题边界；真实本地Python原生验证另附，独审待调度，不声明云端原故障恢复。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现 verify_download(path,metadata)。metadata含十进制字符串size及base64大端4字节crc32c，可选base64的16字节md5Hash。流式读取实际本地文件，核对长度、Castagnoli CRC32C（不是zlib CRC32）及存在时的MD5；MD5缺失不应拒绝只要CRC32C/长度正确。失败ValueError，不修改文件，成功返回bytes/crc32c/md5_verified。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；本地文件/数据库及离线Google Cloud有限模型，不访问云API。\n\n## 能力边界\n真实本地字节校验与GCS元数据格式子集，不下载或compose真实对象；校验和不是来源认证，不证明传输权限或真实云故障已恢复。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://cloud.google.com/storage/docs/data-validation"
+    ],
+    "incident_signature": "gcs-composite-no-md5-client-assumption",
+    "related_modules": [
+      "gcp"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-gcp-105",
+      "original_title": "GCS compose生成对象后旧客户端下载器因缺MD5拒收，但CRC32C一致，如何处理？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import base64,hashlib\ndef verify_download(path,metadata):\n    if not isinstance(metadata,dict) or not isinstance(metadata.get('size'),str) or not metadata['size'].isascii() or not metadata['size'].isdigit():raise ValueError('decimal size')\n    try:expected_crc=base64.b64decode(metadata['crc32c'],validate=True)\n    except Exception as error:raise ValueError('CRC32C metadata') from error\n    if len(expected_crc)!=4:raise ValueError('four CRC32C bytes')\n    expected_md5=None\n    if 'md5Hash' in metadata:\n        try:expected_md5=base64.b64decode(metadata['md5Hash'],validate=True)\n        except Exception as error:raise ValueError('MD5 metadata') from error\n        if len(expected_md5)!=16:raise ValueError('MD5 bytes')\n    crc=0xffffffff;count=0;md5=hashlib.md5(usedforsecurity=False)\n    with open(path,'rb') as stream:\n        while True:\n            block=stream.read(4096)\n            if not block:break\n            count+=len(block);md5.update(block)\n            for byte in block:\n                crc^=byte\n                for _ in range(8):crc=(crc>>1)^(0x82f63b78 if crc&1 else 0)\n    actual_crc=((crc^0xffffffff)&0xffffffff).to_bytes(4,'big')\n    if count!=int(metadata['size']) or actual_crc!=expected_crc or expected_md5 is not None and md5.digest()!=expected_md5:raise ValueError('download checksum mismatch')\n    return {'bytes':count,'crc32c':base64.b64encode(actual_crc).decode(),'md5_verified':expected_md5 is not None}\n"
+    },
+    "negative_files": {
+      "task.py": "import base64,hashlib\ndef verify_download(path,metadata):\n    if not isinstance(metadata,dict) or not isinstance(metadata.get('size'),str) or not metadata['size'].isascii() or not metadata['size'].isdigit():raise ValueError('decimal size')\n    try:expected_crc=base64.b64decode(metadata['crc32c'],validate=True)\n    except Exception as error:raise ValueError('CRC32C metadata') from error\n    if len(expected_crc)!=4:raise ValueError('four CRC32C bytes')\n    expected_md5=None\n    if 'md5Hash' in metadata:\n        try:expected_md5=base64.b64decode(metadata['md5Hash'],validate=True)\n        except Exception as error:raise ValueError('MD5 metadata') from error\n        if len(expected_md5)!=16:raise ValueError('MD5 bytes')\n    crc=0xffffffff;count=0;md5=hashlib.md5(usedforsecurity=False)\n    with open(path,'rb') as stream:\n        while True:\n            block=stream.read(4096)\n            if not block:break\n            count+=len(block);md5.update(block)\n            for byte in block:\n                crc^=byte\n                for _ in range(8):crc=(crc>>1)^(0xedb88320 if crc&1 else 0)\n    actual_crc=((crc^0xffffffff)&0xffffffff).to_bytes(4,'big')\n    if count!=int(metadata['size']) or actual_crc!=expected_crc or expected_md5 is not None and md5.digest()!=expected_md5:raise ValueError('download checksum mismatch')\n    return {'bytes':count,'crc32c':base64.b64encode(actual_crc).decode(),'md5_verified':expected_md5 is not None}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "Python3.11离线GCP训练模型，无云账号或云API",
+      "operation": "实现 verify_download(path,metadata)。metadata含十进制字符串size及base64大端4字节crc32c，可选base64的16字节md5Hash。流式读取实际本地文件，核对长度、Castagnoli CRC32C（不是zlib CRC32）及存在时的MD5；MD5缺失不应拒绝只要CRC32C/长度正确。失败ValueError，不修改文件，成功返回bytes/crc32c/md5_verified。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实本地字节校验与GCS元数据格式子集，不下载或compose真实对象；校验和不是来源认证，不证明传输权限或真实云故障已恢复。",
+      "validation_kind": "offline_cloud_model"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,secrets,json,copy,sqlite3,tempfile,subprocess,base64,hashlib,datetime,re\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('OFFLINE_CLOUD_SCOPE:NO_CLOUD_API_REQUESTS',flush=True)\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('offline GCP contract failed') from error\ndef oracle(raw):\n table=[]\n for value in range(256):\n  crc=value\n  for _ in range(8):crc=(crc>>1)^(0x82f63b78 if crc&1 else 0)\n  table.append(crc)\n crc=0xffffffff\n for byte in raw:crc=table[(crc^byte)&255]^(crc>>8)\n return ((crc^0xffffffff)&0xffffffff).to_bytes(4,'big')\nassert oracle(b'123456789')==bytes.fromhex('e3069283')\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'composite.bin'\n for raw,with_md5 in [(b'123456789',False),(secrets.token_bytes(17001),False),(secrets.token_bytes(8193),True)]:\n  path.write_bytes(raw);crc=base64.b64encode(oracle(raw)).decode();metadata={'size':str(len(raw)),'crc32c':crc}\n  if with_md5:metadata['md5Hash']=base64.b64encode(hashlib.md5(raw,usedforsecurity=False).digest()).decode()\n  assert student(task.verify_download,path,metadata)=={'bytes':len(raw),'crc32c':crc,'md5_verified':with_md5},'CRC32C was confused with CRC32 or missing MD5 treated as invalid'\n  bad=copy.deepcopy(metadata);bad['size']=str(len(raw)+1)\n  try:task.verify_download(path,bad)\n  except ValueError:pass\n  else:raise AssertionError('wrong object length accepted')\n  path.write_bytes(bytes([raw[0]^1])+raw[1:])\n  try:task.verify_download(path,metadata)\n  except ValueError:pass\n  else:raise AssertionError('corrupt downloaded bytes accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n\nfrom unittest.mock import patch\nimport builtins\nwith tempfile.TemporaryDirectory(prefix='opsforge-session04-crc-') as d:\n p=pathlib.Path(d)/'download.bin'\n # Empty file, multi-block randomized file, exact known CRC32C vector.\n for raw in [b'',b'123456789',secrets.token_bytes(131073)]:\n  p.write_bytes(raw);before=p.stat();crc=base64.b64encode(oracle(raw)).decode();meta={'size':str(len(raw)),'crc32c':crc}\n  real_open=builtins.open;reads=[]\n  class Stream:\n   def __init__(self,wrapped):self.wrapped=wrapped\n   def __enter__(self):return self\n   def __exit__(self,*args):self.wrapped.close()\n   def read(self,size=-1):\n    assert 0<size<=65536,'must stream bounded chunks'\n    reads.append(size);return self.wrapped.read(size)\n  def opened(path,*args,**kwargs):return Stream(real_open(path,*args,**kwargs)) if pathlib.Path(path)==p else real_open(path,*args,**kwargs)\n  with patch('builtins.open',opened),patch('io.open',opened):result=task.verify_download(p,meta)\n  assert result=={'bytes':len(raw),'crc32c':crc,'md5_verified':False} and reads\n  assert p.read_bytes()==raw and p.stat().st_mtime_ns==before.st_mtime_ns\n  assert task.verify_download(p,meta)==result\n  invalids=[dict(meta,size='-1'),dict(meta,size=0),dict(meta,size='١'),dict(meta,crc32c='!'),dict(meta,crc32c=base64.b64encode(b'x').decode()),dict(meta,md5Hash='!'),dict(meta,md5Hash=base64.b64encode(b'x').decode()),dict(meta,md5Hash=base64.b64encode(b'x'*16).decode())]\n  for bad in invalids:\n   try:task.verify_download(p,bad)\n   except ValueError:pass\n   else:raise AssertionError('malformed metadata or wrong MD5 accepted')\n   assert p.read_bytes()==raw\n"
+      }
+    },
+    "question_format": "code"
+  }
+]

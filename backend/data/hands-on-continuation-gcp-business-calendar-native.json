@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-advanced-gcp-011",
+    "module": "gcp",
+    "category": "GCP 云模拟",
+    "level": 5,
+    "topic": "托管数据与消息",
+    "title": "离线营业日调度项目：真实时区 gap/fold 策略、持久化准入及补触发去重",
+    "body": "## 操作任务\n实现day_slot(day,zone,clock)与claim(db_path,job,day,zone,clock,approved_dates,now_utc)。day为ISO日期、clock为HH:MM、zone为有效IANA时区。day_slot须分别以fold0/1转UTC并往返校验：不存在的墙钟时间→{kind:gap,utc:None}；两个不同UTC候选→fold且选择最早UTC；普通时间→unique，UTC输出ISO字符串+00:00。此为应用明确政策，不是Cloud Scheduler默认行为。claim仅接受非空job和approved_dates中明确批准的营业日（可含特别营业周末），now须带UTC偏移0；同job+business_date在SQLite持久化calendar_runs表唯一准入，保留其他表；存储zone/clock/slot_utc并拒绝已准入日期改绑计划。gap→manual_gap不准入，未到计划时刻→not_due，到期或批准日期补触发→claimed，重复和重启后回调→already_claimed。gap需另行审批处理，不自动造补偿时间；这里只签发准入收据，不声称业务已经完成。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n离线云模型：真实系统zoneinfo时区数据库、SQLite事务和新解释器重启，验证有限营业日日历与准入收据；未创建/调用Cloud Scheduler、没有真实云触发或外部业务副作用，也不声称收据等于业务exactly-once。实际云调度建议固定UTC触发再由应用营业日日历决定，本题gap/fold政策必须显式由应用选择；不修改系统时区/墙钟/默认账号。",
+    "answer": "```python\nimport contextlib,datetime,re,sqlite3\nfrom zoneinfo import ZoneInfo,ZoneInfoNotFoundError\nUTC=datetime.timezone.utc\ndef day_slot(day,zone,clock):\n    if not isinstance(day,str) or re.fullmatch(r'\\d{4}-\\d{2}-\\d{2}',day) is None:raise ValueError('ISO business date required')\n    if not isinstance(clock,str) or re.fullmatch(r'\\d{2}:\\d{2}',clock) is None:raise ValueError('HH:MM required')\n    date=datetime.date.fromisoformat(day);hour,minute=map(int,clock.split(':'))\n    naive=datetime.datetime.combine(date,datetime.time(hour,minute))\n    try:timezone=ZoneInfo(zone)\n    except (ZoneInfoNotFoundError,TypeError) as error:raise ValueError('known IANA zone required') from error\n    candidates=set()\n    for fold in (0,1):\n        instant=naive.replace(tzinfo=timezone,fold=fold).astimezone(UTC)\n        if instant.astimezone(timezone).replace(tzinfo=None)==naive:candidates.add(instant)\n    if not candidates:return {'kind':'gap','utc':None}\n    return {'kind':'fold' if len(candidates)==2 else 'unique','utc':min(candidates).isoformat()}\ndef claim(db_path,job,day,zone,clock,approved_dates,now_utc):\n    if not isinstance(job,str) or not job or day not in approved_dates:raise ValueError('approved business day and job required')\n    slot=day_slot(day,zone,clock)\n    now=datetime.datetime.fromisoformat(now_utc)\n    if now.tzinfo is None or now.utcoffset()!=datetime.timedelta(0):raise ValueError('explicit UTC callback time required')\n    with contextlib.closing(sqlite3.connect(db_path,timeout=3)) as db:\n        with db:\n            db.execute('CREATE TABLE IF NOT EXISTS calendar_runs(job TEXT,business_date TEXT,zone TEXT,clock TEXT,slot_utc TEXT,PRIMARY KEY(job,business_date))')\n            db.execute('BEGIN IMMEDIATE')\n            old=db.execute('SELECT zone,clock,slot_utc FROM calendar_runs WHERE job=? AND business_date=?',(job,day)).fetchone()\n            if old:\n                if old!=(zone,clock,slot['utc']):raise ValueError('existing business day rebound to a new schedule')\n                return {'state':'already_claimed',**slot}\n            if slot['kind']=='gap':return {'state':'manual_gap',**slot}\n            if now<datetime.datetime.fromisoformat(slot['utc']):return {'state':'not_due',**slot}\n            db.execute('INSERT INTO calendar_runs VALUES(?,?,?,?,?)',(job,day,zone,clock,slot['utc']))\n            return {'state':'claimed',**slot}\n```\n\n原题知识说明：\n交付cron时区、营业日定义、每次计划触发的业务唯一键和执行账本。墙上时钟在夏令时切换时可能重复或跳过时间，若要求稳定间隔可选UTC并在业务层处理营业日，但两者语义不同。验收夏令时两类边界、调度服务暂停恢复、执行超时重试和人工补触发，证明同一业务结算不会重复落账，缺漏可被发现。交付任务与下游执行状态分离的监控，调度返回成功不等于最终作业完成。跨日期积压应按原计划日期处理，不能统一改成当前日期掩盖漏算；具体实现交给开发。",
+    "type": "code",
+    "source": "advanced-expansion-20261022:data:gcp",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "区分控制面受理与业务完成",
+      "交付具体服务对象和身份的证据",
+      "给出重试、容量和不可恢复边界"
+    ],
+    "references": [
+      "https://docs.cloud.google.com/scheduler/docs/configuring/cron-job-schedules",
+      "https://docs.python.org/3/library/zoneinfo.html"
+    ],
+    "related_modules": [
+      "gcp"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-gcp-011",
+      "original_title": "为Cloud Scheduler营业日任务设计夏令时和补触发验收。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import contextlib,datetime,re,sqlite3\nfrom zoneinfo import ZoneInfo,ZoneInfoNotFoundError\nUTC=datetime.timezone.utc\ndef day_slot(day,zone,clock):\n    if not isinstance(day,str) or re.fullmatch(r'\\d{4}-\\d{2}-\\d{2}',day) is None:raise ValueError('ISO business date required')\n    if not isinstance(clock,str) or re.fullmatch(r'\\d{2}:\\d{2}',clock) is None:raise ValueError('HH:MM required')\n    date=datetime.date.fromisoformat(day);hour,minute=map(int,clock.split(':'))\n    naive=datetime.datetime.combine(date,datetime.time(hour,minute))\n    try:timezone=ZoneInfo(zone)\n    except (ZoneInfoNotFoundError,TypeError) as error:raise ValueError('known IANA zone required') from error\n    candidates=set()\n    for fold in (0,1):\n        instant=naive.replace(tzinfo=timezone,fold=fold).astimezone(UTC)\n        if instant.astimezone(timezone).replace(tzinfo=None)==naive:candidates.add(instant)\n    if not candidates:return {'kind':'gap','utc':None}\n    return {'kind':'fold' if len(candidates)==2 else 'unique','utc':min(candidates).isoformat()}\ndef claim(db_path,job,day,zone,clock,approved_dates,now_utc):\n    if not isinstance(job,str) or not job or day not in approved_dates:raise ValueError('approved business day and job required')\n    slot=day_slot(day,zone,clock)\n    now=datetime.datetime.fromisoformat(now_utc)\n    if now.tzinfo is None or now.utcoffset()!=datetime.timedelta(0):raise ValueError('explicit UTC callback time required')\n    with contextlib.closing(sqlite3.connect(db_path,timeout=3)) as db:\n        with db:\n            db.execute('CREATE TABLE IF NOT EXISTS calendar_runs(job TEXT,business_date TEXT,zone TEXT,clock TEXT,slot_utc TEXT,PRIMARY KEY(job,business_date))')\n            db.execute('BEGIN IMMEDIATE')\n            old=db.execute('SELECT zone,clock,slot_utc FROM calendar_runs WHERE job=? AND business_date=?',(job,day)).fetchone()\n            if old:\n                if old!=(zone,clock,slot['utc']):raise ValueError('existing business day rebound to a new schedule')\n                return {'state':'already_claimed',**slot}\n            if slot['kind']=='gap':return {'state':'manual_gap',**slot}\n            if now<datetime.datetime.fromisoformat(slot['utc']):return {'state':'not_due',**slot}\n            db.execute('INSERT INTO calendar_runs VALUES(?,?,?,?,?)',(job,day,zone,clock,slot['utc']))\n            return {'state':'claimed',**slot}\n"
+    },
+    "negative_files": {
+      "task.py": "import contextlib,datetime,re,sqlite3\nfrom zoneinfo import ZoneInfo,ZoneInfoNotFoundError\nUTC=datetime.timezone.utc\ndef day_slot(day,zone,clock):\n    if not isinstance(day,str) or re.fullmatch(r'\\d{4}-\\d{2}-\\d{2}',day) is None:raise ValueError('ISO business date required')\n    if not isinstance(clock,str) or re.fullmatch(r'\\d{2}:\\d{2}',clock) is None:raise ValueError('HH:MM required')\n    date=datetime.date.fromisoformat(day);hour,minute=map(int,clock.split(':'))\n    naive=datetime.datetime.combine(date,datetime.time(hour,minute))\n    try:timezone=ZoneInfo(zone)\n    except (ZoneInfoNotFoundError,TypeError) as error:raise ValueError('known IANA zone required') from error\n    candidates=set()\n    for fold in (0,1):\n        instant=naive.replace(tzinfo=timezone,fold=fold).astimezone(UTC)\n        if instant.astimezone(timezone).replace(tzinfo=None)==naive:candidates.add(instant)\n    if not candidates:return {'kind':'gap','utc':None}\n    return {'kind':'fold' if len(candidates)==2 else 'unique','utc':max(candidates).isoformat()}\ndef claim(db_path,job,day,zone,clock,approved_dates,now_utc):\n    if not isinstance(job,str) or not job or day not in approved_dates:raise ValueError('approved business day and job required')\n    slot=day_slot(day,zone,clock)\n    now=datetime.datetime.fromisoformat(now_utc)\n    if now.tzinfo is None or now.utcoffset()!=datetime.timedelta(0):raise ValueError('explicit UTC callback time required')\n    with contextlib.closing(sqlite3.connect(db_path,timeout=3)) as db:\n        with db:\n            db.execute('CREATE TABLE IF NOT EXISTS calendar_runs(job TEXT,business_date TEXT,zone TEXT,clock TEXT,slot_utc TEXT,PRIMARY KEY(job,business_date))')\n            db.execute('BEGIN IMMEDIATE')\n            old=db.execute('SELECT zone,clock,slot_utc FROM calendar_runs WHERE job=? AND business_date=?',(job,day)).fetchone()\n            if old:\n                if old!=(zone,clock,slot['utc']):raise ValueError('existing business day rebound to a new schedule')\n                return {'state':'already_claimed',**slot}\n            if slot['kind']=='gap':return {'state':'manual_gap',**slot}\n            if now<datetime.datetime.fromisoformat(slot['utc']):return {'state':'not_due',**slot}\n            db.execute('INSERT INTO calendar_runs VALUES(?,?,?,?,?)',(job,day,zone,clock,slot['utc']))\n            return {'state':'claimed',**slot}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现day_slot(day,zone,clock)与claim(db_path,job,day,zone,clock,approved_dates,now_utc)。day为ISO日期、clock为HH:MM、zone为有效IANA时区。day_slot须分别以fold0/1转UTC并往返校验：不存在的墙钟时间→{kind:gap,utc:None}；两个不同UTC候选→fold且选择最早UTC；普通时间→unique，UTC输出ISO字符串+00:00。此为应用明确政策，不是Cloud Scheduler默认行为。claim仅接受非空job和approved_dates中明确批准的营业日（可含特别营业周末），now须带UTC偏移0；同job+business_date在SQLite持久化calendar_runs表唯一准入，保留其他表；存储zone/clock/slot_utc并拒绝已准入日期改绑计划。gap→manual_gap不准入，未到计划时刻→not_due，到期或批准日期补触发→claimed，重复和重启后回调→already_claimed。gap需另行审批处理，不自动造补偿时间；这里只签发准入收据，不声称业务已经完成。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "离线云模型：真实系统zoneinfo时区数据库、SQLite事务和新解释器重启，验证有限营业日日历与准入收据；未创建/调用Cloud Scheduler、没有真实云触发或外部业务副作用，也不声称收据等于业务exactly-once。实际云调度建议固定UTC触发再由应用营业日日历决定，本题gap/fold政策必须显式由应用选择；不修改系统时区/墙钟/默认账号。",
+      "validation_kind": "offline_cloud_model"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import copy,json,os,pathlib,sqlite3,subprocess,sys,tempfile\nsys.path.insert(0,os.getcwd());assert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nimport task\nprint('STUDENT_OPERATION_ENTERED:explicit_dst_gap_fold_policy_and_durable_business_date_receipt',flush=True)\nassert task.day_slot('2026-03-08','America/New_York','02:30')=={'kind':'gap','utc':None}\nassert task.day_slot('2026-11-01','America/New_York','01:30')=={'kind':'fold','utc':'2026-11-01T05:30:00+00:00'},'ambiguous day did not choose first UTC occurrence'\nassert task.day_slot('2026-03-06','America/New_York','09:00')=={'kind':'unique','utc':'2026-03-06T14:00:00+00:00'}\nassert task.day_slot('2026-03-09','America/New_York','09:00')=={'kind':'unique','utc':'2026-03-09T13:00:00+00:00'}\nwith tempfile.TemporaryDirectory(dir='/workspace') as directory:\n database=pathlib.Path(directory)/'calendar.db'\n with sqlite3.connect(database) as db:db.execute('CREATE TABLE protected(value TEXT)');db.execute(\"INSERT INTO protected VALUES('keep')\")\n # Explicit calendar can include an authorized weekend opening; no holiday inference from cron.\n approved=['2026-03-06','2026-03-08','2026-03-09','2026-11-01'];before=copy.deepcopy(approved)\n def claim(day,clock,now,job='business'):\n  return task.claim(database,job,day,'America/New_York',clock,approved,now)\n assert claim('2026-03-06','09:00','2026-03-06T13:59:00+00:00')['state']=='not_due'\n assert claim('2026-03-06','09:00','2026-03-06T14:00:00+00:00')['state']=='claimed'\n assert claim('2026-03-08','02:30','2026-03-08T08:00:00+00:00')['state']=='manual_gap'\n assert claim('2026-11-01','01:30','2026-11-01T05:30:00+00:00')['state']=='claimed'\n payload=[str(database),'business','2026-11-01','America/New_York','01:30',approved,'2026-11-01T06:30:00+00:00']\n restarted=subprocess.run([sys.executable,'-B','-c','import json,sys,task; print(json.dumps(task.claim(*json.loads(sys.argv[1]))))',json.dumps(payload)],capture_output=True,text=True,timeout=3)\n assert restarted.returncode==0,restarted.stderr\n assert json.loads(restarted.stdout)['state']=='already_claimed','restart or second fold callback lost durable business-date admission'\n assert claim('2026-03-09','09:00','2026-03-12T18:00:00+00:00')['state']=='claimed'\n assert claim('2026-03-09','09:00','2026-03-12T18:01:00+00:00')['state']=='already_claimed'\n assert claim('2026-03-09','09:00','2026-03-12T18:01:00+00:00',job='independent-job')['state']=='claimed'\n for args in [('2026-03-10','09:00','2026-03-10T14:00:00+00:00'),('2026-03-06','10:00','2026-03-06T15:00:00+00:00')]:\n  try:claim(*args)\n  except ValueError:pass\n  else:raise AssertionError('unapproved holiday/date or already-admitted schedule rebind accepted')\n assert approved==before\n with sqlite3.connect(database) as db:\n  rows=db.execute('SELECT job,business_date FROM calendar_runs ORDER BY job,business_date').fetchall()\n  assert rows==[('business','2026-03-06'),('business','2026-03-09'),('business','2026-11-01'),('independent-job','2026-03-09')]\n  assert db.execute('SELECT value FROM protected').fetchall()==[('keep',)]\n print('OFFLINE_REAL_TZDB_GAP_FOLD_DURABLE_DATE_RECEIPT_RESTART_BACKFILL_AND_JOB_ISOLATION',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "project"
+  }
+]

@@ -1,0 +1,76 @@
+[
+  {
+    "id": "curated-advanced-process-022",
+    "module": "process",
+    "category": "进程与服务",
+    "level": 5,
+    "topic": "进程性能与故障诊断",
+    "title": "真实glibc内存诊断：free后RSS可保留，trim能归还空闲页，存活增长不等于已证明泄漏",
+    "answer": "```python\ndef diagnose(rows):\n    base=next(row for row in rows if row['phase']=='baseline')\n    retained=0\n    for cycle in range(3):\n        phases={row['phase']:row for row in rows if row['cycle']==cycle}\n        peak,freed,trimmed=[phases[name] for name in ('allocated','freed','trimmed')]\n        if freed['live_bytes']==0 and freed['uordblks']<peak['uordblks'] and freed['fordblks']>peak['fordblks'] and freed['rss_bytes']>base['rss_bytes'] and trimmed['rss_bytes']<freed['rss_bytes']:\n            retained+=1\n    live=next(row for row in rows if row['phase']=='live-after-trim')\n    return {'retention_cycles':retained,'allocator_retention_observed':retained==3,\n        'live_allocation_growth_observed':live['live_bytes']>0 and live['uordblks']>base['uordblks'] and live['rss_bytes']>base['rss_bytes'],\n        'leak_proven':False,'production_trim_recommended':False,'scope':'private-single-thread-glibc-fixture'}\n```\n\n原题知识说明：\n交付负载阶段、应用对象指标、映射/RSS/PSS和分配器统计对照表。停止输入后对象数量回落而RSS不回落，可能是分配器保留、碎片或缓存，不能单凭RSS判断泄漏；还要排查线程栈和直接映射。由开发提供可用的分配统计或受控采样，记录版本及测量开销。验收相同工作集多轮循环，看存活量和保留上界是否稳定，比较实际内存压力和失败率。若诊断需要高开销全量跟踪，应转隔离实例；回退工具配置后检查性能恢复，不能用定时重启当作已证明泄漏修复。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "给出题设要求的具体交付物与关键机制",
+      "用可观察结果验证约束和失败分支",
+      "明确停止条件及回退或恢复边界"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man3/mallinfo.3.html",
+      "https://man7.org/linux/man-pages/man3/malloc_trim.3.html"
+    ],
+    "body": "## 操作任务\n实现diagnose(rows)。rows是隔离单线程glibc子进程的实际快照，含phase/cycle/live_bytes（夹具分配账本）/rss_bytes/uordblks/fordblks/arena/hblkhd。baseline基线后，cycle0..2各含allocated/freed/trimmed：分配并触页32MiB，再free，最后仅该实验进程malloc_trim。每周期若freed.live_bytes=0、uordblks较allocated减少、fordblks较allocated增加、RSS仍高于基线且trimmed.RSS下降，则计allocator retention。另live-after-trim保留16MiB存活分配：live_bytes/uordblks/RSS均高于基线时标记真实存活增长。返回retention_cycles、allocator_retention_observed（恰3周期）、live_allocation_growth_observed、leak_proven=False、production_trim_recommended=False、scope=private-single-thread-glibc-fixture。不改rows；不能把RSS不降或存活对象增加直接称为泄漏，不能把实验trim建议推广到生产。实际验收包括三轮RSS保留上界、释放后活跃分配归零、空闲页归还及仍存活内存不可被trim释放。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n实际glibc mallinfo2/mallopt/malloc/free/malloc_trim与/proc/self/statm，限定自有短生命周期单线程C子进程，32MiB工作集和16MiB存活对照。只为该子进程固定分配器参数，不attach/暂停外部进程、不改变宿主/应用分配器参数。mallinfo2主arena范围和本夹具分配账本不能代表任意多线程应用全堆。区别Python024的tracemalloc不覆盖native分配，本题考察free后allocator保留/trim与多轮上界；不证明生产泄漏根因或永久修复，不构建镜像。",
+    "related_modules": [
+      "process"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-process-022",
+      "original_title": "交付一次进程内存增长的最小影响诊断计划，要求区分allocator保留与真正存活对象增长。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def diagnose(rows):\n    base=next(row for row in rows if row['phase']=='baseline')\n    retained=0\n    for cycle in range(3):\n        phases={row['phase']:row for row in rows if row['cycle']==cycle}\n        peak,freed,trimmed=[phases[name] for name in ('allocated','freed','trimmed')]\n        if freed['live_bytes']==0 and freed['uordblks']<peak['uordblks'] and freed['fordblks']>peak['fordblks'] and freed['rss_bytes']>base['rss_bytes'] and trimmed['rss_bytes']<freed['rss_bytes']:\n            retained+=1\n    live=next(row for row in rows if row['phase']=='live-after-trim')\n    return {'retention_cycles':retained,'allocator_retention_observed':retained==3,\n        'live_allocation_growth_observed':live['live_bytes']>0 and live['uordblks']>base['uordblks'] and live['rss_bytes']>base['rss_bytes'],\n        'leak_proven':False,'production_trim_recommended':False,'scope':'private-single-thread-glibc-fixture'}\n"
+    },
+    "negative_files": {
+      "task.py": "def diagnose(rows):\n    base=next(row for row in rows if row['phase']=='baseline')\n    retained=0\n    for cycle in range(3):\n        phases={row['phase']:row for row in rows if row['cycle']==cycle}\n        peak,freed,trimmed=[phases[name] for name in ('allocated','freed','trimmed')]\n        if freed['live_bytes']>0 and freed['uordblks']<peak['uordblks'] and freed['fordblks']>peak['fordblks'] and freed['rss_bytes']>base['rss_bytes'] and trimmed['rss_bytes']<freed['rss_bytes']:\n            retained+=1\n    live=next(row for row in rows if row['phase']=='live-after-trim')\n    return {'retention_cycles':retained,'allocator_retention_observed':retained==3,\n        'live_allocation_growth_observed':live['live_bytes']>0 and live['uordblks']>base['uordblks'] and live['rss_bytes']>base['rss_bytes'],\n        'leak_proven':False,'production_trim_recommended':False,'scope':'private-single-thread-glibc-fixture'}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现diagnose(rows)。rows是隔离单线程glibc子进程的实际快照，含phase/cycle/live_bytes（夹具分配账本）/rss_bytes/uordblks/fordblks/arena/hblkhd。baseline基线后，cycle0..2各含allocated/freed/trimmed：分配并触页32MiB，再free，最后仅该实验进程malloc_trim。每周期若freed.live_bytes=0、uordblks较allocated减少、fordblks较allocated增加、RSS仍高于基线且trimmed.RSS下降，则计allocator retention。另live-after-trim保留16MiB存活分配：live_bytes/uordblks/RSS均高于基线时标记真实存活增长。返回retention_cycles、allocator_retention_observed（恰3周期）、live_allocation_growth_observed、leak_proven=False、production_trim_recommended=False、scope=private-single-thread-glibc-fixture。不改rows；不能把RSS不降或存活对象增加直接称为泄漏，不能把实验trim建议推广到生产。实际验收包括三轮RSS保留上界、释放后活跃分配归零、空闲页归还及仍存活内存不可被trim释放。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "实际glibc mallinfo2/mallopt/malloc/free/malloc_trim与/proc/self/statm，限定自有短生命周期单线程C子进程，32MiB工作集和16MiB存活对照。只为该子进程固定分配器参数，不attach/暂停外部进程、不改变宿主/应用分配器参数。mallinfo2主arena范围和本夹具分配账本不能代表任意多线程应用全堆。区别Python024的tracemalloc不覆盖native分配，本题考察free后allocator保留/trim与多轮上界；不证明生产泄漏根因或永久修复，不构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "requires": {
+        "commands": [
+          "gcc"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/allocator.c": "#define _GNU_SOURCE\n#include <malloc.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <unistd.h>\nstatic void snapshot(const char *phase,int cycle,size_t live) {\n    unsigned long pages=0,resident=0;\n    FILE *input=fopen(\"/proc/self/statm\",\"r\");\n    if(!input||fscanf(input,\"%lu %lu\",&pages,&resident)!=2) exit(3);\n    fclose(input);\n    struct mallinfo2 info=mallinfo2();\n    printf(\"{\\\"phase\\\":\\\"%s\\\",\\\"cycle\\\":%d,\\\"live_bytes\\\":%zu,\\\"rss_bytes\\\":%lu,\\\"vms_bytes\\\":%lu,\\\"uordblks\\\":%zu,\\\"fordblks\\\":%zu,\\\"arena\\\":%zu,\\\"hblkhd\\\":%zu}\\n\",\n        phase,cycle,live,resident*(unsigned long)sysconf(_SC_PAGESIZE),pages*(unsigned long)sysconf(_SC_PAGESIZE),\n        info.uordblks,info.fordblks,info.arena,info.hblkhd);\n}\nint main(void) {\n    setvbuf(stdout,NULL,_IONBF,0);\n    /* Only this short-lived process; force arena allocations and controlled retention. */\n    if(!mallopt(M_MMAP_THRESHOLD,128*1024*1024)||!mallopt(M_TRIM_THRESHOLD,-1)) return 2;\n    snapshot(\"baseline\",-1,0);\n    void *blocks[64];const size_t size=512*1024;\n    for(int cycle=0;cycle<3;cycle++) {\n        for(int n=0;n<64;n++) { blocks[n]=malloc(size);if(!blocks[n])return 4;memset(blocks[n],n+1,size); }\n        snapshot(\"allocated\",cycle,64*size);\n        for(int n=0;n<64;n++)free(blocks[n]);\n        snapshot(\"freed\",cycle,0);\n        malloc_trim(0);\n        snapshot(\"trimmed\",cycle,0);\n    }\n    for(int n=0;n<32;n++) { blocks[n]=malloc(size);if(!blocks[n])return 5;memset(blocks[n],n+1,size); }\n    snapshot(\"live-held\",3,32*size);\n    malloc_trim(0);snapshot(\"live-after-trim\",3,32*size);\n    for(int n=0;n<32;n++)free(blocks[n]);\n    return 0;\n}\n",
+        "checks/check.py": "import copy,json,os,pathlib,subprocess,sys\nsys.path[:0]=[os.getcwd(),str(pathlib.Path.cwd()/'checks')]\nimport task\nassert os.geteuid()==1000 and sys.platform=='linux'\nprint('NATIVE_LINUX_READY',flush=True)\ncompiled=subprocess.run(['gcc','-O0','-Wall','-Wextra','checks/allocator.c','-o','checks/allocator'],capture_output=True,text=True,timeout=10)\nassert compiled.returncode==0,compiled.stderr\nrun=subprocess.run(['checks/allocator'],capture_output=True,text=True,timeout=8)\nassert run.returncode==0,run.stderr\nrows=[json.loads(line) for line in run.stdout.splitlines()];assert len(rows)==12\nbase=rows[0];freed=[];trimmed=[];MiB=1024*1024\nfor cycle in range(3):\n phases={row['phase']:row for row in rows if row['cycle']==cycle};peak=phases['allocated'];free=phases['freed'];trim=phases['trimmed']\n assert peak['live_bytes']==32*MiB and free['live_bytes']==trim['live_bytes']==0\n assert peak['hblkhd']==free['hblkhd']==0,'fixture unexpectedly used mmap allocation'\n assert free['rss_bytes']>base['rss_bytes']+24*MiB and free['uordblks']<base['uordblks']+65536\n assert free['fordblks']>24*MiB and trim['rss_bytes']<free['rss_bytes']-24*MiB\n freed.append(free['rss_bytes']);trimmed.append(trim['rss_bytes'])\nassert max(freed)-min(freed)<2*MiB and max(trimmed)-min(trimmed)<2*MiB,'repeated workload did not retain a bounded plateau'\nheld=next(row for row in rows if row['phase']=='live-after-trim')\nassert held['live_bytes']==16*MiB and held['uordblks']>base['uordblks']+12*MiB and held['rss_bytes']>base['rss_bytes']+12*MiB\nprint('STUDENT_OPERATION_ENTERED:actual_glibc_free_chunks_rss_retention_vs_live_allocation_growth',flush=True)\nbefore=copy.deepcopy(rows);report=task.diagnose(rows);assert rows==before\nassert report==dict(retention_cycles=3,allocator_retention_observed=True,live_allocation_growth_observed=True,leak_proven=False,\n production_trim_recommended=False,scope='private-single-thread-glibc-fixture'),'RSS retention or live objects incorrectly called a proven leak'\nprint('NATIVE_THREE_NATIVE_MALLOC_FREE_TRIM_CYCLES_RSS_BOUNDED_WHILE_LIVE_BYTES_ZERO '+json.dumps(dict(baseline=base,freed_rss=freed,trimmed_rss=trimmed)),flush=True)\nprint('NATIVE_RETAINED_16M_LIVE_ALLOCATIONS_SURVIVE_TRIM_NO_PRODUCTION_ATTACH_OR_GLOBAL_ALLOCATOR_CHANGE',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "project"
+  }
+]

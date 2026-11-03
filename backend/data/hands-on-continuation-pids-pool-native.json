@@ -1,0 +1,75 @@
+[
+  {
+    "id": "curated-docker-runtime-047",
+    "module": "docker",
+    "category": "Docker / 容器",
+    "level": 4,
+    "topic": "资源限制与性能",
+    "title": "真实pids上限阻止创建线程：收缩自有线程池并恢复创建，保留硬限制",
+    "answer": "```python\ndef recover_pool(control,current_workers,pids_current,pids_max,reserve):\n    if any(not isinstance(n,int) or isinstance(n,bool) for n in (current_workers,pids_current,pids_max,reserve)) or not 1<=current_workers<=pids_current<=pids_max<=256 or not 1<=reserve<=64:raise ValueError('bounded consistent owned cgroup snapshot required')\n    other=pids_current-current_workers\n    target=min(current_workers,pids_max-other-reserve)\n    if target<1:raise ValueError('insufficient headroom; escalate without changing limits')\n    if target!=current_workers:control(target)\n    return target\n```\n\n原题知识说明：\n检查线程增长来源和任务上限，区分宿主总限制；先抑制异常并发或泄漏，再在容量允许时调整明确限制。不要把报错归为文件权限。恢复后验证线程数量稳定、新任务成功且其他容器不受资源挤占。",
+    "type": "code",
+    "source": "OpsForge 容器运行管理补充题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "docker-runtime-completion-20261021",
+    "body": "## 操作任务\n实现recover_pool(control,current_workers,pids_current,pids_max,reserve)。四个计数和reserve均为非bool整数，1<=current_workers<=pids_current<=pids_max<=256、1<=reserve<=64，否则ValueError。非池占用other=pids_current-current_workers；目标=min(current_workers,pids_max-other-reserve)。目标不足1则ValueError且不调用control；需要收缩时只调用一次现有control(target)释放自有空闲worker，已留足预算则不调用，返回目标。不能遗漏主线程、检查器及其他进程占用，不提高pids.max、不杀其他进程、不降低reserve。原生检查在专用独立有限cgroup中用至多256个睡眠线程实际达到pids.current=pids.max，确认pthread_create返回EAGAIN且pids.events:max增长；收缩后留16个任务余量、创建新线程成功，退出回收全部自有线程。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n现有隔离镜像、只读cgroup v2、非root、专用32..256任务上限（本机验证200）；线程栈128KiB，有限睡眠工作负载，无递归fork或宿主限制修改。核实真实线程创建与pids事件，不从CPU空闲推断可创建线程；测试只通过应用已有池控制接口释放空闲worker，不证明生产活跃请求可直接取消。普通工作区未满足独立有限pids预算时应报告环境能力缺失，不能判为学员错误。",
+    "rubric": [
+      "正确区分宿主与容器视角",
+      "结论有证据",
+      "变更与恢复可验证"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.kernel.org/admin-guide/cgroup-v2.html#pid"
+    ],
+    "incident_signature": "docker:pids-limit-eagain",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-docker-runtime-047",
+      "original_title": "容器仍运行但无法启动新线程，报 Resource temporarily unavailable；pids.current 已等于 pids.max。如何处理？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def recover_pool(control,current_workers,pids_current,pids_max,reserve):\n    if any(not isinstance(n,int) or isinstance(n,bool) for n in (current_workers,pids_current,pids_max,reserve)) or not 1<=current_workers<=pids_current<=pids_max<=256 or not 1<=reserve<=64:raise ValueError('bounded consistent owned cgroup snapshot required')\n    other=pids_current-current_workers\n    target=min(current_workers,pids_max-other-reserve)\n    if target<1:raise ValueError('insufficient headroom; escalate without changing limits')\n    if target!=current_workers:control(target)\n    return target\n"
+    },
+    "negative_files": {
+      "task.py": "def recover_pool(control,current_workers,pids_current,pids_max,reserve):\n    if any(not isinstance(n,int) or isinstance(n,bool) for n in (current_workers,pids_current,pids_max,reserve)) or not 1<=current_workers<=pids_current<=pids_max<=256 or not 1<=reserve<=64:raise ValueError('bounded consistent owned cgroup snapshot required')\n    other=pids_current-current_workers\n    target=min(current_workers,pids_max-reserve)\n    if target<1:raise ValueError('insufficient headroom; escalate without changing limits')\n    if target!=current_workers:control(target)\n    return target\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现recover_pool(control,current_workers,pids_current,pids_max,reserve)。四个计数和reserve均为非bool整数，1<=current_workers<=pids_current<=pids_max<=256、1<=reserve<=64，否则ValueError。非池占用other=pids_current-current_workers；目标=min(current_workers,pids_max-other-reserve)。目标不足1则ValueError且不调用control；需要收缩时只调用一次现有control(target)释放自有空闲worker，已留足预算则不调用，返回目标。不能遗漏主线程、检查器及其他进程占用，不提高pids.max、不杀其他进程、不降低reserve。原生检查在专用独立有限cgroup中用至多256个睡眠线程实际达到pids.current=pids.max，确认pthread_create返回EAGAIN且pids.events:max增长；收缩后留16个任务余量、创建新线程成功，退出回收全部自有线程。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "现有隔离镜像、只读cgroup v2、非root、专用32..256任务上限（本机验证200）；线程栈128KiB，有限睡眠工作负载，无递归fork或宿主限制修改。核实真实线程创建与pids事件，不从CPU空闲推断可创建线程；测试只通过应用已有池控制接口释放空闲worker，不证明生产活跃请求可直接取消。普通工作区未满足独立有限pids预算时应报告环境能力缺失，不能判为学员错误。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 25,
+      "requires": {
+        "commands": [
+          "gcc"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/owned_pool.c": "/* Owned teaching pool: at most 256 sleeping threads, stdin control, no child forks. */\n#include <pthread.h>\n#include <stdio.h>\n#include <stdint.h>\n#include <string.h>\n#include <stdlib.h>\nstatic pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;\nstatic pthread_cond_t changed=PTHREAD_COND_INITIALIZER;\nstatic int active=256;\nstatic pthread_t workers[256];\nstatic void *worker(void *arg){\n    int index=(int)(intptr_t)arg;\n    pthread_mutex_lock(&lock);\n    while(index<active)pthread_cond_wait(&changed,&lock);\n    pthread_mutex_unlock(&lock);return NULL;\n}\nstatic void *probe(void *arg){(void)arg;return NULL;}\nint main(void){\n    pthread_attr_t attributes;pthread_attr_init(&attributes);\n    if(pthread_attr_setstacksize(&attributes,131072))return 3;\n    int count=0,code=0;\n    for(;count<256;count++){code=pthread_create(&workers[count],&attributes,worker,(void *)(intptr_t)count);if(code)break;}\n    printf(\"{\\\"workers\\\":%d,\\\"create_error\\\":%d}\\n\",count,code);fflush(stdout);\n    char line[64];\n    while(fgets(line,sizeof(line),stdin)){\n        if(strncmp(line,\"limit \",6)==0){\n            int target=atoi(line+6);if(target<0||target>count)return 4;\n            pthread_mutex_lock(&lock);active=target;pthread_cond_broadcast(&changed);pthread_mutex_unlock(&lock);\n            for(int i=target;i<count;i++)pthread_join(workers[i],NULL);\n            count=target;printf(\"{\\\"workers\\\":%d}\\n\",count);\n        }else if(strncmp(line,\"probe\",5)==0){\n            pthread_t thread;code=pthread_create(&thread,&attributes,probe,NULL);\n            if(!code)pthread_join(thread,NULL);\n            printf(\"{\\\"probe_error\\\":%d}\\n\",code);\n        }else if(strncmp(line,\"stop\",4)==0)break;\n        else return 5;\n        fflush(stdout);\n    }\n    pthread_mutex_lock(&lock);active=0;pthread_cond_broadcast(&changed);pthread_mutex_unlock(&lock);\n    for(int i=0;i<count;i++)pthread_join(workers[i],NULL);\n    pthread_attr_destroy(&attributes);return 0;\n}\n",
+        "checks/check.py": "import sys,os,pathlib,tempfile,subprocess,json,select,errno,time\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nassert sys.platform=='linux' and os.geteuid()!=0\ncgroup=pathlib.Path('/sys/fs/cgroup');maximum=(cgroup/'pids.max').read_text().strip()\nif not maximum.isdecimal() or not 32<=int(maximum)<=256:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: requires dedicated isolated cgroup with bounded pids.max 32..256; do not change host limits')\nmaximum=int(maximum);beforelimit=(cgroup/'pids.max').read_bytes()\ndef current():return int((cgroup/'pids.current').read_text())\ndef events():return int(dict(row.split() for row in (cgroup/'pids.events').read_text().splitlines())['max'])\nprint('NATIVE_LINUX_READY',flush=True)\nwith tempfile.TemporaryDirectory(prefix='of-pids-') as directory:\n root=pathlib.Path(directory);executable=root/'owned-pool'\n compilation=subprocess.run(['gcc','-O2','-pthread','checks/owned_pool.c','-o',str(executable)],capture_output=True,text=True,timeout=8)\n assert compilation.returncode==0,compilation.stderr\n baseline=current();old_events=events()\n process=subprocess.Popen([str(executable)],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n try:\n  def receive():\n   assert select.select([process.stdout],[],[],3)[0],'owned pool response deadline'\n   line=process.stdout.readline();assert line,'owned pool exited unexpectedly'\n   return json.loads(line)\n  def command(text):process.stdin.write(text+'\\n');process.stdin.flush();return receive()\n  exhausted=receive();workers=exhausted['workers']\n  assert exhausted['create_error']==errno.EAGAIN and current()==maximum and events()>old_events,exhausted\n  assert command('probe')['probe_error']==errno.EAGAIN\n  print('NATIVE_CGROUP_PIDS_MAX_REACHED_AND_PTHREAD_CREATE_EAGAIN',flush=True)\n  calls=[]\n  def resize(target):calls.append(target);assert command('limit '+str(target))=={'workers':target}\n  print('STUDENT_OPERATION_ENTERED:recover_pool',flush=True)\n  occupied=current();expected=maximum-(occupied-workers)-16\n  try:target=task.recover_pool(resize,workers,occupied,maximum,16)\n  except Exception as error:raise AssertionError('student owned pool recovery failed') from error\n  assert target==expected and calls==[expected] and current()<=maximum-16,(target,calls,current(),maximum)\n  assert command('probe')['probe_error']==0,'worker creation still failed after recovery'\n  assert (cgroup/'pids.max').read_bytes()==beforelimit,'hard limit was raised to hide leak'\n  calls.clear();assert task.recover_pool(resize,target,current(),maximum,16)==target and calls==[]\n  for args in [(True,occupied,maximum,16),(workers,workers-1,maximum,16),(workers,occupied,maximum,0),(1,maximum,maximum,64)]:\n   try:task.recover_pool(resize,*args)\n   except ValueError:pass\n   else:raise AssertionError('invalid/impossible budget accepted')\n  assert calls==[]\n  print('NATIVE_POOL_REDUCED_WITH_HEADROOM_AND_THREAD_CREATION_RECOVERED',flush=True)\n finally:\n  if process.poll() is None:process.stdin.write('stop\\n');process.stdin.flush()\n  try:process.wait(timeout=3)\n  except subprocess.TimeoutExpired:process.kill();process.wait(timeout=2)\n  process.stdin.close();process.stdout.close();process.stderr.close()\n assert process.returncode==0 and current()<=baseline and (cgroup/'pids.max').read_bytes()==beforelimit\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "docker"
+    ]
+  }
+]

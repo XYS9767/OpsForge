@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-parallel-go-093",
+    "module": "go",
+    "category": "Go 运维开发",
+    "level": 4,
+    "topic": "运行时性能与诊断",
+    "title": "Go真实pprof隔离：公共mux不暴露诊断，管理入口认证、限定采样与并发",
+    "answer": "```go\npackage exercise\nimport(\"net/http\";\"net/http/pprof\";\"crypto/subtle\";\"strconv\";\"errors\")\nfunc PublicHandler()http.Handler{\n mux:=http.NewServeMux();mux.HandleFunc(\"GET /healthz\",func(w http.ResponseWriter,r *http.Request){w.Write([]byte(\"healthy\"))});return mux\n}\nfunc DiagnosticHandler(token string,maxSeconds int)(http.Handler,error){\n if len(token)<16||maxSeconds<1||maxSeconds>5{return nil,errors.New(\"strong token and bounded profile duration required\")}\n slots:=make(chan struct{},1)\n return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){\n  expected:=\"Bearer \"+token\n  if subtle.ConstantTimeCompare([]byte(r.Header.Get(\"Authorization\")),[]byte(expected))!=1{w.Header().Set(\"WWW-Authenticate\",\"Bearer\");http.Error(w,\"unauthorized\",http.StatusUnauthorized);return}\n  if r.Method!=http.MethodGet{w.Header().Set(\"Allow\",\"GET\");http.Error(w,\"method\",http.StatusMethodNotAllowed);return}\n  var handler http.HandlerFunc\n  switch r.URL.Path{case \"/debug/pprof/\":handler=pprof.Index;case \"/debug/pprof/goroutine\":handler=pprof.Handler(\"goroutine\").ServeHTTP;case \"/debug/pprof/heap\":handler=pprof.Handler(\"heap\").ServeHTTP;case \"/debug/pprof/profile\":\n   values:=r.URL.Query();seconds:=\"1\";if all,ok:=values[\"seconds\"];ok{if len(all)!=1{http.Error(w,\"duration\",400);return};seconds=all[0]}\n   n,err:=strconv.Atoi(seconds);if err!=nil||n<1||n>maxSeconds{http.Error(w,\"duration\",400);return}\n   values.Set(\"seconds\",strconv.Itoa(n));r=r.Clone(r.Context());url:=*r.URL;url.RawQuery=values.Encode();r.URL=&url;handler=pprof.Profile\n  default:http.NotFound(w,r);return}\n  select{case slots<-struct{}{}:defer func(){<-slots}();default:http.Error(w,\"diagnostic already active\",http.StatusServiceUnavailable);return}\n  handler(w,r)\n }),nil\n}\n```\n\n原题知识说明：\n它们可暴露堆内容、调用栈及运行细节，也可能消耗CPU和I/O。使用受控管理入口、认证与网络限制，限定采样频率和持续时间，记录取证访问。诊断默认关闭或内网开放仍需验证实际可达路径与代理路由。",
+    "type": "code",
+    "source": "独立编审：Go语言、标准库与运行诊断",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "准确说明Go机制和限制",
+      "给出与本题风险对应的验证或设计约束"
+    ],
+    "references": [
+      "https://pkg.go.dev/net/http/pprof",
+      "https://pkg.go.dev/crypto/subtle#ConstantTimeCompare"
+    ],
+    "language": "go",
+    "conversion": {
+      "original_id": "curated-parallel-go-093",
+      "original_title": "pprof和运行时诊断端点为什么需要独立访问控制？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现PublicHandler() http.Handler和DiagnosticHandler(token string,maxSeconds int)(http.Handler,error)。公共入口仅GET /healthz返回healthy，所有/debug/pprof路径404，不得使用pprof自动注册的DefaultServeMux。管理token至少16字节、maxSeconds为1..5；每个诊断请求都精确检查Authorization: Bearer token（失败401），仅GET（否则405）。允许pprof索引、goroutine、heap、profile四类精确路径，其他路径404。CPU profile的seconds默认1，提供时只能单值整数1..maxSeconds，非法400；每管理handler同时最多1个实际诊断，忙返回503，完成释放。使用真实net/http/pprof而非伪造profile正文，先鉴权再访问运行时。测试真实HTTP取栈与1秒CPU采样，两个并发CPU请求恰好一个200一个503。这里只构造独立handler，不修改任何真实默认身份、端口或部署配置。\n\n## 提交产物\ntask.go\n\n## 验收方法\ngo test -race运行真实HTTP pprof及CPU profile并发测试，go vet -copylocks；使用现有镜像。\n\n## 能力边界\n真实隔离Go HTTP服务器与runtime pprof、认证和采样预算；测试token不是真实凭据。没有生产端点改动，不证明上游反向代理、TLS或网络ACL已部署。",
+    "files": {
+      "task.go": "package exercise\nimport \"net/http\"\nfunc PublicHandler()http.Handler{panic(\"NotImplementedError\")}\nfunc DiagnosticHandler(string,int)(http.Handler,error){panic(\"NotImplementedError\")}\n"
+    },
+    "solution_files": {
+      "task.go": "package exercise\nimport(\"net/http\";\"net/http/pprof\";\"crypto/subtle\";\"strconv\";\"errors\")\nfunc PublicHandler()http.Handler{\n mux:=http.NewServeMux();mux.HandleFunc(\"GET /healthz\",func(w http.ResponseWriter,r *http.Request){w.Write([]byte(\"healthy\"))});return mux\n}\nfunc DiagnosticHandler(token string,maxSeconds int)(http.Handler,error){\n if len(token)<16||maxSeconds<1||maxSeconds>5{return nil,errors.New(\"strong token and bounded profile duration required\")}\n slots:=make(chan struct{},1)\n return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){\n  expected:=\"Bearer \"+token\n  if subtle.ConstantTimeCompare([]byte(r.Header.Get(\"Authorization\")),[]byte(expected))!=1{w.Header().Set(\"WWW-Authenticate\",\"Bearer\");http.Error(w,\"unauthorized\",http.StatusUnauthorized);return}\n  if r.Method!=http.MethodGet{w.Header().Set(\"Allow\",\"GET\");http.Error(w,\"method\",http.StatusMethodNotAllowed);return}\n  var handler http.HandlerFunc\n  switch r.URL.Path{case \"/debug/pprof/\":handler=pprof.Index;case \"/debug/pprof/goroutine\":handler=pprof.Handler(\"goroutine\").ServeHTTP;case \"/debug/pprof/heap\":handler=pprof.Handler(\"heap\").ServeHTTP;case \"/debug/pprof/profile\":\n   values:=r.URL.Query();seconds:=\"1\";if all,ok:=values[\"seconds\"];ok{if len(all)!=1{http.Error(w,\"duration\",400);return};seconds=all[0]}\n   n,err:=strconv.Atoi(seconds);if err!=nil||n<1||n>maxSeconds{http.Error(w,\"duration\",400);return}\n   values.Set(\"seconds\",strconv.Itoa(n));r=r.Clone(r.Context());url:=*r.URL;url.RawQuery=values.Encode();r.URL=&url;handler=pprof.Profile\n  default:http.NotFound(w,r);return}\n  select{case slots<-struct{}{}:defer func(){<-slots}();default:http.Error(w,\"diagnostic already active\",http.StatusServiceUnavailable);return}\n  handler(w,r)\n }),nil\n}\n"
+    },
+    "negative_files": {
+      "task.go": "package exercise\nimport(\"net/http\";\"net/http/pprof\";\"crypto/subtle\";\"strconv\";\"errors\")\nfunc PublicHandler()http.Handler{\n mux:=http.NewServeMux();mux.HandleFunc(\"GET /healthz\",func(w http.ResponseWriter,r *http.Request){w.Write([]byte(\"healthy\"))});return http.DefaultServeMux\n}\nfunc DiagnosticHandler(token string,maxSeconds int)(http.Handler,error){\n if len(token)<16||maxSeconds<1||maxSeconds>5{return nil,errors.New(\"strong token and bounded profile duration required\")}\n slots:=make(chan struct{},1)\n return http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){\n  expected:=\"Bearer \"+token\n  if subtle.ConstantTimeCompare([]byte(r.Header.Get(\"Authorization\")),[]byte(expected))!=1{w.Header().Set(\"WWW-Authenticate\",\"Bearer\");http.Error(w,\"unauthorized\",http.StatusUnauthorized);return}\n  if r.Method!=http.MethodGet{w.Header().Set(\"Allow\",\"GET\");http.Error(w,\"method\",http.StatusMethodNotAllowed);return}\n  var handler http.HandlerFunc\n  switch r.URL.Path{case \"/debug/pprof/\":handler=pprof.Index;case \"/debug/pprof/goroutine\":handler=pprof.Handler(\"goroutine\").ServeHTTP;case \"/debug/pprof/heap\":handler=pprof.Handler(\"heap\").ServeHTTP;case \"/debug/pprof/profile\":\n   values:=r.URL.Query();seconds:=\"1\";if all,ok:=values[\"seconds\"];ok{if len(all)!=1{http.Error(w,\"duration\",400);return};seconds=all[0]}\n   n,err:=strconv.Atoi(seconds);if err!=nil||n<1||n>maxSeconds{http.Error(w,\"duration\",400);return}\n   values.Set(\"seconds\",strconv.Itoa(n));r=r.Clone(r.Context());url:=*r.URL;url.RawQuery=values.Encode();r.URL=&url;handler=pprof.Profile\n  default:http.NotFound(w,r);return}\n  select{case slots<-struct{}{}:defer func(){<-slots}();default:http.Error(w,\"diagnostic already active\",http.StatusServiceUnavailable);return}\n  handler(w,r)\n }),nil\n}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现PublicHandler() http.Handler和DiagnosticHandler(token string,maxSeconds int)(http.Handler,error)。公共入口仅GET /healthz返回healthy，所有/debug/pprof路径404，不得使用pprof自动注册的DefaultServeMux。管理token至少16字节、maxSeconds为1..5；每个诊断请求都精确检查Authorization: Bearer token（失败401），仅GET（否则405）。允许pprof索引、goroutine、heap、profile四类精确路径，其他路径404。CPU profile的seconds默认1，提供时只能单值整数1..maxSeconds，非法400；每管理handler同时最多1个实际诊断，忙返回503，完成释放。使用真实net/http/pprof而非伪造profile正文，先鉴权再访问运行时。测试真实HTTP取栈与1秒CPU采样，两个并发CPU请求恰好一个200一个503。这里只构造独立handler，不修改任何真实默认身份、端口或部署配置。",
+      "deliverables": [
+        "task.go"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实隔离Go HTTP服务器与runtime pprof、认证和采样预算；测试token不是真实凭据。没有生产端点改动，不证明上游反向代理、TLS或网络ACL已部署。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "go"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/task_test.go": "package exercise\nimport(\"testing\";\"net/http\";\"net/http/httptest\";\"strings\";\"io\";\"time\";\"sync\")\nconst token=\"isolated-test-diagnostic-token-123\"\nfunc call(t *testing.T,client *http.Client,base,path,method,auth string)(int,string){t.Helper();req,_:=http.NewRequest(method,base+path,nil);if auth!=\"\"{req.Header.Set(\"Authorization\",auth)};res,err:=client.Do(req);if err!=nil{t.Fatal(err)};defer res.Body.Close();body,_:=io.ReadAll(io.LimitReader(res.Body,100000));return res.StatusCode,string(body)}\nfunc TestPublicMuxNeverPublishesRuntimeDiagnostics(t *testing.T){\n server:=httptest.NewServer(PublicHandler());defer server.Close()\n if status,body:=call(t,server.Client(),server.URL,\"/healthz\",\"GET\",\"\");status!=200||body!=\"healthy\"{t.Fatal(\"health\",status,body)}\n for _,path:=range []string{\"/debug/pprof/\",\"/debug/pprof/goroutine?debug=1\",\"/debug/pprof/profile?seconds=1\"}{if status,_:=call(t,server.Client(),server.URL,path,\"GET\",\"Bearer \"+token);status!=404{t.Fatal(\"public runtime leak\",path,status)}}\n}\nfunc TestAdminAuthMethodsAndDuration(t *testing.T){\n handler,err:=DiagnosticHandler(token,1);if err!=nil{t.Fatal(err)};server:=httptest.NewServer(handler);defer server.Close();client:=server.Client();client.Timeout=3*time.Second\n for _,auth:=range []string{\"\",\"Bearer wrong\",token}{if status,_:=call(t,client,server.URL,\"/debug/pprof/goroutine?debug=1\",\"GET\",auth);status!=401{t.Fatal(\"unprotected stack\",status)}}\n if status,_:=call(t,client,server.URL,\"/debug/pprof/\",\"POST\",\"Bearer \"+token);status!=405{t.Fatal(\"mutation method accepted\",status)}\n if status,body:=call(t,client,server.URL,\"/debug/pprof/goroutine?debug=1\",\"GET\",\"Bearer \"+token);status!=200||!strings.Contains(body,\"goroutine profile:\"){t.Fatal(\"real runtime profile missing\",status,body)}\n for _,query:=range []string{\"seconds=0\",\"seconds=-1\",\"seconds=2\",\"seconds=oops\",\"seconds=1&seconds=1\"}{if status,_:=call(t,client,server.URL,\"/debug/pprof/profile?\"+query,\"GET\",\"Bearer \"+token);status!=400{t.Fatal(\"unbounded profile admitted\",query,status)}}\n if status,_:=call(t,client,server.URL,\"/debug/pprof/trace\",\"GET\",\"Bearer \"+token);status!=404{t.Fatal(\"unapproved trace exposed\",status)}\n for _,n:=range []int{0,6}{if _,err:=DiagnosticHandler(token,n);err==nil{t.Fatal(\"bad max duration\")}}\n if _,err:=DiagnosticHandler(\"weak\",1);err==nil{t.Fatal(\"weak token accepted\")}\n}\nfunc TestConcurrentCpuProfilesHaveOneSlot(t *testing.T){\n handler,err:=DiagnosticHandler(token,1);if err!=nil{t.Fatal(err)};server:=httptest.NewServer(handler);defer server.Close()\n start:=make(chan struct{});results:=make(chan int,2);var wg sync.WaitGroup\n for i:=0;i<2;i++{wg.Add(1);go func(){defer wg.Done();<-start;req,_:=http.NewRequest(\"GET\",server.URL+\"/debug/pprof/profile?seconds=1\",nil);req.Header.Set(\"Authorization\",\"Bearer \"+token);response,err:=server.Client().Do(req);if err!=nil{results<-0;return};_,_=io.Copy(io.Discard,response.Body);response.Body.Close();results<-response.StatusCode}()}\n close(start);wg.Wait();close(results);counts:=map[int]int{};for status:=range results{counts[status]++};if counts[200]!=1||counts[503]!=1{t.Fatal(\"profile concurrency budget\",counts)}\n if status,_:=call(t,server.Client(),server.URL,\"/debug/pprof/\",\"GET\",\"Bearer \"+token);status!=200{t.Fatal(\"slot not released after profile\",status)}\n}\n",
+        "checks/check.py": "import os,sys,pathlib,tempfile,subprocess\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED: compile and execute submitted Go module',flush=True)\nenv={**os.environ,'GOCACHE':'/tmp/opsforge-go-cache','GOMODCACHE':'/tmp/opsforge-go-modcache','GOTOOLCHAIN':'local','GOPROXY':'off','GOSUMDB':'off','CGO_ENABLED':'1','GOMAXPROCS':'2'}\ndef run(root,args,timeout=100):\n p=subprocess.run(['go',*args],cwd=root,env=env,capture_output=True,text=True,timeout=timeout)\n detail=p.stdout+p.stderr\n if len(detail)>5000:detail=detail[:4000]+'\\n[diagnostic shortened; original process exit preserved]\\n'+detail[-1000:]\n assert p.returncode==0, 'Go validation failed: '+detail\n return p.stdout+p.stderr\nwith tempfile.TemporaryDirectory(prefix='opsforge-go-') as directory:\n root=pathlib.Path(directory)\n (root/'go.mod').write_text('module opsforge.local/exercise\\n\\ngo 1.23\\n',encoding='utf8')\n (root/'task.go').write_bytes(pathlib.Path('task.go').read_bytes())\n (root/'task_test.go').write_bytes(pathlib.Path('checks/task_test.go').read_bytes())\n run(root,['test','-race','-vet=off','-count=1','-timeout=15s','./...'])\n run(root,['vet','-race','-copylocks','./...'])\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "go"
+    ]
+  }
+]

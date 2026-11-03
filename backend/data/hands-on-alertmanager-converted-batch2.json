@@ -1,0 +1,83 @@
+[
+  {
+    "id": "curated-parallel-alertmanager-099",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 3,
+    "topic": "路由匹配与通知分组",
+    "title": "修复critical双渠道分发并保留默认与开发环境路径",
+    "answer": "### alertmanager.yaml\n```\nglobal:\n  resolve_timeout: 5m\nroute:\n  receiver: triage\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: dev-sink\n    matchers:\n    - env=\"dev\"\n  - receiver: platform\n    matchers:\n    - env=\"prod\"\n    - severity=\"critical\"\n    continue: true\n  - receiver: checkout\n    matchers:\n    - env=\"prod\"\n    - team=\"checkout\"\n  - receiver: payments\n    matchers:\n    - env=\"prod\"\n    - team=\"payments\"\nreceivers:\n- name: triage\n  webhook_configs:\n  - url: https://triage.example.invalid/notify\n    send_resolved: true\n- name: platform\n  webhook_configs:\n  - url: https://platform.example.invalid/notify\n    send_resolved: true\n- name: checkout\n  webhook_configs:\n  - url: https://checkout.example.invalid/notify\n    send_resolved: true\n- name: payments\n  webhook_configs:\n  - url: https://payments.example.invalid/notify\n    send_resolved: true\n- name: dev-sink\ninhibit_rules: []\n```\n\ncontinue只控制同层后续分支是否继续匹配。platform的critical路径需继续，业务终点保持停止；dev-sink放在前面终止，避免开发告警落到生产值班。根接收器不是每条告警必加一份的渠道：有子路由匹配就不会额外发triage。\n\n### 原题原理\n用完整标签测试路由路径，确认第一匹配停止同级遍历。按期望多投路径设置continue或重构树，测试重叠与兜底后加载。核对两个渠道实际回执及去重，不仅看配置语法。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "用完整标签测试路由路径，确认第一匹配停止同级遍历。",
+      "按期望多投路径设置continue或重构树，测试重叠与兜底后加载。",
+      "核对两个渠道实际回执及去重，不仅看配置语法。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/configuration/",
+      "https://prometheus.io/docs/alerting/latest/notifications/"
+    ],
+    "incident_signature": "alertmanager-sibling-route-continue-false",
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "configuration",
+    "files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: triage\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: dev-sink\n    matchers:\n    - env=\"dev\"\n  - receiver: platform\n    matchers:\n    - env=\"prod\"\n    - severity=\"critical\"\n    continue: false\n  - receiver: checkout\n    matchers:\n    - env=\"prod\"\n    - team=\"checkout\"\n  - receiver: payments\n    matchers:\n    - env=\"prod\"\n    - team=\"payments\"\nreceivers:\n- name: triage\n  webhook_configs:\n  - url: https://triage.example.invalid/notify\n    send_resolved: true\n- name: platform\n  webhook_configs:\n  - url: https://platform.example.invalid/notify\n    send_resolved: true\n- name: checkout\n  webhook_configs:\n  - url: https://checkout.example.invalid/notify\n    send_resolved: true\n- name: payments\n  webhook_configs:\n  - url: https://payments.example.invalid/notify\n    send_resolved: true\n- name: dev-sink\ninhibit_rules: []\n",
+      "routing-cases.json": "[\n  {\n    \"labels\": {\n      \"env\": \"prod\",\n      \"team\": \"checkout\",\n      \"severity\": \"critical\"\n    },\n    \"receivers\": [\n      \"platform\",\n      \"checkout\"\n    ]\n  },\n  {\n    \"labels\": {\n      \"env\": \"prod\",\n      \"team\": \"payments\",\n      \"severity\": \"critical\"\n    },\n    \"receivers\": [\n      \"platform\",\n      \"payments\"\n    ]\n  },\n  {\n    \"labels\": {\n      \"env\": \"prod\",\n      \"team\": \"checkout\",\n      \"severity\": \"warning\"\n    },\n    \"receivers\": [\n      \"checkout\"\n    ]\n  },\n  {\n    \"labels\": {\n      \"env\": \"prod\",\n      \"team\": \"payments\",\n      \"severity\": \"warning\"\n    },\n    \"receivers\": [\n      \"payments\"\n    ]\n  },\n  {\n    \"labels\": {\n      \"env\": \"prod\",\n      \"team\": \"unknown\",\n      \"severity\": \"critical\"\n    },\n    \"receivers\": [\n      \"platform\"\n    ]\n  },\n  {\n    \"labels\": {\n      \"env\": \"prod\",\n      \"team\": \"unknown\",\n      \"severity\": \"warning\"\n    },\n    \"receivers\": [\n      \"triage\"\n    ]\n  },\n  {\n    \"labels\": {\n      \"env\": \"dev\",\n      \"team\": \"checkout\",\n      \"severity\": \"critical\"\n    },\n    \"receivers\": [\n      \"dev-sink\"\n    ]\n  },\n  {\n    \"labels\": {\n      \"team\": \"checkout\",\n      \"severity\": \"critical\"\n    },\n    \"receivers\": [\n      \"triage\"\n    ]\n  },\n  {\n    \"labels\": {\n      \"env\": \"prod\",\n      \"severity\": \"critical\"\n    },\n    \"receivers\": [\n      \"platform\"\n    ]\n  },\n  {\n    \"labels\": {\n      \"env\": \"prod\",\n      \"team\": \"checkout-evil\",\n      \"severity\": \"warning\"\n    },\n    \"receivers\": [\n      \"triage\"\n    ]\n  },\n  {\n    \"labels\": {\n      \"env\": \"prod\",\n      \"team\": \"checkout\",\n      \"severity\": \"Critical\"\n    },\n    \"receivers\": [\n      \"checkout\"\n    ]\n  }\n]\n"
+    },
+    "solution_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: triage\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: dev-sink\n    matchers:\n    - env=\"dev\"\n  - receiver: platform\n    matchers:\n    - env=\"prod\"\n    - severity=\"critical\"\n    continue: true\n  - receiver: checkout\n    matchers:\n    - env=\"prod\"\n    - team=\"checkout\"\n  - receiver: payments\n    matchers:\n    - env=\"prod\"\n    - team=\"payments\"\nreceivers:\n- name: triage\n  webhook_configs:\n  - url: https://triage.example.invalid/notify\n    send_resolved: true\n- name: platform\n  webhook_configs:\n  - url: https://platform.example.invalid/notify\n    send_resolved: true\n- name: checkout\n  webhook_configs:\n  - url: https://checkout.example.invalid/notify\n    send_resolved: true\n- name: payments\n  webhook_configs:\n  - url: https://payments.example.invalid/notify\n    send_resolved: true\n- name: dev-sink\ninhibit_rules: []\n"
+    },
+    "negative_files": {
+      "alertmanager.yaml": "global:\n  resolve_timeout: 5m\nroute:\n  receiver: triage\n  group_by:\n  - alertname\n  - cluster\n  group_wait: 30s\n  group_interval: 5m\n  repeat_interval: 4h\n  routes:\n  - receiver: dev-sink\n    matchers:\n    - env=\"dev\"\n  - receiver: platform\n    matchers:\n    - env=\"prod\"\n    - severity=\"critical\"\n    continue: true\n  - receiver: checkout\n    matchers:\n    - env=\"prod\"\n    - team=~\".*\"\n  - receiver: payments\n    matchers:\n    - env=\"prod\"\n    - team=\"payments\"\nreceivers:\n- name: triage\n  webhook_configs:\n  - url: https://triage.example.invalid/notify\n    send_resolved: true\n- name: platform\n  webhook_configs:\n  - url: https://platform.example.invalid/notify\n    send_resolved: true\n- name: checkout\n  webhook_configs:\n  - url: https://checkout.example.invalid/notify\n    send_resolved: true\n- name: payments\n  webhook_configs:\n  - url: https://payments.example.invalid/notify\n    send_resolved: true\n- name: dev-sink\ninhibit_rules: []\n"
+    },
+    "body": "## 环境与初始材料\n平台提供隔离文件编辑器、amtool 0.28和Python/PyYAML；本题无需学员搭建Alertmanager。所有收件端均为不可实际投递的示例地址。\n\n## 操作任务\n生产critical告警应先通知platform，再通知其所属checkout或payments业务渠道；普通warning仅业务渠道。未知业务critical仅platform，未知业务warning到triage；缺env走triage，dev无论严重性都到dev-sink。修复首次命中后停止遍历的问题，不能把所有路由都设置continue或扩大团队正则。保持根分组与时间参数、接收器URL和恢复通知设置；提交完整配置，经11组标签原生真值表验证。\n\n## 产物\n提交alertmanager.yaml。\n\n## 验收方法\n执行python3 checks/check.py，使用官方amtool实际执行路由/模板离线逻辑，可信样本不从可修改的展示fixture读取。初始配置与典型错误必须被验收拒绝；不同合法表达方式可以通过。不会向接收端发送通知。\n\n## 原理复习\n同一critical告警应通知平台和业务，实际只到第一路由，未配置continue。如何修复？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-amtool",
+      "deliverables": [
+        "alertmanager.yaml"
+      ],
+      "operation": "生产critical告警应先通知platform，再通知其所属checkout或payments业务渠道；普通warning仅业务渠道。未知业务critical仅platform，未知业务warning到triage；缺env走triage，dev无论严重性都到dev-sink。修复首次命中后停止遍历的问题，不能把所有路由都设置continue或扩大团队正则。保持根分组与时间参数、接收器URL和恢复通知设置；提交完整配置，经11组标签原生真值表验证。",
+      "verification": "官方amtool原生离线路由匹配或模板渲染，不以配置语法检查冒充发送成功。",
+      "capability_gap": [
+        "未运行Alertmanager通知调度、gossip或真实接收端；本题只验收明确的原生离线能力。"
+      ],
+      "failure_examples": [
+        "原错误和negative_files包含独立的路由/模板错误。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "amtool"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\ndef run(args):\n p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n print(p.stdout);print(p.stderr);assert p.returncode==0,'official amtool check failed'\n return p.stdout\n\nBASE={'global': {'resolve_timeout': '5m'}, 'route': {'receiver': 'triage', 'group_by': ['alertname', 'cluster'], 'group_wait': '30s', 'group_interval': '5m', 'repeat_interval': '4h', 'routes': [{'receiver': 'dev-sink', 'matchers': ['env=\"dev\"']}, {'receiver': 'platform', 'matchers': ['env=\"prod\"', 'severity=\"critical\"'], 'continue': False}, {'receiver': 'checkout', 'matchers': ['env=\"prod\"', 'team=\"checkout\"']}, {'receiver': 'payments', 'matchers': ['env=\"prod\"', 'team=\"payments\"']}]}, 'receivers': [{'name': 'triage', 'webhook_configs': [{'url': 'https://triage.example.invalid/notify', 'send_resolved': True}]}, {'name': 'platform', 'webhook_configs': [{'url': 'https://platform.example.invalid/notify', 'send_resolved': True}]}, {'name': 'checkout', 'webhook_configs': [{'url': 'https://checkout.example.invalid/notify', 'send_resolved': True}]}, {'name': 'payments', 'webhook_configs': [{'url': 'https://payments.example.invalid/notify', 'send_resolved': True}]}, {'name': 'dev-sink'}], 'inhibit_rules': []}\nCASES=[{'labels': {'env': 'prod', 'team': 'checkout', 'severity': 'critical'}, 'receivers': ['platform', 'checkout']}, {'labels': {'env': 'prod', 'team': 'payments', 'severity': 'critical'}, 'receivers': ['platform', 'payments']}, {'labels': {'env': 'prod', 'team': 'checkout', 'severity': 'warning'}, 'receivers': ['checkout']}, {'labels': {'env': 'prod', 'team': 'payments', 'severity': 'warning'}, 'receivers': ['payments']}, {'labels': {'env': 'prod', 'team': 'unknown', 'severity': 'critical'}, 'receivers': ['platform']}, {'labels': {'env': 'prod', 'team': 'unknown', 'severity': 'warning'}, 'receivers': ['triage']}, {'labels': {'env': 'dev', 'team': 'checkout', 'severity': 'critical'}, 'receivers': ['dev-sink']}, {'labels': {'team': 'checkout', 'severity': 'critical'}, 'receivers': ['triage']}, {'labels': {'env': 'prod', 'severity': 'critical'}, 'receivers': ['platform']}, {'labels': {'env': 'prod', 'team': 'checkout-evil', 'severity': 'warning'}, 'receivers': ['triage']}, {'labels': {'env': 'prod', 'team': 'checkout', 'severity': 'Critical'}, 'receivers': ['checkout']}]\ncfg=load('alertmanager.yaml');normalized=copy.deepcopy(cfg);routes=normalized['route'].pop('routes')\nbase=copy.deepcopy(BASE);base['route'].pop('routes');assert normalized==base\nassert isinstance(routes,list) and 1<=len(routes)<=8\nfor route in routes:assert set(route)<= {'receiver','matchers','continue'} and route['receiver'] in {x['name'] for x in BASE['receivers']}\nrun(['amtool','check-config','alertmanager.yaml'])\nfor case in CASES:\n run(['amtool','config','routes','test','--config.file=alertmanager.yaml','--verify.receivers='+','.join(case['receivers'])]+[k+'='+v for k,v in case['labels'].items()])\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-099",
+      "original_type": "case",
+      "original_title": "同一critical告警应通知平台和业务，实际只到第一路由，未配置continue。如何修复？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

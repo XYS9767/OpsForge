@@ -1,0 +1,72 @@
+[
+  {
+    "id": "curated-parallel-azure-056",
+    "module": "azure",
+    "category": "Azure 云模拟",
+    "level": 2,
+    "topic": "消息事件与函数",
+    "title": "消费端持久收件实操：提交事务后再确认，按topic/id去重而不提前宣告业务完成",
+    "answer": "```python\nimport json,pathlib,sqlite3\ndef accept_events(db_path,events):\n    path=pathlib.Path(db_path)\n    if path.is_symlink() or not path.is_file():raise ValueError('existing real inbox required')\n    if not isinstance(events,list) or not 1<=len(events)<=100:raise ValueError('finite nonempty batch required')\n    encoded=[]\n    for event in events:\n        if not isinstance(event,dict) or any(not isinstance(event.get(k),str) or not event[k] for k in ('topic','id')):raise ValueError('topic and event id required')\n        try:payload=json.dumps(event,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)\n        except (ValueError,TypeError) as error:raise ValueError('finite JSON event required') from error\n        if len(payload.encode())>65536:raise ValueError('local event budget exceeded')\n        encoded.append((event['topic'],event['id'],payload))\n    with sqlite3.connect(path,timeout=1) as db:\n        db.execute('BEGIN IMMEDIATE')\n        inserted=0\n        for topic,ident,payload in encoded:\n            old=db.execute('SELECT payload FROM inbox WHERE topic=? AND event_id=?',(topic,ident)).fetchone()\n            if old is not None:\n                if old[0]!=payload:raise ValueError('same event identity changed payload')\n                continue\n            db.execute(\"INSERT INTO inbox(topic,event_id,payload,state) VALUES(?,?,?,'pending')\",(topic,ident,payload))\n            inserted+=1\n        return {'received':len(events),'inserted':inserted}\n```\n\n原题知识说明：\n事件可能重投，处理端需按事件或业务ID幂等，快速接收后可靠排队避免超时。配置失败投递与死信观察，2xx只应在满足接收合同后返回，不能先成功再丢到内存队列。",
+    "type": "code",
+    "source": "独立编审：Azure身份、网络与平台运维",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "解释Azure特定资源机制",
+      "区分配置、权限与业务验收"
+    ],
+    "references": [
+      "https://learn.microsoft.com/en-us/azure/event-grid/delivery-and-retry",
+      "https://learn.microsoft.com/en-us/azure/event-grid/event-schema"
+    ],
+    "related_modules": [
+      "azure"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-azure-056",
+      "original_title": "Event Grid消费者为何需要去重与快速确认？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现accept_events(db_path,events)。本地数据库已建inbox(topic,event_id,payload,state)复合主键(topic,event_id)，state为pending/done；函数只向inbox写入，不做业务处理。输入为已交给通知消费逻辑的非空list（本地预算最多100个），每事件必须有非空字符串topic/id；保存整个事件为排序键、紧凑分隔、ensure_ascii=False、allow_nan=False的JSON，单事件本地预算65536字节。一次批次原子事务：新身份插入pending；同身份相同完整JSON视为重放不新增；同身份内容冲突ValueError并回滚整个批次，非法事件也不能留下部分结果。返回恰含received输入数和inserted新增数，必须先成功提交才返回；真实SQLite错误传播，不能假成功。数据库须为已存在的真实文件，拒绝symlink；保留保护表和0600。夹具以真实loopback HTTP202包装函数，用独立进程读已提交记录、实际写锁制造503，释放后重试幂等，所有已接受事件仍pending。HTTP确认只代表已持久接收，不代表业务已执行。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n离线云配套消费端实验：真实本地HTTP/SQLite，不访问Azure Event Grid。输入仅通知事件，不实现订阅验证握手、云端投递认证、Azure重试状态矩阵、死信存储、分布式数据库或业务worker；409/503为私有教学接收器约定，不推出云端一定怎样重试。独立进程可见提交不等同断电耐久或端到端exactly-once。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json,pathlib,sqlite3\ndef accept_events(db_path,events):\n    path=pathlib.Path(db_path)\n    if path.is_symlink() or not path.is_file():raise ValueError('existing real inbox required')\n    if not isinstance(events,list) or not 1<=len(events)<=100:raise ValueError('finite nonempty batch required')\n    encoded=[]\n    for event in events:\n        if not isinstance(event,dict) or any(not isinstance(event.get(k),str) or not event[k] for k in ('topic','id')):raise ValueError('topic and event id required')\n        try:payload=json.dumps(event,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)\n        except (ValueError,TypeError) as error:raise ValueError('finite JSON event required') from error\n        if len(payload.encode())>65536:raise ValueError('local event budget exceeded')\n        encoded.append((event['topic'],event['id'],payload))\n    with sqlite3.connect(path,timeout=1) as db:\n        db.execute('BEGIN IMMEDIATE')\n        inserted=0\n        for topic,ident,payload in encoded:\n            old=db.execute('SELECT payload FROM inbox WHERE topic=? AND event_id=?',(topic,ident)).fetchone()\n            if old is not None:\n                if old[0]!=payload:raise ValueError('same event identity changed payload')\n                continue\n            db.execute(\"INSERT INTO inbox(topic,event_id,payload,state) VALUES(?,?,?,'pending')\",(topic,ident,payload))\n            inserted+=1\n        return {'received':len(events),'inserted':inserted}\n"
+    },
+    "negative_files": {
+      "task.py": "import json,pathlib,sqlite3\ndef accept_events(db_path,events):\n    path=pathlib.Path(db_path)\n    if path.is_symlink() or not path.is_file():raise ValueError('existing real inbox required')\n    if not isinstance(events,list) or not 1<=len(events)<=100:raise ValueError('finite nonempty batch required')\n    encoded=[]\n    for event in events:\n        if not isinstance(event,dict) or any(not isinstance(event.get(k),str) or not event[k] for k in ('topic','id')):raise ValueError('topic and event id required')\n        try:payload=json.dumps(event,sort_keys=True,separators=(',',':'),ensure_ascii=False,allow_nan=False)\n        except (ValueError,TypeError) as error:raise ValueError('finite JSON event required') from error\n        if len(payload.encode())>65536:raise ValueError('local event budget exceeded')\n        encoded.append((event['topic'],event['id'],payload))\n    with sqlite3.connect(path,timeout=1) as db:\n        db.execute('BEGIN IMMEDIATE')\n        inserted=0\n        for topic,ident,payload in encoded:\n            old=db.execute('SELECT payload FROM inbox WHERE event_id=?',(ident,)).fetchone()\n            if old is not None:\n                if old[0]!=payload:raise ValueError('same event identity changed payload')\n                continue\n            db.execute(\"INSERT INTO inbox(topic,event_id,payload,state) VALUES(?,?,?,'pending')\",(topic,ident,payload))\n            inserted+=1\n        return {'received':len(events),'inserted':inserted}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现accept_events(db_path,events)。本地数据库已建inbox(topic,event_id,payload,state)复合主键(topic,event_id)，state为pending/done；函数只向inbox写入，不做业务处理。输入为已交给通知消费逻辑的非空list（本地预算最多100个），每事件必须有非空字符串topic/id；保存整个事件为排序键、紧凑分隔、ensure_ascii=False、allow_nan=False的JSON，单事件本地预算65536字节。一次批次原子事务：新身份插入pending；同身份相同完整JSON视为重放不新增；同身份内容冲突ValueError并回滚整个批次，非法事件也不能留下部分结果。返回恰含received输入数和inserted新增数，必须先成功提交才返回；真实SQLite错误传播，不能假成功。数据库须为已存在的真实文件，拒绝symlink；保留保护表和0600。夹具以真实loopback HTTP202包装函数，用独立进程读已提交记录、实际写锁制造503，释放后重试幂等，所有已接受事件仍pending。HTTP确认只代表已持久接收，不代表业务已执行。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "离线云配套消费端实验：真实本地HTTP/SQLite，不访问Azure Event Grid。输入仅通知事件，不实现订阅验证握手、云端投递认证、Azure重试状态矩阵、死信存储、分布式数据库或业务worker；409/503为私有教学接收器约定，不推出云端一定怎样重试。独立进程可见提交不等同断电耐久或端到端exactly-once。",
+      "validation_kind": "offline_cloud_model"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import copy,http.server,json,os,pathlib,secrets,sqlite3,subprocess,sys,tempfile,threading,urllib.error,urllib.request\nsys.path.insert(0,os.getcwd())\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nprint('OFFLINE_CLOUD_SCOPE:NO_CLOUD_API_REQUESTS',flush=True)\nimport task\nwith tempfile.TemporaryDirectory(prefix='eventgrid-inbox-') as directory:\n path=pathlib.Path(directory)/'inbox.db'\n with sqlite3.connect(path) as db:\n  db.execute(\"CREATE TABLE inbox(topic TEXT NOT NULL,event_id TEXT NOT NULL,payload TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('pending','done')),PRIMARY KEY(topic,event_id))\")\n  db.execute('CREATE TABLE protected(value TEXT)');db.execute(\"INSERT INTO protected VALUES('keep')\")\n path.chmod(0o600)\n class Receiver(http.server.BaseHTTPRequestHandler):\n  def do_POST(self):\n   try:\n    assert self.headers.get('aeg-event-type')=='Notification'\n    body=json.loads(self.rfile.read(int(self.headers['Content-Length'])))\n    value=task.accept_events(path,body);code=202\n   except ValueError:value={'error':'invalid batch or identity conflict'};code=409\n   except sqlite3.Error:value={'error':'inbox unavailable'};code=503\n   raw=json.dumps(value).encode();self.send_response(code);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)\n  def log_message(self,*args):pass\n server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Receiver)\n thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()\n opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n def send(events):\n  request=urllib.request.Request('http://127.0.0.1:'+str(server.server_port)+'/events',data=json.dumps(events).encode(),headers={'Content-Type':'application/json','aeg-event-type':'Notification'},method='POST')\n  try:\n   with opener.open(request,timeout=4) as response:return response.status,json.loads(response.read())\n  except urllib.error.HTTPError as response:\n   code=response.code;body=json.loads(response.read());response.close();return code,body\n def rows():\n  with sqlite3.connect(path) as db:return db.execute('SELECT topic,event_id,payload,state FROM inbox ORDER BY topic,event_id').fetchall()\n try:\n  a='topic-a-'+secrets.token_hex(4);b='topic-b-'+secrets.token_hex(4)\n  first={'topic':a,'id':'same-id','eventType':'training.changed','data':{'amount':7}}\n  second={**first,'topic':b,'data':{'amount':9}}\n  print('STUDENT_OPERATION_ENTERED:durable_topic_event_id_inbox_transaction_before_http_ack',flush=True)\n  assert send([first,first])==(202,{'received':2,'inserted':1})\n  assert send([first])==(202,{'received':1,'inserted':0})\n  assert send([second])==(202,{'received':1,'inserted':1}),'event ids from separate topics were incorrectly conflated'\n  assert len(rows())==2 and all(r[3]=='pending' for r in rows()),'ack must queue pending work, not pretend business completed'\n  # The committed rows must be visible from an independent process after the HTTP response.\n  probe=\"import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); print(c.execute('SELECT count(*) FROM inbox').fetchone()[0]); c.close()\"\n  assert subprocess.check_output([sys.executable,'-c',probe,str(path)],text=True).strip()=='2'\n  before=rows();new={**first,'id':'new-before-conflict'}\n  conflicting={**first,'data':{'amount':99}}\n  assert send([new,conflicting])[0]==409 and rows()==before,'partial batch was committed before duplicate identity conflict'\n  assert send([new,{'topic':a,'data':{}}])[0]==409 and rows()==before,'malformed late entry left a partial batch'\n  # Actual SQLite write contention: no successful acknowledgement while nothing can commit.\n  blocker=sqlite3.connect(path);blocker.execute('BEGIN IMMEDIATE')\n  pending={**first,'id':'after-unavailable'}\n  try:assert send([pending])[0]==503,'write failure was acknowledged as durable acceptance'\n  finally:blocker.rollback();blocker.close()\n  assert rows()==before\n  assert send([pending])==(202,{'received':1,'inserted':1})\n  assert send([pending])==(202,{'received':1,'inserted':0})\n  assert len(rows())==3 and all(r[3]=='pending' for r in rows())\n  with sqlite3.connect(path) as db:\n   assert db.execute('SELECT value FROM protected').fetchall()==[('keep',)]\n  assert path.stat().st_mode&0o777==0o600\n  original=copy.deepcopy(first);task.accept_events(path,[first]);assert first==original\n  link=pathlib.Path(directory)/'link.db';link.symlink_to(path)\n  try:task.accept_events(link,[first])\n  except ValueError:pass\n  else:raise AssertionError('symlink inbox accepted')\n  print('NATIVE_LOCAL_EVENTGRID_HTTP202_ONLY_COMMITTED_TOPIC_ID_DEDUP_BATCH_ROLLBACK_SQLITE503_RETRY_PENDING_NOT_BUSINESS_DONE',flush=True)\n finally:server.shutdown();server.server_close();thread.join(2)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

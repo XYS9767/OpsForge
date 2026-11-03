@@ -1,0 +1,98 @@
+[
+  {
+    "id": "curated-permissions-quality-007",
+    "module": "permissions",
+    "category": "用户、权限与安全",
+    "level": 3,
+    "topic": "Web与API安全",
+    "title": "真实HTTP权限与CORS分离：允许来源仍需认证授权，无Origin也不能绕过",
+    "answer": "```python\ndef protect(app,authenticate,authorize,allowed_origin):\n    def application(environ,start_response):\n        origin=environ.get('HTTP_ORIGIN','');trusted=origin==allowed_origin\n        def send(status,headers,exc_info=None):\n            clean=[(key,value) for key,value in headers if key.lower() not in ('access-control-allow-origin','access-control-allow-credentials','access-control-allow-methods','access-control-allow-headers','vary')]\n            vary=[]\n            for key,value in headers:\n                if key.lower()=='vary':\n                    for name in value.split(','):\n                        name=name.strip()\n                        if name and name.lower() not in {v.lower() for v in vary}:vary.append(name)\n            if 'origin' not in {v.lower() for v in vary}:vary.append('Origin')\n            clean.append(('Vary','*' if '*' in vary else ', '.join(vary)))\n            if trusted:\n                clean.extend([('Access-Control-Allow-Origin',allowed_origin),('Access-Control-Allow-Credentials','true')])\n                if environ['REQUEST_METHOD']=='OPTIONS':clean.extend([('Access-Control-Allow-Methods','GET'),('Access-Control-Allow-Headers','Authorization')])\n            return start_response(status,clean,exc_info)\n        def reject(status,text,extra=()):\n            body=text.encode();send(status,[('Content-Type','text/plain'),('Content-Length',str(len(body))),*extra]);return [body]\n        if environ['REQUEST_METHOD']=='OPTIONS':send('204 No Content',[('Content-Length','0')]);return [b'']\n        if environ['REQUEST_METHOD']!='GET':return reject('405 Method Not Allowed','method rejected')\n        header=environ.get('HTTP_AUTHORIZATION','')\n        token=header[7:] if header.startswith('Bearer ') else ''\n        identity=authenticate(token)\n        if identity is None:return reject('401 Unauthorized','authentication required',[('WWW-Authenticate','Bearer')])\n        if not authorize(identity,environ['PATH_INFO']):return reject('403 Forbidden','read forbidden')\n        scoped=dict(environ);scoped['opsforge.identity']=identity\n        return app(scoped,send)\n    return application\n```\n\n原题知识说明：\nCORS主要控制浏览器是否允许脚本读取跨源响应，不是用户身份或对象权限机制；非浏览器客户端不受相同约束。服务端仍需认证和资源授权，凭据请求的来源匹配也要准确。测试未授权客户端直接请求应被拒绝，而不是依赖浏览器报错。\nCORS决定浏览器脚本是否可以读取跨源响应，不保证请求没有发出；CSRF防护需独立验证令牌、来源和Cookie策略，二者不能互相替代。",
+    "type": "code",
+    "source": "OpsForge 身份与安全补充编审",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "semantic-quality-supplement-20261021",
+    "body": "## 操作任务\n实现protect(app,authenticate,authorize,allowed_origin)，返回WSGI middleware。只有GET受保护业务请求：解析Bearer token，authenticate(token)返回身份或None；无身份401且WWW-Authenticate: Bearer，无读取授权403，成功将身份放入environ副本的opsforge.identity后调用app。Origin只影响浏览器可读响应头，不能代替上述两步；来自非批准Origin但身份/对象权限有效的非浏览器请求仍可200，但不加CORS许可头。仅与allowed_origin精确相等时添加ACAO=该来源和ACAC=true；移除下游旧CORS许可头，合并Vary并保留下游Accept-Encoding等已有项，大小写不敏感去重后补Origin，已有Vary:*则保持*。OPTIONS返回204空体，不认证、不调用业务，仅批准来源附GET/Authorization预检许可；其他方法405。任何来源未认证/无权限都不得返回受保护体。仅本题单业务端点，不实现完整生产CORS框架。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实非root Linux回环WSGI HTTP请求、401/403/200及响应头/空预检验收，authenticate/authorize由可信教学回调提供；不是完整身份提供者、Cookie/CSRF或浏览器SOP原生验收。不改OpsForge实际登录流程、宿主身份或外部服务，不构建镜像。与Nginx069仅来源头匹配、权限025对象归属、质量008 CSRF写请求不同，本题验证两种控制在真实HTTP响应上的独立性。",
+    "rubric": [
+      "CORS主要控制浏览器是否允许脚本读取跨源响应，不是用户身份或对象权限机制；非浏览器客户端不受相同约束",
+      "服务端仍需认证和资源授权，凭据请求的来源匹配也要准确",
+      "测试未授权客户端直接请求应被拒绝，而不是依赖浏览器报错"
+    ],
+    "hints": [],
+    "references": [
+      "https://fetch.spec.whatwg.org/#http-cors-protocol",
+      "https://www.rfc-editor.org/rfc/rfc9110.html#name-401-unauthorized"
+    ],
+    "merged_sources": [
+      "curated-feishu-w-045"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "MisFdp5lHoFKrRxDU66ckRE0nvc",
+          "Rc9edN6yLoYqWIxGNYLcdoNNnag",
+          "CAQRdauBQov8x4xSt4TcnhKjnmd",
+          "NY9Sd5Souox9rIx8u7ScVC9UnYe",
+          "IDZwdXB6soIZwAxiKRmczlBpnCg",
+          "N8RXd5M5koay76x2hygc9sCynag",
+          "Rf5idnmEno0AkWxhoMPcWzomn7f",
+          "QcVMdYoIMosYzLxvucic6UkBnKd",
+          "XGUrdKdkAoRnb0xZ4KVcRr3MnCd",
+          "Uxn3d9gnnoJ80exmPRkcTn6MnHg",
+          "Ev6dd367HoA0Zxxtd7vclNtCnje",
+          "F3pvdFZaponDYJxvcWec6gWNnNg",
+          "U9FGdyZYNolMzfxGmBDcRPMCnpc",
+          "SclLdlBXwovnwlx3ODkcjSEJnzf",
+          "MZ6Td6kcsoiddExbAXIc0Aqunpd",
+          "L3oBdD0G3oLuLtxmXZGcupiVndd"
+        ]
+      }
+    ],
+    "related_modules": [
+      "permissions"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-permissions-quality-007",
+      "original_title": "CORS允许某域访问，是否等于服务器已经授权该域用户读取数据？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def protect(app,authenticate,authorize,allowed_origin):\n    def application(environ,start_response):\n        origin=environ.get('HTTP_ORIGIN','');trusted=origin==allowed_origin\n        def send(status,headers,exc_info=None):\n            clean=[(key,value) for key,value in headers if key.lower() not in ('access-control-allow-origin','access-control-allow-credentials','access-control-allow-methods','access-control-allow-headers','vary')]\n            vary=[]\n            for key,value in headers:\n                if key.lower()=='vary':\n                    for name in value.split(','):\n                        name=name.strip()\n                        if name and name.lower() not in {v.lower() for v in vary}:vary.append(name)\n            if 'origin' not in {v.lower() for v in vary}:vary.append('Origin')\n            clean.append(('Vary','*' if '*' in vary else ', '.join(vary)))\n            if trusted:\n                clean.extend([('Access-Control-Allow-Origin',allowed_origin),('Access-Control-Allow-Credentials','true')])\n                if environ['REQUEST_METHOD']=='OPTIONS':clean.extend([('Access-Control-Allow-Methods','GET'),('Access-Control-Allow-Headers','Authorization')])\n            return start_response(status,clean,exc_info)\n        def reject(status,text,extra=()):\n            body=text.encode();send(status,[('Content-Type','text/plain'),('Content-Length',str(len(body))),*extra]);return [body]\n        if environ['REQUEST_METHOD']=='OPTIONS':send('204 No Content',[('Content-Length','0')]);return [b'']\n        if environ['REQUEST_METHOD']!='GET':return reject('405 Method Not Allowed','method rejected')\n        header=environ.get('HTTP_AUTHORIZATION','')\n        token=header[7:] if header.startswith('Bearer ') else ''\n        identity=authenticate(token)\n        if identity is None:return reject('401 Unauthorized','authentication required',[('WWW-Authenticate','Bearer')])\n        if not authorize(identity,environ['PATH_INFO']):return reject('403 Forbidden','read forbidden')\n        scoped=dict(environ);scoped['opsforge.identity']=identity\n        return app(scoped,send)\n    return application\n"
+    },
+    "negative_files": {
+      "task.py": "def protect(app,authenticate,authorize,allowed_origin):\n    def application(environ,start_response):\n        origin=environ.get('HTTP_ORIGIN','');trusted=origin==allowed_origin\n        def send(status,headers,exc_info=None):\n            clean=[(key,value) for key,value in headers if key.lower() not in ('access-control-allow-origin','access-control-allow-credentials','access-control-allow-methods','access-control-allow-headers','vary')]\n            vary=[]\n            for key,value in headers:\n                if key.lower()=='vary':\n                    for name in value.split(','):\n                        name=name.strip()\n                        if name and name.lower() not in {v.lower() for v in vary}:vary.append(name)\n            if 'origin' not in {v.lower() for v in vary}:vary.append('Origin')\n            clean.append(('Vary','*' if '*' in vary else ', '.join(vary)))\n            if trusted:\n                clean.extend([('Access-Control-Allow-Origin',allowed_origin),('Access-Control-Allow-Credentials','true')])\n                if environ['REQUEST_METHOD']=='OPTIONS':clean.extend([('Access-Control-Allow-Methods','GET'),('Access-Control-Allow-Headers','Authorization')])\n            return start_response(status,clean,exc_info)\n        def reject(status,text,extra=()):\n            body=text.encode();send(status,[('Content-Type','text/plain'),('Content-Length',str(len(body))),*extra]);return [body]\n        if environ['REQUEST_METHOD']=='OPTIONS':send('204 No Content',[('Content-Length','0')]);return [b'']\n        if environ['REQUEST_METHOD']!='GET':return reject('405 Method Not Allowed','method rejected')\n        header=environ.get('HTTP_AUTHORIZATION','')\n        token=header[7:] if header.startswith('Bearer ') else ''\n        identity='reader' if trusted else authenticate(token)\n        if identity is None:return reject('401 Unauthorized','authentication required',[('WWW-Authenticate','Bearer')])\n        if not authorize(identity,environ['PATH_INFO']):return reject('403 Forbidden','read forbidden')\n        scoped=dict(environ);scoped['opsforge.identity']=identity\n        return app(scoped,send)\n    return application\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现protect(app,authenticate,authorize,allowed_origin)，返回WSGI middleware。只有GET受保护业务请求：解析Bearer token，authenticate(token)返回身份或None；无身份401且WWW-Authenticate: Bearer，无读取授权403，成功将身份放入environ副本的opsforge.identity后调用app。Origin只影响浏览器可读响应头，不能代替上述两步；来自非批准Origin但身份/对象权限有效的非浏览器请求仍可200，但不加CORS许可头。仅与allowed_origin精确相等时添加ACAO=该来源和ACAC=true；移除下游旧CORS许可头，合并Vary并保留下游Accept-Encoding等已有项，大小写不敏感去重后补Origin，已有Vary:*则保持*。OPTIONS返回204空体，不认证、不调用业务，仅批准来源附GET/Authorization预检许可；其他方法405。任何来源未认证/无权限都不得返回受保护体。仅本题单业务端点，不实现完整生产CORS框架。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实非root Linux回环WSGI HTTP请求、401/403/200及响应头/空预检验收，authenticate/authorize由可信教学回调提供；不是完整身份提供者、Cookie/CSRF或浏览器SOP原生验收。不改OpsForge实际登录流程、宿主身份或外部服务，不构建镜像。与Nginx069仅来源头匹配、权限025对象归属、质量008 CSRF写请求不同，本题验证两种控制在真实HTTP响应上的独立性。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import contextlib,http.client,os,secrets,sys,threading\nfrom wsgiref.simple_server import make_server,WSGIRequestHandler\nsys.path.insert(0,os.getcwd())\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nimport task\nclass Quiet(WSGIRequestHandler):\n def log_message(self,*args):pass\nallowed='http://trusted.example.invalid';other='http://untrusted.example.invalid';token=secrets.token_hex(24);limited=secrets.token_hex(24);secret=secrets.token_hex(24).encode();calls=[]\ndef authenticate(value):return 'reader' if value==token else 'limited' if value==limited else None\ndef authorize(identity,path):return identity=='reader' and path=='/protected'\ndef business(environ,start_response):\n assert environ['opsforge.identity']=='reader';calls.append(environ['PATH_INFO'])\n start_response('200 OK',[('Content-Type','text/plain'),('Content-Length',str(len(secret))),('Access-Control-Allow-Origin','*'),('Vary','Accept-Encoding')]);return [secret]\nprint('STUDENT_OPERATION_ENTERED:real_http_cors_readability_separate_from_user_authentication_and_authorization',flush=True)\ntry:wrapped=task.protect(business,authenticate,authorize,allowed)\nexcept Exception as error:raise AssertionError('CORS/auth middleware creation failed') from error\nserver=make_server('127.0.0.1',0,wrapped,handler_class=Quiet);thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()\ntry:\n def request(origin=None,bearer=None,method='GET',path='/protected'):\n  headers={}\n  if origin is not None:headers['Origin']=origin\n  if bearer is not None:headers['Authorization']='Bearer '+bearer\n  if method=='OPTIONS':headers.update({'Access-Control-Request-Method':'GET','Access-Control-Request-Headers':'authorization'})\n  connection=http.client.HTTPConnection('127.0.0.1',server.server_port,timeout=2)\n  try:\n   connection.request(method,path,headers=headers);response=connection.getresponse();body=response.read();return response.status,dict(response.getheaders()),body\n  finally:connection.close()\n status,headers,body=request(allowed);assert status==401 and body!=secret and headers.get('WWW-Authenticate')=='Bearer','approved Origin bypassed user authentication'\n assert headers.get('Access-Control-Allow-Origin')==allowed and headers.get('Vary')=='Origin'\n status,headers,body=request(allowed,limited);assert status==403 and body!=secret and not calls,'authenticated user bypassed object authorization'\n status,headers,body=request(allowed,token);assert status==200 and body==secret and headers.get('Access-Control-Allow-Origin')==allowed and headers.get('Access-Control-Allow-Credentials')=='true'\n assert headers.get('Vary')=='Accept-Encoding, Origin','downstream cache variation was lost'\n status,headers,body=request(other,token);assert status==200 and body==secret and 'Access-Control-Allow-Origin' not in headers and 'Access-Control-Allow-Credentials' not in headers,'CORS response readability was incorrectly treated as server authorization'\n status,headers,body=request(None,token);assert status==200 and body==secret and 'Access-Control-Allow-Origin' not in headers\n status,headers,body=request(None,None);assert status==401 and body!=secret\n status,headers,body=request(allowed+'.evil.invalid',token);assert status==200 and body==secret and 'Access-Control-Allow-Origin' not in headers\n before=len(calls);status,headers,body=request(allowed,method='OPTIONS');assert status==204 and not body and len(calls)==before\n assert headers.get('Access-Control-Allow-Origin')==allowed and headers.get('Access-Control-Allow-Headers')=='Authorization' and headers.get('Access-Control-Allow-Methods')=='GET'\n status,headers,body=request(other,method='OPTIONS');assert status==204 and not body and 'Access-Control-Allow-Origin' not in headers and len(calls)==before\n status,headers,body=request(allowed,token,path='/other');assert status==403 and body!=secret\n print('NATIVE_HTTP_TRUSTED_ORIGIN_STILL_401_OR_403_VALID_USER_WITHOUT_CORS_200_PREFLIGHT_NO_DATA',flush=True)\nfinally:\n server.shutdown();server.server_close();thread.join(timeout=3);assert not thread.is_alive()\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

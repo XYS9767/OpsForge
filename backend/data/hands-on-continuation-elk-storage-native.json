@@ -1,0 +1,221 @@
+[
+  {
+    "id": "curated-parallel-elk-014",
+    "module": "elk",
+    "category": "ELK / EFK",
+    "level": 1,
+    "topic": "索引分片与生命周期",
+    "title": "真实data stream追加：create、时间戳和409首写保护，滚动后只写最新backing",
+    "answer": "```python\nimport json\ndef append(request,stream,events):\n    lines=[]\n    for event in events:lines.extend([json.dumps({'create':{'_index':stream,'_id':event['_id']}}),json.dumps(event['_source'])])\n    status,value=request('POST','/_bulk?refresh=true','\\n'.join(lines)+'\\n',content_type='application/x-ndjson')\n    if status!=200 or len(value.get('items',[]))!=len(events):raise RuntimeError('stream batch response incomplete')\n    return [{'status':row['create']['status'],'backing':row['create']['_index']} for row in value['items']]\n```\n\n原题知识说明：\n它通过一组backing indices组织追加数据并保持统一名称，要求匹配模板和时间字段等条件。验收写入目标及rollover，更新删除语义需按实际API处理。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Elastic官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现append(request,stream,events)：每项{_id,_source}按原顺序发NDJSON create动作到批准stream，末尾换行，POST /_bulk?refresh=true，content_type=application/x-ndjson；HTTP非200或items数量不符RuntimeError。返回每项{status:实际create状态,backing:实际_index}，不得将HTTP200掩盖400/409、改源时间戳或index覆盖。真实data stream只允许create追加，已存在ID409保持首写、缺@timestamp400不落盘；滚动后同接口写最新backing，查询跨两代。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Elasticsearch8.19.7 data stream协议、隐藏backing、强制@timestamp和create逐项错误；私有手动rollover，不宣称ILM自动策略或长期保留已审。既有Bulk分类/稳定ID辅助不额外计数；rollover后同ID跨backing可再出现，不宣称全流全历史ID去重。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://www.elastic.co/guide/en/elasticsearch/reference/8.19/data-streams.html"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-elk-014",
+      "original_title": "Elasticsearch data stream为何适合持续追加时序记录？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json\ndef append(request,stream,events):\n    lines=[]\n    for event in events:lines.extend([json.dumps({'create':{'_index':stream,'_id':event['_id']}}),json.dumps(event['_source'])])\n    status,value=request('POST','/_bulk?refresh=true','\\n'.join(lines)+'\\n',content_type='application/x-ndjson')\n    if status!=200 or len(value.get('items',[]))!=len(events):raise RuntimeError('stream batch response incomplete')\n    return [{'status':row['create']['status'],'backing':row['create']['_index']} for row in value['items']]\n"
+    },
+    "negative_files": {
+      "task.py": "import json\ndef append(request,stream,events):\n    lines=[]\n    for event in events:lines.extend([json.dumps({'index':{'_index':stream,'_id':event['_id']}}),json.dumps(event['_source'])])\n    status,value=request('POST','/_bulk?refresh=true','\\n'.join(lines)+'\\n',content_type='application/x-ndjson')\n    if status!=200 or len(value.get('items',[]))!=len(events):raise RuntimeError('stream batch response incomplete')\n    return [{'status':row['index']['status'],'backing':row['index']['_index']} for row in value['items']]\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像加只读官方Elasticsearch8.19.7，显式2GiB教学预算；不构建镜像",
+      "operation": "实现append(request,stream,events)：每项{_id,_source}按原顺序发NDJSON create动作到批准stream，末尾换行，POST /_bulk?refresh=true，content_type=application/x-ndjson；HTTP非200或items数量不符RuntimeError。返回每项{status:实际create状态,backing:实际_index}，不得将HTTP200掩盖400/409、改源时间戳或index覆盖。真实data stream只允许create追加，已存在ID409保持首写、缺@timestamp400不落盘；滚动后同接口写最新backing，查询跨两代。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Elasticsearch8.19.7 data stream协议、隐藏backing、强制@timestamp和create逐项错误；私有手动rollover，不宣称ILM自动策略或长期保留已审。既有Bulk分类/稳定ID辅助不额外计数；rollover后同ID跨backing可再出现，不宣称全流全历史ID去重。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "elasticsearch"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/elasticsearch_native.py": "\"\"\"Owned nonroot Elasticsearch8.19.7, private config/data/ports and bounded Java memory.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.error\nimport yaml\n\ndef free_port():\n    with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Elasticsearch:\n    def __enter__(self):\n        executable=shutil.which('elasticsearch')\n        if not executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned Elasticsearch8.19.7 required')\n        if os.geteuid()==0:raise RuntimeError('nonroot Elasticsearch fixture required')\n        self.temp=tempfile.TemporaryDirectory(prefix='of-elasticsearch-');self.root=pathlib.Path(self.temp.name);self.process=None;self.log=None\n        try:\n            tool=pathlib.Path(os.environ.get('OPSF_ELASTICSEARCH_HOME',str(pathlib.Path(executable).resolve().parents[1]))).resolve()\n            config=self.root/'config';shutil.copytree(tool/'config',config)\n            for folder in ('data','logs','tmp'):(self.root/folder).mkdir()\n            self.port=free_port();transport=free_port()\n            while transport==self.port:transport=free_port()\n            settings={'cluster.name':'opsforge-private','node.name':'owned-node','path.data':str(self.root/'data'),'path.logs':str(self.root/'logs'),\n                'network.host':'127.0.0.1','http.port':self.port,'transport.port':transport,'discovery.type':'single-node',\n                'xpack.security.enabled':False,'xpack.ml.enabled':False,'xpack.watcher.enabled':False,\n                'node.roles':['master','data','ingest'],'node.store.allow_mmap':False,'ingest.geoip.downloader.enabled':False,\n                'cluster.routing.allocation.disk.threshold_enabled':False,'http.max_content_length':'8mb'}\n            (config/'elasticsearch.yml').write_text(yaml.safe_dump(settings,sort_keys=False))\n            hostname=socket.gethostname();assert not any(c in hostname for c in '\\r\\n')\n            hosts=self.root/'jvm-hosts';hosts.write_text('127.0.0.1 localhost '+hostname+'\\n')\n            env={**os.environ,'CLI_JAVA_OPTS':'-Djdk.net.hosts.file='+str(hosts),'ES_PATH_CONF':str(config),'ES_TMPDIR':str(self.root/'tmp'),\n                'ES_JAVA_OPTS':'-Xms256m -Xmx256m -XX:MaxDirectMemorySize=128m -XX:ActiveProcessorCount=2 -Djdk.net.hosts.file='+str(hosts)}\n            # Keystore contains only this disposable node's bootstrap metadata, no external credentials.\n            initialized=subprocess.run([str(tool/'bin/elasticsearch-keystore'),'create'],env=env,cwd=self.root,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15)\n            if initialized.returncode:raise RuntimeError('private empty keystore initialization failed: '+initialized.stderr[-1500:])\n            self.log=(self.root/'startup.log').open('wb')\n            self.process=subprocess.Popen([executable],env=env,cwd=self.root,stdin=subprocess.DEVNULL,stdout=self.log,stderr=self.log)\n            self.base='http://127.0.0.1:'+str(self.port);deadline=time.monotonic()+65\n            while time.monotonic()<deadline:\n                if self.process.poll() is not None:raise RuntimeError('private Elasticsearch startup failed: '+(self.root/'startup.log').read_text(errors='replace')[-6000:])\n                try:\n                    status,document=self.request('GET','/')\n                    if status==200:\n                        assert document['version']['number']=='8.19.7';break\n                except (OSError,urllib.error.URLError):pass\n                time.sleep(.15)\n            else:raise RuntimeError('private Elasticsearch readiness deadline: '+(self.root/'startup.log').read_text(errors='replace')[-4000:])\n            print('NATIVE_ELASTICSEARCH_READY:8.19.7',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,method,path,body=None,content_type='application/json'):\n        data=body.encode() if isinstance(body,str) else (json.dumps(body).encode() if body is not None else None)\n        request=urllib.request.Request(self.base+path,data=data,method=method,headers={'Content-Type':content_type})\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        try:\n            with opener.open(request,timeout=5) as response:raw=response.read();return response.status,json.loads(raw) if raw else None\n        except urllib.error.HTTPError as response:\n            try:return response.code,json.loads(response.read())\n            finally:response.close()\n    def __exit__(self,*args):\n        if self.process is not None:\n            if self.process.poll() is None:self.process.terminate()\n            try:self.process.wait(timeout=8)\n            except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=3)\n        if self.log:self.log.close()\n        self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom elasticsearch_native import Elasticsearch\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef call(server,method,path,body=None):\n status,value=server.request(method,path,body);assert status in (200,201),(method,path,status,value)\n return value\ndef docs(server,index):return {row['_id']:row['_source'] for row in call(server,'POST','/'+index+'/_search?size=1000')['hits']['hits']}\nwith Elasticsearch() as server:\n stream='owned-events';template={'index_patterns':['owned-*'],'data_stream':{},'template':{'settings':{'number_of_shards':1,'number_of_replicas':0},'mappings':{'properties':{'@timestamp':{'type':'date'},'message':{'type':'keyword'}}}}}\n call(server,'PUT','/_index_template/owned_stream',template);call(server,'PUT','/_data_stream/'+stream)\n first=call(server,'GET','/_data_stream/'+stream)['data_streams'][0]['indices'][0]['index_name']\n original={'@timestamp':'2020-01-01T00:00:00Z','message':'first-writer-retained'}\n call(server,'PUT','/'+stream+'/_create/existing?refresh=true',original)\n # A plain index action is not the stream append protocol.\n raw=json.dumps({'index':{'_index':stream,'_id':'wrong-op'}})+'\\n'+json.dumps(original)+'\\n'\n status,value=server.request('POST','/_bulk?refresh=true',raw,content_type='application/x-ndjson');assert status==200 and value['errors'] and value['items'][0]['index']['status']==400\n events=[{'_id':'new-a','_source':{'@timestamp':'2021-01-01T00:00:00Z','message':'new-a'}},{'_id':'existing','_source':{'@timestamp':'2022-01-01T00:00:00Z','message':'must-not-overwrite'}},{'_id':'missing-time','_source':{'message':'timestamp-required'}}];before=copy.deepcopy(events)\n print('NATIVE_ELASTICSEARCH_DATA_STREAM_INDEX_OP_REJECTED_HIDDEN_BACKING_TIMESTAMP_AND_CREATE_REQUIRED',flush=True)\n print('STUDENT_OPERATION_ENTERED:actual_create_bulk_per_item_conflict_and_timestamp_error_preserve_first_writer',flush=True)\n try:result=task.append(server.request,stream,events)\n except Exception as error:raise AssertionError('student actual data-stream append failed') from error\n assert [row['status'] for row in result]==[201,409,400] and result[0]['backing']==first\n assert docs(server,stream)=={'existing':original,'new-a':events[0]['_source']} and server.request('GET','/'+first+'/_doc/missing-time')[0]==404\n rolled=call(server,'POST','/'+stream+'/_rollover');second=rolled['new_index'];assert rolled['rolled_over'] and second!=first\n future=[{'_id':'next-generation','_source':{'@timestamp':'2023-01-01T00:00:00Z','message':'future'}}]\n assert task.append(server.request,stream,future)==[{'status':201,'backing':second}]\n assert docs(server,first)=={'existing':original,'new-a':events[0]['_source']} and docs(server,second)=={'next-generation':future[0]['_source']}\n assert docs(server,stream)=={'existing':original,'new-a':events[0]['_source'],'next-generation':future[0]['_source']}\n assert events==before and len(call(server,'GET','/_data_stream/'+stream)['data_streams'][0]['indices'])==2\n print('NATIVE_STREAM_CREATE201_CONFLICT409_MISSING_TIMESTAMP400_BOTH_BACKINGS_READABLE_NEW_WRITES_LATEST',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "elk"
+    ]
+  },
+  {
+    "id": "curated-parallel-elk-022",
+    "module": "elk",
+    "category": "ELK / EFK",
+    "level": 1,
+    "topic": "文档模型与映射",
+    "title": "真实doc_values列访问：不返回_source仍可排序取字段聚合，关闭列值对照失败",
+    "answer": "```python\ndef report(request,index):\n    body={'size':100,'_source':False,'docvalue_fields':['amount','tag'],'sort':[{'amount':'desc'}],'aggs':{'tags':{'terms':{'field':'tag','size':100},'aggs':{'amount':{'sum':{'field':'amount'}}}}}}\n    status,value=request('POST','/'+index+'/_search',body)\n    if status!=200 or value.get('timed_out') or value.get('_shards',{}).get('failed'):raise RuntimeError('column report incomplete')\n    return {'rows':[{'id':row['_id'],'amount':row['fields']['amount'][0],'tag':row['fields']['tag'][0]} for row in value['hits']['hits']],'totals':{bucket['key']:bucket['amount']['value'] for bucket in value['aggregations']['tags']['buckets']}}\n```\n\n原题知识说明：\n它是面向列的磁盘结构，常用于排序、聚合与脚本字段读取，与倒排检索职责不同。按字段类型核对支持，关闭前验证查询需求及存储收益。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Elastic官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现report(request,index)：POST index/_search，size100,_source=false,docvalue_fields=[amount,tag],sort amount desc；aggs.tags terms(tag,size100)，子聚合amount sum(amount)。每请求HTTP非200/timed_out/failed RuntimeError。返回{rows:[{id,amount:fields.amount[0],tag:fields.tag[0]}],totals:{桶key:实际sum值}}，不能从_source读取或以doc_count替代sum。实际index=false但doc_values=true字段可用，另有原文仍在却doc_values=false的真实排序失败对照；不改数据或mapping。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Elasticsearch8.19.7 numeric/keyword doc-value-only字段、_source=false列读取、sort/terms/sum，及关闭doc_values时实际失败。与020的索引存在性、021长值索引边界不同；不把小样本结果宣称全索引导出或性能压测。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://www.elastic.co/guide/en/elasticsearch/reference/8.19/doc-values.html"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-elk-022",
+      "original_title": "Elasticsearch doc_values主要服务哪些访问？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def report(request,index):\n    body={'size':100,'_source':False,'docvalue_fields':['amount','tag'],'sort':[{'amount':'desc'}],'aggs':{'tags':{'terms':{'field':'tag','size':100},'aggs':{'amount':{'sum':{'field':'amount'}}}}}}\n    status,value=request('POST','/'+index+'/_search',body)\n    if status!=200 or value.get('timed_out') or value.get('_shards',{}).get('failed'):raise RuntimeError('column report incomplete')\n    return {'rows':[{'id':row['_id'],'amount':row['fields']['amount'][0],'tag':row['fields']['tag'][0]} for row in value['hits']['hits']],'totals':{bucket['key']:bucket['amount']['value'] for bucket in value['aggregations']['tags']['buckets']}}\n"
+    },
+    "negative_files": {
+      "task.py": "def report(request,index):\n    body={'size':100,'_source':False,'docvalue_fields':['amount','tag'],'sort':[{'amount':'desc'}],'aggs':{'tags':{'terms':{'field':'tag','size':100},'aggs':{'amount':{'sum':{'field':'amount'}}}}}}\n    status,value=request('POST','/'+index+'/_search',body)\n    if status!=200 or value.get('timed_out') or value.get('_shards',{}).get('failed'):raise RuntimeError('column report incomplete')\n    return {'rows':[{'id':row['_id'],'amount':row['_source']['amount'],'tag':row['fields']['tag'][0]} for row in value['hits']['hits']],'totals':{bucket['key']:bucket['amount']['value'] for bucket in value['aggregations']['tags']['buckets']}}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像加只读官方Elasticsearch8.19.7，显式2GiB教学预算；不构建镜像",
+      "operation": "实现report(request,index)：POST index/_search，size100,_source=false,docvalue_fields=[amount,tag],sort amount desc；aggs.tags terms(tag,size100)，子聚合amount sum(amount)。每请求HTTP非200/timed_out/failed RuntimeError。返回{rows:[{id,amount:fields.amount[0],tag:fields.tag[0]}],totals:{桶key:实际sum值}}，不能从_source读取或以doc_count替代sum。实际index=false但doc_values=true字段可用，另有原文仍在却doc_values=false的真实排序失败对照；不改数据或mapping。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Elasticsearch8.19.7 numeric/keyword doc-value-only字段、_source=false列读取、sort/terms/sum，及关闭doc_values时实际失败。与020的索引存在性、021长值索引边界不同；不把小样本结果宣称全索引导出或性能压测。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "elasticsearch"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/elasticsearch_native.py": "\"\"\"Owned nonroot Elasticsearch8.19.7, private config/data/ports and bounded Java memory.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.error\nimport yaml\n\ndef free_port():\n    with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Elasticsearch:\n    def __enter__(self):\n        executable=shutil.which('elasticsearch')\n        if not executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned Elasticsearch8.19.7 required')\n        if os.geteuid()==0:raise RuntimeError('nonroot Elasticsearch fixture required')\n        self.temp=tempfile.TemporaryDirectory(prefix='of-elasticsearch-');self.root=pathlib.Path(self.temp.name);self.process=None;self.log=None\n        try:\n            tool=pathlib.Path(os.environ.get('OPSF_ELASTICSEARCH_HOME',str(pathlib.Path(executable).resolve().parents[1]))).resolve()\n            config=self.root/'config';shutil.copytree(tool/'config',config)\n            for folder in ('data','logs','tmp'):(self.root/folder).mkdir()\n            self.port=free_port();transport=free_port()\n            while transport==self.port:transport=free_port()\n            settings={'cluster.name':'opsforge-private','node.name':'owned-node','path.data':str(self.root/'data'),'path.logs':str(self.root/'logs'),\n                'network.host':'127.0.0.1','http.port':self.port,'transport.port':transport,'discovery.type':'single-node',\n                'xpack.security.enabled':False,'xpack.ml.enabled':False,'xpack.watcher.enabled':False,\n                'node.roles':['master','data','ingest'],'node.store.allow_mmap':False,'ingest.geoip.downloader.enabled':False,\n                'cluster.routing.allocation.disk.threshold_enabled':False,'http.max_content_length':'8mb'}\n            (config/'elasticsearch.yml').write_text(yaml.safe_dump(settings,sort_keys=False))\n            hostname=socket.gethostname();assert not any(c in hostname for c in '\\r\\n')\n            hosts=self.root/'jvm-hosts';hosts.write_text('127.0.0.1 localhost '+hostname+'\\n')\n            env={**os.environ,'CLI_JAVA_OPTS':'-Djdk.net.hosts.file='+str(hosts),'ES_PATH_CONF':str(config),'ES_TMPDIR':str(self.root/'tmp'),\n                'ES_JAVA_OPTS':'-Xms256m -Xmx256m -XX:MaxDirectMemorySize=128m -XX:ActiveProcessorCount=2 -Djdk.net.hosts.file='+str(hosts)}\n            # Keystore contains only this disposable node's bootstrap metadata, no external credentials.\n            initialized=subprocess.run([str(tool/'bin/elasticsearch-keystore'),'create'],env=env,cwd=self.root,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15)\n            if initialized.returncode:raise RuntimeError('private empty keystore initialization failed: '+initialized.stderr[-1500:])\n            self.log=(self.root/'startup.log').open('wb')\n            self.process=subprocess.Popen([executable],env=env,cwd=self.root,stdin=subprocess.DEVNULL,stdout=self.log,stderr=self.log)\n            self.base='http://127.0.0.1:'+str(self.port);deadline=time.monotonic()+65\n            while time.monotonic()<deadline:\n                if self.process.poll() is not None:raise RuntimeError('private Elasticsearch startup failed: '+(self.root/'startup.log').read_text(errors='replace')[-6000:])\n                try:\n                    status,document=self.request('GET','/')\n                    if status==200:\n                        assert document['version']['number']=='8.19.7';break\n                except (OSError,urllib.error.URLError):pass\n                time.sleep(.15)\n            else:raise RuntimeError('private Elasticsearch readiness deadline: '+(self.root/'startup.log').read_text(errors='replace')[-4000:])\n            print('NATIVE_ELASTICSEARCH_READY:8.19.7',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,method,path,body=None,content_type='application/json'):\n        data=body.encode() if isinstance(body,str) else (json.dumps(body).encode() if body is not None else None)\n        request=urllib.request.Request(self.base+path,data=data,method=method,headers={'Content-Type':content_type})\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        try:\n            with opener.open(request,timeout=5) as response:raw=response.read();return response.status,json.loads(raw) if raw else None\n        except urllib.error.HTTPError as response:\n            try:return response.code,json.loads(response.read())\n            finally:response.close()\n    def __exit__(self,*args):\n        if self.process is not None:\n            if self.process.poll() is None:self.process.terminate()\n            try:self.process.wait(timeout=8)\n            except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=3)\n        if self.log:self.log.close()\n        self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom elasticsearch_native import Elasticsearch\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef call(server,method,path,body=None):\n status,value=server.request(method,path,body);assert status in (200,201),(method,path,status,value)\n return value\ndef docs(server,index):return {row['_id']:row['_source'] for row in call(server,'POST','/'+index+'/_search?size=1000')['hits']['hits']}\nwith Elasticsearch() as server:\n index='column_values';other='without_columns'\n for name,enabled in [(index,True),(other,False)]:\n  call(server,'PUT','/'+name,{'settings':{'number_of_shards':1,'number_of_replicas':0},'mappings':{'properties':{'amount':{'type':'long','index':False if enabled else True,'doc_values':enabled},'tag':{'type':'keyword','index':False if enabled else True,'doc_values':enabled}}}})\n bodies={'a':{'amount':11,'tag':'red'},'b':{'amount':7,'tag':'blue'},'c':{'amount':3,'tag':'red'}}\n for name in (index,other):\n  for docid,body in bodies.items():call(server,'PUT','/'+name+'/_doc/'+docid+'?refresh=true',body)\n status,value=server.request('POST','/'+other+'/_search',{'sort':[{'amount':'desc'}]})\n assert status>=400 and ('doc' in json.dumps(value).lower() or 'fielddata' in json.dumps(value).lower()),(status,value)\n print('NATIVE_ELASTICSEARCH_SOURCE_PRESENT_WITHOUT_DOC_VALUES_SORT_FAILS_DOCVALUE_ONLY_FIELDS_READY',flush=True)\n print('STUDENT_OPERATION_ENTERED:source_false_docvalue_fields_sort_and_sum_aggregation_real_columns',flush=True)\n calls=[]\n def request(method,path,body=None,**kwargs):calls.append(copy.deepcopy(body));return server.request(method,path,body,**kwargs)\n try:result=task.report(request,index)\n except Exception as error:raise AssertionError('student actual docvalue column report failed') from error\n assert result=={'rows':[{'id':'a','amount':11,'tag':'red'},{'id':'b','amount':7,'tag':'blue'},{'id':'c','amount':3,'tag':'red'}],'totals':{'red':14.0,'blue':7.0}}\n assert len(calls)==1 and calls[0]['_source'] is False and set(calls[0]['docvalue_fields'])=={'amount','tag'}\n assert docs(server,index)==docs(server,other)==bodies\n assert call(server,'GET','/'+index+'/_mapping')[index]['mappings']['properties']['amount']['index'] is False\n print('NATIVE_DOCVALUE_ONLY_NUMERIC_KEYWORD_SORT_SUM_AND_FIELDS_WITHOUT_SOURCE_RAW_DOCUMENTS_UNCHANGED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "elk"
+    ]
+  },
+  {
+    "id": "curated-parallel-elk-024",
+    "module": "elk",
+    "category": "ELK / EFK",
+    "level": 1,
+    "topic": "采集解析与传输",
+    "title": "真实normalizer单token：大小写去重音归一，查询聚合合并而原文保持",
+    "answer": "```python\ndef create(request,index):\n    analysis={'analyzer':{'owned_words':{'type':'custom','tokenizer':'standard','filter':['lowercase','asciifolding']}},'normalizer':{'owned_keyword':{'type':'custom','filter':['lowercase','asciifolding']}}}\n    body={'settings':{'number_of_shards':1,'number_of_replicas':0,'analysis':analysis},'mappings':{'properties':{'message':{'type':'text','analyzer':'owned_words'},'tag':{'type':'keyword','normalizer':'owned_keyword'}}}}\n    status,value=request('PUT','/'+index,body)\n    if status!=200:raise RuntimeError('approved analyzer/normalizer creation failed')\n```\n\n原题知识说明：\nanalyzer可把文本转成多个词项，normalizer面向keyword规范化并保持单个词项。用_analyze验证大小写、重音和标点，设计需匹配检索口径。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Elastic官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现create(request,index)：PUT批准新索引，1shard/0replica；analysis.analyzer.owned_words为custom,tokenizer=standard,filter=[lowercase,asciifolding]；analysis.normalizer.owned_keyword为custom,filter=[lowercase,asciifolding]。message text使用owned_words，tag keyword使用owned_keyword；非200 RuntimeError。实际CAFÉ Noir分析器两token、normalizer单token，term与聚合把重音/大小写两个原文合并，_source保持。不得用stop等不支持normalization的filter；平台另验真实拒绝。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Elasticsearch8.19.7自定义normalizer单token约束、索引/term时归一与聚合key，以及不支持filter实际拒绝。017已有text分析仅为对照辅助零附加计数，新增核心为keyword normalization，不宣称所有语言/Unicode归一策略完备。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://www.elastic.co/guide/en/elasticsearch/reference/8.19/normalizer.html"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-elk-024",
+      "original_title": "Elasticsearch analyzer与normalizer的输出差异是什么？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def create(request,index):\n    analysis={'analyzer':{'owned_words':{'type':'custom','tokenizer':'standard','filter':['lowercase','asciifolding']}},'normalizer':{'owned_keyword':{'type':'custom','filter':['lowercase','asciifolding']}}}\n    body={'settings':{'number_of_shards':1,'number_of_replicas':0,'analysis':analysis},'mappings':{'properties':{'message':{'type':'text','analyzer':'owned_words'},'tag':{'type':'keyword','normalizer':'owned_keyword'}}}}\n    status,value=request('PUT','/'+index,body)\n    if status!=200:raise RuntimeError('approved analyzer/normalizer creation failed')\n"
+    },
+    "negative_files": {
+      "task.py": "def create(request,index):\n    analysis={'analyzer':{'owned_words':{'type':'custom','tokenizer':'standard','filter':['lowercase','asciifolding']}},'normalizer':{'owned_keyword':{'type':'custom','filter':['stop']}}}\n    body={'settings':{'number_of_shards':1,'number_of_replicas':0,'analysis':analysis},'mappings':{'properties':{'message':{'type':'text','analyzer':'owned_words'},'tag':{'type':'keyword','normalizer':'owned_keyword'}}}}\n    status,value=request('PUT','/'+index,body)\n    if status!=200:raise RuntimeError('approved analyzer/normalizer creation failed')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像加只读官方Elasticsearch8.19.7，显式2GiB教学预算；不构建镜像",
+      "operation": "实现create(request,index)：PUT批准新索引，1shard/0replica；analysis.analyzer.owned_words为custom,tokenizer=standard,filter=[lowercase,asciifolding]；analysis.normalizer.owned_keyword为custom,filter=[lowercase,asciifolding]。message text使用owned_words，tag keyword使用owned_keyword；非200 RuntimeError。实际CAFÉ Noir分析器两token、normalizer单token，term与聚合把重音/大小写两个原文合并，_source保持。不得用stop等不支持normalization的filter；平台另验真实拒绝。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Elasticsearch8.19.7自定义normalizer单token约束、索引/term时归一与聚合key，以及不支持filter实际拒绝。017已有text分析仅为对照辅助零附加计数，新增核心为keyword normalization，不宣称所有语言/Unicode归一策略完备。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 120,
+      "requires": {
+        "commands": [
+          "elasticsearch"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/elasticsearch_native.py": "\"\"\"Owned nonroot Elasticsearch8.19.7, private config/data/ports and bounded Java memory.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.error\nimport yaml\n\ndef free_port():\n    with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Elasticsearch:\n    def __enter__(self):\n        executable=shutil.which('elasticsearch')\n        if not executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned Elasticsearch8.19.7 required')\n        if os.geteuid()==0:raise RuntimeError('nonroot Elasticsearch fixture required')\n        self.temp=tempfile.TemporaryDirectory(prefix='of-elasticsearch-');self.root=pathlib.Path(self.temp.name);self.process=None;self.log=None\n        try:\n            tool=pathlib.Path(os.environ.get('OPSF_ELASTICSEARCH_HOME',str(pathlib.Path(executable).resolve().parents[1]))).resolve()\n            config=self.root/'config';shutil.copytree(tool/'config',config)\n            for folder in ('data','logs','tmp'):(self.root/folder).mkdir()\n            self.port=free_port();transport=free_port()\n            while transport==self.port:transport=free_port()\n            settings={'cluster.name':'opsforge-private','node.name':'owned-node','path.data':str(self.root/'data'),'path.logs':str(self.root/'logs'),\n                'network.host':'127.0.0.1','http.port':self.port,'transport.port':transport,'discovery.type':'single-node',\n                'xpack.security.enabled':False,'xpack.ml.enabled':False,'xpack.watcher.enabled':False,\n                'node.roles':['master','data','ingest'],'node.store.allow_mmap':False,'ingest.geoip.downloader.enabled':False,\n                'cluster.routing.allocation.disk.threshold_enabled':False,'http.max_content_length':'8mb'}\n            (config/'elasticsearch.yml').write_text(yaml.safe_dump(settings,sort_keys=False))\n            hostname=socket.gethostname();assert not any(c in hostname for c in '\\r\\n')\n            hosts=self.root/'jvm-hosts';hosts.write_text('127.0.0.1 localhost '+hostname+'\\n')\n            env={**os.environ,'CLI_JAVA_OPTS':'-Djdk.net.hosts.file='+str(hosts),'ES_PATH_CONF':str(config),'ES_TMPDIR':str(self.root/'tmp'),\n                'ES_JAVA_OPTS':'-Xms256m -Xmx256m -XX:MaxDirectMemorySize=128m -XX:ActiveProcessorCount=2 -Djdk.net.hosts.file='+str(hosts)}\n            # Keystore contains only this disposable node's bootstrap metadata, no external credentials.\n            initialized=subprocess.run([str(tool/'bin/elasticsearch-keystore'),'create'],env=env,cwd=self.root,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=15)\n            if initialized.returncode:raise RuntimeError('private empty keystore initialization failed: '+initialized.stderr[-1500:])\n            self.log=(self.root/'startup.log').open('wb')\n            self.process=subprocess.Popen([executable],env=env,cwd=self.root,stdin=subprocess.DEVNULL,stdout=self.log,stderr=self.log)\n            self.base='http://127.0.0.1:'+str(self.port);deadline=time.monotonic()+65\n            while time.monotonic()<deadline:\n                if self.process.poll() is not None:raise RuntimeError('private Elasticsearch startup failed: '+(self.root/'startup.log').read_text(errors='replace')[-6000:])\n                try:\n                    status,document=self.request('GET','/')\n                    if status==200:\n                        assert document['version']['number']=='8.19.7';break\n                except (OSError,urllib.error.URLError):pass\n                time.sleep(.15)\n            else:raise RuntimeError('private Elasticsearch readiness deadline: '+(self.root/'startup.log').read_text(errors='replace')[-4000:])\n            print('NATIVE_ELASTICSEARCH_READY:8.19.7',flush=True);return self\n        except BaseException:self.__exit__(None,None,None);raise\n    def request(self,method,path,body=None,content_type='application/json'):\n        data=body.encode() if isinstance(body,str) else (json.dumps(body).encode() if body is not None else None)\n        request=urllib.request.Request(self.base+path,data=data,method=method,headers={'Content-Type':content_type})\n        opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n        try:\n            with opener.open(request,timeout=5) as response:raw=response.read();return response.status,json.loads(raw) if raw else None\n        except urllib.error.HTTPError as response:\n            try:return response.code,json.loads(response.read())\n            finally:response.close()\n    def __exit__(self,*args):\n        if self.process is not None:\n            if self.process.poll() is None:self.process.terminate()\n            try:self.process.wait(timeout=8)\n            except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=3)\n        if self.log:self.log.close()\n        self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom elasticsearch_native import Elasticsearch\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef call(server,method,path,body=None):\n status,value=server.request(method,path,body);assert status in (200,201),(method,path,status,value)\n return value\ndef docs(server,index):return {row['_id']:row['_source'] for row in call(server,'POST','/'+index+'/_search?size=1000')['hits']['hits']}\nwith Elasticsearch() as server:\n index='normalized_keyword'\n print('NATIVE_ELASTICSEARCH_ANALYZER_NORMALIZER_REAL_INDEX_API_READY',flush=True)\n print('STUDENT_OPERATION_ENTERED:create_valid_single_token_keyword_normalizer_keep_original_source',flush=True)\n try:task.create(server.request,index)\n except Exception as error:raise AssertionError('student actual analyzer/normalizer configuration failed') from error\n def tokens(kind,name):return [row['token'] for row in call(server,'POST','/'+index+'/_analyze',{kind:name,'text':'CAFÉ Noir'})['tokens']]\n assert tokens('analyzer','owned_words')==['cafe','noir'] and tokens('normalizer','owned_keyword')==['cafe noir'],'normalizer split text or omitted accent/case folding'\n bodies={'accent':{'message':'CAFÉ Noir','tag':'CAFÉ Noir'},'plain':{'message':'cafe noir','tag':'cafe noir'},'other':{'message':'Other','tag':'Other'}}\n for docid,body in bodies.items():call(server,'PUT','/'+index+'/_doc/'+docid+'?refresh=true',body)\n query=call(server,'POST','/'+index+'/_search',{'query':{'term':{'tag':'CAFÉ Noir'}}})\n assert {row['_id'] for row in query['hits']['hits']}=={'accent','plain'}\n buckets=call(server,'POST','/'+index+'/_search',{'size':0,'aggs':{'tags':{'terms':{'field':'tag'}}}})['aggregations']['tags']['buckets']\n assert {row['key']:row['doc_count'] for row in buckets}=={'cafe noir':2,'other':1} and docs(server,index)==bodies\n status,value=server.request('PUT','/invalid_normalizer',{'settings':{'analysis':{'normalizer':{'bad':{'type':'custom','filter':['stop']}}}},'mappings':{'properties':{'tag':{'type':'keyword','normalizer':'bad'}}}})\n assert status==400 and 'normaliz' in json.dumps(value).lower(),(status,value)\n print('NATIVE_NORMALIZER_ONE_TOKEN_FOLDED_INDEX_AND_QUERY_AGG_MERGED_ORIGINAL_SOURCE_RETAINED_STOP_FILTER_REJECTED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "elk"
+    ]
+  }
+]

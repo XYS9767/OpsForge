@@ -1,0 +1,79 @@
+[
+  {
+    "id": "curated-network-completion-041",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 4,
+    "topic": "地址、路由与链路",
+    "title": "真实重复IP故障：ARP帧切换两个MAC且HTTP落到不同主机，撤销错误地址并保留其他业务",
+    "answer": "```python\nimport ipaddress,json,subprocess\n\ndef repair(duplicate_pid,client_pid,interface,cidr,approved_mac):\n    address=ipaddress.ip_interface(cidr)\n    def inside(pid,*args):return subprocess.check_output([\"nsenter\",\"-t\",str(pid),\"-n\",*args],text=True,timeout=5)\n    links=json.loads(inside(duplicate_pid,\"ip\",\"-j\",\"addr\",\"show\",\"dev\",interface))\n    if any(a.get(\"family\")==\"inet\" and a.get(\"local\")==str(address.ip) and a.get(\"prefixlen\")==address.network.prefixlen for link in links for a in link.get(\"addr_info\",[])):\n        inside(duplicate_pid,\"ip\",\"addr\",\"del\",cidr,\"dev\",interface)\n    neighbors=json.loads(inside(client_pid,\"ip\",\"-j\",\"neigh\",\"show\",\"to\",str(address.ip),\"dev\",interface))\n    if any(row.get(\"dst\")==str(address.ip) for row in neighbors):inside(client_pid,\"ip\",\"neigh\",\"del\",str(address.ip),\"dev\",interface)\n```\n\n原题知识说明：\n对照 DHCP/静态分配、交换机 MAC 表和两主机地址，确认重复 IP，先在授权范围隔离错误分配方并恢复唯一归属。再刷新必要邻居状态、验证流量和业务数据，保留冲突证据。不要只永久绑死某台客户端的 ARP 掩盖地址治理问题；修复地址池与资产登记。",
+    "type": "code",
+    "source": "OpsForge 原创网络专题题",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "既有离线ARP快照题升级为真实网络故障证据；原ID不再计改编增量，原来源和报告保留，能力扩大后版本递增并重新验证。",
+    "pack": "network-completion-20261021",
+    "body": "## 操作任务\n实现repair(duplicate_pid,client_pid,interface,cidr,approved_mac)。可信夹具已定位错误地址归属方与批准服务MAC，参数只指向本次独立命名空间内的进程。通过nsenter -t PID -n调用ip：仅从错误主机的指定接口删除明确冲突CIDR，保留其合法第二地址、正确主机地址与客户机地址；仅删除客户机该目标IP的旧邻居项，让实际ARP重新解析，保留其他邻居项，不永久绑定MAC掩盖重复配置。重复调用应可安全完成。夹具用三真实网络命名空间、Linux bridge/veth、真实ARP公告帧及HTTP请求复现同IP的邻居MAC在两主机间切换并访问到不同服务；修复后原批准服务稳定，错误主机在其合法地址继续服务。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n普通student仅在unshare创建的自有用户/网络命名空间中取得对应命名空间的管理能力，实际bridge/veth/ARP/邻居表/HTTP，不模拟ARP缓存字典。子进程结束销毁虚拟网络，外层WSL网络命名空间及ip_forward不变；不触及宿主网卡、现有路由、防火墙或默认身份。原故障按静态重复IP误配置复现，不声称有真实物理交换机、DHCP服务器或恶意ARP攻击；资产分配治理仍需在实际部署中执行。仅修复可信已定位的错误地址，不将静态ARP钉死当根因消除；不构建镜像，原ID只计一次。",
+    "rubric": [
+      "概念和证据对应",
+      "说明限制及故障影响",
+      "验证恢复结果与回退条件"
+    ],
+    "hints": [],
+    "references": [
+      "https://docs.kernel.org/networking/ip-sysctl.html",
+      "https://www.rfc-editor.org/rfc/rfc5227.html"
+    ],
+    "incident_signature": "network-duplicate-ip-neighbor-flapping",
+    "exercise_mode": "tabletop",
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-network-completion-041",
+      "original_title": "同一服务器 IP 的邻居表在两个 MAC 间切换，访问随机落到不同主机。如何恢复？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import ipaddress,json,subprocess\n\ndef repair(duplicate_pid,client_pid,interface,cidr,approved_mac):\n    address=ipaddress.ip_interface(cidr)\n    def inside(pid,*args):return subprocess.check_output([\"nsenter\",\"-t\",str(pid),\"-n\",*args],text=True,timeout=5)\n    links=json.loads(inside(duplicate_pid,\"ip\",\"-j\",\"addr\",\"show\",\"dev\",interface))\n    if any(a.get(\"family\")==\"inet\" and a.get(\"local\")==str(address.ip) and a.get(\"prefixlen\")==address.network.prefixlen for link in links for a in link.get(\"addr_info\",[])):\n        inside(duplicate_pid,\"ip\",\"addr\",\"del\",cidr,\"dev\",interface)\n    neighbors=json.loads(inside(client_pid,\"ip\",\"-j\",\"neigh\",\"show\",\"to\",str(address.ip),\"dev\",interface))\n    if any(row.get(\"dst\")==str(address.ip) for row in neighbors):inside(client_pid,\"ip\",\"neigh\",\"del\",str(address.ip),\"dev\",interface)\n"
+    },
+    "negative_files": {
+      "task.py": "import ipaddress,subprocess\ndef repair(duplicate_pid,client_pid,interface,cidr,approved_mac):\n    address=str(ipaddress.ip_interface(cidr).ip)\n    subprocess.run([\"nsenter\",\"-t\",str(client_pid),\"-n\",\"ip\",\"neigh\",\"del\",address,\"dev\",interface],capture_output=True,timeout=5)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "专用WSL普通student；独立用户/网络命名空间中的真实Linux ARP与HTTP，无镜像",
+      "operation": "实现repair(duplicate_pid,client_pid,interface,cidr,approved_mac)。可信夹具已定位错误地址归属方与批准服务MAC，参数只指向本次独立命名空间内的进程。通过nsenter -t PID -n调用ip：仅从错误主机的指定接口删除明确冲突CIDR，保留其合法第二地址、正确主机地址与客户机地址；仅删除客户机该目标IP的旧邻居项，让实际ARP重新解析，保留其他邻居项，不永久绑定MAC掩盖重复配置。重复调用应可安全完成。夹具用三真实网络命名空间、Linux bridge/veth、真实ARP公告帧及HTTP请求复现同IP的邻居MAC在两主机间切换并访问到不同服务；修复后原批准服务稳定，错误主机在其合法地址继续服务。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "普通student仅在unshare创建的自有用户/网络命名空间中取得对应命名空间的管理能力，实际bridge/veth/ARP/邻居表/HTTP，不模拟ARP缓存字典。子进程结束销毁虚拟网络，外层WSL网络命名空间及ip_forward不变；不触及宿主网卡、现有路由、防火墙或默认身份。原故障按静态重复IP误配置复现，不声称有真实物理交换机、DHCP服务器或恶意ARP攻击；资产分配治理仍需在实际部署中执行。仅修复可信已定位的错误地址，不将静态ARP钉死当根因消除；不构建镜像，原ID只计一次。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 55,
+      "requires": {
+        "commands": [
+          "ip",
+          "nsenter",
+          "unshare"
+        ],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/arp_scenario.py": "\"\"\"Real isolated bridge, two duplicate-IP peers, one client. Never touches the enclosing network.\"\"\"\nimport json,os,pathlib,secrets,subprocess,sys,time\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert os.geteuid()==0\nworkers=[]\n\ndef run(*args):return subprocess.check_output(args,text=True,timeout=5)\n\ndef inside(peer,*args):return run('nsenter','-t',str(peer.pid),'-n',*args)\n\ndef rpc(peer,**data):\n peer.stdin.write(json.dumps(data)+'\\n');peer.stdin.flush();line=peer.stdout.readline();assert line,'namespace worker exited';result=json.loads(line);assert result['ok'],result;return result['result']\n\ndef addresses(peer):return {a['local'] for link in json.loads(inside(peer,'ip','-j','addr','show','dev','eth0')) for a in link.get('addr_info',[]) if a['family']=='inet'}\n\ndef neighbor(peer,address):\n return next((row.get('lladdr') for row in json.loads(inside(peer,'ip','-j','neigh','show','to',address,'dev','eth0')) if row.get('dst')==address),None)\n\ntry:\n for label in ['client','approved','duplicate']:\n  peer=subprocess.Popen(['unshare','-n','--',sys.executable,'-I','-B','checks/arp_worker.py'],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n  workers.append(peer);ready=json.loads(peer.stdout.readline());assert ready['ready'] and ready['pid']==peer.pid\n client,approved,duplicate=workers\n run('ip','link','add','br0','type','bridge');run('ip','link','set','br0','up')\n for label,peer in zip(['c','a','b'],workers):\n  run('ip','link','add','r'+label,'type','veth','peer','name','p'+label);run('ip','link','set','p'+label,'netns',str(peer.pid));inside(peer,'ip','link','set','p'+label,'name','eth0');inside(peer,'ip','link','set','lo','up');inside(peer,'ip','link','set','eth0','up');run('ip','link','set','r'+label,'master','br0');run('ip','link','set','r'+label,'up')\n for peer,values in [(client,['192.0.2.10/24']),(approved,['192.0.2.20/24','192.0.2.22/24']),(duplicate,['192.0.2.21/24'])]:\n  for value in values:inside(peer,'ip','addr','add',value,'dev','eth0')\n nonce=secrets.token_hex(16);good='approved:'+nonce;bad='duplicate:'+nonce\n rpc(approved,op='serve',content=good);rpc(duplicate,op='serve',content=bad)\n assert rpc(client,op='http',address='192.0.2.20')==good and rpc(client,op='http',address='192.0.2.21')==bad\n mac_a=json.loads(inside(approved,'ip','-j','link','show','dev','eth0'))[0]['address'];mac_b=json.loads(inside(duplicate,'ip','-j','link','show','dev','eth0'))[0]['address'];assert mac_a!=mac_b\n inside(duplicate,'ip','addr','add','192.0.2.20/24','dev','eth0')\n observations=[]\n for peer,mac,body in [(duplicate,mac_b,bad),(approved,mac_a,good),(duplicate,mac_b,bad)]:\n  end=time.monotonic()+3\n  while time.monotonic()<end:\n   rpc(peer,op='announce',interface='eth0',address='192.0.2.20')\n   if neighbor(client,'192.0.2.20')==mac:break\n   time.sleep(.05)\n  assert neighbor(client,'192.0.2.20')==mac\n  observed=rpc(client,op='http',address='192.0.2.20');assert observed==body;observations.append((mac,observed.split(':')[0]))\n assert len({mac for mac,_ in observations})==2 and neighbor(client,'192.0.2.21')==mac_b\n print('NATIVE_LINUX_READY',flush=True)\n print('STUDENT_OPERATION_ENTERED: real ARP frames switched the client neighbor MAC and real HTTP reached both duplicate-IP peers',flush=True)\n task.repair(duplicate.pid,client.pid,'eth0','192.0.2.20/24',mac_a)\n assert addresses(duplicate)=={'192.0.2.21'} and addresses(approved)=={'192.0.2.20','192.0.2.22'} and addresses(client)=={'192.0.2.10'}\n assert neighbor(client,'192.0.2.21')==mac_b,'unrelated neighbor must survive the targeted repair'\n for _ in range(3):assert rpc(client,op='http',address='192.0.2.20')==good\n assert neighbor(client,'192.0.2.20')==mac_a\n assert rpc(client,op='http',address='192.0.2.21')==bad and rpc(client,op='http',address='192.0.2.22')==good\n task.repair(duplicate.pid,client.pid,'eth0','192.0.2.20/24',mac_a);assert addresses(duplicate)=={'192.0.2.21'}\n print('NATIVE_ARP_TWO_REAL_MACS_AND_HTTP_IDENTITIES_REPRODUCED_REMOVE_ONLY_ERRONEOUS_DUPLICATE_ADDRESS_STABLE_APPROVED_SERVICE_OTHER_ADDRESSES_AND_NEIGHBOR_PRESERVED',flush=True)\n print('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\nfinally:\n for peer in reversed(workers):\n  if peer.poll() is None:peer.terminate()\n  try:peer.wait(timeout=4)\n  except subprocess.TimeoutExpired:peer.kill();peer.wait()\n",
+        "checks/arp_worker.py": "\"\"\"Trusted private namespace worker: real HTTP, IP inspection and link-local ARP announcements.\"\"\"\nimport json,pathlib,socket,struct,subprocess,sys,threading,urllib.request\nfrom http.server import BaseHTTPRequestHandler,ThreadingHTTPServer\nserver=None\n\ndef run(*args):return subprocess.check_output(args,text=True,timeout=5)\n\nprint(json.dumps({'ready':True,'pid':__import__('os').getpid()}),flush=True)\ntry:\n for line in sys.stdin:\n  data=json.loads(line)\n  try:\n   op=data['op']\n   if op=='serve':\n    content=data['content'].encode()\n    class Handler(BaseHTTPRequestHandler):\n     def log_message(self,*args):pass\n     def do_GET(self):\n      self.send_response(200);self.send_header('Content-Length',str(len(content)));self.end_headers();self.wfile.write(content)\n    server=ThreadingHTTPServer(('0.0.0.0',18080),Handler);threading.Thread(target=server.serve_forever,daemon=True).start();result=True\n   elif op=='http':\n    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n    with opener.open('http://'+data['address']+':18080/',timeout=2) as response:result=response.read().decode()\n   elif op=='announce':\n    iface=data['interface'];mac=bytes.fromhex(json.loads(run('ip','-j','link','show','dev',iface))[0]['address'].replace(':',''))\n    address=socket.inet_aton(data['address']);packet=b'\\xff'*6+mac+struct.pack('!H',0x0806)+struct.pack('!HHBBH',1,0x0800,6,4,1)+mac+address+b'\\x00'*6+address\n    with socket.socket(socket.AF_PACKET,socket.SOCK_RAW,socket.htons(0x0806)) as link:link.bind((iface,0));link.send(packet)\n    result=True\n   else:raise ValueError('unknown trusted worker operation')\n   print(json.dumps({'ok':True,'result':result}),flush=True)\n  except Exception as exc:print(json.dumps({'ok':False,'error':type(exc).__name__+': '+str(exc)}),flush=True)\nfinally:\n if server is not None:server.shutdown();server.server_close()\n",
+        "checks/check.py": "import os,pathlib,subprocess,sys\nassert os.geteuid()!=0\nbefore=(os.readlink(\"/proc/self/ns/net\"),pathlib.Path(\"/proc/sys/net/ipv4/ip_forward\").read_text())\nprocess=subprocess.run([\"unshare\",\"-Urn\",\"--\",sys.executable,\"-I\",\"-B\",\"checks/arp_scenario.py\"],capture_output=True,text=True,timeout=40)\nprint(process.stdout,flush=True)\nassert before==(os.readlink(\"/proc/self/ns/net\"),pathlib.Path(\"/proc/sys/net/ipv4/ip_forward\").read_text()),\"enclosing namespace must remain unchanged\"\nassert process.returncode==0,process.stderr+process.stdout\n"
+      }
+    },
+    "question_format": "code"
+  }
+]

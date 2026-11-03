@@ -1,0 +1,69 @@
+[
+  {
+    "id": "curated-parallel-gcp-102",
+    "module": "gcp",
+    "category": "GCP",
+    "level": 3,
+    "topic": "GKE与CloudRun",
+    "title": "Cloud Run请求返回后后台任务停滞且下一请求才推进",
+    "answer": "```python\ndef plan_background_work(request_cpu_only,task_durable,worker_idempotent,instance_billing=False):\n    if not all(isinstance(x,bool) for x in (request_cpu_only,task_durable,worker_idempotent,instance_billing)):\n        raise ValueError(\"execution flags must be booleans\")\n    if task_durable and worker_idempotent:\n        return {\"safe_for_background_progress\":True,\"path\":\"durable_queue_or_job\",\"action\":\"retain durable task state, acknowledge only after completion, and verify bounded retries\"}\n    if request_cpu_only:\n        return {\"safe_for_background_progress\":False,\"path\":\"request_cpu_not_available_after_response\",\"action\":\"move work to a durable queue or Job; instance CPU allocation alone does not guarantee instance lifetime or retry safety\"}\n    if instance_billing:\n        return {\"safe_for_background_progress\":False,\"path\":\"instance_lifecycle_still_unbounded\",\"action\":\"use a durable task record and idempotent worker; instance-based CPU allocation does not keep an instance alive indefinitely\"}\n    return {\"safe_for_background_progress\":False,\"path\":\"lifecycle_or_durability_unproven\",\"action\":\"persist task intent before responding and run it through a retryable worker with idempotency\"}\n```\n\n原题知识说明：\n桌面推演，未在生产执行。核对request-based billing及CPU分配设置，对比请求期间与空闲期间后台进度，排除外部队列等待。根因为后台工作依赖请求外CPU；将工作交给适合的Job/队列执行，或按业务采用instance-based billing并确认实例生命周期。验收无前台请求时任务按承诺完成，实例终止仍可重试。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Google Cloud官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现plan_background_work(...)：识别依赖request-based CPU的请求外后台任务会在响应后停滞；不得把切换instance-based billing误称为持久执行保证。只有任务意图已持久化、worker具备幂等重试时才认可安全后台路径；否则优先规划durable queue/Job并在完成后确认。\n\n## 提交产物\ntask.py\n\n## 验收方法\n覆盖request CPU停滞、instance生命周期限制、持久任务状态与worker幂等组合。\n\n## 能力边界\n只验证本地调度策略合同，不启动Cloud Run，不改变计费或实例设置；离线结果不证明远端任务真实完成。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [],
+    "incident_signature": "cloud-run-request-scoped-cpu-background-work",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-gcp-102",
+      "original_title": "Cloud Run请求返回后后台任务长期停滞，下一次请求到来又推进，如何处理？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def plan_background_work(request_cpu_only,task_durable,worker_idempotent,instance_billing=False):\n    if not all(isinstance(x,bool) for x in (request_cpu_only,task_durable,worker_idempotent,instance_billing)):\n        raise ValueError(\"execution flags must be booleans\")\n    if task_durable and worker_idempotent:\n        return {\"safe_for_background_progress\":True,\"path\":\"durable_queue_or_job\",\"action\":\"retain durable task state, acknowledge only after completion, and verify bounded retries\"}\n    if request_cpu_only:\n        return {\"safe_for_background_progress\":False,\"path\":\"request_cpu_not_available_after_response\",\"action\":\"move work to a durable queue or Job; instance CPU allocation alone does not guarantee instance lifetime or retry safety\"}\n    if instance_billing:\n        return {\"safe_for_background_progress\":False,\"path\":\"instance_lifecycle_still_unbounded\",\"action\":\"use a durable task record and idempotent worker; instance-based CPU allocation does not keep an instance alive indefinitely\"}\n    return {\"safe_for_background_progress\":False,\"path\":\"lifecycle_or_durability_unproven\",\"action\":\"persist task intent before responding and run it through a retryable worker with idempotency\"}\n"
+    },
+    "negative_files": {
+      "task.py": "def plan_background_work(request_cpu_only,task_durable,worker_idempotent,instance_billing=False):\n    if not all(isinstance(x,bool) for x in (request_cpu_only,task_durable,worker_idempotent,instance_billing)):\n        raise ValueError(\"execution flags must be booleans\")\n    if task_durable or worker_idempotent:\n        return {\"safe_for_background_progress\":True,\"path\":\"durable_queue_or_job\",\"action\":\"retain durable task state, acknowledge only after completion, and verify bounded retries\"}\n    if request_cpu_only:\n        return {\"safe_for_background_progress\":False,\"path\":\"request_cpu_not_available_after_response\",\"action\":\"move work to a durable queue or Job; instance CPU allocation alone does not guarantee instance lifetime or retry safety\"}\n    if instance_billing:\n        return {\"safe_for_background_progress\":False,\"path\":\"instance_lifecycle_still_unbounded\",\"action\":\"use a durable task record and idempotent worker; instance-based CPU allocation does not keep an instance alive indefinitely\"}\n    return {\"safe_for_background_progress\":False,\"path\":\"lifecycle_or_durability_unproven\",\"action\":\"persist task intent before responding and run it through a retryable worker with idempotency\"}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现plan_background_work(...)：识别依赖request-based CPU的请求外后台任务会在响应后停滞；不得把切换instance-based billing误称为持久执行保证。只有任务意图已持久化、worker具备幂等重试时才认可安全后台路径；否则优先规划durable queue/Job并在完成后确认。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "只验证本地调度策略合同，不启动Cloud Run，不改变计费或实例设置；离线结果不证明远端任务真实完成。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'));task=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: choose durable background execution path',flush=True)\nstalled=task.plan_background_work(True,False,False);assert not stalled['safe_for_background_progress'] and stalled['path']=='request_cpu_not_available_after_response'\ninstance=task.plan_background_work(False,False,False,True);assert not instance['safe_for_background_progress'] and 'does not keep an instance alive' in instance['action']\nqueued=task.plan_background_work(True,True,True);assert queued['safe_for_background_progress'] and queued['path']=='durable_queue_or_job'\nunsafe=task.plan_background_work(False,True,False);assert not unsafe['safe_for_background_progress']\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "gcp"
+    ]
+  }
+]

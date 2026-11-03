@@ -1,0 +1,74 @@
+[
+  {
+    "id": "curated-advanced-go-003",
+    "module": "go",
+    "category": "Go 运维开发",
+    "level": 5,
+    "topic": "文件数据与时间",
+    "title": "Go配置网关：拒绝重复键、大小写漂移和JSON尾随数据",
+    "body": "## 操作任务\n提交task.go，实现Config{Name string;Retries int;TLSEnabled bool;ServerName string}及Parse([]byte)(Config,error)。只接受不大于4096字节的单个JSON对象，键严格为name、retries和tls；name为非空非全空白字符串，retries是0至5的整数文本，tls恰含enabled布尔和server_name字符串，enabled为true时server_name非空非全空白。任何层级重复键（含转义后相同的键）、未知键、大小写变化、尾随JSON或文本、非匹配类型、超过32层嵌套均拒绝，错误时返回零Config。不得把Go结构体解码默认大小写匹配或重复键覆盖当成安全唯一解释。\n\n## 提交产物\ntask.go\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Go encoding/json Token读取，检查键转义还原后的重复、大小写精确匹配、嵌套schema、整数词法和完整输入结束。此合同仅限给定字段与大小上限，不宣称所有Unicode规范化或其他语言解析器已验证。普通student临时目录、离线标准库，无镜像构建。",
+    "answer": "```go\npackage exercise\nimport(\"bytes\";\"encoding/json\";\"errors\";\"io\";\"strconv\";\"strings\")\ntype Config struct{Name string;Retries int;TLSEnabled bool;ServerName string}\nfunc value(d *json.Decoder,depth int)(any,error){\n if depth>32{return nil,errors.New(\"too deep\")};token,err:=d.Token();if err!=nil{return nil,err};delim,ok:=token.(json.Delim);if !ok{return token,nil}\n switch delim{case '{':\n  m:=map[string]any{};for d.More(){k,e:=d.Token();if e!=nil{return nil,e};key,ok:=k.(string);if !ok{return nil,errors.New(\"key\")};if _,exists:=m[key];exists{return nil,errors.New(\"duplicate key\")};v,e:=value(d,depth+1);if e!=nil{return nil,e};m[key]=v};end,e:=d.Token();if e!=nil||end!=json.Delim('}'){return nil,errors.New(\"object end\")};return m,nil\n case '[':\n  a:=[]any{};for d.More(){v,e:=value(d,depth+1);if e!=nil{return nil,e};a=append(a,v)};end,e:=d.Token();if e!=nil||end!=json.Delim(']'){return nil,errors.New(\"array end\")};return a,nil\n };return nil,errors.New(\"unexpected delimiter\")\n}\nfunc Parse(data []byte)(Config,error){\n bad:=func()(Config,error){return Config{},errors.New(\"invalid config\")};if len(data)>4096{return bad()};d:=json.NewDecoder(bytes.NewReader(data));d.UseNumber();raw,e:=value(d,0);if e!=nil{return bad()};if _,e=d.Token();e!=io.EOF{return bad()}\n m,ok:=raw.(map[string]any);if !ok||len(m)!=3{return bad()};name,ok:=m[\"name\"].(string);if !ok||strings.TrimSpace(name)==\"\"{return bad()};number,ok:=m[\"retries\"].(json.Number);if !ok{return bad()};n,e:=strconv.Atoi(string(number));if e!=nil||n<0||n>5{return bad()}\n tls,ok:=m[\"tls\"].(map[string]any);if !ok||len(tls)!=2{return bad()};enabled,ok:=tls[\"enabled\"].(bool);if !ok{return bad()};server,ok:=tls[\"server_name\"].(string);if !ok||(enabled&&strings.TrimSpace(server)==\"\"){return bad()};return Config{Name:name,Retries:n,TLSEnabled:enabled,ServerName:server},nil\n}\n```\n\n原题知识说明：\n交付接受的JSON语法与字段匹配规范，明确是否拒绝重复对象键、字段大小写变体和单对象后多余内容。标准encoding/json的行为不能直接当所有语言解析器共同规范；DisallowUnknownFields也不负责拒绝全部重复键或保证输入只含一个对象。开发应在最终解码前或过程中按选定规则检测重复与歧义，并在单个文档后验证仅剩允许空白；签名应绑定同一语义或明确的规范字节。验收构造同键不同值、嵌套重复、大小写碰撞、拼接两对象及超限深度，要求所有入口结论一致。发现历史客户端依赖宽松行为时先隔离兼容入口并告警，不能静默改变安全字段优先级；回退仍保持已承诺的拒绝边界。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "指出机制特有的兼容或失败边界",
+      "交付可操作的接口合同与验收矩阵",
+      "定义失败处置及回退限制"
+    ],
+    "references": [
+      "https://pkg.go.dev/encoding/json#Decoder",
+      "https://www.rfc-editor.org/rfc/rfc8259.html"
+    ],
+    "related_modules": [
+      "go"
+    ],
+    "language": "go",
+    "conversion": {
+      "original_id": "curated-advanced-go-003",
+      "original_title": "为Go配置网关制定JSON唯一解释规则，怎样防止重复键、大小写字段与尾随数据在不同解析端产生不同结果？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.go": "package exercise\ntype Config struct{Name string;Retries int;TLSEnabled bool;ServerName string}\nfunc Parse([]byte)(Config,error){panic(\"NotImplementedError\")}\n"
+    },
+    "solution_files": {
+      "task.go": "package exercise\nimport(\"bytes\";\"encoding/json\";\"errors\";\"io\";\"strconv\";\"strings\")\ntype Config struct{Name string;Retries int;TLSEnabled bool;ServerName string}\nfunc value(d *json.Decoder,depth int)(any,error){\n if depth>32{return nil,errors.New(\"too deep\")};token,err:=d.Token();if err!=nil{return nil,err};delim,ok:=token.(json.Delim);if !ok{return token,nil}\n switch delim{case '{':\n  m:=map[string]any{};for d.More(){k,e:=d.Token();if e!=nil{return nil,e};key,ok:=k.(string);if !ok{return nil,errors.New(\"key\")};if _,exists:=m[key];exists{return nil,errors.New(\"duplicate key\")};v,e:=value(d,depth+1);if e!=nil{return nil,e};m[key]=v};end,e:=d.Token();if e!=nil||end!=json.Delim('}'){return nil,errors.New(\"object end\")};return m,nil\n case '[':\n  a:=[]any{};for d.More(){v,e:=value(d,depth+1);if e!=nil{return nil,e};a=append(a,v)};end,e:=d.Token();if e!=nil||end!=json.Delim(']'){return nil,errors.New(\"array end\")};return a,nil\n };return nil,errors.New(\"unexpected delimiter\")\n}\nfunc Parse(data []byte)(Config,error){\n bad:=func()(Config,error){return Config{},errors.New(\"invalid config\")};if len(data)>4096{return bad()};d:=json.NewDecoder(bytes.NewReader(data));d.UseNumber();raw,e:=value(d,0);if e!=nil{return bad()};if _,e=d.Token();e!=io.EOF{return bad()}\n m,ok:=raw.(map[string]any);if !ok||len(m)!=3{return bad()};name,ok:=m[\"name\"].(string);if !ok||strings.TrimSpace(name)==\"\"{return bad()};number,ok:=m[\"retries\"].(json.Number);if !ok{return bad()};n,e:=strconv.Atoi(string(number));if e!=nil||n<0||n>5{return bad()}\n tls,ok:=m[\"tls\"].(map[string]any);if !ok||len(tls)!=2{return bad()};enabled,ok:=tls[\"enabled\"].(bool);if !ok{return bad()};server,ok:=tls[\"server_name\"].(string);if !ok||(enabled&&strings.TrimSpace(server)==\"\"){return bad()};return Config{Name:name,Retries:n,TLSEnabled:enabled,ServerName:server},nil\n}\n"
+    },
+    "negative_files": {
+      "task.go": "package exercise\nimport(\"bytes\";\"encoding/json\";\"errors\";\"io\";\"strconv\";\"strings\")\ntype Config struct{Name string;Retries int;TLSEnabled bool;ServerName string}\nfunc value(d *json.Decoder,depth int)(any,error){\n if depth>32{return nil,errors.New(\"too deep\")};token,err:=d.Token();if err!=nil{return nil,err};delim,ok:=token.(json.Delim);if !ok{return token,nil}\n switch delim{case '{':\n  m:=map[string]any{};for d.More(){k,e:=d.Token();if e!=nil{return nil,e};key,ok:=k.(string);if !ok{return nil,errors.New(\"key\")};v,e:=value(d,depth+1);if e!=nil{return nil,e};m[key]=v};end,e:=d.Token();if e!=nil||end!=json.Delim('}'){return nil,errors.New(\"object end\")};return m,nil\n case '[':\n  a:=[]any{};for d.More(){v,e:=value(d,depth+1);if e!=nil{return nil,e};a=append(a,v)};end,e:=d.Token();if e!=nil||end!=json.Delim(']'){return nil,errors.New(\"array end\")};return a,nil\n };return nil,errors.New(\"unexpected delimiter\")\n}\nfunc Parse(data []byte)(Config,error){\n bad:=func()(Config,error){return Config{},errors.New(\"invalid config\")};if len(data)>4096{return bad()};d:=json.NewDecoder(bytes.NewReader(data));d.UseNumber();raw,e:=value(d,0);if e!=nil{return bad()};if _,e=d.Token();e!=io.EOF{return bad()}\n m,ok:=raw.(map[string]any);if !ok||len(m)!=3{return bad()};name,ok:=m[\"name\"].(string);if !ok||strings.TrimSpace(name)==\"\"{return bad()};number,ok:=m[\"retries\"].(json.Number);if !ok{return bad()};n,e:=strconv.Atoi(string(number));if e!=nil||n<0||n>5{return bad()}\n tls,ok:=m[\"tls\"].(map[string]any);if !ok||len(tls)!=2{return bad()};enabled,ok:=tls[\"enabled\"].(bool);if !ok{return bad()};server,ok:=tls[\"server_name\"].(string);if !ok||(enabled&&strings.TrimSpace(server)==\"\"){return bad()};return Config{Name:name,Retries:n,TLSEnabled:enabled,ServerName:server},nil\n}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "提交task.go，实现Config{Name string;Retries int;TLSEnabled bool;ServerName string}及Parse([]byte)(Config,error)。只接受不大于4096字节的单个JSON对象，键严格为name、retries和tls；name为非空非全空白字符串，retries是0至5的整数文本，tls恰含enabled布尔和server_name字符串，enabled为true时server_name非空非全空白。任何层级重复键（含转义后相同的键）、未知键、大小写变化、尾随JSON或文本、非匹配类型、超过32层嵌套均拒绝，错误时返回零Config。不得把Go结构体解码默认大小写匹配或重复键覆盖当成安全唯一解释。",
+      "deliverables": [
+        "task.go"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Go encoding/json Token读取，检查键转义还原后的重复、大小写精确匹配、嵌套schema、整数词法和完整输入结束。此合同仅限给定字段与大小上限，不宣称所有Unicode规范化或其他语言解析器已验证。普通student临时目录、离线标准库，无镜像构建。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "go"
+        ],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/task_test.go": "package exercise\nimport(\"strings\";\"testing\")\nfunc TestStrictSchemaAndJSONBoundaries(t *testing.T){\n good:=`{\"name\":\"api\",\"retries\":3,\"tls\":{\"enabled\":true,\"server_name\":\"api.example\"}}`;got,e:=Parse([]byte(good));if e!=nil||got!=(Config{Name:\"api\",Retries:3,TLSEnabled:true,ServerName:\"api.example\"}){t.Fatal(\"valid config\",got,e)}\n invalid:=[]string{\n `{\"name\":\"a\",\"name\":\"b\",\"retries\":0,\"tls\":{\"enabled\":false,\"server_name\":\"\"}}`,\n `{\"name\":\"a\",\"na\\u006de\":\"b\",\"retries\":0,\"tls\":{\"enabled\":false,\"server_name\":\"\"}}`,\n `{\"Name\":\"a\",\"retries\":0,\"tls\":{\"enabled\":false,\"server_name\":\"\"}}`,\n `{\"name\":\"a\",\"retries\":0,\"tls\":{\"enabled\":true,\"enabled\":false,\"server_name\":\"x\"}}`,\n `{\"name\":\"a\",\"retries\":1.0,\"tls\":{\"enabled\":false,\"server_name\":\"\"}}`,\n `{\"name\":\"a\",\"retries\":6,\"tls\":{\"enabled\":false,\"server_name\":\"\"}}`,\n `{\"name\":\"a\",\"retries\":null,\"tls\":{\"enabled\":false,\"server_name\":\"\"}}`,\n `{\"name\":\"a\",\"retries\":0,\"tls\":{\"enabled\":true,\"server_name\":\"\"}}`,\n `{\"name\":\"a\",\"retries\":0,\"tls\":{\"enabled\":false,\"server_name\":\"\",\"extra\":1}}`,\n `{\"name\":\"a\",\"retries\":0,\"tls\":{\"enabled\":false,\"server_name\":\"\"}} {}`,\n `{\"name\":\"a\",\"retries\":0,\"tls\":{\"enabled\":false,\"server_name\":\"\"}} trailing`,\n strings.Repeat(\"[\",35)+strings.Repeat(\"]\",35),strings.Repeat(\" \",4097),`null`,\n }\n for _,input:=range invalid{c,e:=Parse([]byte(input));if e==nil||c!=(Config{}){t.Fatalf(\"ambiguous or malformed config accepted: %q %#v %v\",input,c,e)}}\n t.Log(\"NATIVE_GO_JSON_DUPLICATE_ESCAPED_KEY_CASE_SCHEMA_NUMERIC_AND_TRAILING_REJECTED\")\n}\n",
+        "checks/check.py": "import os,pathlib,subprocess,sys,tempfile\nassert os.getuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED:single_interpretation_go_json_config',flush=True)\nenv={**os.environ,'GOCACHE':'/tmp/opsforge-go-cache','GOMODCACHE':'/tmp/opsforge-go-modcache','GOTOOLCHAIN':'local','GOPROXY':'off','GOSUMDB':'off','CGO_ENABLED':'0','GOMAXPROCS':'2','GOMEMLIMIT':'384MiB'}\nwith tempfile.TemporaryDirectory(prefix='opsforge-go-json-') as name:\n root=pathlib.Path(name);(root/'go.mod').write_text('module opsforge.local/exercise\\n\\ngo 1.23\\n');(root/'task.go').write_bytes(pathlib.Path('task.go').read_bytes());(root/'task_test.go').write_bytes(pathlib.Path('checks/task_test.go').read_bytes())\n p=subprocess.run(['go','test','-vet=off','-v','-count=1','-timeout=8s','./...'],cwd=root,env=env,capture_output=True,text=True,timeout=55);assert p.returncode==0,p.stdout+p.stderr\n assert 'NATIVE_GO_JSON_DUPLICATE_ESCAPED_KEY_CASE_SCHEMA_NUMERIC_AND_TRAILING_REJECTED' in p.stdout\n print('NATIVE_GO_JSON_DUPLICATE_ESCAPED_KEY_CASE_SCHEMA_NUMERIC_AND_TRAILING_REJECTED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "project"
+  }
+]

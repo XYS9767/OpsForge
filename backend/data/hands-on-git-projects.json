@@ -1,0 +1,357 @@
+[
+  {
+    "id": "curated-git-project-001",
+    "module": "git",
+    "category": "Git",
+    "topic": "批量迁移 Git notes：预检冲突与原子发布",
+    "title": "批量迁移 Git notes：预检冲突与原子发布",
+    "level": 4,
+    "type": "code",
+    "language": "python",
+    "version": 1,
+    "body": "## 环境与初始材料\nPython 3.11+ 与 Git 2.39+，仅新建的本地临时仓库，无外部网络。初始task.py为未实现骨架；平台自动注入验收文件并按题目描述创建仓库和故障。\n\n## 操作任务\n实现 execute(repo,mapping,report_path)。mapping将旧commit ID映射到新commit ID；把refs/notes/commits上的原注释复制到新提交，保留旧注释及无关注释。先检查所有目标：已有相同注释允许幂等；不同注释、旧注释缺失、多个来源映射到同一目标且内容不同都拒绝且不改变正式notes引用。在临时notes引用构造全部修改，最后用带旧值的update-ref发布，清除临时引用，生成JSON报告（before、after、copied）。仓库HEAD/索引/工作区不变。\n\n## 提交产物\ntask.py；运行产物包括：refs/notes/commits新版本、保留的源注释和无关注释、迁移JSON报告、已回收的临时notes引用。要求完整可运行工具及真实Git工件，不能用设计文档替代。\n\n## 验收方法\n平台执行python3 checks/check.py，在真实隔离仓库验证成功、边界、拒绝与失败恢复路径；全部断言返回0。验收脚本由平台注入，不要将checks文件作为作答提交。\n\n失败示例：顺序notes copy -f会覆盖目标的独立注释，后面出现冲突时也已留下部分修改。",
+    "files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "run": "python3 checks/check.py",
+    "solution_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,mapping,report_path):\n    import uuid\n    ref='refs/notes/commits';before=git(repo,'rev-parse',ref)\n    entries={commit:note for note,commit in (line.split() for line in git(repo,'notes','--ref='+ref,'list').splitlines())}\n    def blob(oid):return subprocess.run([GIT,'-C',str(repo),'cat-file','blob',oid],capture_output=True,check=True).stdout\n    planned={}\n    for old,new in mapping.items():\n        git(repo,'rev-parse','--verify',old+'^{commit}');git(repo,'rev-parse','--verify',new+'^{commit}')\n        if old not in entries:raise ValueError('source note missing')\n        data=blob(entries[old])\n        if new in entries and blob(entries[new])!=data:raise ValueError('target note conflict')\n        if new in planned and planned[new]!=data:raise ValueError('multiple sources conflict')\n        planned[new]=data\n    temporary='refs/notes/opsforge-'+uuid.uuid4().hex;git(repo,'update-ref',temporary,before)\n    try:\n        for new,data in planned.items():\n            if new not in entries:subprocess.run([GIT,'-C',str(repo),'notes','--ref='+temporary,'add','-F','-',new],input=data,capture_output=True,check=True)\n        after=git(repo,'rev-parse',temporary);git(repo,'update-ref',ref,after,before)\n        result={'before':before,'after':after,'copied':sorted(planned)};pathlib.Path(report_path).write_text(json.dumps(result,sort_keys=True),encoding='utf-8');return result\n    finally:git(repo,'update-ref','-d',temporary)\n"
+    },
+    "negative_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,mapping,report_path):\n    before=git(repo,'rev-parse','refs/notes/commits')\n    for old,new in mapping.items():git(repo,'notes','copy','-f',old,new)\n    result={'before':before,'after':git(repo,'rev-parse','refs/notes/commits'),'copied':sorted(mapping.values())};pathlib.Path(report_path).write_text(json.dumps(result));return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(repo,mapping,report_path)。mapping将旧commit ID映射到新commit ID；把refs/notes/commits上的原注释复制到新提交，保留旧注释及无关注释。先检查所有目标：已有相同注释允许幂等；不同注释、旧注释缺失、多个来源映射到同一目标且内容不同都拒绝且不改变正式notes引用。在临时notes引用构造全部修改，最后用带旧值的update-ref发布，清除临时引用，生成JSON报告（before、after、copied）。仓库HEAD/索引/工作区不变。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "refs/notes/commits新版本",
+        "保留的源注释和无关注释",
+        "迁移JSON报告",
+        "已回收的临时notes引用"
+      ],
+      "verification": "真实本地Git仓库中的成功、失败与恢复断言；无远程和生产操作",
+      "failure_examples": [
+        "顺序notes copy -f会覆盖目标的独立注释，后面出现冲突时也已留下部分修改。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,tempfile,json,shutil\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef g(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8')\n    if check and p.returncode: raise AssertionError((args,p.returncode,p.stdout,p.stderr))\n    return p.stdout.strip()\ndef put(repo,name,content):\n    p=pathlib.Path(repo)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8',newline='')\ndef init(name='repo',bare=False):\n    p=pathlib.Path(name).resolve();p.mkdir(parents=True,exist_ok=True)\n    g(p,'init','-b','main',*(['--bare'] if bare else []))\n    g(p,'config','user.name','Exercise Author');g(p,'config','user.email','exercise@example.invalid')\n    g(p,'config','core.autocrlf','false');g(p,'config','commit.gpgsign','false')\n    return p\ndef commit(repo,files,msg='fixture'):\n    for name,content in files.items(): put(repo,name,content)\n    g(repo,'add','--all');g(repo,'commit','-m',msg)\n    return g(repo,'rev-parse','HEAD')\ndef before(repo):\n    return (g(repo,'rev-parse','HEAD'),g(repo,'diff','--binary'),g(repo,'diff','--cached','--binary'),g(repo,'status','--porcelain=v1','--untracked-files=all'))\nr=init();ids=[commit(r,{'x':str(i)},str(i)) for i in range(6)];g(r,'notes','add','-m','first',ids[0]);g(r,'notes','add','-m','second',ids[1]);g(r,'notes','add','-m','unrelated',ids[5]);s=before(r);report=pathlib.Path('report.json')\nresult=task.execute(r,{ids[0]:ids[2],ids[1]:ids[3]},report);assert result==json.loads(report.read_text());assert result['copied']==sorted([ids[2],ids[3]])\nassert g(r,'notes','show',ids[2])=='first' and g(r,'notes','show',ids[3])=='second' and g(r,'notes','show',ids[0])=='first' and g(r,'notes','show',ids[5])=='unrelated';assert before(r)==s\nstable=g(r,'rev-parse','refs/notes/commits');assert task.execute(r,{ids[0]:ids[2]},report)['after']==stable\nfor mapping in [{ids[0]:ids[4],ids[1]:ids[2]},{ids[0]:ids[4],ids[1]:ids[4]},{ids[4]:ids[2]}]:\n    previous=report.read_bytes()\n    try:task.execute(r,mapping,report)\n    except ValueError:pass\n    else:raise AssertionError('conflict accepted')\n    assert g(r,'rev-parse','refs/notes/commits')==stable and report.read_bytes()==previous\nassert g(r,'for-each-ref','--format=%(refname)','refs/notes')=='refs/notes/commits'\n"
+      },
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      },
+      "timeout": 60
+    },
+    "answer": "```python\nimport os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,mapping,report_path):\n    import uuid\n    ref='refs/notes/commits';before=git(repo,'rev-parse',ref)\n    entries={commit:note for note,commit in (line.split() for line in git(repo,'notes','--ref='+ref,'list').splitlines())}\n    def blob(oid):return subprocess.run([GIT,'-C',str(repo),'cat-file','blob',oid],capture_output=True,check=True).stdout\n    planned={}\n    for old,new in mapping.items():\n        git(repo,'rev-parse','--verify',old+'^{commit}');git(repo,'rev-parse','--verify',new+'^{commit}')\n        if old not in entries:raise ValueError('source note missing')\n        data=blob(entries[old])\n        if new in entries and blob(entries[new])!=data:raise ValueError('target note conflict')\n        if new in planned and planned[new]!=data:raise ValueError('multiple sources conflict')\n        planned[new]=data\n    temporary='refs/notes/opsforge-'+uuid.uuid4().hex;git(repo,'update-ref',temporary,before)\n    try:\n        for new,data in planned.items():\n            if new not in entries:subprocess.run([GIT,'-C',str(repo),'notes','--ref='+temporary,'add','-F','-',new],input=data,capture_output=True,check=True)\n        after=git(repo,'rev-parse',temporary);git(repo,'update-ref',ref,after,before)\n        result={'before':before,'after':after,'copied':sorted(planned)};pathlib.Path(report_path).write_text(json.dumps(result,sort_keys=True),encoding='utf-8');return result\n    finally:git(repo,'update-ref','-d',temporary)\n```\n\n设计说明：实现 execute(repo,mapping,report_path)。mapping将旧commit ID映射到新commit ID；把refs/notes/commits上的原注释复制到新提交，保留旧注释及无关注释。先检查所有目标：已有相同注释允许幂等；不同注释、旧注释缺失、多个来源映射到同一目标且内容不同都拒绝且不改变正式notes引用。在临时notes引用构造全部修改，最后用带旧值的update-ref发布，清除临时引用，生成JSON报告（before、after、copied）。仓库HEAD/索引/工作区不变。",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "has_answer": true,
+    "case_signature": "git-project|1|批量迁移 Git notes：预检冲突与原子发布",
+    "source": "OpsForge 原创隔离仓库工程练习"
+  },
+  {
+    "id": "curated-git-project-002",
+    "module": "git",
+    "category": "Git",
+    "topic": "bisect 跳过不可构建提交并保留不确定边界",
+    "title": "bisect 跳过不可构建提交并保留不确定边界",
+    "level": 4,
+    "type": "code",
+    "language": "python",
+    "version": 1,
+    "body": "## 环境与初始材料\nPython 3.11+ 与 Git 2.39+，仅新建的本地临时仓库，无外部网络。初始task.py为未实现骨架；平台自动注入验收文件并按题目描述创建仓库和故障。\n\n## 操作任务\n实现 execute(repo,good,bad,report_path)。测试仓库每个提交有app.json的buildable与healthy字段；用真实git bisect，buildable=False必须skip，构建成功时才按healthy判好坏。唯一根因返回{status:\"unique\",candidates:[ID]}；因连续skip不能确定时返回{status:\"ambiguous\",candidates:[所有候选ID]}，不得把不可构建当作通过。无论结果如何finally执行bisect reset恢复原分支和HEAD，输出JSON报告；脏仓库必须预先拒绝。\n\n## 提交产物\ntask.py；运行产物包括：bisect真实运行记录对应结果、唯一根因或全部歧义候选JSON、恢复的原分支与HEAD、不存在残留BISECT状态。要求完整可运行工具及真实Git工件，不能用设计文档替代。\n\n## 验收方法\n平台执行python3 checks/check.py，在真实隔离仓库验证成功、边界、拒绝与失败恢复路径；全部断言返回0。验收脚本由平台注入，不要将checks文件作为作答提交。\n\n失败示例：跳过不可构建后仍宣称最后见到的第一个坏提交就是唯一根因，会掩盖中间候选范围。",
+    "files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "run": "python3 checks/check.py",
+    "solution_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,good,bad,report_path):\n    import re\n    if git(repo,'status','--porcelain'):raise ValueError('dirty worktree')\n    def step(*args):\n        p=subprocess.run([GIT,'-C',str(repo),'bisect',*args],capture_output=True,text=True,encoding='utf-8')\n        return p.returncode,p.stdout+p.stderr\n    def result(text):\n        m=re.search(r'(?m)^([0-9a-f]{40,64}) is the first bad commit',text)\n        if m:return {'status':'unique','candidates':[m.group(1)]}\n        if 'first bad commit could be any of' in text:\n            return {'status':'ambiguous','candidates':sorted(set(re.findall(r'(?m)^([0-9a-f]{40,64})\\s*$',text)))}\n    try:\n        code,text=step('start',bad,good)\n        for _ in range(200):\n            found=result(text)\n            if found:\n                pathlib.Path(report_path).write_text(json.dumps(found,sort_keys=True),encoding='utf-8');return found\n            if code not in [0,2]:raise RuntimeError(text)\n            config=json.loads((pathlib.Path(repo)/'app.json').read_text());code,text=step('skip' if not config['buildable'] else ('good' if config['healthy'] else 'bad'))\n        raise RuntimeError('bisect did not finish')\n    finally:git(repo,'bisect','reset')\n"
+    },
+    "negative_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,good,bad,report_path):\n    if git(repo,'status','--porcelain'):raise ValueError('dirty worktree')\n    ids=git(repo,'rev-list','--reverse',good+'..'+bad).splitlines()\n    for oid in ids:\n        config=json.loads(git(repo,'show',oid+':app.json'))\n        if config['buildable'] and not config['healthy']:\n            out={'status':'unique','candidates':[oid]};pathlib.Path(report_path).write_text(json.dumps(out));return out\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(repo,good,bad,report_path)。测试仓库每个提交有app.json的buildable与healthy字段；用真实git bisect，buildable=False必须skip，构建成功时才按healthy判好坏。唯一根因返回{status:\"unique\",candidates:[ID]}；因连续skip不能确定时返回{status:\"ambiguous\",candidates:[所有候选ID]}，不得把不可构建当作通过。无论结果如何finally执行bisect reset恢复原分支和HEAD，输出JSON报告；脏仓库必须预先拒绝。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "bisect真实运行记录对应结果",
+        "唯一根因或全部歧义候选JSON",
+        "恢复的原分支与HEAD",
+        "不存在残留BISECT状态"
+      ],
+      "verification": "真实本地Git仓库中的成功、失败与恢复断言；无远程和生产操作",
+      "failure_examples": [
+        "跳过不可构建后仍宣称最后见到的第一个坏提交就是唯一根因，会掩盖中间候选范围。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,tempfile,json,shutil\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef g(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8')\n    if check and p.returncode: raise AssertionError((args,p.returncode,p.stdout,p.stderr))\n    return p.stdout.strip()\ndef put(repo,name,content):\n    p=pathlib.Path(repo)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8',newline='')\ndef init(name='repo',bare=False):\n    p=pathlib.Path(name).resolve();p.mkdir(parents=True,exist_ok=True)\n    g(p,'init','-b','main',*(['--bare'] if bare else []))\n    g(p,'config','user.name','Exercise Author');g(p,'config','user.email','exercise@example.invalid')\n    g(p,'config','core.autocrlf','false');g(p,'config','commit.gpgsign','false')\n    return p\ndef commit(repo,files,msg='fixture'):\n    for name,content in files.items(): put(repo,name,content)\n    g(repo,'add','--all');g(repo,'commit','-m',msg)\n    return g(repo,'rev-parse','HEAD')\ndef before(repo):\n    return (g(repo,'rev-parse','HEAD'),g(repo,'diff','--binary'),g(repo,'diff','--cached','--binary'),g(repo,'status','--porcelain=v1','--untracked-files=all'))\nfor name,skip in [('unique',set()),('ambiguous',{3,4})]:\n    r=init(name);ids=[]\n    for n in range(8):ids.append(commit(r,{'app.json':json.dumps({'step':n,'healthy':n<4,'buildable':n not in skip})},str(n)))\n    s=before(r);report=pathlib.Path(name+'.json');out=task.execute(r,ids[0],ids[-1],report)\n    expected={'status':'ambiguous','candidates':sorted(ids[3:6])} if skip else {'status':'unique','candidates':[ids[4]]}\n    assert out==expected and json.loads(report.read_text())==expected;assert before(r)==s and g(r,'branch','--show-current')=='main' and not (r/'.git/BISECT_START').exists()\n    put(r,'dirty','keep');head=g(r,'rev-parse','HEAD')\n    try:task.execute(r,ids[0],ids[-1],report)\n    except ValueError:pass\n    else:raise AssertionError('dirty repo accepted')\n    assert g(r,'rev-parse','HEAD')==head and (r/'dirty').read_text()=='keep'\n"
+      },
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      },
+      "timeout": 60
+    },
+    "answer": "```python\nimport os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,good,bad,report_path):\n    import re\n    if git(repo,'status','--porcelain'):raise ValueError('dirty worktree')\n    def step(*args):\n        p=subprocess.run([GIT,'-C',str(repo),'bisect',*args],capture_output=True,text=True,encoding='utf-8')\n        return p.returncode,p.stdout+p.stderr\n    def result(text):\n        m=re.search(r'(?m)^([0-9a-f]{40,64}) is the first bad commit',text)\n        if m:return {'status':'unique','candidates':[m.group(1)]}\n        if 'first bad commit could be any of' in text:\n            return {'status':'ambiguous','candidates':sorted(set(re.findall(r'(?m)^([0-9a-f]{40,64})\\s*$',text)))}\n    try:\n        code,text=step('start',bad,good)\n        for _ in range(200):\n            found=result(text)\n            if found:\n                pathlib.Path(report_path).write_text(json.dumps(found,sort_keys=True),encoding='utf-8');return found\n            if code not in [0,2]:raise RuntimeError(text)\n            config=json.loads((pathlib.Path(repo)/'app.json').read_text());code,text=step('skip' if not config['buildable'] else ('good' if config['healthy'] else 'bad'))\n        raise RuntimeError('bisect did not finish')\n    finally:git(repo,'bisect','reset')\n```\n\n设计说明：实现 execute(repo,good,bad,report_path)。测试仓库每个提交有app.json的buildable与healthy字段；用真实git bisect，buildable=False必须skip，构建成功时才按healthy判好坏。唯一根因返回{status:\"unique\",candidates:[ID]}；因连续skip不能确定时返回{status:\"ambiguous\",candidates:[所有候选ID]}，不得把不可构建当作通过。无论结果如何finally执行bisect reset恢复原分支和HEAD，输出JSON报告；脏仓库必须预先拒绝。",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "has_answer": true,
+    "case_signature": "git-project|2|bisect 跳过不可构建提交并保留不确定边界",
+    "source": "OpsForge 原创隔离仓库工程练习"
+  },
+  {
+    "id": "curated-git-project-003",
+    "module": "git",
+    "category": "Git",
+    "topic": "多仓库固定提交发布：一致工件、校验清单与失败保留",
+    "title": "多仓库固定提交发布：一致工件、校验清单与失败保留",
+    "level": 5,
+    "type": "code",
+    "language": "python",
+    "version": 1,
+    "body": "## 环境与初始材料\nPython 3.11+ 与 Git 2.39+，仅新建的本地临时仓库，无外部网络。初始task.py为未实现骨架；平台自动注入验收文件并按题目描述创建仓库和故障。\n\n## 操作任务\n实现 execute(manifest_path,output_dir)。清单components数组每项含name、repo绝对本地路径、commit完整对象ID。禁止分支名等可漂移输入，组件名仅字母数字下划线连字符且不得重复。先校验全部目标commit，再在临时目录按固定提交生成每组件tar归档（统一组件名前缀）和release.json（commit、tree、sha256）。所有组件成功后整体替换output_dir；任一校验/归档失败必须保留上次完整发布目录，不留下半成品。不修改源仓库HEAD、索引或脏文件；相同清单重复构建哈希一致。\n\n## 提交产物\ntask.py；运行产物包括：每组件固定提交tar、release.json提交/树/哈希清单、整体替换后的发布目录、失败时完整保留的上次发布。要求完整可运行工具及真实Git工件，不能用设计文档替代。\n\n## 验收方法\n平台执行python3 checks/check.py，在真实隔离仓库验证成功、边界、拒绝与失败恢复路径；全部断言返回0。验收脚本由平台注入，不要将checks文件作为作答提交。\n\n失败示例：直接写最终目录会混留旧文件或部分组件，分支名输入还会导致同一清单得到不同发布内容。",
+    "files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "run": "python3 checks/check.py",
+    "solution_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(manifest_path,output_dir):\n    import tempfile,hashlib,re,shutil\n    manifest=json.loads(pathlib.Path(manifest_path).read_text(encoding='utf-8'));components=manifest['components'];seen=set();resolved=[]\n    if not components:raise ValueError('empty release')\n    for c in components:\n        name=c['name']\n        if not re.fullmatch(r'[A-Za-z0-9_-]+',name) or name in seen:raise ValueError('invalid component')\n        seen.add(name);oid=git(c['repo'],'rev-parse','--verify',c['commit']+'^{commit}')\n        if c['commit']!=oid:raise ValueError('full immutable commit ID required')\n        resolved.append((name,c['repo'],oid,git(c['repo'],'rev-parse',oid+'^{tree}')))\n    output=pathlib.Path(output_dir).resolve();output.parent.mkdir(parents=True,exist_ok=True)\n    if output.exists() and not output.is_dir():raise ValueError('output not a directory')\n    with tempfile.TemporaryDirectory(prefix='release-stage-',dir=output.parent) as temp:\n        temp=pathlib.Path(temp);stage=temp/'new';stage.mkdir();report={'components':{}}\n        for name,repo,oid,tree in resolved:\n            archive=stage/(name+'.tar');git(repo,'archive','--format=tar','--prefix='+name+'/','--output='+str(archive),oid)\n            report['components'][name]={'commit':oid,'tree':tree,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}\n        (stage/'release.json').write_text(json.dumps(report,sort_keys=True,indent=2),encoding='utf-8');previous=temp/'previous'\n        if output.exists():output.rename(previous)\n        try:stage.rename(output)\n        except Exception:\n            if previous.exists():previous.rename(output)\n            raise\n        return report\n"
+    },
+    "negative_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(manifest_path,output_dir):\n    import hashlib\n    output=pathlib.Path(output_dir).resolve();output.mkdir(exist_ok=True);report={'components':{}}\n    for c in json.loads(pathlib.Path(manifest_path).read_text())['components']:\n        p=output/(c['name']+'.tar');git(c['repo'],'archive','--format=tar','--prefix='+c['name']+'/','--output='+str(p),c['commit']);report['components'][c['name']]={'commit':c['commit'],'tree':git(c['repo'],'rev-parse',c['commit']+'^{tree}'),'sha256':hashlib.sha256(p.read_bytes()).hexdigest()}\n    (output/'release.json').write_text(json.dumps(report));return report\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(manifest_path,output_dir)。清单components数组每项含name、repo绝对本地路径、commit完整对象ID。禁止分支名等可漂移输入，组件名仅字母数字下划线连字符且不得重复。先校验全部目标commit，再在临时目录按固定提交生成每组件tar归档（统一组件名前缀）和release.json（commit、tree、sha256）。所有组件成功后整体替换output_dir；任一校验/归档失败必须保留上次完整发布目录，不留下半成品。不修改源仓库HEAD、索引或脏文件；相同清单重复构建哈希一致。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "每组件固定提交tar",
+        "release.json提交/树/哈希清单",
+        "整体替换后的发布目录",
+        "失败时完整保留的上次发布"
+      ],
+      "verification": "真实本地Git仓库中的成功、失败与恢复断言；无远程和生产操作",
+      "failure_examples": [
+        "直接写最终目录会混留旧文件或部分组件，分支名输入还会导致同一清单得到不同发布内容。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,tempfile,json,shutil\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef g(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8')\n    if check and p.returncode: raise AssertionError((args,p.returncode,p.stdout,p.stderr))\n    return p.stdout.strip()\ndef put(repo,name,content):\n    p=pathlib.Path(repo)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8',newline='')\ndef init(name='repo',bare=False):\n    p=pathlib.Path(name).resolve();p.mkdir(parents=True,exist_ok=True)\n    g(p,'init','-b','main',*(['--bare'] if bare else []))\n    g(p,'config','user.name','Exercise Author');g(p,'config','user.email','exercise@example.invalid')\n    g(p,'config','core.autocrlf','false');g(p,'config','commit.gpgsign','false')\n    return p\ndef commit(repo,files,msg='fixture'):\n    for name,content in files.items(): put(repo,name,content)\n    g(repo,'add','--all');g(repo,'commit','-m',msg)\n    return g(repo,'rev-parse','HEAD')\ndef before(repo):\n    return (g(repo,'rev-parse','HEAD'),g(repo,'diff','--binary'),g(repo,'diff','--cached','--binary'),g(repo,'status','--porcelain=v1','--untracked-files=all'))\nimport tarfile,hashlib\na=init('service-a');aid=commit(a,{'app':'a1'});b=init('service-b');bid=commit(b,{'app':'b1'});put(a,'app','uncommitted');put(b,'loose','not shipped');states=[before(a),before(b)]\nmanifest=pathlib.Path('manifest.json');config={'components':[{'name':'api','repo':str(a),'commit':aid},{'name':'worker','repo':str(b),'commit':bid}]};manifest.write_text(json.dumps(config));out=pathlib.Path('release');out.mkdir();put(out,'previous','old')\nreport=task.execute(manifest,out);assert json.loads((out/'release.json').read_text())==report;assert set(p.name for p in out.iterdir())=={'api.tar','worker.tar','release.json'}\nfor name,value in [('api',b'a1'),('worker',b'b1')]:\n    with tarfile.open(out/(name+'.tar')) as tf:assert tf.extractfile(name+'/app').read()==value;assert name+'/loose' not in tf.getnames()\n    assert report['components'][name]['sha256']==hashlib.sha256((out/(name+'.tar')).read_bytes()).hexdigest()\nassert [before(a),before(b)]==states\nsnapshot={p.name:p.read_bytes() for p in out.iterdir()};assert task.execute(manifest,out)==report and {p.name:p.read_bytes() for p in out.iterdir()}==snapshot\nfor change in ['invalid_commit','moving_ref','duplicate_name','traversal']:\n    bad=json.loads(json.dumps(config))\n    if change=='invalid_commit':bad['components'][1]['commit']='0'*40\n    elif change=='moving_ref':bad['components'][1]['commit']='HEAD'\n    elif change=='duplicate_name':bad['components'][1]['name']='api'\n    else:bad['components'][1]['name']='../outside'\n    manifest.write_text(json.dumps(bad))\n    try:task.execute(manifest,out)\n    except Exception:pass\n    else:raise AssertionError('invalid release accepted')\n    assert {p.name:p.read_bytes() for p in out.iterdir()}==snapshot and [before(a),before(b)]==states\nassert not list(pathlib.Path('.').glob('release-stage-*'))\n\n# Cause a real archive failure AFTER the first component has been built:\n# commit and tree still resolve, but the second source's loose blob is unavailable.\nnewaid=commit(a,{'app':'a2 changed release'});runtime=json.loads(json.dumps(config));runtime['components'][0]['commit']=newaid;manifest.write_text(json.dumps(runtime))\nblob=g(b,'rev-parse',bid+':app');object_path=b/'.git/objects'/blob[:2]/blob[2:];assert object_path.is_file();object_bytes=object_path.read_bytes();object_mode=object_path.stat().st_mode;object_path.chmod(0o600);object_path.unlink()\ntry:\n    try:task.execute(manifest,out)\n    except Exception:pass\n    else:raise AssertionError('missing blob archive unexpectedly accepted')\n    assert {p.name:p.read_bytes() for p in out.iterdir()}==snapshot\nfinally:object_path.write_bytes(object_bytes);object_path.chmod(object_mode)\nassert not list(pathlib.Path('.').glob('release-stage-*'))\n"
+      },
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      },
+      "timeout": 60
+    },
+    "answer": "```python\nimport os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(manifest_path,output_dir):\n    import tempfile,hashlib,re,shutil\n    manifest=json.loads(pathlib.Path(manifest_path).read_text(encoding='utf-8'));components=manifest['components'];seen=set();resolved=[]\n    if not components:raise ValueError('empty release')\n    for c in components:\n        name=c['name']\n        if not re.fullmatch(r'[A-Za-z0-9_-]+',name) or name in seen:raise ValueError('invalid component')\n        seen.add(name);oid=git(c['repo'],'rev-parse','--verify',c['commit']+'^{commit}')\n        if c['commit']!=oid:raise ValueError('full immutable commit ID required')\n        resolved.append((name,c['repo'],oid,git(c['repo'],'rev-parse',oid+'^{tree}')))\n    output=pathlib.Path(output_dir).resolve();output.parent.mkdir(parents=True,exist_ok=True)\n    if output.exists() and not output.is_dir():raise ValueError('output not a directory')\n    with tempfile.TemporaryDirectory(prefix='release-stage-',dir=output.parent) as temp:\n        temp=pathlib.Path(temp);stage=temp/'new';stage.mkdir();report={'components':{}}\n        for name,repo,oid,tree in resolved:\n            archive=stage/(name+'.tar');git(repo,'archive','--format=tar','--prefix='+name+'/','--output='+str(archive),oid)\n            report['components'][name]={'commit':oid,'tree':tree,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}\n        (stage/'release.json').write_text(json.dumps(report,sort_keys=True,indent=2),encoding='utf-8');previous=temp/'previous'\n        if output.exists():output.rename(previous)\n        try:stage.rename(output)\n        except Exception:\n            if previous.exists():previous.rename(output)\n            raise\n        return report\n```\n\n设计说明：实现 execute(manifest_path,output_dir)。清单components数组每项含name、repo绝对本地路径、commit完整对象ID。禁止分支名等可漂移输入，组件名仅字母数字下划线连字符且不得重复。先校验全部目标commit，再在临时目录按固定提交生成每组件tar归档（统一组件名前缀）和release.json（commit、tree、sha256）。所有组件成功后整体替换output_dir；任一校验/归档失败必须保留上次完整发布目录，不留下半成品。不修改源仓库HEAD、索引或脏文件；相同清单重复构建哈希一致。",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "has_answer": true,
+    "case_signature": "git-project|3|多仓库固定提交发布：一致工件、校验清单与失败保留",
+    "source": "OpsForge 原创隔离仓库工程练习"
+  },
+  {
+    "id": "curated-git-project-004",
+    "module": "git",
+    "category": "Git",
+    "topic": "校验驱动的 Git 灾备恢复与故障回退",
+    "title": "校验驱动的 Git 灾备恢复与故障回退",
+    "level": 5,
+    "type": "code",
+    "language": "python",
+    "version": 1,
+    "body": "## 环境与初始材料\nPython 3.11+ 与 Git 2.39+，仅新建的本地临时仓库，无外部网络。初始task.py为未实现骨架；平台自动注入验收文件并按题目描述创建仓库和故障。\n\n## 操作任务\n实现 execute(backup_dir,destination)。备份目录包含repo.bundle与manifest.json（bundle_sha256、refs字典）。先校验SHA256，再在隔离目录校验bundle并clone --mirror；恢复后必须fsck --full成功且全部引用精确等于manifest.refs（含标签和notes）。仅在全部检查通过后整体替换目标裸仓库；损坏bundle、校验哈希不符、缺失引用、无效bundle均须保留原目标仓库和文件，不留下临时目录。生成destination/restore-report.json，记录hash、refs、verified。不得依赖源仓库或访问网络。\n\n## 提交产物\ntask.py；运行产物包括：独立可用的裸仓库、完整分支/标签/notes引用、restore-report.json、失败后保持不变的旧目标。要求完整可运行工具及真实Git工件，不能用设计文档替代。\n\n## 验收方法\n平台执行python3 checks/check.py，在真实隔离仓库验证成功、边界、拒绝与失败恢复路径；全部断言返回0。验收脚本由平台注入，不要将checks文件作为作答提交。\n\n失败示例：先删除目标再尝试clone，遇到损坏备份会把原可用仓库一并丢掉；忽略引用清单也会接受不完整恢复。",
+    "files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "run": "python3 checks/check.py",
+    "solution_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(backup_dir,destination):\n    import tempfile,hashlib\n    backup=pathlib.Path(backup_dir);bundle=backup/'repo.bundle';manifest=json.loads((backup/'manifest.json').read_text());digest=hashlib.sha256(bundle.read_bytes()).hexdigest()\n    if digest!=manifest['bundle_sha256']:raise ValueError('bundle checksum mismatch')\n    dst=pathlib.Path(destination).resolve();dst.parent.mkdir(parents=True,exist_ok=True)\n    with tempfile.TemporaryDirectory(prefix='restore-stage-',dir=dst.parent) as tmp:\n        tmp=pathlib.Path(tmp);verify=tmp/'verify';subprocess.run([GIT,'init','--bare',str(verify)],capture_output=True,check=True);git(verify,'bundle','verify',str(bundle.resolve()))\n        stage=tmp/'restored';subprocess.run([GIT,'clone','--mirror',str(bundle.resolve()),str(stage)],capture_output=True,check=True);git(stage,'fsck','--full')\n        refs=dict(line.split(' ',1) for line in git(stage,'for-each-ref','--format=%(refname) %(objectname)').splitlines())\n        if refs!=manifest['refs']:raise ValueError('reference manifest mismatch')\n        report={'bundle_sha256':digest,'refs':refs,'verified':True};(stage/'restore-report.json').write_text(json.dumps(report,sort_keys=True),encoding='utf-8');previous=tmp/'previous'\n        if dst.exists():dst.rename(previous)\n        try:stage.rename(dst)\n        except Exception:\n            if previous.exists():previous.rename(dst)\n            raise\n        return report\n"
+    },
+    "negative_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(backup_dir,destination):\n    import hashlib,shutil\n    backup=pathlib.Path(backup_dir);dst=pathlib.Path(destination)\n    if dst.exists():shutil.rmtree(dst)\n    subprocess.run([GIT,'clone','--mirror',str((backup/'repo.bundle').resolve()),str(dst)],capture_output=True,check=True)\n    refs=dict(x.split(' ',1) for x in git(dst,'for-each-ref','--format=%(refname) %(objectname)').splitlines());report={'bundle_sha256':hashlib.sha256((backup/'repo.bundle').read_bytes()).hexdigest(),'refs':refs,'verified':True};(dst/'restore-report.json').write_text(json.dumps(report));return report\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(backup_dir,destination)。备份目录包含repo.bundle与manifest.json（bundle_sha256、refs字典）。先校验SHA256，再在隔离目录校验bundle并clone --mirror；恢复后必须fsck --full成功且全部引用精确等于manifest.refs（含标签和notes）。仅在全部检查通过后整体替换目标裸仓库；损坏bundle、校验哈希不符、缺失引用、无效bundle均须保留原目标仓库和文件，不留下临时目录。生成destination/restore-report.json，记录hash、refs、verified。不得依赖源仓库或访问网络。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "独立可用的裸仓库",
+        "完整分支/标签/notes引用",
+        "restore-report.json",
+        "失败后保持不变的旧目标"
+      ],
+      "verification": "真实本地Git仓库中的成功、失败与恢复断言；无远程和生产操作",
+      "failure_examples": [
+        "先删除目标再尝试clone，遇到损坏备份会把原可用仓库一并丢掉；忽略引用清单也会接受不完整恢复。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,tempfile,json,shutil\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef g(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8')\n    if check and p.returncode: raise AssertionError((args,p.returncode,p.stdout,p.stderr))\n    return p.stdout.strip()\ndef put(repo,name,content):\n    p=pathlib.Path(repo)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8',newline='')\ndef init(name='repo',bare=False):\n    p=pathlib.Path(name).resolve();p.mkdir(parents=True,exist_ok=True)\n    g(p,'init','-b','main',*(['--bare'] if bare else []))\n    g(p,'config','user.name','Exercise Author');g(p,'config','user.email','exercise@example.invalid')\n    g(p,'config','core.autocrlf','false');g(p,'config','commit.gpgsign','false')\n    return p\ndef commit(repo,files,msg='fixture'):\n    for name,content in files.items(): put(repo,name,content)\n    g(repo,'add','--all');g(repo,'commit','-m',msg)\n    return g(repo,'rev-parse','HEAD')\ndef before(repo):\n    return (g(repo,'rev-parse','HEAD'),g(repo,'diff','--binary'),g(repo,'diff','--cached','--binary'),g(repo,'status','--porcelain=v1','--untracked-files=all'))\nimport hashlib\ns=init('source');head=commit(s,{'app':'backed'});g(s,'branch','maintenance');g(s,'tag','-a','v1','-m','tag');g(s,'notes','add','-m','audit',head);backup=pathlib.Path('backup').resolve();backup.mkdir();g(s,'bundle','create',str(backup/'repo.bundle'),'--all');refs=dict(x.split(' ',1) for x in g(s,'for-each-ref','--format=%(refname) %(objectname)').splitlines());data=(backup/'repo.bundle').read_bytes();manifest={'bundle_sha256':hashlib.sha256(data).hexdigest(),'refs':refs};(backup/'manifest.json').write_text(json.dumps(manifest))\ndst=init('restore',True);(dst/'old-marker').write_text('keep until success');report=task.execute(backup,dst);assert report['verified'] and report['refs']==refs;assert json.loads((dst/'restore-report.json').read_text())==report and not (dst/'old-marker').exists();assert g(dst,'show','main:app')=='backed';assert g(dst,'notes','show',head)=='audit';snapshot=g(dst,'show-ref');saved_report=(dst/'restore-report.json').read_bytes()\nfor case in ['checksum','invalid_bundle','missing_ref']:\n    m=json.loads(json.dumps(manifest));payload=data\n    if case=='checksum':payload=b'corrupt'\n    elif case=='invalid_bundle':payload=b'not a bundle';m['bundle_sha256']=hashlib.sha256(payload).hexdigest()\n    else:m['refs'].pop('refs/heads/maintenance')\n    (backup/'repo.bundle').write_bytes(payload);(backup/'manifest.json').write_text(json.dumps(m))\n    try:task.execute(backup,dst)\n    except Exception:pass\n    else:raise AssertionError('invalid backup published')\n    assert g(dst,'show-ref')==snapshot and (dst/'restore-report.json').read_bytes()==saved_report;g(dst,'fsck','--full')\nassert not list(pathlib.Path('.').glob('restore-stage-*'))\n\nsource_objects=s/'.git/objects';saved_objects=s/'.git/objects.offline';source_objects.rename(saved_objects)\ntry:assert g(dst,'show','main:app')=='backed';g(dst,'fsck','--full')\nfinally:saved_objects.rename(source_objects)\n"
+      },
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      },
+      "timeout": 60
+    },
+    "answer": "```python\nimport os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(backup_dir,destination):\n    import tempfile,hashlib\n    backup=pathlib.Path(backup_dir);bundle=backup/'repo.bundle';manifest=json.loads((backup/'manifest.json').read_text());digest=hashlib.sha256(bundle.read_bytes()).hexdigest()\n    if digest!=manifest['bundle_sha256']:raise ValueError('bundle checksum mismatch')\n    dst=pathlib.Path(destination).resolve();dst.parent.mkdir(parents=True,exist_ok=True)\n    with tempfile.TemporaryDirectory(prefix='restore-stage-',dir=dst.parent) as tmp:\n        tmp=pathlib.Path(tmp);verify=tmp/'verify';subprocess.run([GIT,'init','--bare',str(verify)],capture_output=True,check=True);git(verify,'bundle','verify',str(bundle.resolve()))\n        stage=tmp/'restored';subprocess.run([GIT,'clone','--mirror',str(bundle.resolve()),str(stage)],capture_output=True,check=True);git(stage,'fsck','--full')\n        refs=dict(line.split(' ',1) for line in git(stage,'for-each-ref','--format=%(refname) %(objectname)').splitlines())\n        if refs!=manifest['refs']:raise ValueError('reference manifest mismatch')\n        report={'bundle_sha256':digest,'refs':refs,'verified':True};(stage/'restore-report.json').write_text(json.dumps(report,sort_keys=True),encoding='utf-8');previous=tmp/'previous'\n        if dst.exists():dst.rename(previous)\n        try:stage.rename(dst)\n        except Exception:\n            if previous.exists():previous.rename(dst)\n            raise\n        return report\n```\n\n设计说明：实现 execute(backup_dir,destination)。备份目录包含repo.bundle与manifest.json（bundle_sha256、refs字典）。先校验SHA256，再在隔离目录校验bundle并clone --mirror；恢复后必须fsck --full成功且全部引用精确等于manifest.refs（含标签和notes）。仅在全部检查通过后整体替换目标裸仓库；损坏bundle、校验哈希不符、缺失引用、无效bundle均须保留原目标仓库和文件，不留下临时目录。生成destination/restore-report.json，记录hash、refs、verified。不得依赖源仓库或访问网络。",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "has_answer": true,
+    "case_signature": "git-project|4|校验驱动的 Git 灾备恢复与故障回退",
+    "source": "OpsForge 原创隔离仓库工程练习"
+  },
+  {
+    "id": "curated-git-project-005",
+    "module": "git",
+    "category": "Git",
+    "topic": "本地裸库发布门禁：隔离区检查与整批拒绝",
+    "title": "本地裸库发布门禁：隔离区检查与整批拒绝",
+    "level": 5,
+    "type": "code",
+    "language": "python",
+    "version": 1,
+    "body": "## 环境与初始材料\nPython 3.11+ 与 Git 2.39+，仅新建的本地临时仓库，无外部网络。初始task.py为未实现骨架；平台自动注入验收文件并按题目描述创建仓库和故障。\n\n## 操作任务\n实现 execute(bare_repo)，在此临时裸仓库安装hooks/pre-receive及Python验证程序，不修改全局Git配置。门禁仅允许refs/heads/release/*；禁止删除与非快进更新；检查每个待引入提交的树，禁止任意目录下的.env文件，即使后续提交已删除也不能漏检。必须在pre-receive隔离区读取新对象，全部ref检查成功才放行，任一失败整个push不更新。将每次受理的accepted、refs、quarantine布尔值追加到hooks/audit.jsonl。验收用本地真实push测试正常发布、同时推两个ref时一项泄漏导致全部拒绝、强制回退、删除和越界分支拒绝。\n\n## 提交产物\ntask.py；运行产物包括：pre-receive可执行hook、隔离区对象验证程序、audit.jsonl受理日志、被门禁保护的release引用集合。要求完整可运行工具及真实Git工件，不能用设计文档替代。\n\n## 验收方法\n平台执行python3 checks/check.py，在真实隔离仓库验证成功、边界、拒绝与失败恢复路径；全部断言返回0。验收脚本由平台注入，不要将checks文件作为作答提交。\n\n失败示例：只在post-receive检查、只扫描最终树或先更新一部分引用，均无法阻止敏感历史/半发布进入仓库。",
+    "files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "run": "python3 checks/check.py",
+    "solution_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(bare_repo):\n    import sys,shlex\n    root=pathlib.Path(bare_repo).resolve()\n    if git(root,'rev-parse','--is-bare-repository')!='true':raise ValueError('bare repository required')\n    hooks=root/'hooks';hooks.mkdir(exist_ok=True);validator=hooks/'opsforge_validate.py'\n    source=r\"\"\"import os,sys,pathlib,json,subprocess\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef run(*args):return subprocess.run([GIT,*args],capture_output=True,check=True).stdout\nupdates=[line.split() for line in sys.stdin if line.strip()]\naccepted=True\ntry:\n    for old,new,ref in updates:\n        if not ref.startswith('refs/heads/release/') or not new.strip('0'):raise ValueError('branch scope or deletion')\n        if old.strip('0'):\n            if subprocess.run([GIT,'merge-base','--is-ancestor',old,new],capture_output=True).returncode!=0:raise ValueError('non-fast-forward')\n        revisions=['rev-list',new]+(['^'+old] if old.strip('0') else [])\n        for oid in run(*revisions).decode().splitlines():\n            paths=run('ls-tree','-r','--name-only','-z',oid).split(b'\\0')\n            if any(p==b'.env' or p.endswith(b'/.env') for p in paths if p):raise ValueError('secret file in introduced history')\nexcept Exception as exc:\n    accepted=False;print('release rejected: '+str(exc),file=sys.stderr)\naudit={'accepted':accepted,'refs':[x[2] for x in updates],'quarantine':bool(os.environ.get('GIT_QUARANTINE_PATH'))}\nwith (pathlib.Path(__file__).parent/'audit.jsonl').open('a',encoding='utf-8') as out:out.write(json.dumps(audit)+'\\n')\nsys.exit(0 if accepted else 1)\n\"\"\"\n    validator.write_text(source,encoding='utf-8',newline='');hook=hooks/'pre-receive';hook.write_text('#!/bin/sh\\nexec '+shlex.quote(pathlib.Path(sys.executable).as_posix())+' '+shlex.quote(validator.as_posix())+'\\n',encoding='utf-8',newline='');hook.chmod(0o755)\n    return {'hook':str(hook),'validator':str(validator),'audit':str(hooks/'audit.jsonl')}\n"
+    },
+    "negative_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(bare_repo):\n    root=pathlib.Path(bare_repo);hooks=root/'hooks';hooks.mkdir(exist_ok=True);hook=hooks/'pre-receive';validator=hooks/'opsforge_validate.py';validator.write_text('pass\\n');hook.write_text('#!/bin/sh\\nexit 0\\n',newline='');hook.chmod(0o755)\n    return {'hook':str(hook),'validator':str(validator),'audit':str(hooks/'audit.jsonl')}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(bare_repo)，在此临时裸仓库安装hooks/pre-receive及Python验证程序，不修改全局Git配置。门禁仅允许refs/heads/release/*；禁止删除与非快进更新；检查每个待引入提交的树，禁止任意目录下的.env文件，即使后续提交已删除也不能漏检。必须在pre-receive隔离区读取新对象，全部ref检查成功才放行，任一失败整个push不更新。将每次受理的accepted、refs、quarantine布尔值追加到hooks/audit.jsonl。验收用本地真实push测试正常发布、同时推两个ref时一项泄漏导致全部拒绝、强制回退、删除和越界分支拒绝。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "pre-receive可执行hook",
+        "隔离区对象验证程序",
+        "audit.jsonl受理日志",
+        "被门禁保护的release引用集合"
+      ],
+      "verification": "真实本地Git仓库中的成功、失败与恢复断言；无远程和生产操作",
+      "failure_examples": [
+        "只在post-receive检查、只扫描最终树或先更新一部分引用，均无法阻止敏感历史/半发布进入仓库。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,tempfile,json,shutil\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef g(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8')\n    if check and p.returncode: raise AssertionError((args,p.returncode,p.stdout,p.stderr))\n    return p.stdout.strip()\ndef put(repo,name,content):\n    p=pathlib.Path(repo)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8',newline='')\ndef init(name='repo',bare=False):\n    p=pathlib.Path(name).resolve();p.mkdir(parents=True,exist_ok=True)\n    g(p,'init','-b','main',*(['--bare'] if bare else []))\n    g(p,'config','user.name','Exercise Author');g(p,'config','user.email','exercise@example.invalid')\n    g(p,'config','core.autocrlf','false');g(p,'config','commit.gpgsign','false')\n    return p\ndef commit(repo,files,msg='fixture'):\n    for name,content in files.items(): put(repo,name,content)\n    g(repo,'add','--all');g(repo,'commit','-m',msg)\n    return g(repo,'rev-parse','HEAD')\ndef before(repo):\n    return (g(repo,'rev-parse','HEAD'),g(repo,'diff','--binary'),g(repo,'diff','--cached','--binary'),g(repo,'status','--porcelain=v1','--untracked-files=all'))\nb=init('server',True);paths=task.execute(b);assert pathlib.Path(paths['hook']).is_file() and pathlib.Path(paths['validator']).is_file();s=init('source');base=commit(s,{'app':'safe'});g(s,'push',str(b),'HEAD:refs/heads/release/v1');assert g(b,'rev-parse','release/v1')==base\nsafe=commit(s,{'safe':'next'});g(s,'branch','candidate-safe');g(s,'checkout','-b','candidate-leak',base);leak=commit(s,{'nested/.env':'fixture secret'});g(s,'rm','nested/.env');commit(s,{'removed':'looks clean'},'remove secret');old=g(b,'show-ref')\np=subprocess.run([GIT,'-C',str(s),'push','--atomic',str(b),'refs/heads/candidate-safe:refs/heads/release/v1','refs/heads/candidate-leak:refs/heads/release/v2'],capture_output=True);assert p.returncode!=0 and g(b,'show-ref')==old\ng(s,'checkout','candidate-safe');g(s,'push',str(b),'HEAD:refs/heads/release/v1');assert g(b,'rev-parse','release/v1')==safe\nfor refspec in [base+':refs/heads/release/v1',':refs/heads/release/v1','HEAD:refs/heads/main']:\n    old=g(b,'show-ref');p=subprocess.run([GIT,'-C',str(s),'push','--force',str(b),refspec],capture_output=True);assert p.returncode!=0 and g(b,'show-ref')==old\naudit=[json.loads(x) for x in pathlib.Path(paths['audit']).read_text().splitlines()];assert any(x['accepted'] for x in audit) and sum(not x['accepted'] for x in audit)>=4 and any(x['quarantine'] for x in audit)\nassert not list((b/'objects').glob('incoming-*'));assert g(s,'show','candidate-leak:nested/.env',check=False)==''\n"
+      },
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      },
+      "timeout": 60
+    },
+    "answer": "```python\nimport os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(bare_repo):\n    import sys,shlex\n    root=pathlib.Path(bare_repo).resolve()\n    if git(root,'rev-parse','--is-bare-repository')!='true':raise ValueError('bare repository required')\n    hooks=root/'hooks';hooks.mkdir(exist_ok=True);validator=hooks/'opsforge_validate.py'\n    source=r\"\"\"import os,sys,pathlib,json,subprocess\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef run(*args):return subprocess.run([GIT,*args],capture_output=True,check=True).stdout\nupdates=[line.split() for line in sys.stdin if line.strip()]\naccepted=True\ntry:\n    for old,new,ref in updates:\n        if not ref.startswith('refs/heads/release/') or not new.strip('0'):raise ValueError('branch scope or deletion')\n        if old.strip('0'):\n            if subprocess.run([GIT,'merge-base','--is-ancestor',old,new],capture_output=True).returncode!=0:raise ValueError('non-fast-forward')\n        revisions=['rev-list',new]+(['^'+old] if old.strip('0') else [])\n        for oid in run(*revisions).decode().splitlines():\n            paths=run('ls-tree','-r','--name-only','-z',oid).split(b'\\0')\n            if any(p==b'.env' or p.endswith(b'/.env') for p in paths if p):raise ValueError('secret file in introduced history')\nexcept Exception as exc:\n    accepted=False;print('release rejected: '+str(exc),file=sys.stderr)\naudit={'accepted':accepted,'refs':[x[2] for x in updates],'quarantine':bool(os.environ.get('GIT_QUARANTINE_PATH'))}\nwith (pathlib.Path(__file__).parent/'audit.jsonl').open('a',encoding='utf-8') as out:out.write(json.dumps(audit)+'\\n')\nsys.exit(0 if accepted else 1)\n\"\"\"\n    validator.write_text(source,encoding='utf-8',newline='');hook=hooks/'pre-receive';hook.write_text('#!/bin/sh\\nexec '+shlex.quote(pathlib.Path(sys.executable).as_posix())+' '+shlex.quote(validator.as_posix())+'\\n',encoding='utf-8',newline='');hook.chmod(0o755)\n    return {'hook':str(hook),'validator':str(validator),'audit':str(hooks/'audit.jsonl')}\n```\n\n设计说明：实现 execute(bare_repo)，在此临时裸仓库安装hooks/pre-receive及Python验证程序，不修改全局Git配置。门禁仅允许refs/heads/release/*；禁止删除与非快进更新；检查每个待引入提交的树，禁止任意目录下的.env文件，即使后续提交已删除也不能漏检。必须在pre-receive隔离区读取新对象，全部ref检查成功才放行，任一失败整个push不更新。将每次受理的accepted、refs、quarantine布尔值追加到hooks/audit.jsonl。验收用本地真实push测试正常发布、同时推两个ref时一项泄漏导致全部拒绝、强制回退、删除和越界分支拒绝。",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "has_answer": true,
+    "case_signature": "git-project|5|本地裸库发布门禁：隔离区检查与整批拒绝",
+    "source": "OpsForge 原创隔离仓库工程练习"
+  },
+  {
+    "id": "curated-git-project-006",
+    "module": "git",
+    "category": "Git",
+    "topic": "多维护分支补丁回移：隔离验证与引用原子提交",
+    "title": "多维护分支补丁回移：隔离验证与引用原子提交",
+    "level": 5,
+    "type": "code",
+    "language": "python",
+    "version": 1,
+    "body": "## 环境与初始材料\nPython 3.11+ 与 Git 2.39+，仅新建的本地临时仓库，无外部网络。初始task.py为未实现骨架；平台自动注入验收文件并按题目描述创建仓库和故障。\n\n## 操作任务\n实现 execute(repo,fix_commit,branches,report_path)。每个维护分支有feature.txt=disabled和policy.json.allow_feature，修复提交将feature.txt改为enabled。先记录所有分支旧ID，在各自临时detached worktree中cherry-pick修复并验证feature=enabled且allow_feature=True；任一冲突或策略不允许时全部正式分支保持原ID、原报告不变。全部验证成功后使用单个update-ref事务带旧值更新全部分支，生成逐分支old/new报告。必须保留每个分支独有文件、源主工作树脏修改和当前分支；回收所有临时worktree及cherry-pick状态。只接收非当前、未被其他worktree检出的独立维护分支。\n\n## 提交产物\ntask.py；运行产物包括：每个维护分支独立修复提交、保留分支独有文件、原子更新后的分支集合、逐分支old/new JSON报告、已回收临时worktree与失败状态。要求完整可运行工具及真实Git工件，不能用设计文档替代。\n\n## 验收方法\n平台执行python3 checks/check.py，在真实隔离仓库验证成功、边界、拒绝与失败恢复路径；全部断言返回0。验收脚本由平台注入，不要将checks文件作为作答提交。\n\n失败示例：逐个checkout后直接更新正式分支，第二个失败时第一个已发布，还会改变用户当前工作树。",
+    "files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(*args, **kwargs):\n    raise NotImplementedError\n"
+    },
+    "run": "python3 checks/check.py",
+    "solution_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,fix_commit,branches,report_path):\n    import tempfile\n    if not branches or len(set(branches))!=len(branches):raise ValueError('unique branches required')\n    checked={line[7:] for line in git(repo,'worktree','list','--porcelain').splitlines() if line.startswith('branch ')}\n    old={}\n    for branch in branches:\n        git(repo,'check-ref-format','--branch',branch)\n        if 'refs/heads/'+branch in checked:raise ValueError('branch checked out')\n        old[branch]=git(repo,'rev-parse','--verify','refs/heads/'+branch)\n    prepared={};worktrees=[]\n    with tempfile.TemporaryDirectory(prefix='backport-stage-') as temp:\n        try:\n            for index,branch in enumerate(branches):\n                work=pathlib.Path(temp)/str(index);git(repo,'worktree','add','--detach',str(work),old[branch]);worktrees.append(work)\n                git(work,'cherry-pick',fix_commit)\n                if (work/'feature.txt').read_text().strip()!='enabled' or json.loads((work/'policy.json').read_text())['allow_feature'] is not True:raise ValueError('branch validation failed')\n                prepared[branch]={'old':old[branch],'new':git(work,'rev-parse','HEAD')}\n            commands='start\\n'+''.join('update refs/heads/'+b+' '+prepared[b]['new']+' '+old[b]+'\\n' for b in branches)+'prepare\\ncommit\\n'\n            subprocess.run([GIT,'-C',str(repo),'update-ref','--stdin'],input=commands.encode(),capture_output=True,check=True)\n            pathlib.Path(report_path).write_text(json.dumps({'branches':prepared},sort_keys=True),encoding='utf-8');return prepared\n        finally:\n            for work in reversed(worktrees):git(repo,'worktree','remove','--force',str(work))\n"
+    },
+    "negative_files": {
+      "task.py": "import os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,fix_commit,branches,report_path):\n    prepared={}\n    for branch in branches:\n        old=git(repo,'rev-parse',branch);git(repo,'checkout',branch);git(repo,'cherry-pick',fix_commit)\n        if not json.loads((pathlib.Path(repo)/'policy.json').read_text())['allow_feature']:raise ValueError('policy denied')\n        prepared[branch]={'old':old,'new':git(repo,'rev-parse','HEAD')}\n    pathlib.Path(report_path).write_text(json.dumps({'branches':prepared}));return prepared\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 execute(repo,fix_commit,branches,report_path)。每个维护分支有feature.txt=disabled和policy.json.allow_feature，修复提交将feature.txt改为enabled。先记录所有分支旧ID，在各自临时detached worktree中cherry-pick修复并验证feature=enabled且allow_feature=True；任一冲突或策略不允许时全部正式分支保持原ID、原报告不变。全部验证成功后使用单个update-ref事务带旧值更新全部分支，生成逐分支old/new报告。必须保留每个分支独有文件、源主工作树脏修改和当前分支；回收所有临时worktree及cherry-pick状态。只接收非当前、未被其他worktree检出的独立维护分支。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "每个维护分支独立修复提交",
+        "保留分支独有文件",
+        "原子更新后的分支集合",
+        "逐分支old/new JSON报告",
+        "已回收临时worktree与失败状态"
+      ],
+      "verification": "真实本地Git仓库中的成功、失败与恢复断言；无远程和生产操作",
+      "failure_examples": [
+        "逐个checkout后直接更新正式分支，第二个失败时第一个已发布，还会改变用户当前工作树。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,subprocess,tempfile,json,shutil\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef g(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8')\n    if check and p.returncode: raise AssertionError((args,p.returncode,p.stdout,p.stderr))\n    return p.stdout.strip()\ndef put(repo,name,content):\n    p=pathlib.Path(repo)/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(content,encoding='utf-8',newline='')\ndef init(name='repo',bare=False):\n    p=pathlib.Path(name).resolve();p.mkdir(parents=True,exist_ok=True)\n    g(p,'init','-b','main',*(['--bare'] if bare else []))\n    g(p,'config','user.name','Exercise Author');g(p,'config','user.email','exercise@example.invalid')\n    g(p,'config','core.autocrlf','false');g(p,'config','commit.gpgsign','false')\n    return p\ndef commit(repo,files,msg='fixture'):\n    for name,content in files.items(): put(repo,name,content)\n    g(repo,'add','--all');g(repo,'commit','-m',msg)\n    return g(repo,'rev-parse','HEAD')\ndef before(repo):\n    return (g(repo,'rev-parse','HEAD'),g(repo,'diff','--binary'),g(repo,'diff','--cached','--binary'),g(repo,'status','--porcelain=v1','--untracked-files=all'))\nr=init();base=commit(r,{'feature.txt':'disabled\\n','policy.json':json.dumps({'allow_feature':True})});g(r,'checkout','-b','fix');fix=commit(r,{'feature.txt':'enabled\\n'});g(r,'checkout','-b','release/a',base);a=commit(r,{'branch-a':'retain-a'});g(r,'checkout','-b','release/b',base);b=commit(r,{'branch-b':'retain-b','policy.json':json.dumps({'allow_feature':False})});g(r,'checkout','main');put(r,'dirty','keep');s=before(r);report=pathlib.Path('backport.json');report.write_text('previous report');oldrefs={x:g(r,'rev-parse',x) for x in ['release/a','release/b']};oldworktrees=g(r,'worktree','list','--porcelain')\ntry:task.execute(r,fix,['release/a','release/b'],report)\nexcept Exception:pass\nelse:raise AssertionError('policy rejection missing')\nassert {x:g(r,'rev-parse',x) for x in oldrefs}==oldrefs and report.read_text()=='previous report' and before(r)==s;assert g(r,'worktree','list','--porcelain')==oldworktrees\ng(r,'checkout','release/b');b=commit(r,{'policy.json':json.dumps({'allow_feature':True})});g(r,'checkout','main');s=before(r);result=task.execute(r,fix,['release/a','release/b'],report)\nassert json.loads(report.read_text())=={'branches':result};assert result['release/a']['old']==a and result['release/b']['old']==b\nfor branch,unique in [('release/a','branch-a'),('release/b','branch-b')]:\n    assert g(r,'show',branch+':feature.txt')=='enabled' and g(r,'show',branch+':'+unique).startswith('retain-');assert g(r,'rev-parse',branch+'^')==result[branch]['old'];assert g(r,'rev-parse',branch)==result[branch]['new']\nassert before(r)==s and g(r,'worktree','list','--porcelain')==oldworktrees\n# A text conflict must also leave both refs and the previous successful report untouched.\ng(r,'checkout','-b','release/c',base);commit(r,{'branch-c':'retain-c'});g(r,'checkout','-b','release/conflict',base);conflict=commit(r,{'feature.txt':'custom incompatible\\n'});g(r,'checkout','main');saved=report.read_bytes();stable=g(r,'show-ref');s=before(r)\ntry:task.execute(r,fix,['release/c','release/conflict'],report)\nexcept Exception:pass\nelse:raise AssertionError('conflict accepted')\nassert g(r,'show-ref')==stable and report.read_bytes()==saved and before(r)==s and g(r,'worktree','list','--porcelain')==oldworktrees\n\nfor invalid in [['main'],['release/a','release/a'],[]]:\n    saved=report.read_bytes();stable=g(r,'show-ref');s=before(r)\n    try:task.execute(r,fix,invalid,report)\n    except ValueError:pass\n    else:raise AssertionError('invalid branch batch accepted')\n    assert g(r,'show-ref')==stable and report.read_bytes()==saved and before(r)==s\n"
+      },
+      "requires": {
+        "commands": [
+          "git"
+        ]
+      },
+      "timeout": 60
+    },
+    "answer": "```python\nimport os, pathlib, subprocess, json\nGIT=os.environ.get('OPSFORGE_GIT','git')\ndef git(repo,*args,check=True):\n    p=subprocess.run([GIT,'-C',str(repo),*args],capture_output=True,text=True,encoding='utf-8',check=check)\n    return p.stdout.strip()\ndef execute(repo,fix_commit,branches,report_path):\n    import tempfile\n    if not branches or len(set(branches))!=len(branches):raise ValueError('unique branches required')\n    checked={line[7:] for line in git(repo,'worktree','list','--porcelain').splitlines() if line.startswith('branch ')}\n    old={}\n    for branch in branches:\n        git(repo,'check-ref-format','--branch',branch)\n        if 'refs/heads/'+branch in checked:raise ValueError('branch checked out')\n        old[branch]=git(repo,'rev-parse','--verify','refs/heads/'+branch)\n    prepared={};worktrees=[]\n    with tempfile.TemporaryDirectory(prefix='backport-stage-') as temp:\n        try:\n            for index,branch in enumerate(branches):\n                work=pathlib.Path(temp)/str(index);git(repo,'worktree','add','--detach',str(work),old[branch]);worktrees.append(work)\n                git(work,'cherry-pick',fix_commit)\n                if (work/'feature.txt').read_text().strip()!='enabled' or json.loads((work/'policy.json').read_text())['allow_feature'] is not True:raise ValueError('branch validation failed')\n                prepared[branch]={'old':old[branch],'new':git(work,'rev-parse','HEAD')}\n            commands='start\\n'+''.join('update refs/heads/'+b+' '+prepared[b]['new']+' '+old[b]+'\\n' for b in branches)+'prepare\\ncommit\\n'\n            subprocess.run([GIT,'-C',str(repo),'update-ref','--stdin'],input=commands.encode(),capture_output=True,check=True)\n            pathlib.Path(report_path).write_text(json.dumps({'branches':prepared},sort_keys=True),encoding='utf-8');return prepared\n        finally:\n            for work in reversed(worktrees):git(repo,'worktree','remove','--force',str(work))\n```\n\n设计说明：实现 execute(repo,fix_commit,branches,report_path)。每个维护分支有feature.txt=disabled和policy.json.allow_feature，修复提交将feature.txt改为enabled。先记录所有分支旧ID，在各自临时detached worktree中cherry-pick修复并验证feature=enabled且allow_feature=True；任一冲突或策略不允许时全部正式分支保持原ID、原报告不变。全部验证成功后使用单个update-ref事务带旧值更新全部分支，生成逐分支old/new报告。必须保留每个分支独有文件、源主工作树脏修改和当前分支；回收所有临时worktree及cherry-pick状态。只接收非当前、未被其他worktree检出的独立维护分支。",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "has_answer": true,
+    "case_signature": "git-project|6|多维护分支补丁回移：隔离验证与引用原子提交",
+    "source": "OpsForge 原创隔离仓库工程练习"
+  }
+]

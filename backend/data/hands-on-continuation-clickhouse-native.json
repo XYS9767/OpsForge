@@ -1,0 +1,574 @@
+[
+  {
+    "id": "curated-parallel-clickhouse-003",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 0,
+    "topic": "表模型与数据类型",
+    "title": "真实ClickHouse进程重启对照：将Memory暂存数据迁入可保留的MergeTree",
+    "answer": "```sql\nCREATE TABLE durable_events(id UInt32,payload String) ENGINE=MergeTree ORDER BY id;\nINSERT INTO durable_events SELECT id,payload FROM transient_events;\n```\n\n原题知识说明：\n不能将内存表当持久恢复来源，进程重启后的数据保留能力受引擎语义限制。用持久引擎承载必须恢复的数据，并在隔离重启验证。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；ClickHouse官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n提交task.sql：当前已有transient_events(id UInt32,payload String) ENGINE=Memory。创建同列durable_events，ENGINE=MergeTree ORDER BY id，并完整复制当前数据；不删除或改变源表，不另输出SELECT。平台同一数据目录退出实际引擎并重新打开，持久表必须原字节保留，Memory数据应消失。仅迁本题临时目录，不将磁盘保留视为备份。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/engines/table-engines/special/memory",
+      "https://clickhouse.com/docs/engines/table-engines/mergetree-family/mergetree"
+    ],
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-003",
+      "original_title": "ClickHouse Memory表能否当作重启后仍可靠存在的数据存储？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "CREATE TABLE durable_events(id UInt32,payload String) ENGINE=MergeTree ORDER BY id;\nINSERT INTO durable_events SELECT id,payload FROM transient_events;\n"
+    },
+    "negative_files": {
+      "task.sql": "CREATE TABLE durable_events(id UInt32,payload String) ENGINE=Memory;\nINSERT INTO durable_events SELECT id,payload FROM transient_events;\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，提供固定ClickHouse Local 25.8.1.5101原生二进制；不构建镜像",
+      "operation": "提交task.sql：当前已有transient_events(id UInt32,payload String) ENGINE=Memory。创建同列durable_events，ENGINE=MergeTree ORDER BY id，并完整复制当前数据；不删除或改变源表，不另输出SELECT。平台同一数据目录退出实际引擎并重新打开，持久表必须原字节保留，Memory数据应消失。仅迁本题临时目录，不将磁盘保留视为备份。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 50,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n token=secrets.token_hex(8);payload=token.encode().hex()\n initial=\"CREATE TABLE transient_events(id UInt32,payload String) ENGINE=Memory; INSERT INTO transient_events VALUES(7,unhex('\"+payload+\"')),(11,'second');\"\n assert database.run(initial+sql+\"SELECT id,hex(payload) AS payload_hex FROM durable_events ORDER BY id;\")==[{'id':7,'payload_hex':payload.upper()},{'id':11,'payload_hex':'second'.encode().hex().upper()}],'initial copy incomplete'\n after=database.run(\"SELECT id,hex(payload) AS payload_hex FROM durable_events ORDER BY id;\")\n assert after==[{'id':7,'payload_hex':payload.upper()},{'id':11,'payload_hex':'second'.encode().hex().upper()}],'Memory table contents vanished after actual engine process restart'\n assert database.run('SELECT count() AS count FROM transient_events;')==[{'count':0}]\n assert database.run(\"SELECT engine FROM system.tables WHERE database=currentDatabase() AND name='durable_events';\")==[{'engine':'MergeTree'}]\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-clickhouse-004",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 0,
+    "topic": "表模型与数据类型",
+    "title": "原生ClickHouse String保留二进制：分别计算字节数、合法UTF8和字符数",
+    "answer": "```sql\nSELECT id,length(payload) AS bytes,isValidUTF8(payload) AS valid,\n if(isValidUTF8(payload),toNullable(lengthUTF8(payload)),NULL) AS characters\nFROM raw_strings ORDER BY id;\n```\n\n原题知识说明：\nString可保存任意字节，字符串长度与UTF-8字符数函数语义不同。验收多字节及无效编码输入，展示层解码要求应单独定义。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；ClickHouse官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\ntask.sql只读raw_strings(id UInt32,payload String)，按id升序返回id、bytes=真实字节数、valid=isValidUTF8的0/1、characters=合法UTF8字符数，非法UTF8时characters必须NULL。空串合法且长度0，嵌入NUL也是实际字节，不能先替换/丢弃非法字节再当合法文本。不输出原始payload，避免JSON层误解二进制。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/sql-reference/data-types/string",
+      "https://clickhouse.com/docs/sql-reference/functions/string-functions"
+    ],
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-004",
+      "original_title": "ClickHouse String是否限定为UTF-8文本？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "SELECT id,length(payload) AS bytes,isValidUTF8(payload) AS valid,\n if(isValidUTF8(payload),toNullable(lengthUTF8(payload)),NULL) AS characters\nFROM raw_strings ORDER BY id;\n"
+    },
+    "negative_files": {
+      "task.sql": "SELECT id,length(payload) AS bytes,isValidUTF8(payload) AS valid,\n if(isValidUTF8(payload),toNullable(length(payload)),NULL) AS characters\nFROM raw_strings ORDER BY id;\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，提供固定ClickHouse Local 25.8.1.5101原生二进制；不构建镜像",
+      "operation": "task.sql只读raw_strings(id UInt32,payload String)，按id升序返回id、bytes=真实字节数、valid=isValidUTF8的0/1、characters=合法UTF8字符数，非法UTF8时characters必须NULL。空串合法且长度0，嵌入NUL也是实际字节，不能先替换/丢弃非法字节再当合法文本。不输出原始payload，避免JSON层误解二进制。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 50,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n values=[(3,'中文🙂'.encode()),(9,b'a\\x00b'),(12,b'\\xff\\xfe\\x00'),(18,b''),(21,('x'+secrets.token_hex(5)).encode())]\n fixture='CREATE TABLE raw_strings(id UInt32,payload String) ENGINE=Memory; INSERT INTO raw_strings VALUES '+','.join('('+str(i)+\",unhex('\"+data.hex()+\"'))\" for i,data in values)+';'\n expected=[]\n for identity,data in values:\n  try:characters=len(data.decode('utf8'));valid=1\n  except UnicodeDecodeError:characters=None;valid=0\n  expected.append({'id':identity,'bytes':len(data),'valid':valid,'characters':characters})\n assert database.run(fixture+sql)==expected,'byte length, UTF8 character count and invalid binary payload were confused'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-clickhouse-013",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 1,
+    "topic": "表模型与数据类型",
+    "title": "创建原生MergeTree排序键与较短主索引前缀，验证主键不强制行唯一",
+    "answer": "```sql\nCREATE TABLE indexed_events(tenant UInt32,event_at UInt64,id UInt32,payload String)\nENGINE=MergeTree PRIMARY KEY (tenant,event_at) ORDER BY (tenant,event_at,id);\n```\n\n原题知识说明：\nORDER BY决定数据排序，PRIMARY KEY决定主索引表达式，显式主键通常需为排序键前缀。检查DDL和索引内存，不能把二者当独立任意列集合。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；ClickHouse官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\ntask.sql创建indexed_events：tenant UInt32、event_at UInt64、id UInt32、payload String；MergeTree，完整ORDER BY(tenant,event_at,id)，显式PRIMARY KEY(tenant,event_at)。不得把id单独设为主键，也不能把整排序键冒充要求的较短主索引。平台读取实际system.tables并插入重复键验证仍保留全部事实行。不声明索引空间或查询性能已压测。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/engines/table-engines/mergetree-family/mergetree"
+    ],
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-013",
+      "original_title": "MergeTree ORDER BY与PRIMARY KEY不完全相同时如何理解？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "CREATE TABLE indexed_events(tenant UInt32,event_at UInt64,id UInt32,payload String)\nENGINE=MergeTree PRIMARY KEY (tenant,event_at) ORDER BY (tenant,event_at,id);\n"
+    },
+    "negative_files": {
+      "task.sql": "CREATE TABLE indexed_events(tenant UInt32,event_at UInt64,id UInt32,payload String)\nENGINE=MergeTree PRIMARY KEY (id) ORDER BY (tenant,event_at,id);\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，提供固定ClickHouse Local 25.8.1.5101原生二进制；不构建镜像",
+      "operation": "task.sql创建indexed_events：tenant UInt32、event_at UInt64、id UInt32、payload String；MergeTree，完整ORDER BY(tenant,event_at,id)，显式PRIMARY KEY(tenant,event_at)。不得把id单独设为主键，也不能把整排序键冒充要求的较短主索引。平台读取实际system.tables并插入重复键验证仍保留全部事实行。不声明索引空间或查询性能已压测。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 50,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n database.run(sql)\n metadata=database.run(\"SELECT engine,replaceAll(primary_key,' ','') AS pk,replaceAll(sorting_key,' ','') AS ordering FROM system.tables WHERE database=currentDatabase() AND name='indexed_events';\")\n assert metadata==[{'engine':'MergeTree','pk':'tenant,event_at','ordering':'tenant,event_at,id'}],'primary key prefix and full physical sorting key conflated'\n assert database.run(\"INSERT INTO indexed_events VALUES(2,100,9,'one'),(2,100,9,'two'),(2,100,3,'earlier'); SELECT count() AS count,groupArray(payload) AS payloads FROM (SELECT * FROM indexed_events ORDER BY id,payload);\")==[{'count':3,'payloads':['earlier','one','two']}],'sparse primary index was incorrectly used as uniqueness enforcement'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-clickhouse-016",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 1,
+    "topic": "表模型与数据类型",
+    "title": "原生DateTime64毫秒存储：同一秒内事件不得合并，UTC语义保持",
+    "answer": "```sql\nCREATE TABLE precise_events(id UInt32,ts DateTime64(3,'UTC')) ENGINE=MergeTree ORDER BY (ts,id);\n```\n\n原题知识说明：\nDateTime64支持指定小数秒精度，DateTime主要到秒。核对时区与输入转换，用毫秒或微秒样本验收，输出格式精细不代表底层保留了精度。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；ClickHouse官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\ntask.sql创建precise_events(id UInt32,ts DateTime64(3,'UTC'))，MergeTree ORDER BY(ts,id)。平台以UTC墙上时间文本写入同秒多个毫秒及跨秒边界，读取toUnixTimestamp64Milli必须逐值相同。不得用秒精度、字符串显示伪装或换时区。只验固定毫秒精度，不声称纳秒或任意时区转换都已覆盖。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/sql-reference/data-types/datetime64"
+    ],
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-016",
+      "original_title": "DateTime64与DateTime在精度上有何区别？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "CREATE TABLE precise_events(id UInt32,ts DateTime64(3,'UTC')) ENGINE=MergeTree ORDER BY (ts,id);\n"
+    },
+    "negative_files": {
+      "task.sql": "CREATE TABLE precise_events(id UInt32,ts DateTime64(0,'UTC')) ENGINE=MergeTree ORDER BY (ts,id);\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，提供固定ClickHouse Local 25.8.1.5101原生二进制；不构建镜像",
+      "operation": "task.sql创建precise_events(id UInt32,ts DateTime64(3,'UTC'))，MergeTree ORDER BY(ts,id)。平台以UTC墙上时间文本写入同秒多个毫秒及跨秒边界，读取toUnixTimestamp64Milli必须逐值相同。不得用秒精度、字符串显示伪装或换时区。只验固定毫秒精度，不声称纳秒或任意时区转换都已覆盖。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 50,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n database.run(sql)\n base=1760000000000+secrets.randbelow(1000)*1000;ticks=[base+1,base+199,base+999,base+1001]\n values=[]\n for identity,tick in enumerate(ticks,1):\n  moment=datetime.datetime.fromtimestamp(tick/1000,datetime.timezone.utc);text=moment.strftime('%Y-%m-%d %H:%M:%S.')+f'{tick%1000:03d}';values.append('('+str(identity)+\",'\"+text+\"')\")\n actual=database.run('INSERT INTO precise_events VALUES '+','.join(values)+'; SELECT id,toUnixTimestamp64Milli(ts) AS tick FROM precise_events ORDER BY id;')\n assert actual==[{'id':identity,'tick':tick} for identity,tick in enumerate(ticks,1)],'milliseconds lost or UTC wall input was interpreted in a different timezone'\n assert database.run('SELECT countDistinct(ts) AS distinct_count FROM precise_events;')==[{'distinct_count':4}]\n assert database.run(\"SELECT type FROM system.columns WHERE database=currentDatabase() AND table='precise_events' AND name='ts';\")==[{'type':\"DateTime64(3, 'UTC')\"}]\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-clickhouse-017",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 1,
+    "topic": "表模型与数据类型",
+    "title": "原生ARRAY JOIN按位置同步展开成对数组，拒绝笛卡尔乘积和空数组伪行",
+    "answer": "```sql\nSELECT id,metric,amount FROM events\nARRAY JOIN names AS metric,amounts AS amount ORDER BY id,metric;\n```\n\n原题知识说明：\nArray把多个元素保存为一个行值，arrayJoin把元素展开为多行并复制其他列。测试空数组和多数组组合，防止展开后聚合重复计数。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；ClickHouse官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\ntask.sql从events(id UInt32,names Array(String),amounts Array(UInt32))输出id/metric/amount，两个数组长度相等且位置一一对应。使用同一ARRAY JOIN按位置配对，普通空数组不产生行；按id、metric升序，不独立arrayJoin造成笛卡尔积，不以LEFT ARRAY JOIN填空数组默认行。保留真实amount=0。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/sql-reference/statements/select/array-join"
+    ],
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-017",
+      "original_title": "Array列与arrayJoin对输出行数有何影响？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "SELECT id,metric,amount FROM events\nARRAY JOIN names AS metric,amounts AS amount ORDER BY id,metric;\n"
+    },
+    "negative_files": {
+      "task.sql": "SELECT id,arrayJoin(names) AS metric,arrayJoin(amounts) AS amount FROM events ORDER BY id,metric;\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，提供固定ClickHouse Local 25.8.1.5101原生二进制；不构建镜像",
+      "operation": "task.sql从events(id UInt32,names Array(String),amounts Array(UInt32))输出id/metric/amount，两个数组长度相等且位置一一对应。使用同一ARRAY JOIN按位置配对，普通空数组不产生行；按id、metric升序，不独立arrayJoin造成笛卡尔积，不以LEFT ARRAY JOIN填空数组默认行。保留真实amount=0。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 50,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n suffix=secrets.token_hex(3);a='a'+suffix;b='b'+suffix\n fixture=\"CREATE TABLE events(id UInt32,names Array(String),amounts Array(UInt32)) ENGINE=Memory; INSERT INTO events VALUES(1,['\"+a+\"','\"+b+\"'],[7,19]),(2,[],[]),(3,['\"+a+\"'],[0]);\"\n assert database.run(fixture+sql)==[{'id':1,'metric':a,'amount':7},{'id':1,'metric':b,'amount':19},{'id':3,'metric':a,'amount':0}],'aligned arrays multiplied into Cartesian pairs or empty array produced fake row'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-clickhouse-019",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 1,
+    "topic": "查询与聚合优化",
+    "title": "原生LEFT JOIN未匹配值为NULL，保留实际匹配零分而非把零当缺失",
+    "answer": "```sql\nSELECT l.id AS id,r.score AS score FROM left_data AS l\nLEFT ALL JOIN right_data AS r ON l.id=r.owner ORDER BY id\nSETTINGS join_use_nulls=1;\n```\n\n原题知识说明：\n不一定，默认行为可能填类型默认值，join_use_nulls等设置改变表现。先确认会话配置，再测试无匹配行，避免把0当真实匹配结果。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；ClickHouse官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\ntask.sql查询left_data(id UInt32)与right_data(owner UInt32,score UInt32)，每个owner在本题唯一。返回全部左侧id及匹配score，按id升序。要求未匹配为NULL且真实score=0保持0；可使用query SETTINGS join_use_nulls=1，不能NULLIF(score,0)混淆合法零值。不更改表或全局设置。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/operations/settings/settings#join_use_nulls",
+      "https://clickhouse.com/docs/sql-reference/statements/select/join"
+    ],
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-019",
+      "original_title": "ClickHouse LEFT JOIN未匹配字段一定是NULL吗？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "SELECT l.id AS id,r.score AS score FROM left_data AS l\nLEFT ALL JOIN right_data AS r ON l.id=r.owner ORDER BY id\nSETTINGS join_use_nulls=1;\n"
+    },
+    "negative_files": {
+      "task.sql": "SELECT l.id AS id,r.score AS score FROM left_data AS l\nLEFT ALL JOIN right_data AS r ON l.id=r.owner ORDER BY id\nSETTINGS join_use_nulls=0;\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，提供固定ClickHouse Local 25.8.1.5101原生二进制；不构建镜像",
+      "operation": "task.sql查询left_data(id UInt32)与right_data(owner UInt32,score UInt32)，每个owner在本题唯一。返回全部左侧id及匹配score，按id升序。要求未匹配为NULL且真实score=0保持0；可使用query SETTINGS join_use_nulls=1，不能NULLIF(score,0)混淆合法零值。不更改表或全局设置。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 50,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n identity=secrets.randbelow(2000)+100\n fixture='CREATE TABLE left_data(id UInt32) ENGINE=Memory; CREATE TABLE right_data(owner UInt32,score UInt32) ENGINE=Memory; INSERT INTO left_data VALUES('+str(identity)+'),('+str(identity+1)+'),('+str(identity+2)+'); INSERT INTO right_data VALUES('+str(identity)+',0),('+str(identity+2)+',27);'\n assert database.run(fixture+sql)==[{'id':identity,'score':0},{'id':identity+1,'score':None},{'id':identity+2,'score':27}],'unmatched default zero confused with actual matched score zero'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-clickhouse-027",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 1,
+    "topic": "表模型与数据类型",
+    "title": "原生AggregatingMergeTree用avgMerge合并不等样本量状态，不能平均局部平均值",
+    "answer": "```sql\nSELECT tenant,avgMerge(latency_state) AS mean_latency\nFROM aggregate_rollup GROUP BY tenant ORDER BY tenant;\n```\n\n原题知识说明：\nAggregateFunction列保存可合并状态，需用相应-Merge等函数完成合并和取值。状态类型必须匹配聚合函数与参数，验收分批写入与一次计算结果一致。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；ClickHouse官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\ntask.sql只读aggregate_rollup(tenant UInt32,latency_state AggregateFunction(avg,Float64))，按tenant返回mean_latency并升序。不同批次样本量明显不同且后台合并暂停，必须用可合并的原生avg状态得到全体观察值平均；不能先finalize每个状态再等权平均，也不能把多个part的局部结果直接当最终报表。不主动OPTIMIZE来依赖后台合并。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/engines/table-engines/mergetree-family/aggregatingmergetree"
+    ],
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-027",
+      "original_title": "AggregatingMergeTree保存的聚合状态为什么不能直接当最终数值使用？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "SELECT tenant,avgMerge(latency_state) AS mean_latency\nFROM aggregate_rollup GROUP BY tenant ORDER BY tenant;\n"
+    },
+    "negative_files": {
+      "task.sql": "SELECT tenant,avg(finalizeAggregation(latency_state)) AS mean_latency\nFROM aggregate_rollup GROUP BY tenant ORDER BY tenant;\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，提供固定ClickHouse Local 25.8.1.5101原生二进制；不构建镜像",
+      "operation": "task.sql只读aggregate_rollup(tenant UInt32,latency_state AggregateFunction(avg,Float64))，按tenant返回mean_latency并升序。不同批次样本量明显不同且后台合并暂停，必须用可合并的原生avg状态得到全体观察值平均；不能先finalize每个状态再等权平均，也不能把多个part的局部结果直接当最终报表。不主动OPTIMIZE来依赖后台合并。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 50,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n offset=secrets.randbelow(40)+20\n fixture=\"CREATE TABLE aggregate_rollup(tenant UInt32,latency_state AggregateFunction(avg,Float64)) ENGINE=AggregatingMergeTree ORDER BY tenant; SYSTEM STOP MERGES aggregate_rollup; CREATE TABLE raw(tenant UInt32,batch UInt8,latency Float64) ENGINE=Memory;\"\n events=[(1,1,offset+100)]+[(1,2,offset+10)]*9+[(2,1,offset+5)]*4+[(2,2,offset+55)]\n fixture+='INSERT INTO raw VALUES '+','.join(str(row) for row in events)+';'\n for batch in (1,2):fixture+='INSERT INTO aggregate_rollup SELECT tenant,avgState(latency) FROM raw WHERE batch='+str(batch)+' GROUP BY tenant;'\n actual=database.run(fixture+sql);expected=[{'tenant':tenant,'mean_latency':sum(value for key,_,value in events if key==tenant)/sum(key==tenant for key,_,_ in events)} for tenant in (1,2)]\n assert len(actual)==2 and all(row['tenant']==wanted['tenant'] and math.isclose(row['mean_latency'],wanted['mean_latency'],rel_tol=1e-12) for row,wanted in zip(actual,expected)),'finalized partial averages were averaged without their observation counts or states were not merged'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-clickhouse-098",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 3,
+    "topic": "表模型与数据类型",
+    "title": "真实复现价格进入ReplacingMergeTree去重键故障，迁至稳定业务键并拒绝迟到旧版本",
+    "answer": "```sql\nCREATE TABLE corrected(product_id UInt32,price UInt32,version UInt64)\nENGINE=ReplacingMergeTree(version) ORDER BY product_id;\nINSERT INTO corrected SELECT product_id,price,version FROM broken;\n```\n\n原题知识说明：\n桌面推演，未在生产执行。对比旧新记录排序键，价格变化使其成为不同去重键，FINAL也不能按业务ID自动合并。由开发设计稳定业务键和version并迁表回填；验收乱序价格更新只产生一个最终业务状态。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；ClickHouse官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n已有broken(product_id UInt32,price UInt32,version UInt64)，ReplacingMergeTree(version) ORDER BY(product_id,price)，同商品改价后FINAL仍有两条。task.sql创建同列corrected表，ReplacingMergeTree(version)仅按稳定product_id排序，从源表迁入业务记录；原broken全量历史不修改或删除。目标引擎允许合并消除旧物理版本，不要求永久保留目标表的全部版本。平台真实验证FINAL最新价格、旧表证据保留，并在迁移后插入迟到version=1，不能覆盖version=2。不得仅过滤价格或用无version的ReplacingMergeTree靠插入顺序猜新旧。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。本题恢复单机稳定键/版本语义，不演练生产大表迁移切流或多节点一致性。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/engines/table-engines/mergetree-family/replacingmergetree"
+    ],
+    "incident_signature": "clickhouse:replacingmergetree-version-order-key",
+    "related_modules": [
+      "clickhouse"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-parallel-clickhouse-098",
+      "original_title": "ReplacingMergeTree最新价格未覆盖旧记录，ORDER BY包含会变化的price字段，根因与修复是什么？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "CREATE TABLE corrected(product_id UInt32,price UInt32,version UInt64)\nENGINE=ReplacingMergeTree(version) ORDER BY product_id;\nINSERT INTO corrected SELECT product_id,price,version FROM broken;\n"
+    },
+    "negative_files": {
+      "task.sql": "CREATE TABLE corrected(product_id UInt32,price UInt32,version UInt64)\nENGINE=ReplacingMergeTree(version) ORDER BY (product_id,price);\nINSERT INTO corrected SELECT product_id,price,version FROM broken;\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，提供固定ClickHouse Local 25.8.1.5101原生二进制；不构建镜像",
+      "operation": "已有broken(product_id UInt32,price UInt32,version UInt64)，ReplacingMergeTree(version) ORDER BY(product_id,price)，同商品改价后FINAL仍有两条。task.sql创建同列corrected表，ReplacingMergeTree(version)仅按稳定product_id排序，从源表迁入业务记录；原broken全量历史不修改或删除。目标引擎允许合并消除旧物理版本，不要求永久保留目标表的全部版本。平台真实验证FINAL最新价格、旧表证据保留，并在迁移后插入迟到version=1，不能覆盖version=2。不得仅过滤价格或用无version的ReplacingMergeTree靠插入顺序猜新旧。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实ClickHouse Local 25.8.1.5101单机引擎、临时目录及小数据；不调用云服务，不启动Keeper/多节点复制，不证明生产吞吐。本题恢复单机稳定键/版本语义，不演练生产大表迁移切流或多节点一致性。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 50,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'HOME':str(self.root),'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,secrets,json,datetime,math\nsys.path.insert(0,str(pathlib.Path.cwd()))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\ndef submitted():\n sql=pathlib.Path('task.sql').read_text(encoding='utf8')\n if not sql.strip() or sql.strip()=='-- implement requested native operation':raise NotImplementedError('implement native ClickHouse SQL')\n return sql\n\nwith Local() as database:\n print('NATIVE_LINUX_READY',flush=True)\n sql=submitted()\n print('STUDENT_OPERATION_ENTERED:native-clickhouse-sql',flush=True)\n identity=secrets.randbelow(10000)+100;old=700+secrets.randbelow(100);new=100+secrets.randbelow(100)\n fixture='CREATE TABLE broken(product_id UInt32,price UInt32,version UInt64) ENGINE=ReplacingMergeTree(version) ORDER BY (product_id,price); SYSTEM STOP MERGES broken; INSERT INTO broken VALUES('+str(identity)+','+str(old)+',1),('+str(identity)+','+str(new)+',2),('+str(identity+1)+',50,1);'\n demonstration=database.run(fixture+'SELECT count() AS count FROM broken FINAL;');assert demonstration==[{'count':3}],'fault must reproduce before applying answer'\n database.run(sql)\n expected=[{'product_id':identity,'price':new,'version':2},{'product_id':identity+1,'price':50,'version':1}]\n assert database.run('SELECT product_id,price,version FROM corrected FINAL ORDER BY product_id;')==expected,'mutable price remained in deduplication key'\n assert database.run('SELECT count() AS count FROM broken FINAL;')==[{'count':3}],'original evidence table modified'\n assert database.run(\"SELECT engine,sorting_key FROM system.tables WHERE database=currentDatabase() AND name='corrected';\")==[{'engine':'ReplacingMergeTree','sorting_key':'product_id'}]\n assert database.run('INSERT INTO corrected VALUES('+str(identity)+','+str(old+99)+',1); SELECT product_id,price,version FROM corrected FINAL ORDER BY product_id;')==expected,'late old update replaced newer version after key migration'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

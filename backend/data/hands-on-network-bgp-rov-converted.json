@@ -1,0 +1,82 @@
+[
+  {
+    "id": "curated-advanced-network-004",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 4,
+    "topic": "RPKI起源验证与独立AS_PATH策略",
+    "title": "修复把ROA Valid等同于完整路径可信的BGP准入策略",
+    "answer": "```bird\nfilter origin_only {\n    if source != RTS_BGP then reject;\n    if roa_check(r4, net, bgp_path.last) = ROA_VALID then accept;\n    reject;\n}\nfilter admission {\n    if source != RTS_BGP then reject;\n    if roa_check(r4, net, bgp_path.last) != ROA_VALID then reject;\n    if bgp_path ~ [= 65001 64496 =] then accept;\n    reject;\n}\n```\n\nROV比较前缀、最大长度与起源AS，路径中间部分不参与此授权关系。将origin_only和admission分离能保留真实ROV结果，同时实施独立的本地路径政策。更新授权后应重新评估已有路由，不能只处理新UPDATE。这里精确路径限制仍没有密码学认证路径，且实验静态ROA不是在线验证器。参考：[BIRD v2.14 ROA与filter文档](https://github.com/CZ-NIC/bird/blob/v2.14/doc/bird.sgml)。\n\n原题原理说明：\n路由起源验证主要检查前缀、起源AS和ROA允许的最大长度，不能认证整个传播路径，也不评价拥塞、时延或商业策略。应同时应用前缀范围、邻居类型和路径策略，区分Invalid、NotFound及本地验证缓存故障。Valid只是选路输入之一，不应覆盖业务出口策略。验收合法子前缀、超长前缀、错误起源和验证器不可用，确认规则不会误拒全部路由。策略改变前观察模式对比实际路由，出现异常撤回本地变更并保留证据，而非关闭所有路由过滤。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://www.rfc-editor.org/info/rfc6811/"
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "configuration",
+    "run": "python3 checks/check.py",
+    "files": {
+      "policy.conf": "filter origin_only { accept; }\nfilter admission { accept; }\n"
+    },
+    "solution_files": {
+      "policy.conf": "filter origin_only {\n    if source != RTS_BGP then reject;\n    if roa_check(r4, net, bgp_path.last) = ROA_VALID then accept;\n    reject;\n}\nfilter admission {\n    if source != RTS_BGP then reject;\n    if roa_check(r4, net, bgp_path.last) != ROA_VALID then reject;\n    if bgp_path ~ [= 65001 64496 =] then accept;\n    reject;\n}\n"
+    },
+    "negative_files": {
+      "policy.conf": "filter origin_only {\n    if source != RTS_BGP then reject;\n    if roa_check(r4, net, bgp_path.last) = ROA_VALID then accept;\n    reject;\n}\nfilter admission {\n    if source != RTS_BGP then reject;\n    if roa_check(r4, net, bgp_path.last) != ROA_VALID then reject;\n    accept;\n    reject;\n}\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bird",
+          "birdc",
+          "ip"
+        ],
+        "features": [
+          "bird:v2"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,socket,time,re,json,secrets,os\nassert os.getuid()!=0\npolicy=pathlib.Path('policy.conf').read_text()\n# Candidate contains filters only; the fixture owns all protocols/listeners.\nassert not re.search(r'\\b(protocol|include|router|log|table)\\b',policy,re.I),'only the two named filters may be submitted'\nassert set(re.findall(r'\\bfilter\\s+(\\w+)\\s*\\{',policy))=={'origin_only','admission'}\nassert policy.count('{')==policy.count('}')\nbefore=subprocess.check_output(['ip','-j','route','show','table','all'])\nn=secrets.randbelow(160)+20\nprefixes={'good':f'198.18.{n}.0/24','transit':f'198.18.{n+1}.0/24','origin':f'198.18.{n+2}.0/24','specific':f'198.18.{n+3}.0/25','unknown':f'198.19.{n}.0/24'}\nports=[];reserved=[]\nfor _ in range(2):\n    s=socket.socket();s.bind(('127.0.0.1',0));ports.append(s.getsockname()[1]);reserved.append(s)\nfor s in reserved:s.close()\ndef receiver(maxlen):\n    roa=''.join(f' route 198.18.{n+i}.0/24 max {maxlen if i==3 else 24} as 64496;\\n' for i in range(4))\n    return f\"\"\"\nlog stderr all; router id 192.0.2.2;\nroa4 table r4;\nipv4 table accepted;\nprotocol static origins {{ roa4 {{ table r4; }}; {roa} }}\ninclude \"policy.conf\";\nprotocol static igp {{ ipv4; route 192.0.2.254/32 blackhole; }}\nprotocol bgp upstream {{\n local 127.0.0.1 port {ports[1]} as 65002; neighbor 127.0.0.1 port {ports[0]} as 65001;\n multihop; passive on; strict bind on; connect retry time 1; connect delay time 1;\n ipv4 {{ import all; export none; }};\n}}\nprotocol pipe gate {{ table master4; peer table accepted; import none; export filter admission; }}\n\"\"\"\nstatic=''.join(f' route {p} blackhole;\\n' for p in prefixes.values())\nbranches=''\nfor name,prefix in prefixes.items():\n    path='bgp_path.prepend(64497);' if name=='origin' else 'bgp_path.prepend(64496);'\n    if name=='transit':path+='bgp_path.prepend(65199);'\n    branches+=f' if net = {prefix} then {{ {path} bgp_next_hop=192.0.2.254; accept; }}\\n'\nsender=f\"\"\"\nlog stderr all; router id 192.0.2.1;\nprotocol static seed {{ ipv4; {static} }}\nprotocol bgp peer {{\n local 127.0.0.1 port {ports[0]} as 65001; neighbor 127.0.0.1 port {ports[1]} as 65002;\n multihop; strict bind on; connect retry time 1; connect delay time 1;\n ipv4 {{ import none; next hop keep; export filter {{ {branches} reject; }}; }};\n}}\n\"\"\"\npathlib.Path('sender.conf').write_text(sender);pathlib.Path('receiver.conf').write_text(receiver(24))\nprocesses=[];handles=[]\ndef command(*args):\n    result=subprocess.run(['birdc','-s','receiver.ctl',*args],capture_output=True,text=True,timeout=2)\n    assert result.returncode==0,result.stdout+result.stderr\n    return result.stdout\ndef routes(*args):\n    text=command('show','route',*args,'all')\n    return set(re.findall(r'(?m)^(\\d+\\.\\d+\\.\\d+\\.\\d+/\\d+)\\s',text)),text\ndef wait_set(expected,*args):\n    end=time.monotonic()+5;last=None\n    while time.monotonic()<end:\n        assert all(p.poll() is None for p in processes),[pathlib.Path(n+'.log').read_text() for n in ('sender','receiver')]\n        last=routes(*args)\n        if last[0]==expected:return last[1]\n        time.sleep(.03)\n    raise AssertionError({'expected':sorted(expected),'actual':last})\ntry:\n    for name in ('receiver','sender'):\n        checked=subprocess.run(['bird','-p','-c',name+'.conf'],capture_output=True,text=True,timeout=3)\n        assert checked.returncode==0,checked.stderr\n    for name in ('receiver','sender'):\n        h=open(name+'.log','w');handles.append(h)\n        processes.append(subprocess.Popen(['bird','-f','-c',name+'.conf','-s',name+'.ctl','-P',name+'.pid'],stdout=h,stderr=h))\n    for _ in range(100):\n        if all(pathlib.Path(n+'.ctl').exists() for n in ('sender','receiver')):break\n        assert all(p.poll() is None for p in processes);time.sleep(.01)\n    raw=wait_set(set(prefixes.values()),'table','master4','protocol','upstream')\n    valid=wait_set({prefixes['good'],prefixes['transit']},'table','master4','filter','origin_only')\n    admitted=wait_set({prefixes['good']},'table','accepted')\n    assert 'BGP.as_path: 65001 65199 64496' in valid,'ROA-valid route with disallowed transit must remain visible in the origin-only audit'\n    assert 'BGP.as_path: 65001 64497' in raw,'wrong-origin negative route must really be received'\n    # ROA authority now permits /25; force the native pipe to reconsider existing routes.\n    pathlib.Path('updated.conf').write_text(receiver(25))\n    command('configure','\"updated.conf\"')\n    command('reload','out','gate')\n    updated_valid=wait_set({prefixes['good'],prefixes['transit'],prefixes['specific']},'table','master4','filter','origin_only')\n    updated_admitted=wait_set({prefixes['good'],prefixes['specific']},'table','accepted')\n    pathlib.Path('origin-admission-observations.json').write_text(json.dumps({'received':raw,'origin_valid':valid,'admitted':admitted,'after_maxlength_change':{'valid':updated_valid,'admitted':updated_admitted},'as_path_authentication':False,'public_rpki_chain_verified':False},indent=2))\nfinally:\n    for p in processes:\n        if p.poll() is None:p.terminate()\n    for p in processes:\n        try:p.wait(timeout=2)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=2)\n    for h in handles:h.close()\n    assert before==subprocess.check_output(['ip','-j','route','show','table','all'])\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现policy.conf两个独立过滤器。origin_only仅接受source=RTS_BGP且roa_check(r4,net,bgp_path.last)=ROA_VALID的路由，供原生审计视图使用；不能把中间AS不符合本地策略直接改称ROA_INVALID。admission先满足同样来源与ROA_VALID条件，再要求完整AS_PATH恰为65001 64496才接受，其余（Invalid、Unknown、额外或不同中间AS）拒绝。平台把admission作为真实pipe出口过滤器送入独立accepted表，不写内核。你需要通过真实BGP收到的路由证明：带65199中间AS的路由仍可能ROA Valid，却应被本地路径策略拒绝；ROA maxLength从24授权到25后，重新评估应接纳合法/25，而其他拒绝项保持拒绝。",
+      "deliverables": [
+        "policy.conf"
+      ],
+      "generated_artifacts": [
+        "origin-admission-observations.json"
+      ],
+      "verification": "python3 checks/check.py运行两实例BGP与BIRD原生ROA表，随机前缀覆盖合法路径、额外中间AS、错误origin ASN、过长/25及Unknown五类；分别核对原始收到集合、origin_only原生过滤视图和pipe实际accepted表。再变更原生ROA maxLength并reload out，核对只有对应/25新增，输出状态证据。没有用Python实现ROV/选路规则。",
+      "failure_examples": [
+        "只检查ROA_VALID会放过带额外中间AS的路径；把所有ROA_UNKNOWN当Valid会放入无授权记录的前缀；写死当前前缀不响应maxLength授权变化。"
+      ]
+    },
+    "body": "## 环境与初始材料\n非root Linux与BIRD 2。提供policy.conf错误过滤器，平台管理两个回环高端口BGP实例、静态实验ROA表r4与两个内部IPv4表。只读系统路由，无Kernel/Direct/OSPF。配置仅可声明origin_only和admission过滤器，不提交协议、监听或include。\n\n## 操作任务\n实现policy.conf两个独立过滤器。origin_only仅接受source=RTS_BGP且roa_check(r4,net,bgp_path.last)=ROA_VALID的路由，供原生审计视图使用；不能把中间AS不符合本地策略直接改称ROA_INVALID。admission先满足同样来源与ROA_VALID条件，再要求完整AS_PATH恰为65001 64496才接受，其余（Invalid、Unknown、额外或不同中间AS）拒绝。平台把admission作为真实pipe出口过滤器送入独立accepted表，不写内核。你需要通过真实BGP收到的路由证明：带65199中间AS的路由仍可能ROA Valid，却应被本地路径策略拒绝；ROA maxLength从24授权到25后，重新评估应接纳合法/25，而其他拒绝项保持拒绝。\n\n## 提交产物\npolicy.conf完整过滤器。运行后生成origin-admission-observations.json，记录原始/Valid/准入三组路由及授权变化结果。\n\n## 验收方法\npython3 checks/check.py运行两实例BGP与BIRD原生ROA表，随机前缀覆盖合法路径、额外中间AS、错误origin ASN、过长/25及Unknown五类；分别核对原始收到集合、origin_only原生过滤视图和pipe实际accepted表。再变更原生ROA maxLength并reload out，核对只有对应/25新增，输出状态证据。没有用Python实现ROV/选路规则。 全部断言通过退出0。ROA记录由实验预置，未验证公网RPKI证书链或RTR同步；精确AS_PATH只是本地准入策略，不能证明路径未伪造，也不是BGPsec。\n\n失败示例：只检查ROA_VALID会放过带额外中间AS的路径；把所有ROA_UNKNOWN当Valid会放入无授权记录的前缀；写死当前前缀不响应maxLength授权变化。",
+    "case_signature": "curated-advanced-network-004|native-roa-origin-vs-transit-admission-and-maxlength-reload",
+    "conversion": {
+      "original_id": "curated-advanced-network-004",
+      "original_title": "RPKI验证显示一条BGP路由Valid，为什么仍不能证明整个AS_PATH真实或这条路由最适合业务？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

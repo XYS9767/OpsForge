@@ -1,0 +1,221 @@
+[
+  {
+    "id": "curated-parallel-loki-011",
+    "module": "loki",
+    "category": "Loki",
+    "level": 1,
+    "topic": "LogQL查询与解析",
+    "title": "真实LogQL标签正则全匹配：从明确环境清单构造选择器，转义字面值并拒绝空清单",
+    "answer": "```python\nimport json,re\ndef selector(envs):\n    if not isinstance(envs,list) or not 1<=len(envs)<=32 or any(not isinstance(v,str) or not v or len(v)>64 for v in envs):raise ValueError('bounded explicit environment list required')\n    pattern='('+'|'.join(re.escape(v) for v in dict.fromkeys(envs))+')'\n    return '{job=\"selector-exercise\",env=~'+json.dumps(pattern,ensure_ascii=False)+'}'\n```\n\n原题知识说明：\n等值可明确缩小流集合，宽泛正则可能选中大量流。先用稳定低基数条件限定租户内范围，再过滤正文；验收匹配流数和扫描字节。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Grafana Loki官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现selector(envs)，为固定job=selector-exercise和调用者明确环境清单构造LogQL标签选择器，实际只选中清单内完整env值。envs须list长度1..32，每项非空字符串且最多64字符，不改输入，重复项可去重。必须分别处理正则元字符转义与LogQL字符串引用，prod不能匹配preprod/prod-blue，字面环境prod|stage不能变成prod或stage，qa.<随机后缀>中的点不能当通配。空清单必须拒绝，不能退化全量扫描；不要求手写^$，Loki标签正则本身为全匹配语义。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Loki3.5.5写入独立env流并执行生成LogQL，不是正则字符串相等测试；未证明任意大规模租户扫描成本或采集端标签治理。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://grafana.com/docs/loki/latest/query/log_queries/#log-stream-selector"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-loki-011",
+      "original_title": "LogQL标签选择器的等值与正则匹配怎样影响扫描范围？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json,re\ndef selector(envs):\n    if not isinstance(envs,list) or not 1<=len(envs)<=32 or any(not isinstance(v,str) or not v or len(v)>64 for v in envs):raise ValueError('bounded explicit environment list required')\n    pattern='('+'|'.join(re.escape(v) for v in dict.fromkeys(envs))+')'\n    return '{job=\"selector-exercise\",env=~'+json.dumps(pattern,ensure_ascii=False)+'}'\n"
+    },
+    "negative_files": {
+      "task.py": "import json,re\ndef selector(envs):\n    if not isinstance(envs,list) or not 1<=len(envs)<=32 or any(not isinstance(v,str) or not v or len(v)>64 for v in envs):raise ValueError('bounded explicit environment list required')\n    pattern='.*('+'|'.join(re.escape(v) for v in dict.fromkeys(envs))+').*'\n    return '{job=\"selector-exercise\",env=~'+json.dumps(pattern,ensure_ascii=False)+'}'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现selector(envs)，为固定job=selector-exercise和调用者明确环境清单构造LogQL标签选择器，实际只选中清单内完整env值。envs须list长度1..32，每项非空字符串且最多64字符，不改输入，重复项可去重。必须分别处理正则元字符转义与LogQL字符串引用，prod不能匹配preprod/prod-blue，字面环境prod|stage不能变成prod或stage，qa.<随机后缀>中的点不能当通配。空清单必须拒绝，不能退化全量扫描；不要求手写^$，Loki标签正则本身为全匹配语义。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Loki3.5.5写入独立env流并执行生成LogQL，不是正则字符串相等测试；未证明任意大规模租户扫描成本或采集端标签治理。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "loki"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/loki_native.py": "\"\"\"Private standalone Loki 3.5.5, filesystem storage and loopback-only HTTP/gRPC.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.parse,urllib.error\nimport yaml\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Loki:\n def __init__(self,auth=False,structured=False,configurator=None,directory=None):\n  self.binary=shutil.which('loki');self.process=None;self.auth=auth;self.structured=structured;self.configurator=configurator;self.directory=directory\n  if not self.binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 executable missing')\n  version=subprocess.run([self.binary,'-version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '3.5.5' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-loki-') if self.directory is None else None;self.root=pathlib.Path(self.temp.name if self.temp else self.directory);self.root.mkdir(parents=True,exist_ok=True);http=free_port();grpc=free_port()\n  while grpc==http:grpc=free_port()\n  self.base='http://127.0.0.1:'+str(http);self.log=(self.root/'server.log').open('wb')\n  config={'auth_enabled':self.auth,'server':{'http_listen_address':'127.0.0.1','http_listen_port':http,'grpc_listen_address':'127.0.0.1','grpc_listen_port':grpc,'log_level':'error'},\n   'common':{'instance_addr':'127.0.0.1','path_prefix':str(self.root),'replication_factor':1,'storage':{'filesystem':{'chunks_directory':str(self.root/'chunks'),'rules_directory':str(self.root/'rules')}},'ring':{'kvstore':{'store':'inmemory'}}},\n   'schema_config':{'configs':[{'from':'2020-10-24','store':'tsdb','object_store':'filesystem','schema':'v13','index':{'prefix':'index_','period':'24h'}}]},\n   'ingester':{'lifecycler':{'min_ready_duration':'0s','final_sleep':'0s','heartbeat_period':'100ms'},'wal':{'enabled':False}},\n   'limits_config':{'allow_structured_metadata':self.structured,'max_query_parallelism':2,'tsdb_max_query_parallelism':2,'split_queries_by_interval':'0s','query_timeout':'5s'},\n   'querier':{'max_concurrent':2},'analytics':{'reporting_enabled':False},'pattern_ingester':{'enabled':False},'compactor':{'working_directory':str(self.root/'compactor')}}\n  if self.configurator:self.configurator(config,self.root)\n  self.config=config;path=self.root/'config.yaml';path.write_text(yaml.safe_dump(config,sort_keys=False),encoding='utf8')\n  try:\n   self.process=subprocess.Popen([self.binary,'-config.file='+str(path)],cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'192MiB','HOME':str(self.root)})\n   self.wait(lambda:self.request('/ready')==b'ready\\n','private HTTP readiness',seconds=12)\n   print('NATIVE_LOKI_READY:3.5.5',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,data=None,tenant=None,headers=None):\n  outgoing={'Content-Type':'application/json',**(headers or {})}\n  if tenant is not None:outgoing['X-Scope-OrgID']=tenant\n  request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data,ensure_ascii=False).encode(),headers=outgoing)\n  with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as response:\n   raw=response.read();return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n def wait(self,predicate,description,seconds=5):\n  deadline=time.monotonic()+seconds\n  while time.monotonic()<deadline:\n   if self.process.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki exited: '+(self.root/'server.log').read_text(errors='replace')[-2500:])\n   try:\n    value=predicate()\n    if value:return value\n   except (OSError,urllib.error.URLError):pass\n   time.sleep(.04)\n  raise AssertionError('native Loki deadline: '+description)\n def push(self,streams,tenant=None):\n  result=self.request('/loki/api/v1/push',{'streams':streams},tenant=tenant);assert result==b''\n def logs(self,query,start,end,tenant=None):\n  params={'query':query,'start':str(start),'end':str(end),'direction':'forward','limit':'1000'}\n  result=self.request('/loki/api/v1/query_range?'+urllib.parse.urlencode(params),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='streams';return result['data']['result']\n def metric(self,query,at,tenant=None):\n  result=self.request('/loki/api/v1/query?'+urllib.parse.urlencode({'query':query,'time':str(at)}),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='vector';return result['data']['result']\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=4)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if getattr(self,'log',None):self.log.close()\n  if self.temp:self.temp.cleanup()\n",
+        "checks/check.py": "import sys,pathlib,time,json,secrets,copy\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom loki_native import Loki\nprint('NATIVE_LINUX_READY',flush=True)\ndef operation(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('submitted LogQL builder failed') from error\ndef bodies(streams):return sorted(value[1] for stream in streams for value in stream['values'])\nwith Loki() as server:\n now=time.time_ns();nonce=secrets.token_hex(4);envs=['prod','stage','prod-blue','preprod','stage2','prod|stage','qa.'+nonce,'qax'+nonce]\n server.push([{'stream':{'job':'selector-exercise','env':env},'values':[[str(now-10**9),'environment='+env]]} for env in envs])\n for chosen in [['prod','stage'],['prod|stage','qa.'+nonce],['prod','prod']]:\n  original=chosen[:];query=operation(task.selector,chosen);assert chosen==original\n  result=server.logs(query,now-60*10**9,now+10**9)\n  assert bodies(result)==sorted('environment='+env for env in set(chosen)),(query,bodies(result))\n for invalid in [[],None,[''],'prod',['x']*33]:\n  try:task.selector(invalid)\n  except ValueError:pass\n  else:raise AssertionError('unbounded or empty environment selection accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "loki"
+    ]
+  },
+  {
+    "id": "curated-parallel-loki-016",
+    "module": "loki",
+    "category": "Loki",
+    "level": 1,
+    "topic": "LogQL查询与解析",
+    "title": "真实line_format仅改查询视图：生成显示正文后复查原始JSON、坏行和流标签不变",
+    "answer": "```python\ndef query():\n    return '{job=\"render-exercise\"} | json | __error__=\"\" | line_format \"{{.level}} {{.message}}\"'\n```\n\n原题知识说明：\n不会，它在查询结果中重排展示文本，原chunk内容不变。验收原始查询与格式化查询对照，不能用line_format实现持久脱敏。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Grafana Loki官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现query()，返回固定job=render-exercise的LogQL：解析JSON，显式过滤解析错误，仅将有效行格式化为“level 空格 message”。测试真实写入含中文及随机文本的JSON、普通JSON和一条坏行；格式化结果正确后再用原选择器读取，所有原始行须逐字保留，原流标签不得出现查询时提取的level/message。不要把label_format当line_format，不要认为查询过滤坏行已删除源日志。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Loki3.5.5查询时JSON解析、line_format和后续原始日志复查；不修改采集端或持久日志，不声明查询显示等于脱敏落盘。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://grafana.com/docs/loki/latest/query/log_queries/#line-format-expression"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-loki-016",
+      "original_title": "LogQL line_format会改变已经存储的原始日志吗？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def query():\n    return '{job=\"render-exercise\"} | json | __error__=\"\" | line_format \"{{.level}} {{.message}}\"'\n"
+    },
+    "negative_files": {
+      "task.py": "def query():\n    return '{job=\"render-exercise\"} | json | __error__=\"\" | label_format rendered=\"{{.level}} {{.message}}\"'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现query()，返回固定job=render-exercise的LogQL：解析JSON，显式过滤解析错误，仅将有效行格式化为“level 空格 message”。测试真实写入含中文及随机文本的JSON、普通JSON和一条坏行；格式化结果正确后再用原选择器读取，所有原始行须逐字保留，原流标签不得出现查询时提取的level/message。不要把label_format当line_format，不要认为查询过滤坏行已删除源日志。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Loki3.5.5查询时JSON解析、line_format和后续原始日志复查；不修改采集端或持久日志，不声明查询显示等于脱敏落盘。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "loki"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/loki_native.py": "\"\"\"Private standalone Loki 3.5.5, filesystem storage and loopback-only HTTP/gRPC.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.parse,urllib.error\nimport yaml\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Loki:\n def __init__(self,auth=False,structured=False,configurator=None,directory=None):\n  self.binary=shutil.which('loki');self.process=None;self.auth=auth;self.structured=structured;self.configurator=configurator;self.directory=directory\n  if not self.binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 executable missing')\n  version=subprocess.run([self.binary,'-version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '3.5.5' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-loki-') if self.directory is None else None;self.root=pathlib.Path(self.temp.name if self.temp else self.directory);self.root.mkdir(parents=True,exist_ok=True);http=free_port();grpc=free_port()\n  while grpc==http:grpc=free_port()\n  self.base='http://127.0.0.1:'+str(http);self.log=(self.root/'server.log').open('wb')\n  config={'auth_enabled':self.auth,'server':{'http_listen_address':'127.0.0.1','http_listen_port':http,'grpc_listen_address':'127.0.0.1','grpc_listen_port':grpc,'log_level':'error'},\n   'common':{'instance_addr':'127.0.0.1','path_prefix':str(self.root),'replication_factor':1,'storage':{'filesystem':{'chunks_directory':str(self.root/'chunks'),'rules_directory':str(self.root/'rules')}},'ring':{'kvstore':{'store':'inmemory'}}},\n   'schema_config':{'configs':[{'from':'2020-10-24','store':'tsdb','object_store':'filesystem','schema':'v13','index':{'prefix':'index_','period':'24h'}}]},\n   'ingester':{'lifecycler':{'min_ready_duration':'0s','final_sleep':'0s','heartbeat_period':'100ms'},'wal':{'enabled':False}},\n   'limits_config':{'allow_structured_metadata':self.structured,'max_query_parallelism':2,'tsdb_max_query_parallelism':2,'split_queries_by_interval':'0s','query_timeout':'5s'},\n   'querier':{'max_concurrent':2},'analytics':{'reporting_enabled':False},'pattern_ingester':{'enabled':False},'compactor':{'working_directory':str(self.root/'compactor')}}\n  if self.configurator:self.configurator(config,self.root)\n  self.config=config;path=self.root/'config.yaml';path.write_text(yaml.safe_dump(config,sort_keys=False),encoding='utf8')\n  try:\n   self.process=subprocess.Popen([self.binary,'-config.file='+str(path)],cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'192MiB','HOME':str(self.root)})\n   self.wait(lambda:self.request('/ready')==b'ready\\n','private HTTP readiness',seconds=12)\n   print('NATIVE_LOKI_READY:3.5.5',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,data=None,tenant=None,headers=None):\n  outgoing={'Content-Type':'application/json',**(headers or {})}\n  if tenant is not None:outgoing['X-Scope-OrgID']=tenant\n  request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data,ensure_ascii=False).encode(),headers=outgoing)\n  with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as response:\n   raw=response.read();return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n def wait(self,predicate,description,seconds=5):\n  deadline=time.monotonic()+seconds\n  while time.monotonic()<deadline:\n   if self.process.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki exited: '+(self.root/'server.log').read_text(errors='replace')[-2500:])\n   try:\n    value=predicate()\n    if value:return value\n   except (OSError,urllib.error.URLError):pass\n   time.sleep(.04)\n  raise AssertionError('native Loki deadline: '+description)\n def push(self,streams,tenant=None):\n  result=self.request('/loki/api/v1/push',{'streams':streams},tenant=tenant);assert result==b''\n def logs(self,query,start,end,tenant=None):\n  params={'query':query,'start':str(start),'end':str(end),'direction':'forward','limit':'1000'}\n  result=self.request('/loki/api/v1/query_range?'+urllib.parse.urlencode(params),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='streams';return result['data']['result']\n def metric(self,query,at,tenant=None):\n  result=self.request('/loki/api/v1/query?'+urllib.parse.urlencode({'query':query,'time':str(at)}),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='vector';return result['data']['result']\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=4)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if getattr(self,'log',None):self.log.close()\n  if self.temp:self.temp.cleanup()\n",
+        "checks/check.py": "import sys,pathlib,time,json,secrets,copy\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom loki_native import Loki\nprint('NATIVE_LINUX_READY',flush=True)\ndef operation(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('submitted LogQL builder failed') from error\ndef bodies(streams):return sorted(value[1] for stream in streams for value in stream['values'])\nwith Loki() as server:\n now=time.time_ns();nonce=secrets.token_hex(5)\n first=json.dumps({'level':'error','message':'失败-'+nonce,'sequence':1},ensure_ascii=False,separators=(',',':'))\n second=json.dumps({'level':'info','message':'ready-'+nonce,'sequence':2},separators=(',',':'))\n broken='malformed-original-'+nonce;raw=[first,second,broken]\n server.push([{'stream':{'job':'render-exercise','source':'collector-a'},'values':[[str(now-(3-i)*10**9),text] for i,text in enumerate(raw)]}])\n rendered=server.logs(operation(task.query),now-60*10**9,now+10**9)\n assert bodies(rendered)==sorted(['error 失败-'+nonce,'info ready-'+nonce]),bodies(rendered)\n original=server.logs('{job=\"render-exercise\"}',now-60*10**9,now+10**9)\n assert bodies(original)==sorted(raw),'presentation changed stored original text or lost malformed source'\n assert all('level' not in stream['stream'] and 'message' not in stream['stream'] and stream['stream']['source']=='collector-a' for stream in original),'query extracted fields persisted into original labels'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "loki"
+    ]
+  },
+  {
+    "id": "curated-parallel-loki-070",
+    "module": "loki",
+    "category": "Loki",
+    "level": 3,
+    "topic": "LogQL查询与解析",
+    "title": "真实JSON字段重名：保留索引status来源，用status_extracted筛选正文状态",
+    "answer": "```python\ndef query():\n    return '{job=\"collision-exercise\"} | json | status_extracted=~\"5[0-9]{2}\" | __error__=\"\" | line_format \"{{.status}}|{{.status_extracted}}|{{.message}}\"'\n```\n\n原题知识说明：\n解析器可能采用冲突处理名称如追加后缀，行为按版本确认。检查实际提取标签并显式重命名，测试原标签与正文值不一致时的过滤结果。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Grafana Loki官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现query()，固定选择job=collision-exercise。流原有status=ingress标签，JSON正文另有数字status。解析后应使用status_extracted筛选三位5xx，过滤解析错误，line_format输出“原索引status|正文status|message”。真实结果必须ingress|500|…和ingress|503|…，不能把索引status当正文，也不能用label_format覆盖原status掩盖来源。最后原选择器仍须能取回全部原始日志且不含持久status_extracted标签；200、非法状态和坏JSON不进入5xx视图。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Loki3.5.5解析字段与原流标签冲突、_extracted后缀和来源区分；限定标准JSON parser行为，不证明所有采集器命名规则或永久标签策略已治理。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://grafana.com/docs/loki/latest/query/log_queries/#parser-expression"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-loki-070",
+      "original_title": "LogQL解析字段名与原有流标签同名时应如何避免混淆？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def query():\n    return '{job=\"collision-exercise\"} | json | status_extracted=~\"5[0-9]{2}\" | __error__=\"\" | line_format \"{{.status}}|{{.status_extracted}}|{{.message}}\"'\n"
+    },
+    "negative_files": {
+      "task.py": "def query():\n    return '{job=\"collision-exercise\"} | json | status=~\"5[0-9]{2}\" | __error__=\"\" | line_format \"{{.status}}|{{.status_extracted}}|{{.message}}\"'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现query()，固定选择job=collision-exercise。流原有status=ingress标签，JSON正文另有数字status。解析后应使用status_extracted筛选三位5xx，过滤解析错误，line_format输出“原索引status|正文status|message”。真实结果必须ingress|500|…和ingress|503|…，不能把索引status当正文，也不能用label_format覆盖原status掩盖来源。最后原选择器仍须能取回全部原始日志且不含持久status_extracted标签；200、非法状态和坏JSON不进入5xx视图。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Loki3.5.5解析字段与原流标签冲突、_extracted后缀和来源区分；限定标准JSON parser行为，不证明所有采集器命名规则或永久标签策略已治理。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "loki"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/loki_native.py": "\"\"\"Private standalone Loki 3.5.5, filesystem storage and loopback-only HTTP/gRPC.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.parse,urllib.error\nimport yaml\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Loki:\n def __init__(self,auth=False,structured=False,configurator=None,directory=None):\n  self.binary=shutil.which('loki');self.process=None;self.auth=auth;self.structured=structured;self.configurator=configurator;self.directory=directory\n  if not self.binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 executable missing')\n  version=subprocess.run([self.binary,'-version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '3.5.5' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-loki-') if self.directory is None else None;self.root=pathlib.Path(self.temp.name if self.temp else self.directory);self.root.mkdir(parents=True,exist_ok=True);http=free_port();grpc=free_port()\n  while grpc==http:grpc=free_port()\n  self.base='http://127.0.0.1:'+str(http);self.log=(self.root/'server.log').open('wb')\n  config={'auth_enabled':self.auth,'server':{'http_listen_address':'127.0.0.1','http_listen_port':http,'grpc_listen_address':'127.0.0.1','grpc_listen_port':grpc,'log_level':'error'},\n   'common':{'instance_addr':'127.0.0.1','path_prefix':str(self.root),'replication_factor':1,'storage':{'filesystem':{'chunks_directory':str(self.root/'chunks'),'rules_directory':str(self.root/'rules')}},'ring':{'kvstore':{'store':'inmemory'}}},\n   'schema_config':{'configs':[{'from':'2020-10-24','store':'tsdb','object_store':'filesystem','schema':'v13','index':{'prefix':'index_','period':'24h'}}]},\n   'ingester':{'lifecycler':{'min_ready_duration':'0s','final_sleep':'0s','heartbeat_period':'100ms'},'wal':{'enabled':False}},\n   'limits_config':{'allow_structured_metadata':self.structured,'max_query_parallelism':2,'tsdb_max_query_parallelism':2,'split_queries_by_interval':'0s','query_timeout':'5s'},\n   'querier':{'max_concurrent':2},'analytics':{'reporting_enabled':False},'pattern_ingester':{'enabled':False},'compactor':{'working_directory':str(self.root/'compactor')}}\n  if self.configurator:self.configurator(config,self.root)\n  self.config=config;path=self.root/'config.yaml';path.write_text(yaml.safe_dump(config,sort_keys=False),encoding='utf8')\n  try:\n   self.process=subprocess.Popen([self.binary,'-config.file='+str(path)],cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'192MiB','HOME':str(self.root)})\n   self.wait(lambda:self.request('/ready')==b'ready\\n','private HTTP readiness',seconds=12)\n   print('NATIVE_LOKI_READY:3.5.5',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,data=None,tenant=None,headers=None):\n  outgoing={'Content-Type':'application/json',**(headers or {})}\n  if tenant is not None:outgoing['X-Scope-OrgID']=tenant\n  request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data,ensure_ascii=False).encode(),headers=outgoing)\n  with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as response:\n   raw=response.read();return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n def wait(self,predicate,description,seconds=5):\n  deadline=time.monotonic()+seconds\n  while time.monotonic()<deadline:\n   if self.process.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki exited: '+(self.root/'server.log').read_text(errors='replace')[-2500:])\n   try:\n    value=predicate()\n    if value:return value\n   except (OSError,urllib.error.URLError):pass\n   time.sleep(.04)\n  raise AssertionError('native Loki deadline: '+description)\n def push(self,streams,tenant=None):\n  result=self.request('/loki/api/v1/push',{'streams':streams},tenant=tenant);assert result==b''\n def logs(self,query,start,end,tenant=None):\n  params={'query':query,'start':str(start),'end':str(end),'direction':'forward','limit':'1000'}\n  result=self.request('/loki/api/v1/query_range?'+urllib.parse.urlencode(params),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='streams';return result['data']['result']\n def metric(self,query,at,tenant=None):\n  result=self.request('/loki/api/v1/query?'+urllib.parse.urlencode({'query':query,'time':str(at)}),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='vector';return result['data']['result']\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=4)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if getattr(self,'log',None):self.log.close()\n  if self.temp:self.temp.cleanup()\n",
+        "checks/check.py": "import sys,pathlib,time,json,secrets,copy\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom loki_native import Loki\nprint('NATIVE_LINUX_READY',flush=True)\ndef operation(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('submitted LogQL builder failed') from error\ndef bodies(streams):return sorted(value[1] for stream in streams for value in stream['values'])\nwith Loki() as server:\n now=time.time_ns();nonce=secrets.token_hex(5)\n values=[json.dumps({'status':500,'message':'one-'+nonce}),json.dumps({'status':200,'message':'ok-'+nonce}),json.dumps({'status':503,'message':'two-'+nonce}),json.dumps({'status':'invalid','message':'bad-'+nonce}),'not-json-'+nonce]\n server.push([{'stream':{'job':'collision-exercise','status':'ingress'},'values':[[str(now-(5-i)*10**9),text] for i,text in enumerate(values)]}])\n result=server.logs(operation(task.query),now-60*10**9,now+10**9)\n assert bodies(result)==sorted(['ingress|500|one-'+nonce,'ingress|503|two-'+nonce]),bodies(result)\n assert all(stream['stream']['status']=='ingress' for stream in result),'original indexed status label overwritten'\n raw=server.logs('{job=\"collision-exercise\",status=\"ingress\"}',now-60*10**9,now+10**9)\n assert bodies(raw)==sorted(values) and all('status_extracted' not in stream['stream'] for stream in raw),'query extraction changed stored provenance'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "loki"
+    ]
+  }
+]

@@ -1,0 +1,70 @@
+[
+  {
+    "id": "curated-python-completion-046",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 4,
+    "topic": "对象与程序组织",
+    "title": "修复多租户采集器的可变默认参数数据串扰",
+    "answer": "```python\nimport copy\n\nclass TenantResults:\n    def __init__(self):\n        self._by_tenant = {}\n    def append(self, tenant, result):\n        if not isinstance(tenant, str) or not tenant:\n            raise ValueError('tenant required')\n        self._by_tenant.setdefault(tenant, []).append(result)\n        return self.snapshot(tenant)\n    def snapshot(self, tenant):\n        if not isinstance(tenant, str) or not tenant:\n            raise ValueError('tenant required')\n        return copy.deepcopy(self._by_tenant.get(tenant, []))\n```\n\n原题知识说明：\n默认可变对象在定义时建立并被多次调用共享。改为每次调用创建独立容器或显式传入受控对象，核对其他全局缓存。用两个租户交替及并发调用验证互不污染，已混入数据要标记并重新采集，不能只清空一次列表。",
+    "type": "code",
+    "source": "OpsForge Python运维开发补充题",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。\n本轮边界核查：防御性 snapshot 隔离常见嵌套 dict/list 的修改；不要求 append 时复制实参，不承诺任意外部资源对象可克隆。",
+    "pack": "python-completion-20261021",
+    "body": "## 故障初始材料与公开复现\n现有 TenantResults 使用可变默认字典共享实例状态，浅层 snapshot 也会泄漏嵌套修改。\n在题目工作目录运行 `python3 reproduce.py`：故障初态退出 1；修复后退出 0。复现输出真实观察结果，未调用私有判分器。修改返回的嵌套快照后再读取，可独立观察内部状态是否被污染。\n\n## 操作任务\n实现TenantResults隔离租户采集结果：append(tenant,result)只写入指定租户，snapshot(tenant)只返回该租户结果的副本。禁止用可变默认参数保存跨调用状态；拒绝空租户标识，调用方修改快照不得污染内部数据。\n\n## 提交产物\ntask.py\n\n## 验收方法\n隔离Python进程中在同一实例和多个实例间交错写入两个租户，检查无串扰且返回快照可独立修改。\n\n## 能力边界\n只验证同一进程内的租户键隔离和防御性快照；不提供多进程共享、持久化、并发写保护或租户身份认证。\n\n范围说明：防御性 snapshot 隔离常见嵌套 dict/list 的修改；不要求 append 时复制实参，不承诺任意外部资源对象可克隆。",
+    "rubric": [
+      "Python语义准确",
+      "资源与错误处理明确",
+      "验证覆盖边界"
+    ],
+    "hints": [],
+    "references": [],
+    "incident_signature": "python:mutable-default-state",
+    "related_modules": [
+      "python"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-python-completion-046",
+      "original_title": "第二个租户的采集结果混入第一个租户的数据，函数使用 results=[] 默认参数并不断append。如何修复与验收？",
+      "original_type": "case"
+    },
+    "files": {
+      "task.py": "\"\"\"Existing collector: default state is shared and snapshots are shallow.\"\"\"\nclass TenantResults:\n    def __init__(self, by_tenant={}):\n        self._by_tenant = by_tenant\n    def append(self, tenant, result):\n        if not isinstance(tenant, str) or not tenant:\n            raise ValueError('tenant required')\n        self._by_tenant.setdefault(tenant, []).append(result)\n        return self.snapshot(tenant)\n    def snapshot(self, tenant):\n        if not isinstance(tenant, str) or not tenant:\n            raise ValueError('tenant required')\n        return list(self._by_tenant.get(tenant, []))\n",
+      "reproduce.py": "\"\"\"Run: python3 reproduce.py. Exit 1 demonstrates an unfixed case.\"\"\"\nimport json\nimport task\nfirst = task.TenantResults()\nfirst.append('tenant-a', {'payload': {'items': [1]}})\nsecond = task.TenantResults()\nleak = second.snapshot('tenant-a')\nsecond.append('tenant-b', {'id': 'b1'})\nother_tenant = first.snapshot('tenant-b')\nsnapshot = first.snapshot('tenant-a')\nsnapshot[0]['payload']['items'].append(99)\nafter = first.snapshot('tenant-a')\nchecks = {'new_instance_isolated': leak == [],\n          'other_instance_tenant_isolated': other_tenant == [],\n          'nested_snapshot_isolated': after == [{'payload': {'items': [1]}}]}\nprint(json.dumps({'checks': checks, 'new_instance_observed': leak,\n                  'other_tenant_observed': other_tenant, 'after_snapshot_edit': after},\n                 sort_keys=True), flush=True)\nraise SystemExit(0 if all(checks.values()) else 1)\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\n\nclass TenantResults:\n    def __init__(self):\n        self._by_tenant = {}\n    def append(self, tenant, result):\n        if not isinstance(tenant, str) or not tenant:\n            raise ValueError('tenant required')\n        self._by_tenant.setdefault(tenant, []).append(result)\n        return self.snapshot(tenant)\n    def snapshot(self, tenant):\n        if not isinstance(tenant, str) or not tenant:\n            raise ValueError('tenant required')\n        return copy.deepcopy(self._by_tenant.get(tenant, []))\n"
+    },
+    "negative_files": {
+      "task.py": "class TenantResults:\n    _shared=[]\n    def __init__(self):self._values=self._shared\n    def append(self,tenant,result):\n        if not isinstance(tenant,str) or not tenant:raise ValueError('tenant required')\n        self._values.append(result);return self.snapshot(tenant)\n    def snapshot(self,tenant):\n        if not isinstance(tenant,str) or not tenant:raise ValueError('tenant required')\n        return list(self._values)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "现有 TenantResults 使用可变默认字典共享实例状态，浅层 snapshot 也会泄漏嵌套修改。先运行公开复现观察故障，再修复原有接口。实现TenantResults隔离租户采集结果：append(tenant,result)只写入指定租户，snapshot(tenant)只返回该租户结果的副本。禁止用可变默认参数保存跨调用状态；拒绝空租户标识，调用方修改快照不得污染内部数据。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "只验证同一进程内的租户键隔离和防御性快照；不提供多进程共享、持久化、并发写保护或租户身份认证。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: tenant result isolation',flush=True)\na=task.TenantResults();b=task.TenantResults()\nassert a.append('tenant-a',{'id':'a1'})==[{'id':'a1'}]\nassert a.append('tenant-a',{'id':'a2'})==[{'id':'a1'},{'id':'a2'}]\nassert a.snapshot('tenant-b')==[]\nassert b.append('tenant-b',{'id':'b1'})==[{'id':'b1'}]\nassert a.snapshot('tenant-a')==[{'id':'a1'},{'id':'a2'}] and a.snapshot('tenant-b')==[]\ncopy=a.snapshot('tenant-a');copy.append({'id':'injected'});assert a.snapshot('tenant-a')==[{'id':'a1'},{'id':'a2'}]\nfor bad in ('',None):\n try:a.snapshot(bad)\n except ValueError:pass\n else:raise AssertionError('invalid tenant accepted')\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n\nstore = task.TenantResults()\nrecord = {'payload':{'items':[1, {'safe':[2]}]}}\nstore.append('a', record)\nfirst = store.snapshot('a')\nfirst[0]['payload']['items'][1]['safe'].append(9)\nfirst[0]['payload']['items'].append(8)\nfirst[0]['new'] = 'local'\nassert store.snapshot('a') == [{'payload':{'items':[1,{'safe':[2]}]}}], 'nested snapshot mutation leaked'\nreturned = store.append('b', [{'values':[3,4]}])\nreturned[0][0]['values'][0] = 99\nassert store.snapshot('b') == [[{'values':[3,4]}]]\nassert store.snapshot('a') == [{'payload':{'items':[1,{'safe':[2]}]}}]\n# No append-argument-copy or arbitrary external-resource cloning requirement.\nprint('COMMON_NESTED_RECORD_SNAPSHOT_DEFENSE_ONLY', flush=True)\n"
+      }
+    },
+    "question_format": "case"
+  }
+]

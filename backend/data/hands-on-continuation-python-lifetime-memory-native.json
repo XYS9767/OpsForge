@@ -1,0 +1,141 @@
+[
+  {
+    "id": "curated-advanced-python-007",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 4,
+    "topic": "对象与程序组织",
+    "title": "真实finalize所有权：绑定方法阻止回收，显式close与上下文及时释放文件",
+    "body": "## 操作任务\n实现OwnedFile(path)，os.open独占创建0600文件，fd属性为真实描述符，weakref.finalize(self,os.close,fd)只捕获fd，不捕获self/绑定方法。close幂等，__enter__返回self，__exit__立即close且不吞异常。显式关闭、作用域正常或异常退出时即使对象仍被强引用也必须关闭；重复close不能误关已复用的其他FD；无人持有时GC回退可释放。不能把finalize作为主要生命周期机制或假定frozen/弱引用自动关闭。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实CPython weakref.finalize注册表、GC和内核FD；通用异常关闭机制复用不另计，核心是实际绑定方法强引用陷阱及回退不替代确定性关闭。不承诺崩溃、os._exit或跨解释器清理。",
+    "answer": "```python\nimport os,weakref\nclass OwnedFile:\n    def __init__(self,path):\n        self.fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n        self._finalizer=weakref.finalize(self,os.close,self.fd)\n    def close(self):self._finalizer()\n    def __enter__(self):return self\n    def __exit__(self,*args):self.close();return False\n```\n\n原题知识说明：\n对象回收时机不是业务提交或请求结束时机，引用环、解释器退出和异常路径都会改变清理发生的时间；资源数量上限可能在回收前已被耗尽。finalize回调还不能通过绑定方法或闭包重新强引用被监控对象，否则对象可能一直可达，预期清理永不发生。应把显式close和上下文管理作为正常生命周期，弱引用清理仅作为有限的补救并避免依赖已经销毁的全局状态。推演长时间持有引用、线程退出、回调异常和进程被强制结束，明确哪些情况不能承诺执行。验证应观察资源台账和实际关闭事件，而不是仅删除一个变量并等待；网络事务提交、解锁和数据持久化更不能托付给垃圾回收回调。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "明确语言运行时与业务合同的边界",
+      "给出可区分正确与失败的具体样例",
+      "说明资源或数据恢复限制"
+    ],
+    "references": [
+      "https://docs.python.org/3/library/weakref.html#finalizer-objects"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-python-007",
+      "original_title": "把弱引用finalize作为文件与连接的主要关闭机制，会遇到哪些无法满足确定性清理的情况？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import os,weakref\nclass OwnedFile:\n    def __init__(self,path):\n        self.fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n        self._finalizer=weakref.finalize(self,os.close,self.fd)\n    def close(self):self._finalizer()\n    def __enter__(self):return self\n    def __exit__(self,*args):self.close();return False\n"
+    },
+    "negative_files": {
+      "task.py": "import os,weakref\nclass OwnedFile:\n    def __init__(self,path):\n        self.fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n        self._finalizer=weakref.finalize(self,self._close_raw)\n    def _close_raw(self):os.close(self.fd)\n    def close(self):self._finalizer()\n    def __enter__(self):return self\n    def __exit__(self,*args):self.close();return False\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现OwnedFile(path)，os.open独占创建0600文件，fd属性为真实描述符，weakref.finalize(self,os.close,fd)只捕获fd，不捕获self/绑定方法。close幂等，__enter__返回self，__exit__立即close且不吞异常。显式关闭、作用域正常或异常退出时即使对象仍被强引用也必须关闭；重复close不能误关已复用的其他FD；无人持有时GC回退可释放。不能把finalize作为主要生命周期机制或假定frozen/弱引用自动关闭。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实CPython weakref.finalize注册表、GC和内核FD；通用异常关闭机制复用不另计，核心是实际绑定方法强引用陷阱及回退不替代确定性关闭。不承诺崩溃、os._exit或跨解释器清理。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,tempfile,pathlib,weakref,gc,errno\nsys.path.insert(0,os.getcwd());import task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith tempfile.TemporaryDirectory(prefix='of-finalize-') as directory:\n root=pathlib.Path(directory)\n class Leaky:\n  def __init__(self):\n   self.fd=os.open(root/'bad',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n   self.finalizer=weakref.finalize(self,self.close)\n  def close(self):os.close(self.fd)\n bad=Leaky();bad_fd=bad.fd;bad_ref=weakref.ref(bad);cleanup=bad.finalizer\n del bad;gc.collect();assert bad_ref() is not None and os.fstat(bad_fd)\n cleanup();del cleanup;gc.collect();assert bad_ref() is None\n print('NATIVE_BOUND_METHOD_FINALIZER_ACTUALLY_RETAINS_OWNER_UNTIL_EXPLICIT_CLEANUP',flush=True)\n print('STUDENT_OPERATION_ENTERED:deterministic_close_with_nonowning_finalizer_fallback',flush=True)\n def closed(fd):\n  try:os.fstat(fd)\n  except OSError as error:assert error.errno==errno.EBADF\n  else:raise AssertionError('owned file still open')\n handles=[]\n try:\n  owner=task.OwnedFile(root/'explicit');handles.append(owner);fd=owner.fd;assert os.fstat(fd)\n  owner.close();closed(fd);owner.close();closed(fd)\n  # A reused descriptor must not be closed by repeated close of the previous owner.\n  other=os.open(root/'unrelated',os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n  try:owner.close();assert os.fstat(other)\n  finally:os.close(other)\n  with task.OwnedFile(root/'scope') as owned:\n   handles.append(owned);scoped_fd=owned.fd;assert os.fstat(scoped_fd)\n  closed(scoped_fd);assert owned is not None  # Still strongly retained; no GC explanation possible.\n  class BusinessError(Exception):pass\n  try:\n   with task.OwnedFile(root/'error') as failed:\n    handles.append(failed);failed_fd=failed.fd;raise BusinessError('keep original failure')\n  except BusinessError:pass\n  else:raise AssertionError('business exception suppressed')\n  closed(failed_fd)\n  fallback=task.OwnedFile(root/'fallback');fallback_fd=fallback.fd;ref=weakref.ref(fallback)\n  del fallback;gc.collect();assert ref() is None,'finalizer callback retained owner';closed(fallback_fd)\n except Exception as error:raise AssertionError('student finalizer ownership or deterministic close failed') from error\n finally:\n  for handle in handles:\n   try:handle.close()\n   except OSError:pass\n print('NATIVE_EXPLICIT_SCOPE_EXCEPTION_CLOSE_IDEMPOTENT_FD_REUSE_AND_GC_FALLBACK',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "python"
+    ]
+  },
+  {
+    "id": "curated-advanced-python-024",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 5,
+    "topic": "异常、测试与调试",
+    "title": "真实RSS与tracemalloc对照：触页的libc分配不进入Python快照",
+    "body": "## 操作任务\n实现measure(kind,size)，kind为python/native，size精确int且8..24MiB。用独立sys.executable -I子进程测量，tracemalloc开始后取/proc/self/smaps_rollup Rss和当前traced基线；python使用bytearray逐页触碰，native用ctypes libc.malloc并memset全部触页，再取持有指标，finally释放后再测。返回kind/size及rss_delta/trace_delta/released_trace_delta/released_rss_delta，分类trace_delta>=size//2为python_tracked，否则untracked_native。真实两种大小对照，不能把RSS增量冒充traced或只凭快照平稳断言无泄漏。子进程错误抛RuntimeError，输入非法先ValueError。不改主进程tracemalloc和主机参数。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Linux smaps_rollup/CPython tracemalloc/libc malloc触页，证明测量域不同；显式释放但不承诺RSS必降，不把分配器保留直接判泄漏。不采集Slab/内核或完整任意C扩展栈，不宣称已定位生产泄漏。",
+    "answer": "```python\nimport json,subprocess,sys\nWORKER=\"\"\"import ctypes,json,os,sys,tracemalloc\nkind,size=json.load(sys.stdin)\nlibc=ctypes.CDLL(None)\nlibc.malloc.argtypes=[ctypes.c_size_t];libc.malloc.restype=ctypes.c_void_p\nlibc.free.argtypes=[ctypes.c_void_p];libc.free.restype=None\ndef rss():\n    for line in open('/proc/self/smaps_rollup'):\n        if line.startswith('Rss:'):return int(line.split()[1])*1024\n    raise RuntimeError('RSS unavailable')\ntracemalloc.start();baseline_rss=rss();baseline_trace=tracemalloc.get_traced_memory()[0]\npointer=None;buffer=None\ntry:\n    if kind=='python':\n        buffer=bytearray(size)\n        for offset in range(0,size,4096):buffer[offset]=65\n    else:\n        pointer=libc.malloc(size)\n        if not pointer:raise MemoryError('malloc failed')\n        ctypes.memset(pointer,65,size)\n    held_rss=rss();held_trace=tracemalloc.get_traced_memory()[0]\nfinally:\n    buffer=None\n    if pointer:libc.free(pointer)\nreleased_rss=rss();released_trace=tracemalloc.get_traced_memory()[0]\nprint(json.dumps(dict(kind=kind,size=size,rss_delta=held_rss-baseline_rss,trace_delta=held_trace-baseline_trace,released_trace_delta=released_trace-baseline_trace,released_rss_delta=released_rss-baseline_rss)),flush=True)\n\"\"\"\ndef measure(kind,size):\n    if kind not in ('python','native') or type(size) is not int or not 8*1024*1024<=size<=24*1024*1024:raise ValueError('bounded controlled allocation only')\n    child=subprocess.run([sys.executable,'-I','-c',WORKER],input=json.dumps([kind,size]),text=True,capture_output=True,timeout=5)\n    if child.returncode:raise RuntimeError('controlled memory worker failed')\n    report=json.loads(child.stdout)\n    report['classification']='python_tracked' if report['trace_delta']>=size//2 else 'untracked_native'\n    return report\n```\n\n原题知识说明：\n交付同一负载阶段的RSS、tracemalloc已追踪大小、对象数量及原生扩展活动记录，注明追踪开启时间与采样开销。tracemalloc主要反映被其追踪的内存分配，不能把快照稳定当成整个进程没有增长；原生库、映射文件、线程栈与分配器保留可能形成差额。验收用受控负载分别触发对象增长、原生缓冲和负载回落，比较当前与峰值、分配栈差异和操作系统映射，而不是仅调用gc后观察是否下降。诊断过程限制堆样本中的敏感数据和持续时间。证据不完整时保持已验证版本并限流，交开发定位具体分配路径；不能以重启暂时降RSS作为根因修复，回退应同时记录容量和业务影响。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "明确语言运行时与业务合同的边界",
+      "给出可区分正确与失败的具体样例",
+      "说明资源或数据恢复限制"
+    ],
+    "references": [
+      "https://docs.python.org/3/library/tracemalloc.html",
+      "https://docs.python.org/3/library/ctypes.html"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-python-024",
+      "original_title": "Python服务RSS增长而tracemalloc快照稳定，怎样交付区分Python分配、原生扩展和分配器保留的诊断包？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import json,subprocess,sys\nWORKER=\"\"\"import ctypes,json,os,sys,tracemalloc\nkind,size=json.load(sys.stdin)\nlibc=ctypes.CDLL(None)\nlibc.malloc.argtypes=[ctypes.c_size_t];libc.malloc.restype=ctypes.c_void_p\nlibc.free.argtypes=[ctypes.c_void_p];libc.free.restype=None\ndef rss():\n    for line in open('/proc/self/smaps_rollup'):\n        if line.startswith('Rss:'):return int(line.split()[1])*1024\n    raise RuntimeError('RSS unavailable')\ntracemalloc.start();baseline_rss=rss();baseline_trace=tracemalloc.get_traced_memory()[0]\npointer=None;buffer=None\ntry:\n    if kind=='python':\n        buffer=bytearray(size)\n        for offset in range(0,size,4096):buffer[offset]=65\n    else:\n        pointer=libc.malloc(size)\n        if not pointer:raise MemoryError('malloc failed')\n        ctypes.memset(pointer,65,size)\n    held_rss=rss();held_trace=tracemalloc.get_traced_memory()[0]\nfinally:\n    buffer=None\n    if pointer:libc.free(pointer)\nreleased_rss=rss();released_trace=tracemalloc.get_traced_memory()[0]\nprint(json.dumps(dict(kind=kind,size=size,rss_delta=held_rss-baseline_rss,trace_delta=held_trace-baseline_trace,released_trace_delta=released_trace-baseline_trace,released_rss_delta=released_rss-baseline_rss)),flush=True)\n\"\"\"\ndef measure(kind,size):\n    if kind not in ('python','native') or type(size) is not int or not 8*1024*1024<=size<=24*1024*1024:raise ValueError('bounded controlled allocation only')\n    child=subprocess.run([sys.executable,'-I','-c',WORKER],input=json.dumps([kind,size]),text=True,capture_output=True,timeout=5)\n    if child.returncode:raise RuntimeError('controlled memory worker failed')\n    report=json.loads(child.stdout)\n    report['classification']='python_tracked' if report['trace_delta']>=size//2 else 'untracked_native'\n    return report\n"
+    },
+    "negative_files": {
+      "task.py": "import json,subprocess,sys\nWORKER=\"\"\"import ctypes,json,os,sys,tracemalloc\nkind,size=json.load(sys.stdin)\nlibc=ctypes.CDLL(None)\nlibc.malloc.argtypes=[ctypes.c_size_t];libc.malloc.restype=ctypes.c_void_p\nlibc.free.argtypes=[ctypes.c_void_p];libc.free.restype=None\ndef rss():\n    for line in open('/proc/self/smaps_rollup'):\n        if line.startswith('Rss:'):return int(line.split()[1])*1024\n    raise RuntimeError('RSS unavailable')\ntracemalloc.start();baseline_rss=rss();baseline_trace=tracemalloc.get_traced_memory()[0]\npointer=None;buffer=None\ntry:\n    if kind=='python':\n        buffer=bytearray(size)\n        for offset in range(0,size,4096):buffer[offset]=65\n    else:\n        pointer=libc.malloc(size)\n        if not pointer:raise MemoryError('malloc failed')\n        ctypes.memset(pointer,65,size)\n    held_rss=rss();held_trace=tracemalloc.get_traced_memory()[0]\nfinally:\n    buffer=None\n    if pointer:libc.free(pointer)\nreleased_rss=rss();released_trace=tracemalloc.get_traced_memory()[0]\nprint(json.dumps(dict(kind=kind,size=size,rss_delta=held_rss-baseline_rss,trace_delta=held_trace-baseline_trace,released_trace_delta=released_trace-baseline_trace,released_rss_delta=released_rss-baseline_rss)),flush=True)\n\"\"\"\ndef measure(kind,size):\n    if kind not in ('python','native') or type(size) is not int or not 8*1024*1024<=size<=24*1024*1024:raise ValueError('bounded controlled allocation only')\n    child=subprocess.run([sys.executable,'-I','-c',WORKER],input=json.dumps([kind,size]),text=True,capture_output=True,timeout=5)\n    if child.returncode:raise RuntimeError('controlled memory worker failed')\n    report=json.loads(child.stdout)\n    report['classification']='python_tracked' if report['trace_delta']>=size//2 else 'no_growth'\n    return report\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现measure(kind,size)，kind为python/native，size精确int且8..24MiB。用独立sys.executable -I子进程测量，tracemalloc开始后取/proc/self/smaps_rollup Rss和当前traced基线；python使用bytearray逐页触碰，native用ctypes libc.malloc并memset全部触页，再取持有指标，finally释放后再测。返回kind/size及rss_delta/trace_delta/released_trace_delta/released_rss_delta，分类trace_delta>=size//2为python_tracked，否则untracked_native。真实两种大小对照，不能把RSS增量冒充traced或只凭快照平稳断言无泄漏。子进程错误抛RuntimeError，输入非法先ValueError。不改主进程tracemalloc和主机参数。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Linux smaps_rollup/CPython tracemalloc/libc malloc触页，证明测量域不同；显式释放但不承诺RSS必降，不把分配器保留直接判泄漏。不采集Slab/内核或完整任意C扩展栈，不宣称已定位生产泄漏。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,json,subprocess\nsys.path.insert(0,os.getcwd());import task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nassert pathlib.Path('/proc/self/smaps_rollup').is_file()\nchildren=[];original=subprocess.run\ndef record(*args,**kwargs):\n result=original(*args,**kwargs);children.append(result);return result\nsubprocess.run=record\nprint('STUDENT_OPERATION_ENTERED:separate_traced_python_from_actual_touched_libc_allocation',flush=True)\ntry:\n for size in (8*1024*1024,16*1024*1024):\n  reports={}\n  for kind in ('python','native'):\n   try:report=task.measure(kind,size)\n   except Exception as error:raise AssertionError('student controlled memory observation failed') from error\n   assert len(children) and children[-1].returncode==0,'missing real isolated measurement worker'\n   raw=json.loads(children[-1].stdout);assert all(report[k]==value for k,value in raw.items()),'student replaced observed metrics'\n   assert report['rss_delta']>=size*.7 and report['rss_delta']<size*2,'allocation was not actually resident or baseline invalid'\n   assert abs(report['released_trace_delta'])<1024*1024,'owned Python allocation not released'\n   expected='python_tracked' if kind=='python' else 'untracked_native'\n   assert report['classification']==expected,'flat tracemalloc incorrectly means flat RSS or no native allocation'\n   if kind=='python':assert report['trace_delta']>=size*.9\n   else:assert abs(report['trace_delta'])<1024*1024\n   reports[kind]=report\n  assert reports['python']['trace_delta']-reports['native']['trace_delta']>size*.8\n # Only owned child processes were measured; parent's tracing configuration is unchanged.\n import tracemalloc\n assert not tracemalloc.is_tracing()\n before=len(children)\n for kind,size in [('unknown',8*1024*1024),('native',True),('native',100*1024*1024)]:\n  try:task.measure(kind,size)\n  except ValueError:pass\n  else:raise AssertionError('unbounded controlled allocation accepted')\n assert len(children)==before\nfinally:subprocess.run=original\nprint('NATIVE_ACTUAL_RSS_RISES_FOR_BOTH_DOMAINS_ONLY_PYTHON_TRACED_NO_RELEASE_RSS_PROMISE',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "python"
+    ]
+  }
+]

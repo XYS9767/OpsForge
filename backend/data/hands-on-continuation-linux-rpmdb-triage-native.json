@@ -1,0 +1,72 @@
+[
+  {
+    "id": "curated-parallel-linux-090",
+    "module": "linux",
+    "category": "Linux 基础",
+    "level": 4,
+    "topic": "软件包与动态链接",
+    "title": "只读诊断RPM包数据库损坏并保护仍在的包文件",
+    "answer": "```python\nimport hashlib,pathlib,sqlite3\n\ndef triage_rpmdb(database,payload_root,manifest_paths):\n    database=pathlib.Path(database);root=pathlib.Path(payload_root).resolve()\n    if not database.is_file() or database.is_symlink():raise ValueError(\"database must be an existing regular file\")\n    if not isinstance(manifest_paths,list) or any(not isinstance(x,str) or not x for x in manifest_paths):\n        raise ValueError(\"manifest paths must be nonempty strings\")\n    present=[];missing=[]\n    for raw in manifest_paths:\n        candidate=(root/raw).resolve()\n        if not candidate.is_relative_to(root):raise ValueError(\"payload path escapes root\")\n        (present if candidate.is_file() else missing).append(raw)\n    before=hashlib.sha256(database.read_bytes()).hexdigest();magic=database.read_bytes()[:16]\n    if magic==b\"SQLite format 3\\x00\":\n        backend=\"sqlite\";integrity=\"ok\"\n        uri=database.resolve().as_uri()+\"?mode=ro&immutable=1\"\n        try:\n            with sqlite3.connect(uri,uri=True,timeout=2) as conn:\n                rows=conn.execute(\"PRAGMA quick_check\").fetchall()\n                if rows!=[(\"ok\",)]:integrity=\"corrupt\"\n        except sqlite3.DatabaseError:integrity=\"corrupt\"\n    else:\n        backend=\"unknown\";integrity=\"not_checked\"\n    after=hashlib.sha256(database.read_bytes()).hexdigest()\n    if before!=after:raise RuntimeError(\"read-only inspection changed database bytes\")\n    if integrity==\"ok\":status=\"database_integrity_ok\"\n    elif integrity==\"corrupt\":status=\"database_corrupt_preserved\"\n    else:status=\"backend_requires_vendor_specific_inspection\"\n    return {\"backend\":backend,\"integrity\":integrity,\"status\":status,\"database_sha256\":after,\n        \"payload_present\":sorted(present),\"payload_missing\":sorted(missing),\"database_unchanged\":True,\n        \"next\":\"stop concurrent package transactions; preserve database, logs and storage evidence; use this RPM version's vendor procedure; reconcile installed packages against trusted manifests and file verification; never delete the database blindly\"}\n```\n\n原题知识说明：\n停止并发包事务，保留数据库目录和包管理日志副本，确认底层存储健康与该发行版使用的数据库后端。按该版本厂商流程检查/重建数据库；重建不能恢复所有已丢包记录，还需与可信包清单和文件验证结果对照，必要时重装确定版本。验收查询、依赖解析和关键服务，不能直接删除整个数据库。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "停止并发包事务，保留数据库目录和包管理日志副本，确认底层存储健康与该发行版使用的数据库后端。",
+      "按该版本厂商流程检查/重建数据库；重建不能恢复所有已丢包记录，还需与可信包清单和文件验证结果对照，必要时重装确定版本。",
+      "验收查询、依赖解析和关键服务，不能直接删除整个数据库。"
+    ],
+    "references": [
+      "https://rpm.org/docs/6.0.x/man/rpmdb.8"
+    ],
+    "incident_signature": "linux-rpmdb-interrupted-transaction-inconsistency",
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-linux-090",
+      "original_title": "断电后 RPM 查询数据库报损坏，磁盘包文件尚在。怎样恢复而不扩大影响？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现只读triage_rpmdb(database,payload_root,manifest_paths)：先识别SQLite RPMDB魔数，在immutable只读连接上执行quick_check；未知后端不猜测修复。逐项确认安装包payload是否仍在，核对诊断前后数据库摘要一致，并输出停止并发事务、保留证据、按当前RPM版本厂商流程恢复和重建清单的计划。拒绝清库或越界manifest路径。\n\n## 提交产物\ntask.py\n\n## 验收方法\n隔离SQLite索引的完整性检查、截断损坏副本、包文件对账和原字节摘要保全。\n\n## 能力边界\n使用临时SQLite风格RPM包索引，截断副本实际触发quick_check损坏状态，同时核实包文件仍在且损坏数据库字节完全未改变；另验证健康和未知后端。仅模拟离线数据库证据，不调用RPM重建命令或修改宿主包数据库。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import hashlib,pathlib,sqlite3\n\ndef triage_rpmdb(database,payload_root,manifest_paths):\n    database=pathlib.Path(database);root=pathlib.Path(payload_root).resolve()\n    if not database.is_file() or database.is_symlink():raise ValueError(\"database must be an existing regular file\")\n    if not isinstance(manifest_paths,list) or any(not isinstance(x,str) or not x for x in manifest_paths):\n        raise ValueError(\"manifest paths must be nonempty strings\")\n    present=[];missing=[]\n    for raw in manifest_paths:\n        candidate=(root/raw).resolve()\n        if not candidate.is_relative_to(root):raise ValueError(\"payload path escapes root\")\n        (present if candidate.is_file() else missing).append(raw)\n    before=hashlib.sha256(database.read_bytes()).hexdigest();magic=database.read_bytes()[:16]\n    if magic==b\"SQLite format 3\\x00\":\n        backend=\"sqlite\";integrity=\"ok\"\n        uri=database.resolve().as_uri()+\"?mode=ro&immutable=1\"\n        try:\n            with sqlite3.connect(uri,uri=True,timeout=2) as conn:\n                rows=conn.execute(\"PRAGMA quick_check\").fetchall()\n                if rows!=[(\"ok\",)]:integrity=\"corrupt\"\n        except sqlite3.DatabaseError:integrity=\"corrupt\"\n    else:\n        backend=\"unknown\";integrity=\"not_checked\"\n    after=hashlib.sha256(database.read_bytes()).hexdigest()\n    if before!=after:raise RuntimeError(\"read-only inspection changed database bytes\")\n    if integrity==\"ok\":status=\"database_integrity_ok\"\n    elif integrity==\"corrupt\":status=\"database_corrupt_preserved\"\n    else:status=\"backend_requires_vendor_specific_inspection\"\n    return {\"backend\":backend,\"integrity\":integrity,\"status\":status,\"database_sha256\":after,\n        \"payload_present\":sorted(present),\"payload_missing\":sorted(missing),\"database_unchanged\":True,\n        \"next\":\"stop concurrent package transactions; preserve database, logs and storage evidence; use this RPM version's vendor procedure; reconcile installed packages against trusted manifests and file verification; never delete the database blindly\"}\n"
+    },
+    "negative_files": {
+      "task.py": "import hashlib,pathlib,sqlite3\n\ndef triage_rpmdb(database,payload_root,manifest_paths):\n    database=pathlib.Path(database);root=pathlib.Path(payload_root).resolve()\n    if not database.is_file() or database.is_symlink():raise ValueError(\"database must be an existing regular file\")\n    if not isinstance(manifest_paths,list) or any(not isinstance(x,str) or not x for x in manifest_paths):\n        raise ValueError(\"manifest paths must be nonempty strings\")\n    present=[];missing=[]\n    for raw in manifest_paths:\n        candidate=(root/raw).resolve()\n        if not candidate.is_relative_to(root):raise ValueError(\"payload path escapes root\")\n        (present if candidate.is_file() else missing).append(raw)\n    before=hashlib.sha256(database.read_bytes()).hexdigest();magic=database.read_bytes()[:16]\n    if magic==b\"never\":\n        backend=\"sqlite\";integrity=\"ok\"\n        uri=database.resolve().as_uri()+\"?mode=ro&immutable=1\"\n        try:\n            with sqlite3.connect(uri,uri=True,timeout=2) as conn:\n                rows=conn.execute(\"PRAGMA quick_check\").fetchall()\n                if rows!=[(\"ok\",)]:integrity=\"corrupt\"\n        except sqlite3.DatabaseError:integrity=\"corrupt\"\n    else:\n        backend=\"unknown\";integrity=\"not_checked\"\n    after=hashlib.sha256(database.read_bytes()).hexdigest()\n    if before!=after:raise RuntimeError(\"read-only inspection changed database bytes\")\n    if integrity==\"ok\":status=\"database_integrity_ok\"\n    elif integrity==\"corrupt\":status=\"database_corrupt_preserved\"\n    else:status=\"backend_requires_vendor_specific_inspection\"\n    return {\"backend\":backend,\"integrity\":integrity,\"status\":status,\"database_sha256\":after,\n        \"payload_present\":sorted(present),\"payload_missing\":sorted(missing),\"database_unchanged\":True,\n        \"next\":\"stop concurrent package transactions; preserve database, logs and storage evidence; use this RPM version's vendor procedure; reconcile installed packages against trusted manifests and file verification; never delete the database blindly\"}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现只读triage_rpmdb(database,payload_root,manifest_paths)：先识别SQLite RPMDB魔数，在immutable只读连接上执行quick_check；未知后端不猜测修复。逐项确认安装包payload是否仍在，核对诊断前后数据库摘要一致，并输出停止并发事务、保留证据、按当前RPM版本厂商流程恢复和重建清单的计划。拒绝清库或越界manifest路径。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "使用临时SQLite风格RPM包索引，截断副本实际触发quick_check损坏状态，同时核实包文件仍在且损坏数据库字节完全未改变；另验证健康和未知后端。仅模拟离线数据库证据，不调用RPM重建命令或修改宿主包数据库。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib,tempfile,sqlite3,hashlib,os\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'));task=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nprint('NATIVE_LINUX_READY',flush=True)\nprint('STUDENT_OPERATION_ENTERED: inspect package database without modifying it',flush=True)\nwith tempfile.TemporaryDirectory(prefix='rpmdb triage ') as d:\n root=pathlib.Path(d);payload=root/'payload';payload.mkdir();(payload/'app.rpm').write_bytes(b'package payload preserved');(payload/'lib.rpm').write_bytes(b'library payload preserved');(payload/'directory-entry').mkdir()\n db=root/'rpmdb.sqlite';conn=sqlite3.connect(db);conn.execute('create table Packages(name text,nevra text)');conn.executemany('insert into Packages values(?,?)',[('app','app-1-1'),('lib','lib-1-1')]);conn.commit();conn.close()\n before=hashlib.sha256(db.read_bytes()).hexdigest();good=task.triage_rpmdb(db,payload,['app.rpm','lib.rpm','missing.rpm','directory-entry']);assert good['backend']=='sqlite' and good['integrity']=='ok' and good['payload_missing']==['directory-entry','missing.rpm']\n assert hashlib.sha256(db.read_bytes()).hexdigest()==before and good['database_unchanged']\n damaged=root/'damaged.sqlite';damaged.write_bytes(db.read_bytes()[:512]);damaged_hash=hashlib.sha256(damaged.read_bytes()).hexdigest()\n print('NATIVE_OPERATION_ENTERED: truncated SQLite package index fails integrity check while payloads remain',flush=True)\n bad=task.triage_rpmdb(damaged,payload,['app.rpm','lib.rpm']);assert bad['status']=='database_corrupt_preserved' and bad['payload_present']==['app.rpm','lib.rpm']\n assert hashlib.sha256(damaged.read_bytes()).hexdigest()==damaged_hash,'diagnostic must not mutate damaged metadata'\n opaque=root/'rpmdb.opaque';opaque.write_bytes(b'not sqlite');assert task.triage_rpmdb(opaque,payload,[])['backend']=='unknown'\n try:task.triage_rpmdb(db,payload,['../outside'])\n except ValueError:pass\n else:raise AssertionError('path traversal in package manifest accepted')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "linux"
+    ]
+  }
+]

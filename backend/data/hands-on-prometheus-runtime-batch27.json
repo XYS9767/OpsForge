@@ -1,0 +1,89 @@
+[
+  {
+    "id": "curated-parallel-prometheus-063",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 3,
+    "topic": "抓取配置与采集质量",
+    "title": "为采集间隔内消失的温度尖峰补充事件Counter并验证真实抓取",
+    "answer": "```python\nimport math,threading\nclass Recorder:\n def __init__(self):\n  self._lock=threading.Lock();self._current=None;self._above=False;self._events=0\n def observe(self,value):\n  if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value):raise ValueError('finite numeric temperature required')\n  with self._lock:\n   above=value>=80\n   if above and not self._above:self._events+=1\n   self._above=above;self._current=value\n def render(self):\n  with self._lock:\n   lines=['# TYPE training_overheat_events_total counter','training_overheat_events_total '+str(self._events)]\n   if self._current is not None:lines+=['# TYPE training_temperature_celsius gauge','training_temperature_celsius '+repr(float(self._current))]\n   return '\\n'.join(lines)+'\\n'\n```\n当前Gauge和事件Counter分别回答“现在多少”和“累计进入高温多少次”。将事件变化累计在抓取间隔之间保存，之后抓取仍能看到事件发生；同一高温区间内多次observe不应重复计数。原生rate/increase处理Counter重启语义，但不能由计数反推出事件准确发生时间。\n\n原题原理：不能，未被采样的状态通常没有观测记录。可在源端暴露累计事件、最大值或分布以符合问题语义，或者提高合理采样频率。更密的查询step无法重建未采样真实峰值。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "不能，未被采样的状态通常没有观测记录。",
+      "可在源端暴露累计事件、最大值或分布以符合问题语义，或者提高合理采样频率。",
+      "更密的查询step无法重建未采样真实峰值。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/practices/instrumentation/",
+      "https://prometheus.io/docs/concepts/metric_types/",
+      "https://prometheus.io/docs/instrumenting/exposition_formats/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "python",
+    "files": {
+      "recorder.py": "import math,threading\nclass Recorder:\n def __init__(self):\n  self._lock=threading.Lock();self._current=None;self._above=False;self._events=0\n def observe(self,value):\n  if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value):raise ValueError('finite numeric temperature required')\n  with self._lock:\n   above=value>=80\n   if False:self._events+=1\n   self._above=above;self._current=value\n def render(self):\n  with self._lock:\n   lines=['# TYPE training_overheat_events_total counter','training_overheat_events_total '+str(self._events)]\n   if self._current is not None:lines+=['# TYPE training_temperature_celsius gauge','training_temperature_celsius '+repr(float(self._current))]\n   return '\\n'.join(lines)+'\\n'\n",
+      "events.json": "{\n  \"threshold\": 80,\n  \"first_short_episode\": [\n    81,\n    95,\n    85,\n    20\n  ],\n  \"second_episodes\": [\n    80,\n    80,\n    79,\n    80,\n    20\n  ],\n  \"expected_total_events\": 3,\n  \"scraped_temperature\": 20\n}\n"
+    },
+    "solution_files": {
+      "recorder.py": "import math,threading\nclass Recorder:\n def __init__(self):\n  self._lock=threading.Lock();self._current=None;self._above=False;self._events=0\n def observe(self,value):\n  if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value):raise ValueError('finite numeric temperature required')\n  with self._lock:\n   above=value>=80\n   if above and not self._above:self._events+=1\n   self._above=above;self._current=value\n def render(self):\n  with self._lock:\n   lines=['# TYPE training_overheat_events_total counter','training_overheat_events_total '+str(self._events)]\n   if self._current is not None:lines+=['# TYPE training_temperature_celsius gauge','training_temperature_celsius '+repr(float(self._current))]\n   return '\\n'.join(lines)+'\\n'\n"
+    },
+    "negative_files": {
+      "recorder.py": "import math,threading\nclass Recorder:\n def __init__(self):\n  self._lock=threading.Lock();self._current=None;self._above=False;self._events=0\n def observe(self,value):\n  if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value):raise ValueError('finite numeric temperature required')\n  with self._lock:\n   above=value>=80\n   if above:self._events+=1\n   self._above=above;self._current=value\n def render(self):\n  with self._lock:\n   lines=['# TYPE training_overheat_events_total counter','training_overheat_events_total '+str(self._events)]\n   if self._current is not None:lines+=['# TYPE training_temperature_celsius gauge','training_temperature_celsius '+repr(float(self._current))]\n   return '\\n'.join(lines)+'\\n'\n"
+    },
+    "body": "## 环境与初始材料\n温度Gauge只保留最近读数；事件81→95→85→20可能完全发生在两次Prometheus抓取之间，因此事后max_over_time也不能恢复未采样的峰值。recorder.py提供Recorder.observe(value)/render()骨架，但事件计数没有实现。events.json给出两批真实交给模块的事件材料，平台自动提供HTTP exporter与隔离Prometheus。\n\n## 操作任务\n实现线程安全的Recorder。每次observe接收有限int/float温度（拒绝bool、字符串、None、NaN、无穷，拒绝时状态不能变化）。温度首次达到或从低于80进入大于等于80时，training_overheat_events_total增加一次；持续高温期间不重复加，降到80以下后可再次计一次。首次读数若已达80算进入一次。当前读数另作为training_temperature_celsius Gauge。\nrender返回合法Prometheus文本格式并以换行结尾，必须给出两个指标正确的TYPE，不附加标签或自定义时间戳。新Recorder尚无读数时只输出Counter=0；有读数后同时输出当前Gauge和累计Counter。一次render应为一致快照。不要把Gauge的当前值改成历史最大值，也不能将每条高温读数都算一个事件。\n\n## 产物\n提交recorder.py，仅使用Python标准库，导出Recorder类及observe/render方法。模块不得自行监听端口或访问网络；HTTP发布由平台包装，运行时命令和验收入口已提供。事件Counter仅保存在本进程内，新Recorder从0开始，真实部署应按Counter重启语义查询。\n\n## 验收方法\n运行python3 checks/check.py。先以边界80、重复高温、下降后再进入、随机事件序列及无效输入验证状态。随后真实Prometheus先抓取Gauge=20/Counter=0；平台保证一整批短事件在下一次快照开放前完成，所以所有被采样Gauge仍为20，而Counter须变为1；原生increase须为正。第二批含等于阈值和再次进入，Counter最终为3。检查原生metadata类型、完整存储标签和up，错误只改Gauge或每个高值都加一都会失败。\n\n## 边界\n事件Counter证明发生过跨阈值事件，不能恢复未采样尖峰的准确幅度、时刻或持续时间；这些需求应另用日志、直方图或持续时间累计指标设计。平台的受控快照批次不代表生产调度保证。此处实际验证指标产物与原生采集，不宣称已经改造真实传感器或生产exporter。\n",
+    "exercise": {
+      "kind": "instrumentation-program",
+      "environment": "isolated-http-exporter-and-native-prometheus",
+      "deliverables": [
+        "recorder.py"
+      ],
+      "operation": "实现跨阈值事件Counter和一致Gauge快照，交给实际HTTP exporter抓取",
+      "verification": "状态边界/随机序列/拒绝输入不变、原生metadata和0→1→3事件计数",
+      "capability_gap": [
+        "不能恢复未采样峰值或精确时刻",
+        "未改造生产传感器/exporter"
+      ],
+      "failure_examples": [
+        "仅Gauge导致事件丢失",
+        "每次高温读数累加",
+        "边界80不算进入",
+        "无效值破坏先前状态",
+        "Counter错声明Gauge"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,secrets\nimport pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1s'},'scrape_configs':[JOB]}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\n\nspec=importlib.util.spec_from_file_location('submission_recorder',pathlib.Path('recorder.py'));module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)\ndef parse(rec):\n text=rec.render();assert isinstance(text,str) and text.endswith('\\n')\n types={};values={}\n for line in text.splitlines():\n  if line.startswith('# TYPE '):\n   fields=line.split();assert len(fields)==4 and fields[2] not in types;types[fields[2]]=fields[3]\n  elif line and not line.startswith('#'):\n   fields=line.split();assert len(fields)==2 and fields[0] not in values;values[fields[0]]=float(fields[1]);assert math.isfinite(values[fields[0]])\n assert set(values)<= {'training_overheat_events_total','training_temperature_celsius'} and types.get('training_overheat_events_total')=='counter'\n if 'training_temperature_celsius' in values:assert types.get('training_temperature_celsius')=='gauge'\n assert 'training_overheat_events_total' in values\n return values\nunit=module.Recorder();assert parse(unit)=={'training_overheat_events_total':0}\nabove=False;events=0\nsequence=[80,81,100,80,79.999,80,0,-5,85,20]+[secrets.choice([-10,20,79,80,81,120]) for _ in range(60)]\nfor value in sequence:\n new=value>=80;events+=int(new and not above);above=new;unit.observe(value)\n assert parse(unit)=={'training_temperature_celsius':float(value),'training_overheat_events_total':events}\nfor bad in [True,False,'80',None,float('inf'),float('-inf'),float('nan')]:\n before=parse(unit)\n try:unit.observe(bad)\n except (ValueError,TypeError):pass\n else:raise AssertionError('invalid observation accepted')\n assert parse(unit)==before,'rejected observation changed gauge/counter state'\nassert parse(module.Recorder())=={'training_overheat_events_total':0}\nconcurrent=module.Recorder();concurrent.observe(20)\nfor round_index in range(5):\n for value in [80,20]:\n  errors=[]\n  def observe_many():\n   try:\n    for _ in range(32):concurrent.observe(value)\n   except BaseException as exc:errors.append(repr(exc))\n  workers=[threading.Thread(target=observe_many) for _ in range(4)]\n  [t.start() for t in workers];[t.join(timeout=2) for t in workers];assert not any(t.is_alive() for t in workers) and not errors\n  assert parse(concurrent)=={'training_overheat_events_total':round_index+1,'training_temperature_celsius':float(value)}\nrec=module.Recorder();rec.observe(20);gate=threading.Lock();hits={'count':0}\nclass Handler(http.server.BaseHTTPRequestHandler):\n def do_GET(self):\n  with gate:body=rec.render().encode();hits['count']+=1\n  self.send_response(200);self.send_header('Content-Type','text/plain; version=0.0.4');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)\n def log_message(self,*args):pass\nhttpd=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=threading.Thread(target=httpd.serve_forever,daemon=True);thread.start()\nJOB={'job_name':'temperature','scrape_interval':'1s','static_configs':[{'targets':['127.0.0.1:'+str(httpd.server_port)]}]}\ndef wait(fn,message):\n end=time.monotonic()+10\n while time.monotonic()<end:\n  v=fn()\n  if v:return v\n  time.sleep(.1)\n raise AssertionError(message)\ndef metric(api,name,value):\n rows=vector(api,name);return len(rows)==1 and rows[0]['metric']=={'__name__':name,'job':'temperature','instance':'127.0.0.1:'+str(httpd.server_port)} and float(rows[0]['value'][1])==value\ntry:\n with tempfile.TemporaryDirectory(prefix='trusted-prom-instrumentation-') as d:\n  try:\n   with server(pathlib.Path(d),'source') as (url,api):\n    wait(lambda:hits['count']>=3 and metric(api,'training_overheat_events_total',0),'initial zero counter not scraped')\n    # Complete a short event before exposing another snapshot; no scrape can see the transient gauge.\n    with gate:\n     for value in [81,95,85,20]:rec.observe(value)\n    wait(lambda:metric(api,'training_overheat_events_total',1) and metric(api,'training_temperature_celsius',20),'completed overheat episode must remain visible as one counter event')\n    assert float(vector(api,'max_over_time(training_temperature_celsius[10s])')[0]['value'][1])==20,'fixture leaked the intentionally unsampled spike'\n    increase=vector(api,'increase(training_overheat_events_total[10s])');assert len(increase)==1 and float(increase[0]['value'][1])>0\n    with gate:\n     for value in [80,80,79,80,20]:rec.observe(value)\n    wait(lambda:metric(api,'training_overheat_events_total',3),'two additional threshold entries must accumulate without counting sustained high observations')\n    assert metric(api,'training_temperature_celsius',20)\n    metadata=api('/api/v1/metadata')['data'];assert any(x['type']=='counter' for x in metadata['training_overheat_events_total']) and any(x['type']=='gauge' for x in metadata['training_temperature_celsius'])\n    up=vector(api,'up');assert len(up)==1 and float(up[0]['value'][1])==1\n    print('real scrapes:',hits['count'],'stored gauge peak=20; observed event counter progressed 0 -> 1 -> 3; native increase positive')\n  finally:print('native lifecycle:',json.dumps(STATS))\nfinally:httpd.shutdown();httpd.server_close();thread.join(timeout=2)\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "exporter_threshold_episode_counter_preserves_unsampled_gauge_events_without_claiming_peak_recovery",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-063",
+      "original_type": "interview",
+      "original_title": "抓取间隔之间发生并消失的gauge尖峰能被可靠恢复吗？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

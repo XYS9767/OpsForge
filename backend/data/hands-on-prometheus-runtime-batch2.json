@@ -1,0 +1,84 @@
+[
+  {
+    "id": "curated-parallel-prometheus-030",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 1,
+    "topic": "PromQL查询与计算",
+    "title": "通过真实查询API区分评估步长与已存储采样",
+    "answer": "```json\n{\n  \"fine\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}\",\n    \"start_offset\": 0,\n    \"end_offset\": 360,\n    \"step\": 60\n  },\n  \"coarse\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}\",\n    \"start_offset\": 0,\n    \"end_offset\": 360,\n    \"step\": 120\n  },\n  \"stored\": {\n    \"expr\": \"count_over_time(queue_depth{service=\\\"checkout\\\"}[7m])\",\n    \"at_offset\": 360\n  }\n}\n```\nquery_range的step只决定执行表达式的时间网格，不改变采集间隔或已有样本。这里粗网格选到偶数分钟原值，遗漏的峰值11/17/23仍存储在数据库，stored查询仍统计7点；avg_over_time是改变每次评估的统计口径，不是另一种step写法。\n\n原题原理：step控制查询评估点密度，抓取间隔控制原始数据采样。增大step减少展示点但不改变已存样本；减小step也不能创造抓取间隔之间真实观测。图上平滑不代表高采样。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "step控制查询评估点密度，抓取间隔控制原始数据采样。",
+      "增大step减少展示点但不改变已存样本；减小step也不能创造抓取间隔之间真实观测。",
+      "图上平滑不代表高采样。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/api/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "json",
+    "files": {
+      "queries.json": "{\n  \"fine\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}\",\n    \"start_offset\": 0,\n    \"end_offset\": 360,\n    \"step\": 300\n  },\n  \"coarse\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}\",\n    \"start_offset\": 0,\n    \"end_offset\": 360,\n    \"step\": 300\n  },\n  \"stored\": {\n    \"expr\": \"count_over_time(queue_depth{service=\\\"checkout\\\"}[7m])\",\n    \"at_offset\": 360\n  }\n}\n",
+      "samples.json": "{\n  \"sample_interval_seconds\": 60,\n  \"start_offset\": 0,\n  \"end_offset\": 360,\n  \"service\": \"checkout\",\n  \"instances\": {\n    \"a\": [\n      2,\n      11,\n      4,\n      17,\n      6,\n      23,\n      8\n    ],\n    \"b\": [\n      20,\n      18,\n      16,\n      14,\n      12,\n      10,\n      8\n    ]\n  }\n}\n"
+    },
+    "solution_files": {
+      "queries.json": "{\n  \"fine\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}\",\n    \"start_offset\": 0,\n    \"end_offset\": 360,\n    \"step\": 60\n  },\n  \"coarse\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}\",\n    \"start_offset\": 0,\n    \"end_offset\": 360,\n    \"step\": 120\n  },\n  \"stored\": {\n    \"expr\": \"count_over_time(queue_depth{service=\\\"checkout\\\"}[7m])\",\n    \"at_offset\": 360\n  }\n}\n"
+    },
+    "negative_files": {
+      "queries.json": "{\n  \"fine\": {\n    \"expr\": \"queue_depth{service=\\\"checkout\\\"}\",\n    \"start_offset\": 0,\n    \"end_offset\": 360,\n    \"step\": 60\n  },\n  \"coarse\": {\n    \"expr\": \"avg_over_time(queue_depth{service=\\\"checkout\\\"}[2m])\",\n    \"start_offset\": 0,\n    \"end_offset\": 360,\n    \"step\": 120\n  },\n  \"stored\": {\n    \"expr\": \"count_over_time(queue_depth{service=\\\"checkout\\\"}[7m])\",\n    \"at_offset\": 360\n  }\n}\n"
+    },
+    "body": "## 环境与初始材料\n平台提供prometheus/promtool 3.5与Python/PyYAML，在隔离工作区创建14条真实历史样本并启动仅回环临时服务。samples.json列明材料：checkout服务两个实例各7点、固定60秒间隔。时间基准由验收器映射到安全的过去窗口，无需学员另开Kubernetes或安装服务。\n\n## 操作任务\n修复queries.json。fine使用query_range返回0至360秒、每60秒的原始queue_depth；coarse在同样范围按120秒评估，同样返回原值而不是滚动平均。两个查询都保留a/b实例和service身份。stored使用instant query在360秒计算过去7分钟内每实例实际采样数。允许等价PromQL，不能只改为一个实例或把缺点补成0。\n\n## 产物\n提交queries.json，保留fine/coarse/stored三项，start/end/at_offset均按给定相对时间；step是评估网格间隔，expr是实际PromQL。不能提交任意URL，验收器仅调用自己创建的本机服务。\n\n## 验收方法\n执行python3 checks/check.py。真实promtool导入OpenMetrics历史块，真实Prometheus API执行三个查询。fine每实例7点，coarse每实例4点且时间为0/120/240/360；coarse中a为2/4/6/8，不能用移动平均替代。stored两实例均7。查询前后真实原始matrix和不可变块摘要一致，证明step不会修改已存储采样。参考/初始/典型错误/等价表达式均实际运行；只验证14点固定材料，不宣称生产查询性能测试。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-query-api",
+      "deliverables": [
+        "queries.json"
+      ],
+      "operation": "修复真实query_range和instant查询定义并验证存储采样数",
+      "verification": "真实HTTP API结果、时间网格、值、标签及源块不变校验",
+      "capability_gap": [
+        "仅14个历史样本，不测试生产查询负载或采集网络。"
+      ],
+      "failure_examples": [
+        "coarse使用avg_over_time改变业务值",
+        "step=300导致网格不符"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "prometheus",
+          "promtool"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1m'},'scrape_configs':[]}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\ncandidate=yaml.load(pathlib.Path('queries.json').read_text(encoding='utf-8'),Loader=Strict)\nassert set(candidate)=={'fine','coarse','stored'}\nfor name in ['fine','coarse']:\n q=candidate[name];assert set(q)=={'expr','start_offset','end_offset','step'}\n assert q['start_offset']==0 and q['end_offset']==360\n assert type(q['step']) is int and 1<=q['step']<=360\n assert isinstance(q['expr'],str) and len(q['expr'])<=1000\nassert set(candidate['stored'])=={'expr','at_offset'} and candidate['stored']['at_offset']==360\nfor cmd in ['prometheus','promtool']:assert shutil.which(cmd)\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-query-grid-') as d:\n root=pathlib.Path(d);base=int(time.time())-86400;base-=base%7200\n values={'a':[2,11,4,17,6,23,8],'b':[20,18,16,14,12,10,8]}\n lines=['# TYPE queue_depth gauge']\n for instance,seq in values.items():\n  for n,value in enumerate(seq):lines.append('queue_depth{service=\"checkout\",instance=\"'+instance+'\"} '+str(value)+' '+str(base+60*n))\n lines.append('# EOF');(root/'source.om').write_bytes(('\\n'.join(lines)+'\\n').encode())\n try:\n  run_command(['promtool','tsdb','create-blocks-from','openmetrics',str(root/'source.om'),str(root/'source')],root)\n  before=digest_blocks(root/'source')\n  with server(root,'source') as (url,api):\n   original=vector(api,'queue_depth[7m]',base+360)\n   for name,expected_step in [('fine',60),('coarse',120)]:\n    q=candidate[name]\n    data=api('/api/v1/query_range',{'query':q['expr'],'start':base+q['start_offset'],'end':base+q['end_offset'],'step':q['step']})\n    assert data['status']=='success' and data['data']['resultType']=='matrix'\n    result=data['data']['result'];assert len(result)==2,'keep both instances'\n    seen=set()\n    for row in result:\n     identity=row['metric'];instance=identity.get('instance')\n     assert instance in values and instance not in seen;seen.add(instance)\n     assert identity=={'__name__':'queue_depth','service':'checkout','instance':instance}\n     expected=[[base+n*60,values[instance][n]] for n in range(0,7,expected_step//60)]\n     actual=[[int(t),float(v)] for t,v in row['values']]\n     assert actual==expected,(name,instance,actual,expected)\n   raw=vector(api,candidate['stored']['expr'],base+candidate['stored']['at_offset'])\n   assert len(raw)==2 and {x['metric']['instance'] for x in raw}==set(values)\n   for row in raw:\n    assert row['metric']=={'service':'checkout','instance':row['metric']['instance']} and float(row['value'][1])==7\n   assert vector(api,'queue_depth[7m]',base+360)==original,'query changed stored data'\n   assert all(len(row['values'])==7 for row in original)\n  assert digest_blocks(root/'source')==before,'query changed immutable source blocks'\n finally:print('native lifecycle:',json.dumps(STATS))\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "query_range_step_changes_evaluation_grid_without_changing_persisted_samples",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-030",
+      "original_title": "range query的step与抓取间隔为什么不是同一个设置？",
+      "original_type": "interview",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

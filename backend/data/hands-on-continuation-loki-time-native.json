@@ -1,0 +1,152 @@
+[
+  {
+    "id": "curated-advanced-loki-012",
+    "module": "loki",
+    "category": "Loki",
+    "level": 5,
+    "topic": "指标查询与告警",
+    "title": "真实滑动窗口报表：互斥分桶才可相加，迟到修订与未结算窗口明确标记",
+    "body": "## 操作任务\n实现report(query,start,end,step,watermark)，整数秒参数拒绝bool，0<=start<end、step为1..3600、最多60桶。可信query(width,at)实际计算原生count_over_time在(at-width,at]的整数条数。报告目标为(start,end]：从start起按step生成不重叠桶，末桶可不足step，必须用该桶实际宽度查询；返回{bins:[{from_exclusive,to_inclusive,count,final}],total:桶数值之和,final:end<=watermark}。watermark为上游提供的可结算事件时间界，各桶right<=watermark才final，不是Loki自动承诺。迟到后重新查询生成修订报告，不能把两份报告total叠加。回调None/非整数/负数应RuntimeError含incomplete，不能当0。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Loki3.5.5范围聚合、区间边界、晚到追加与非重叠报表；仅受控数据和外部可信watermark，不证明生产采集链完整性、永久结算保证或大型报表性能。",
+    "answer": "```python\ndef report(query,start,end,step,watermark):\n    if any(type(x) is not int for x in (start,end,step,watermark)) or not 0<=start<end or not 1<=step<=3600 or (end-start+step-1)//step>60:raise ValueError('bounded integer report interval')\n    bins=[];left=start\n    while left<end:\n        right=min(left+step,end);count=query(right-left,right)\n        if type(count) is not int or count<0:raise RuntimeError('incomplete: missing count sample')\n        bins.append({'from_exclusive':left,'to_inclusive':right,'count':count,'final':right<=watermark})\n        left=right\n    return {'bins':bins,'total':sum(row['count'] for row in bins),'final':end<=watermark}\n```\n\n原题知识说明：\n交付range窗口、求值step、时间边界和报表聚合方式。相邻窗口若重叠，同一日志会被多次计入，不能把每个count_over_time点直接相加得到整个时间段事件总数。验收用带固定序号的事件在窗口交界两侧分布，手工计算每个点与总区间基准，检查缺点和重采样行为。若报表需要总数，应使用不重叠分桶或直接计算目标范围，并说明迟到日志对结算的影响。交付图表显示与数据导出的单位及时间语义，不能为了平滑曲线改变统计口径而不告知使用者。",
+    "type": "code",
+    "source": "advanced-expansion-20261022:data:loki",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "LogQL或存储语义准确",
+      "证据可证明时间范围与完整性",
+      "明确配额、权限与无法保证的边界"
+    ],
+    "references": [
+      "https://grafana.com/docs/loki/latest/query/metric_queries/",
+      "https://grafana.com/docs/loki/latest/reference/loki-http-api/"
+    ],
+    "related_modules": [
+      "loki"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-loki-012",
+      "original_title": "为Loki滑动窗口统计建立不重复累计的报表契约。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def report(query,start,end,step,watermark):\n    if any(type(x) is not int for x in (start,end,step,watermark)) or not 0<=start<end or not 1<=step<=3600 or (end-start+step-1)//step>60:raise ValueError('bounded integer report interval')\n    bins=[];left=start\n    while left<end:\n        right=min(left+step,end);count=query(right-left,right)\n        if type(count) is not int or count<0:raise RuntimeError('incomplete: missing count sample')\n        bins.append({'from_exclusive':left,'to_inclusive':right,'count':count,'final':right<=watermark})\n        left=right\n    return {'bins':bins,'total':sum(row['count'] for row in bins),'final':end<=watermark}\n"
+    },
+    "negative_files": {
+      "task.py": "def report(query,start,end,step,watermark):\n    if any(type(x) is not int for x in (start,end,step,watermark)) or not 0<=start<end or not 1<=step<=3600 or (end-start+step-1)//step>60:raise ValueError('bounded integer report interval')\n    bins=[];left=start\n    while left<end:\n        right=min(left+step,end);count=query(2*(right-left),right)\n        if type(count) is not int or count<0:raise RuntimeError('incomplete: missing count sample')\n        bins.append({'from_exclusive':left,'to_inclusive':right,'count':count,'final':right<=watermark})\n        left=right\n    return {'bins':bins,'total':sum(row['count'] for row in bins),'final':end<=watermark}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现report(query,start,end,step,watermark)，整数秒参数拒绝bool，0<=start<end、step为1..3600、最多60桶。可信query(width,at)实际计算原生count_over_time在(at-width,at]的整数条数。报告目标为(start,end]：从start起按step生成不重叠桶，末桶可不足step，必须用该桶实际宽度查询；返回{bins:[{from_exclusive,to_inclusive,count,final}],total:桶数值之和,final:end<=watermark}。watermark为上游提供的可结算事件时间界，各桶right<=watermark才final，不是Loki自动承诺。迟到后重新查询生成修订报告，不能把两份报告total叠加。回调None/非整数/负数应RuntimeError含incomplete，不能当0。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Loki3.5.5范围聚合、区间边界、晚到追加与非重叠报表；仅受控数据和外部可信watermark，不证明生产采集链完整性、永久结算保证或大型报表性能。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "loki"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/loki_native.py": "\"\"\"Private standalone Loki 3.5.5, filesystem storage and loopback-only HTTP/gRPC.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.parse,urllib.error\nimport yaml\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Loki:\n def __init__(self,auth=False,structured=False):\n  self.binary=shutil.which('loki');self.process=None;self.auth=auth;self.structured=structured\n  if not self.binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 executable missing')\n  version=subprocess.run([self.binary,'-version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '3.5.5' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-loki-');self.root=pathlib.Path(self.temp.name);http=free_port();grpc=free_port()\n  while grpc==http:grpc=free_port()\n  self.base='http://127.0.0.1:'+str(http);self.log=(self.root/'server.log').open('wb')\n  config={'auth_enabled':self.auth,'server':{'http_listen_address':'127.0.0.1','http_listen_port':http,'grpc_listen_address':'127.0.0.1','grpc_listen_port':grpc,'log_level':'error'},\n   'common':{'instance_addr':'127.0.0.1','path_prefix':str(self.root),'replication_factor':1,'storage':{'filesystem':{'chunks_directory':str(self.root/'chunks'),'rules_directory':str(self.root/'rules')}},'ring':{'kvstore':{'store':'inmemory'}}},\n   'schema_config':{'configs':[{'from':'2020-10-24','store':'tsdb','object_store':'filesystem','schema':'v13','index':{'prefix':'index_','period':'24h'}}]},\n   'ingester':{'lifecycler':{'min_ready_duration':'0s','final_sleep':'0s','heartbeat_period':'100ms'},'wal':{'enabled':False}},\n   'limits_config':{'allow_structured_metadata':self.structured,'max_query_parallelism':2,'tsdb_max_query_parallelism':2,'split_queries_by_interval':'0s','query_timeout':'5s'},\n   'querier':{'max_concurrent':2},'analytics':{'reporting_enabled':False},'pattern_ingester':{'enabled':False},'compactor':{'working_directory':str(self.root/'compactor')}}\n  path=self.root/'config.yaml';path.write_text(yaml.safe_dump(config,sort_keys=False),encoding='utf8')\n  try:\n   self.process=subprocess.Popen([self.binary,'-config.file='+str(path)],cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'192MiB','HOME':str(self.root)})\n   self.wait(lambda:self.request('/ready')==b'ready\\n','private HTTP readiness',seconds=12)\n   print('NATIVE_LOKI_READY:3.5.5',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,data=None,tenant=None,headers=None):\n  outgoing={'Content-Type':'application/json',**(headers or {})}\n  if tenant is not None:outgoing['X-Scope-OrgID']=tenant\n  request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data,ensure_ascii=False).encode(),headers=outgoing)\n  with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as response:\n   raw=response.read();return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n def wait(self,predicate,description,seconds=5):\n  deadline=time.monotonic()+seconds\n  while time.monotonic()<deadline:\n   if self.process.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki exited: '+(self.root/'server.log').read_text(errors='replace')[-2500:])\n   try:\n    value=predicate()\n    if value:return value\n   except (OSError,urllib.error.URLError):pass\n   time.sleep(.04)\n  raise AssertionError('native Loki deadline: '+description)\n def push(self,streams,tenant=None):\n  result=self.request('/loki/api/v1/push',{'streams':streams},tenant=tenant);assert result==b''\n def logs(self,query,start,end,tenant=None):\n  params={'query':query,'start':str(start),'end':str(end),'direction':'forward','limit':'1000'}\n  result=self.request('/loki/api/v1/query_range?'+urllib.parse.urlencode(params),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='streams';return result['data']['result']\n def metric(self,query,at,tenant=None):\n  result=self.request('/loki/api/v1/query?'+urllib.parse.urlencode({'query':query,'time':str(at)}),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='vector';return result['data']['result']\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=4)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if getattr(self,'log',None):self.log.close()\n  self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,copy,json,time,secrets,urllib.parse,datetime\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom loki_native import Loki\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith Loki() as server:\n start=int(time.time())-40;end=start+20\n server.push([{'stream':{'app':'report'},'values':[[str((start+offset)*10**9),'event-'+str(offset)] for offset in (0,5,10,15,20)]}])\n def query(width,at):\n  assert 1<=width<=40 and start<=at<=end\n  expression='sum(count_over_time({app=\"report\"}['+str(width)+'s]))'\n  result=server.metric(expression,at)\n  return 0 if not result else int(float(result[0]['value'][1]))\n baseline=sum(query(10,at) for at in range(start+5,end+1,5));assert baseline>4,'native overlapping windows did not repeat events'\n print('NATIVE_LOKI_OVERLAPPING_WINDOWS_REPRODUCED',flush=True)\n print('STUDENT_OPERATION_ENTERED:report',flush=True)\n first=task.report(query,start,end,5,start)\n expected=[{'from_exclusive':start+i*5,'to_inclusive':start+(i+1)*5,'count':1,'final':False} for i in range(4)]\n assert first=={'bins':expected,'total':4,'final':False},'sliding points were summed or provisional windows called final'\n # Real late arrival changes a provisional result; do not add report revisions together.\n server.push([{'stream':{'app':'report'},'values':[[str((start+7)*10**9),'late-event']]}])\n second=task.report(query,start,end,5,end)\n assert [row['count'] for row in second['bins']]==[1,2,1,1] and second['total']==5 and second['final'] is True\n partial=task.report(query,start,start+18,5,end);assert partial['total']==4 and partial['bins'][-1]=={'from_exclusive':start+15,'to_inclusive':start+18,'count':0,'final':True}\n assert first=={'bins':expected,'total':4,'final':False},'previous report object was mutated'\n try:task.report(lambda width,at:None,start,end,5,end)\n except RuntimeError as error:assert 'incomplete' in str(error)\n else:raise AssertionError('missing measurement silently became a zero')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-advanced-loki-015",
+    "module": "loki",
+    "category": "Loki",
+    "level": 5,
+    "topic": "日志模型与采集",
+    "title": "真实日志双时间：保留原始时区与纳秒事件时间，接收时间另存，异常明确隔离",
+    "body": "## 操作任务\n实现prepare(entry,received_ns,max_lag,max_future)。entry含event_time/message字符串；received_ns为采集端可信非负整数纳秒，max_lag为0..86400秒、max_future为0..300秒，整数拒绝bool。事件时间必须为YYYY-MM-DDTHH:MM:SS可带1..9位小数及Z或明确±HH:MM（最多14:00）；缺时区unknown_timezone、无法解析invalid_time、超过未来预算future、超迟到预算too_old，返回{accepted:False,reason,original:输入深拷贝,collector_received_ns}，不能猜UTC或重写成接收时刻。成功返回{accepted:True,timestamp_ns:准确事件纳秒,line:JSON}，JSON恰含event_time_original/event_ns/collector_received_ns/message；Loki push使用事件timestamp_ns，接收时间仅另存。验收跨时区同刻、9位精度、重复小时显式offset、坏时间和实际原生入库时间。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Loki3.5.5当前时间附近日志写查及Python明确偏移时间解析；collector_received_ns不是Loki服务端自动接收时间。重复小时离线数学检查不把未来日期写入Loki，未验证NTP修复、所有IANA时区或真实历史补采故障。",
+    "answer": "```python\nimport calendar,copy,datetime,json,re\ndef prepare(entry,received_ns,max_lag,max_future):\n    if not isinstance(entry,dict) or not isinstance(entry.get('event_time'),str) or not isinstance(entry.get('message'),str) or any(type(x) is not int for x in (received_ns,max_lag,max_future)) or received_ns<0 or not 0<=max_lag<=86400 or not 0<=max_future<=300:raise ValueError('typed source and collector policy')\n    text=entry['event_time']\n    def reject(reason):return {'accepted':False,'reason':reason,'original':copy.deepcopy(entry),'collector_received_ns':received_ns}\n    match=re.fullmatch(r'(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2})(?:\\.(\\d{1,9}))?(Z|[+-]\\d{2}:\\d{2})?',text)\n    if not match:return reject('invalid_time')\n    if not match[3]:return reject('unknown_timezone')\n    try:\n        zone=match[3];offset=datetime.timedelta()\n        if zone!='Z':\n            hours=int(zone[1:3]);minutes=int(zone[4:6])\n            if hours>14 or minutes>=60 or (hours==14 and minutes):return reject('invalid_time')\n            offset=datetime.timedelta(hours=hours,minutes=minutes)*(1 if zone[0]=='+' else -1)\n        instant=datetime.datetime.strptime(match[1],'%Y-%m-%dT%H:%M:%S').replace(tzinfo=datetime.timezone(offset))\n        fraction=int((match[2] or '').ljust(9,'0') or '0')\n        ns=calendar.timegm(instant.utctimetuple())*10**9+fraction\n    except ValueError:return reject('invalid_time')\n    if ns>received_ns+max_future*10**9:return reject('future')\n    if received_ns-ns>max_lag*10**9:return reject('too_old')\n    record={'event_time_original':text,'event_ns':ns,'collector_received_ns':received_ns,'message':entry['message']}\n    return {'accepted':True,'timestamp_ns':ns,'line':json.dumps(record,ensure_ascii=False,sort_keys=True)}\n```\n\n原题知识说明：\n交付原始时间字符串、来源时区、事件时间和接收时间，定义未知时区及夏令时歧义的处理。将所有日志统一改成接收时间可绕过旧日志拒绝，却破坏事故时序和告警口径；应保留原始事实并将无法解析记录明确隔离。验收重复小时、缺失时区、纳秒精度和主机时钟偏移，比较同一业务事件在多个来源的相对顺序。交付迟到量与时钟偏差报表、查询显示约定和历史补采路径，不能仅因为Grafana图上有点就认定时间正确。不可恢复的时区信息应标未知，不能猜测成UTC。",
+    "type": "code",
+    "source": "advanced-expansion-20261022:data:loki",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "LogQL或存储语义准确",
+      "证据可证明时间范围与完整性",
+      "明确配额、权限与无法保证的边界"
+    ],
+    "references": [
+      "https://grafana.com/docs/loki/latest/reference/loki-http-api/",
+      "https://docs.python.org/3.11/library/datetime.html"
+    ],
+    "related_modules": [
+      "loki"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-loki-015",
+      "original_title": "为Loki跨时区日志建立事件时间与接收时间的双时间审查。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import calendar,copy,datetime,json,re\ndef prepare(entry,received_ns,max_lag,max_future):\n    if not isinstance(entry,dict) or not isinstance(entry.get('event_time'),str) or not isinstance(entry.get('message'),str) or any(type(x) is not int for x in (received_ns,max_lag,max_future)) or received_ns<0 or not 0<=max_lag<=86400 or not 0<=max_future<=300:raise ValueError('typed source and collector policy')\n    text=entry['event_time']\n    def reject(reason):return {'accepted':False,'reason':reason,'original':copy.deepcopy(entry),'collector_received_ns':received_ns}\n    match=re.fullmatch(r'(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2})(?:\\.(\\d{1,9}))?(Z|[+-]\\d{2}:\\d{2})?',text)\n    if not match:return reject('invalid_time')\n    if not match[3]:return reject('unknown_timezone')\n    try:\n        zone=match[3];offset=datetime.timedelta()\n        if zone!='Z':\n            hours=int(zone[1:3]);minutes=int(zone[4:6])\n            if hours>14 or minutes>=60 or (hours==14 and minutes):return reject('invalid_time')\n            offset=datetime.timedelta(hours=hours,minutes=minutes)*(1 if zone[0]=='+' else -1)\n        instant=datetime.datetime.strptime(match[1],'%Y-%m-%dT%H:%M:%S').replace(tzinfo=datetime.timezone(offset))\n        fraction=int((match[2] or '').ljust(9,'0') or '0')\n        ns=calendar.timegm(instant.utctimetuple())*10**9+fraction\n    except ValueError:return reject('invalid_time')\n    if ns>received_ns+max_future*10**9:return reject('future')\n    if received_ns-ns>max_lag*10**9:return reject('too_old')\n    record={'event_time_original':text,'event_ns':ns,'collector_received_ns':received_ns,'message':entry['message']}\n    return {'accepted':True,'timestamp_ns':ns,'line':json.dumps(record,ensure_ascii=False,sort_keys=True)}\n"
+    },
+    "negative_files": {
+      "task.py": "import calendar,copy,datetime,json,re\ndef prepare(entry,received_ns,max_lag,max_future):\n    if not isinstance(entry,dict) or not isinstance(entry.get('event_time'),str) or not isinstance(entry.get('message'),str) or any(type(x) is not int for x in (received_ns,max_lag,max_future)) or received_ns<0 or not 0<=max_lag<=86400 or not 0<=max_future<=300:raise ValueError('typed source and collector policy')\n    text=entry['event_time']\n    def reject(reason):return {'accepted':False,'reason':reason,'original':copy.deepcopy(entry),'collector_received_ns':received_ns}\n    match=re.fullmatch(r'(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2})(?:\\.(\\d{1,9}))?(Z|[+-]\\d{2}:\\d{2})?',text)\n    if not match:return reject('invalid_time')\n    if not match[3]:return reject('unknown_timezone')\n    try:\n        zone=match[3];offset=datetime.timedelta()\n        if zone!='Z':\n            hours=int(zone[1:3]);minutes=int(zone[4:6])\n            if hours>14 or minutes>=60 or (hours==14 and minutes):return reject('invalid_time')\n            offset=datetime.timedelta(hours=hours,minutes=minutes)*(1 if zone[0]=='+' else -1)\n        instant=datetime.datetime.strptime(match[1],'%Y-%m-%dT%H:%M:%S').replace(tzinfo=datetime.timezone(offset))\n        fraction=int((match[2] or '').ljust(9,'0') or '0')\n        ns=calendar.timegm(instant.utctimetuple())*10**9+fraction\n    except ValueError:return reject('invalid_time')\n    if ns>received_ns+max_future*10**9:return reject('future')\n    if received_ns-ns>max_lag*10**9:return reject('too_old')\n    record={'event_time_original':text,'event_ns':ns,'collector_received_ns':received_ns,'message':entry['message']}\n    return {'accepted':True,'timestamp_ns':received_ns,'line':json.dumps(record,ensure_ascii=False,sort_keys=True)}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现prepare(entry,received_ns,max_lag,max_future)。entry含event_time/message字符串；received_ns为采集端可信非负整数纳秒，max_lag为0..86400秒、max_future为0..300秒，整数拒绝bool。事件时间必须为YYYY-MM-DDTHH:MM:SS可带1..9位小数及Z或明确±HH:MM（最多14:00）；缺时区unknown_timezone、无法解析invalid_time、超过未来预算future、超迟到预算too_old，返回{accepted:False,reason,original:输入深拷贝,collector_received_ns}，不能猜UTC或重写成接收时刻。成功返回{accepted:True,timestamp_ns:准确事件纳秒,line:JSON}，JSON恰含event_time_original/event_ns/collector_received_ns/message；Loki push使用事件timestamp_ns，接收时间仅另存。验收跨时区同刻、9位精度、重复小时显式offset、坏时间和实际原生入库时间。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Loki3.5.5当前时间附近日志写查及Python明确偏移时间解析；collector_received_ns不是Loki服务端自动接收时间。重复小时离线数学检查不把未来日期写入Loki，未验证NTP修复、所有IANA时区或真实历史补采故障。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "loki"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/loki_native.py": "\"\"\"Private standalone Loki 3.5.5, filesystem storage and loopback-only HTTP/gRPC.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.parse,urllib.error\nimport yaml\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Loki:\n def __init__(self,auth=False,structured=False):\n  self.binary=shutil.which('loki');self.process=None;self.auth=auth;self.structured=structured\n  if not self.binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 executable missing')\n  version=subprocess.run([self.binary,'-version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '3.5.5' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-loki-');self.root=pathlib.Path(self.temp.name);http=free_port();grpc=free_port()\n  while grpc==http:grpc=free_port()\n  self.base='http://127.0.0.1:'+str(http);self.log=(self.root/'server.log').open('wb')\n  config={'auth_enabled':self.auth,'server':{'http_listen_address':'127.0.0.1','http_listen_port':http,'grpc_listen_address':'127.0.0.1','grpc_listen_port':grpc,'log_level':'error'},\n   'common':{'instance_addr':'127.0.0.1','path_prefix':str(self.root),'replication_factor':1,'storage':{'filesystem':{'chunks_directory':str(self.root/'chunks'),'rules_directory':str(self.root/'rules')}},'ring':{'kvstore':{'store':'inmemory'}}},\n   'schema_config':{'configs':[{'from':'2020-10-24','store':'tsdb','object_store':'filesystem','schema':'v13','index':{'prefix':'index_','period':'24h'}}]},\n   'ingester':{'lifecycler':{'min_ready_duration':'0s','final_sleep':'0s','heartbeat_period':'100ms'},'wal':{'enabled':False}},\n   'limits_config':{'allow_structured_metadata':self.structured,'max_query_parallelism':2,'tsdb_max_query_parallelism':2,'split_queries_by_interval':'0s','query_timeout':'5s'},\n   'querier':{'max_concurrent':2},'analytics':{'reporting_enabled':False},'pattern_ingester':{'enabled':False},'compactor':{'working_directory':str(self.root/'compactor')}}\n  path=self.root/'config.yaml';path.write_text(yaml.safe_dump(config,sort_keys=False),encoding='utf8')\n  try:\n   self.process=subprocess.Popen([self.binary,'-config.file='+str(path)],cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'192MiB','HOME':str(self.root)})\n   self.wait(lambda:self.request('/ready')==b'ready\\n','private HTTP readiness',seconds=12)\n   print('NATIVE_LOKI_READY:3.5.5',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,data=None,tenant=None,headers=None):\n  outgoing={'Content-Type':'application/json',**(headers or {})}\n  if tenant is not None:outgoing['X-Scope-OrgID']=tenant\n  request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data,ensure_ascii=False).encode(),headers=outgoing)\n  with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as response:\n   raw=response.read();return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n def wait(self,predicate,description,seconds=5):\n  deadline=time.monotonic()+seconds\n  while time.monotonic()<deadline:\n   if self.process.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki exited: '+(self.root/'server.log').read_text(errors='replace')[-2500:])\n   try:\n    value=predicate()\n    if value:return value\n   except (OSError,urllib.error.URLError):pass\n   time.sleep(.04)\n  raise AssertionError('native Loki deadline: '+description)\n def push(self,streams,tenant=None):\n  result=self.request('/loki/api/v1/push',{'streams':streams},tenant=tenant);assert result==b''\n def logs(self,query,start,end,tenant=None):\n  params={'query':query,'start':str(start),'end':str(end),'direction':'forward','limit':'1000'}\n  result=self.request('/loki/api/v1/query_range?'+urllib.parse.urlencode(params),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='streams';return result['data']['result']\n def metric(self,query,at,tenant=None):\n  result=self.request('/loki/api/v1/query?'+urllib.parse.urlencode({'query':query,'time':str(at)}),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='vector';return result['data']['result']\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=4)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if getattr(self,'log',None):self.log.close()\n  self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,copy,json,time,secrets,urllib.parse,datetime\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom loki_native import Loki\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith Loki() as server:\n received=time.time_ns();event_ns=(received//10**9-5)*10**9+123456789;utc=datetime.datetime.fromtimestamp(event_ns//10**9,datetime.timezone.utc)\n records=[]\n for hours in (8,-5):\n  local=utc.astimezone(datetime.timezone(datetime.timedelta(hours=hours)));source=local.strftime('%Y-%m-%dT%H:%M:%S')+'.123456789'+('+' if hours>=0 else '-')+str(abs(hours)).zfill(2)+':00'\n  records.append({'event_time':source,'message':'from-zone-'+str(hours)})\n before=copy.deepcopy(records);accepted=[]\n print('STUDENT_OPERATION_ENTERED:prepare',flush=True)\n for record in records:\n  value=task.prepare(record,received,30,1);assert value['accepted'] is True and value['timestamp_ns']==event_ns,'event nanos were rounded, shifted twice, or replaced by collector receipt time'\n  body=json.loads(value['line']);assert body=={'event_time_original':record['event_time'],'event_ns':event_ns,'collector_received_ns':received,'message':record['message']}\n  accepted.append([str(value['timestamp_ns']),value['line']])\n server.push([{'stream':{'app':'dual-time'},'values':accepted}])\n actual=server.logs('{app=\"dual-time\"}',event_ns-1,event_ns+1);values=[(int(timestamp),json.loads(line)) for row in actual for timestamp,line in row['values']]\n assert len(values)==2 and all(timestamp==event_ns for timestamp,body in values) and {body['message'] for timestamp,body in values}=={'from-zone-8','from-zone--5'}\n for record,reason in [({'event_time':'2026-10-26T01:00:00','message':'naive'},'unknown_timezone'),({'event_time':'2026-02-30T01:00:00Z','message':'invalid'},'invalid_time'),({'event_time':(utc+datetime.timedelta(seconds=120)).strftime('%Y-%m-%dT%H:%M:%SZ'),'message':'future'},'future'),({'event_time':(utc-datetime.timedelta(seconds=120)).strftime('%Y-%m-%dT%H:%M:%SZ'),'message':'old'},'too_old')]:\n  value=task.prepare(record,received,30,1);assert value=={'accepted':False,'reason':reason,'original':record,'collector_received_ns':received}\n # A repeated wall-clock hour is two instants when explicit offsets differ.\n first={'event_time':'2026-11-01T01:30:00.123456789-04:00','message':'first-hour'};second={'event_time':'2026-11-01T01:30:00.123456789-05:00','message':'second-hour'}\n later=int(datetime.datetime(2026,11,1,7,tzinfo=datetime.timezone.utc).timestamp())*10**9\n a=task.prepare(first,later,7200,1);b=task.prepare(second,later,7200,1);assert a['accepted'] and b['accepted'] and b['timestamp_ns']-a['timestamp_ns']==3600*10**9\n assert records==before\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

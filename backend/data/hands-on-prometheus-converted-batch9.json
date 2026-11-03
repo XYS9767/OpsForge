@@ -1,0 +1,322 @@
+[
+  {
+    "id": "curated-parallel-prometheus-006",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 0,
+    "topic": "PromQL查询与计算",
+    "title": "编写完整匹配且排除空归属的生产标签筛选",
+    "answer": "```yaml\ngroups:\n- name: label-selection-boundaries\n  interval: 1m\n  rules:\n  - record: jobs:exact_prod_owned\n    expr: worker_jobs{env=\"prod\",team=~\".+\"}\n  - record: jobs:prod_variants\n    expr: worker_jobs{env=~\"prod(-[a-z]+)?\",team!=\"\"}\n```\n\n标签team缺失时按空值参与匹配，非空约束可以用team!=\"\"或.+。prod.*过宽会接受production；明确可接受的后缀文法能约束业务集合。\n\n### 原题原理\n前者精确字符串匹配，后者按正则匹配且Prometheus标签正则整体锚定。正则里的特殊字符需正确转义。想匹配包含某段文字时不能把普通子串当默认行为。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "提交可执行的规则配置和指定标签结果",
+      "官方PromQL计算验证值、范围和边界",
+      "不得删除输入或修改可信验收来通过"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/",
+      "https://prometheus.io/docs/prometheus/latest/querying/operators/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: label-selection-boundaries\n  interval: 1m\n  rules:\n  - record: jobs:exact_prod_owned\n    expr: worker_jobs{env=\"prod\"}\n  - record: jobs:prod_variants\n    expr: worker_jobs{env=~\"prod.*\"}\n",
+      "fixtures.yaml": "rule_files:\n- rules.yaml\nevaluation_interval: 1m\nfuzzy_compare: true\ntests:\n- interval: 1m\n  input_series:\n  - series: worker_jobs{instance=\"a\",env=\"prod\",team=\"payments\"}\n    values: 3+0x2\n  - series: worker_jobs{instance=\"b\",env=\"production\",team=\"payments\"}\n    values: 7+0x2\n  - series: worker_jobs{instance=\"c\",env=\"prod-us\",team=\"\"}\n    values: 9+0x2\n  - series: worker_jobs{instance=\"d\",env=\"prod\",team=\"\"}\n    values: 11+0x2\n  - series: worker_jobs{instance=\"e\",env=\"prod\"}\n    values: 13+0x2\n  - series: worker_jobs{instance=\"f\",env=\"stage\",team=\"ops\"}\n    values: 17+0x2\n  - series: worker_jobs{instance=\"g\",env=\"prod-us\",team=\"ops\"}\n    values: 19+0x2\n  promql_expr_test:\n  - expr: jobs:exact_prod_owned\n    eval_time: 2m\n    exp_samples:\n    - labels: jobs:exact_prod_owned{env=\"prod\",instance=\"a\",team=\"payments\"}\n      value: 3\n  - expr: jobs:prod_variants\n    eval_time: 2m\n    exp_samples:\n    - labels: jobs:prod_variants{env=\"prod\",instance=\"a\",team=\"payments\"}\n      value: 3\n    - labels: jobs:prod_variants{env=\"prod-us\",instance=\"g\",team=\"ops\"}\n      value: 19\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: label-selection-boundaries\n  interval: 1m\n  rules:\n  - record: jobs:exact_prod_owned\n    expr: worker_jobs{env=\"prod\",team=~\".+\"}\n  - record: jobs:prod_variants\n    expr: worker_jobs{env=~\"prod(-[a-z]+)?\",team!=\"\"}\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: label-selection-boundaries\n  interval: 1m\n  rules:\n  - record: jobs:exact_prod_owned\n    expr: worker_jobs{env=\"prod\",team=~\".+\"}\n  - record: jobs:prod_variants\n    expr: worker_jobs{env=~\"prod(-[a-z]+)?\",team=~\".*\"}\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供promtool 3.5和Python/PyYAML。编辑rules.yaml，fixtures.yaml提供固定Prometheus规则测试输入；无需学员自建Prometheus，也不连接生产。\n\n## 操作任务\njobs:exact_prod_owned只保留env恰好prod且team非空的序列；jobs:prod_variants允许prod或prod-加小写区域后缀，仍要求非空team。不允许production、stage，team空字符串和根本缺失都排除。保留所有原标签和值。不要依赖隐式子串搜索；PromQL标签正则是完整匹配。\n\n## 产物\n提交rules.yaml，保留题定记录规则和告警的名称、标签合同。\n\n## 验收方法\n执行python3 checks/check.py：官方promtool check rules检查规则，再由promtool test rules真实计算样本、告警pending/firing/恢复。可信fixtures由验收器独立加载，不接受删改测试来通过；允许等价PromQL表达式，不做公式字符串匹配。参考解、原配置、典型错误及重复键四路验证。\n\n## 原理复习\nPromQL中label=\"x\"与label=~\"x\"有何区别？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-promtool",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "jobs:exact_prod_owned只保留env恰好prod且team非空的序列；jobs:prod_variants允许prod或prod-加小写区域后缀，仍要求非空team。不允许production、stage，team空字符串和根本缺失都排除。保留所有原标签和值。不要依赖隐式子串搜索；PromQL标签正则是完整匹配。",
+      "verification": "官方promtool真实离线执行PromQL与告警时间状态；带独立边界样本。",
+      "capability_gap": [
+        "不运行抓取、服务发现、Alertmanager通知，不将离线规则执行冒充线上链路通过。"
+      ],
+      "failure_examples": [
+        "negative_files对应题目中容易产生误报或错误数值的配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "promtool"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nEXPECTED={'groups': [{'name': 'label-selection-boundaries', 'interval': '1m', 'rules': [{'record': 'jobs:exact_prod_owned', 'expr': 'worker_jobs{env=\"prod\",team=~\".+\"}'}, {'record': 'jobs:prod_variants', 'expr': 'worker_jobs{env=~\"prod(-[a-z]+)?\",team!=\"\"}'}]}]}\nFIXTURE={'rule_files': ['rules.yaml'], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'worker_jobs{instance=\"a\",env=\"prod\",team=\"payments\"}', 'values': '3+0x2'}, {'series': 'worker_jobs{instance=\"b\",env=\"production\",team=\"payments\"}', 'values': '7+0x2'}, {'series': 'worker_jobs{instance=\"c\",env=\"prod-us\",team=\"\"}', 'values': '9+0x2'}, {'series': 'worker_jobs{instance=\"d\",env=\"prod\",team=\"\"}', 'values': '11+0x2'}, {'series': 'worker_jobs{instance=\"e\",env=\"prod\"}', 'values': '13+0x2'}, {'series': 'worker_jobs{instance=\"f\",env=\"stage\",team=\"ops\"}', 'values': '17+0x2'}, {'series': 'worker_jobs{instance=\"g\",env=\"prod-us\",team=\"ops\"}', 'values': '19+0x2'}], 'promql_expr_test': [{'expr': 'jobs:exact_prod_owned', 'eval_time': '2m', 'exp_samples': [{'labels': 'jobs:exact_prod_owned{env=\"prod\",instance=\"a\",team=\"payments\"}', 'value': 3}]}, {'expr': 'jobs:prod_variants', 'eval_time': '2m', 'exp_samples': [{'labels': 'jobs:prod_variants{env=\"prod\",instance=\"a\",team=\"payments\"}', 'value': 3}, {'labels': 'jobs:prod_variants{env=\"prod-us\",instance=\"g\",team=\"ops\"}', 'value': 19}]}]}]}\nr=load('rules.yaml')\nassert set(r)=={'groups'} and len(r['groups'])==1\ng=r['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']==EXPECTED['groups'][0]['name'] and g['interval']=='1m'\nassert len(g['rules'])==len(EXPECTED['groups'][0]['rules'])\nfor actual,expected in zip(g['rules'],EXPECTED['groups'][0]['rules']):\n assert set(actual)==set(expected)\n assert {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in expected.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\n\nassert shutil.which('promtool'),'platform must supply native promtool'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-rules-') as tmp:\n fixture=copy.deepcopy(FIXTURE);fixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\n path=pathlib.Path(tmp)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf-8')\n for args in [['promtool','check','rules','rules.yaml'],['promtool','test','rules',str(path)]]:\n  p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n  print(p.stdout);print(p.stderr);assert p.returncode==0,'native rule execution failed'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-006",
+      "original_type": "interview",
+      "original_title": "PromQL中label=\"x\"与label=~\"x\"有何区别？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-015",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 1,
+    "topic": "PromQL查询与计算",
+    "title": "同时输出计数器回退次数与样本变化次数",
+    "answer": "```yaml\ngroups:\n- name: counter-reset-diagnostics\n  interval: 1m\n  rules:\n  - record: counter:observed_resets\n    expr: resets(handled_total[5m])\n  - record: counter:changed_samples\n    expr: changes(handled_total[5m])\n```\n\nchanges包含正常增长，不能替代resets；只比较当前与前一次又会漏掉窗口内更早的下降。指标重建、进程重启、错误重新初始化都可能导致回退，题目输出是观测统计。\n\n### 原题原理\n它统计窗口内计数器重置迹象，帮助解释重启或序列来源变化。不能仅凭重置次数断言应用崩溃，设备重建和采集语义变化也可能导致下降。需关联运行事件。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "提交可执行的规则配置和指定标签结果",
+      "官方PromQL计算验证值、范围和边界",
+      "不得删除输入或修改可信验收来通过"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/",
+      "https://prometheus.io/docs/prometheus/latest/querying/operators/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: counter-reset-diagnostics\n  interval: 1m\n  rules:\n  - record: counter:observed_resets\n    expr: changes(handled_total[5m])\n  - record: counter:changed_samples\n    expr: changes(handled_total[5m])\n",
+      "fixtures.yaml": "rule_files:\n- rules.yaml\nevaluation_interval: 1m\nfuzzy_compare: true\ntests:\n- interval: 1m\n  input_series:\n  - series: handled_total{instance=\"resets\"}\n    values: 0 10 2 7 1 4\n  - series: handled_total{instance=\"steady\"}\n    values: 0 10 20 30 40 50\n  - series: handled_total{instance=\"idle\"}\n    values: 5+0x5\n  promql_expr_test:\n  - expr: counter:observed_resets\n    eval_time: 5m\n    exp_samples:\n    - labels: counter:observed_resets{instance=\"resets\"}\n      value: 2\n    - labels: counter:observed_resets{instance=\"steady\"}\n      value: 0\n    - labels: counter:observed_resets{instance=\"idle\"}\n      value: 0\n  - expr: counter:changed_samples\n    eval_time: 5m\n    exp_samples:\n    - labels: counter:changed_samples{instance=\"resets\"}\n      value: 4\n    - labels: counter:changed_samples{instance=\"steady\"}\n      value: 4\n    - labels: counter:changed_samples{instance=\"idle\"}\n      value: 0\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: counter-reset-diagnostics\n  interval: 1m\n  rules:\n  - record: counter:observed_resets\n    expr: resets(handled_total[5m])\n  - record: counter:changed_samples\n    expr: changes(handled_total[5m])\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: counter-reset-diagnostics\n  interval: 1m\n  rules:\n  - record: counter:observed_resets\n    expr: (handled_total < bool handled_total offset 1m)\n  - record: counter:changed_samples\n    expr: changes(handled_total[5m])\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供promtool 3.5和Python/PyYAML。编辑rules.yaml，fixtures.yaml提供固定Prometheus规则测试输入；无需学员自建Prometheus，也不连接生产。\n\n## 操作任务\n对5分钟窗口分别记录counter:observed_resets（计数器下降次数）和counter:changed_samples（任意数值变化次数），保留instance。第5分钟resets实例窗口样本10/2/7/1/4，预期2次下降、4次变化；steady只有增长不算reset，idle均为0。此证据只能说明观察到的计数器回退，不能直接宣称进程重启次数。\n\n## 产物\n提交rules.yaml，保留题定记录规则和告警的名称、标签合同。\n\n## 验收方法\n执行python3 checks/check.py：官方promtool check rules检查规则，再由promtool test rules真实计算样本、告警pending/firing/恢复。可信fixtures由验收器独立加载，不接受删改测试来通过；允许等价PromQL表达式，不做公式字符串匹配。参考解、原配置、典型错误及重复键四路验证。\n\n## 原理复习\nresets函数能帮助识别什么，不能证明什么？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-promtool",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "对5分钟窗口分别记录counter:observed_resets（计数器下降次数）和counter:changed_samples（任意数值变化次数），保留instance。第5分钟resets实例窗口样本10/2/7/1/4，预期2次下降、4次变化；steady只有增长不算reset，idle均为0。此证据只能说明观察到的计数器回退，不能直接宣称进程重启次数。",
+      "verification": "官方promtool真实离线执行PromQL与告警时间状态；带独立边界样本。",
+      "capability_gap": [
+        "不运行抓取、服务发现、Alertmanager通知，不将离线规则执行冒充线上链路通过。"
+      ],
+      "failure_examples": [
+        "negative_files对应题目中容易产生误报或错误数值的配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "promtool"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nEXPECTED={'groups': [{'name': 'counter-reset-diagnostics', 'interval': '1m', 'rules': [{'record': 'counter:observed_resets', 'expr': 'resets(handled_total[5m])'}, {'record': 'counter:changed_samples', 'expr': 'changes(handled_total[5m])'}]}]}\nFIXTURE={'rule_files': ['rules.yaml'], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'handled_total{instance=\"resets\"}', 'values': '0 10 2 7 1 4'}, {'series': 'handled_total{instance=\"steady\"}', 'values': '0 10 20 30 40 50'}, {'series': 'handled_total{instance=\"idle\"}', 'values': '5+0x5'}], 'promql_expr_test': [{'expr': 'counter:observed_resets', 'eval_time': '5m', 'exp_samples': [{'labels': 'counter:observed_resets{instance=\"resets\"}', 'value': 2}, {'labels': 'counter:observed_resets{instance=\"steady\"}', 'value': 0}, {'labels': 'counter:observed_resets{instance=\"idle\"}', 'value': 0}]}, {'expr': 'counter:changed_samples', 'eval_time': '5m', 'exp_samples': [{'labels': 'counter:changed_samples{instance=\"resets\"}', 'value': 4}, {'labels': 'counter:changed_samples{instance=\"steady\"}', 'value': 4}, {'labels': 'counter:changed_samples{instance=\"idle\"}', 'value': 0}]}]}]}\nr=load('rules.yaml')\nassert set(r)=={'groups'} and len(r['groups'])==1\ng=r['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']==EXPECTED['groups'][0]['name'] and g['interval']=='1m'\nassert len(g['rules'])==len(EXPECTED['groups'][0]['rules'])\nfor actual,expected in zip(g['rules'],EXPECTED['groups'][0]['rules']):\n assert set(actual)==set(expected)\n assert {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in expected.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\n\nassert shutil.which('promtool'),'platform must supply native promtool'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-rules-') as tmp:\n fixture=copy.deepcopy(FIXTURE);fixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\n path=pathlib.Path(tmp)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf-8')\n for args in [['promtool','check','rules','rules.yaml'],['promtool','test','rules',str(path)]]:\n  p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n  print(p.stdout);print(p.stderr);assert p.returncode==0,'native rule execution failed'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-015",
+      "original_type": "interview",
+      "original_title": "resets函数能帮助识别什么，不能证明什么？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-019",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 1,
+    "topic": "PromQL查询与计算",
+    "title": "按明确矩形近似交付样本和与会话秒数",
+    "answer": "```yaml\ngroups:\n- name: sample-area-contract\n  interval: 1m\n  rules:\n  - record: sessions:sample_sum\n    expr: sum_over_time(active_sessions[3m])\n  - record: sessions:estimated_session_seconds\n    expr: sum_over_time(active_sessions[3m]) * 60\n```\n\ngauge表示存量；求和统计采样值，不能获得事件次数。这里明确固定完整采样和右端矩形近似，所以乘60可估计面积；存在漏采或间隔变化时必须重新设计加权，不能照搬。\n\n### 原题原理\n不能自动保证。它求样本值之和，不按采样间隔积分，抓取频率改变会影响结果。优先使用对应事件counter的increase，或明确积分近似及缺样处理。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "提交可执行的规则配置和指定标签结果",
+      "官方PromQL计算验证值、范围和边界",
+      "不得删除输入或修改可信验收来通过"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/",
+      "https://prometheus.io/docs/prometheus/latest/querying/operators/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: sample-area-contract\n  interval: 1m\n  rules:\n  - record: sessions:sample_sum\n    expr: sum_over_time(active_sessions[3m])\n  - record: sessions:estimated_session_seconds\n    expr: sum_over_time(active_sessions[3m])\n",
+      "fixtures.yaml": "rule_files:\n- rules.yaml\nevaluation_interval: 1m\nfuzzy_compare: true\ntests:\n- interval: 1m\n  input_series:\n  - series: active_sessions{instance=\"a\"}\n    values: 1 2 4 3\n  - series: active_sessions{instance=\"b\"}\n    values: 10 10 10 10\n  promql_expr_test:\n  - expr: sessions:sample_sum\n    eval_time: 3m\n    exp_samples:\n    - labels: sessions:sample_sum{instance=\"a\"}\n      value: 9\n    - labels: sessions:sample_sum{instance=\"b\"}\n      value: 30\n  - expr: sessions:estimated_session_seconds\n    eval_time: 3m\n    exp_samples:\n    - labels: sessions:estimated_session_seconds{instance=\"a\"}\n      value: 540\n    - labels: sessions:estimated_session_seconds{instance=\"b\"}\n      value: 1800\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: sample-area-contract\n  interval: 1m\n  rules:\n  - record: sessions:sample_sum\n    expr: sum_over_time(active_sessions[3m])\n  - record: sessions:estimated_session_seconds\n    expr: sum_over_time(active_sessions[3m]) * 60\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: sample-area-contract\n  interval: 1m\n  rules:\n  - record: sessions:sample_sum\n    expr: sum_over_time(active_sessions[3m])\n  - record: sessions:estimated_session_seconds\n    expr: increase(active_sessions[3m])\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供promtool 3.5和Python/PyYAML。编辑rules.yaml，fixtures.yaml提供固定Prometheus规则测试输入；无需学员自建Prometheus，也不连接生产。\n\n## 操作任务\n材料保证每60秒完整采样，无缺点；第3分钟的3分钟窗口左开右闭含1/2/3分钟三个样本。sessions:sample_sum输出样本值总和；sessions:estimated_session_seconds按每个样本代表此前60秒的右端矩形近似乘60，单位会话秒。不得把它称为新增会话数、独立用户数或精确积分。保留instance；a应为9和540，b为30和1800。\n\n## 产物\n提交rules.yaml，保留题定记录规则和告警的名称、标签合同。\n\n## 验收方法\n执行python3 checks/check.py：官方promtool check rules检查规则，再由promtool test rules真实计算样本、告警pending/firing/恢复。可信fixtures由验收器独立加载，不接受删改测试来通过；允许等价PromQL表达式，不做公式字符串匹配。参考解、原配置、典型错误及重复键四路验证。\n\n## 原理复习\nsum_over_time能直接计算gauge表示的每秒速率总事件数吗？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-promtool",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "材料保证每60秒完整采样，无缺点；第3分钟的3分钟窗口左开右闭含1/2/3分钟三个样本。sessions:sample_sum输出样本值总和；sessions:estimated_session_seconds按每个样本代表此前60秒的右端矩形近似乘60，单位会话秒。不得把它称为新增会话数、独立用户数或精确积分。保留instance；a应为9和540，b为30和1800。",
+      "verification": "官方promtool真实离线执行PromQL与告警时间状态；带独立边界样本。",
+      "capability_gap": [
+        "不运行抓取、服务发现、Alertmanager通知，不将离线规则执行冒充线上链路通过。"
+      ],
+      "failure_examples": [
+        "negative_files对应题目中容易产生误报或错误数值的配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "promtool"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nEXPECTED={'groups': [{'name': 'sample-area-contract', 'interval': '1m', 'rules': [{'record': 'sessions:sample_sum', 'expr': 'sum_over_time(active_sessions[3m])'}, {'record': 'sessions:estimated_session_seconds', 'expr': 'sum_over_time(active_sessions[3m]) * 60'}]}]}\nFIXTURE={'rule_files': ['rules.yaml'], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'active_sessions{instance=\"a\"}', 'values': '1 2 4 3'}, {'series': 'active_sessions{instance=\"b\"}', 'values': '10 10 10 10'}], 'promql_expr_test': [{'expr': 'sessions:sample_sum', 'eval_time': '3m', 'exp_samples': [{'labels': 'sessions:sample_sum{instance=\"a\"}', 'value': 9}, {'labels': 'sessions:sample_sum{instance=\"b\"}', 'value': 30}]}, {'expr': 'sessions:estimated_session_seconds', 'eval_time': '3m', 'exp_samples': [{'labels': 'sessions:estimated_session_seconds{instance=\"a\"}', 'value': 540}, {'labels': 'sessions:estimated_session_seconds{instance=\"b\"}', 'value': 1800}]}]}]}\nr=load('rules.yaml')\nassert set(r)=={'groups'} and len(r['groups'])==1\ng=r['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']==EXPECTED['groups'][0]['name'] and g['interval']=='1m'\nassert len(g['rules'])==len(EXPECTED['groups'][0]['rules'])\nfor actual,expected in zip(g['rules'],EXPECTED['groups'][0]['rules']):\n assert set(actual)==set(expected)\n assert {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in expected.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\n\nassert shutil.which('promtool'),'platform must supply native promtool'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-rules-') as tmp:\n fixture=copy.deepcopy(FIXTURE);fixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\n path=pathlib.Path(tmp)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf-8')\n for args in [['promtool','check','rules','rules.yaml'],['promtool','test','rules',str(path)]]:\n  p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n  print(p.stdout);print(p.stderr);assert p.returncode==0,'native rule execution failed'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-019",
+      "original_type": "interview",
+      "original_title": "sum_over_time能直接计算gauge表示的每秒速率总事件数吗？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  },
+  {
+    "id": "curated-parallel-prometheus-021",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 1,
+    "topic": "PromQL查询与计算",
+    "title": "阻止无效容量输入被零值回退伪装为健康",
+    "answer": "```yaml\ngroups:\n- name: invalid-number-contract\n  interval: 1m\n  rules:\n  - record: capacity:valid_ratio\n    expr: (capacity_used / capacity_total) and on(instance)(capacity_total > 0) and\n      on(instance)(capacity_total < +Inf) and on(instance)(capacity_used >= 0) and\n      on(instance)(capacity_used <= capacity_total)\n```\n\n浮点除法可产生NaN/Inf；正数比较并不足以排除+Inf。边界守卫利用比较过滤非有限值和非法关系，保留未知为缺失，不把缺失误标正常。告警是否单独监视无效输入属于另一条监控合同。\n\n### 原题原理\n零是存在的数值样本，NaN是非数值浮点结果，空向量没有匹配序列。比较与聚合行为不同，不能统一替换为0而掩盖缺采集。应分别设计无数据、无流量及数学异常处理。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "提交可执行的规则配置和指定标签结果",
+      "官方PromQL计算验证值、范围和边界",
+      "不得删除输入或修改可信验收来通过"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/functions/",
+      "https://prometheus.io/docs/prometheus/latest/querying/operators/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "rules.yaml": "groups:\n- name: invalid-number-contract\n  interval: 1m\n  rules:\n  - record: capacity:valid_ratio\n    expr: capacity_used / capacity_total\n",
+      "fixtures.yaml": "rule_files:\n- rules.yaml\nevaluation_interval: 1m\nfuzzy_compare: true\ntests:\n- interval: 1m\n  input_series:\n  - series: capacity_total{instance=\"good\"}\n    values: 100+0x2\n  - series: capacity_used{instance=\"good\"}\n    values: 30+0x2\n  - series: capacity_total{instance=\"empty\"}\n    values: 100+0x2\n  - series: capacity_used{instance=\"empty\"}\n    values: 0+0x2\n  - series: capacity_total{instance=\"negative_used\"}\n    values: 100+0x2\n  - series: capacity_used{instance=\"negative_used\"}\n    values: -1+0x2\n  - series: capacity_total{instance=\"zero\"}\n    values: 0+0x2\n  - series: capacity_used{instance=\"zero\"}\n    values: 0+0x2\n  - series: capacity_total{instance=\"negative\"}\n    values: -2+0x2\n  - series: capacity_used{instance=\"negative\"}\n    values: 1+0x2\n  - series: capacity_total{instance=\"nan\"}\n    values: NaN NaN NaN\n  - series: capacity_used{instance=\"nan\"}\n    values: 1+0x2\n  - series: capacity_total{instance=\"inf\"}\n    values: +Inf +Inf +Inf\n  - series: capacity_used{instance=\"inf\"}\n    values: 1+0x2\n  - series: capacity_total{instance=\"bad_used\"}\n    values: 100+0x2\n  - series: capacity_used{instance=\"bad_used\"}\n    values: NaN NaN NaN\n  - series: capacity_total{instance=\"overflow\"}\n    values: 100+0x2\n  - series: capacity_used{instance=\"overflow\"}\n    values: 150+0x2\n  promql_expr_test:\n  - expr: capacity:valid_ratio\n    eval_time: 2m\n    exp_samples:\n    - labels: capacity:valid_ratio{instance=\"good\"}\n      value: 0.3\n    - labels: capacity:valid_ratio{instance=\"empty\"}\n      value: 0\n"
+    },
+    "solution_files": {
+      "rules.yaml": "groups:\n- name: invalid-number-contract\n  interval: 1m\n  rules:\n  - record: capacity:valid_ratio\n    expr: (capacity_used / capacity_total) and on(instance)(capacity_total > 0) and\n      on(instance)(capacity_total < +Inf) and on(instance)(capacity_used >= 0) and\n      on(instance)(capacity_used <= capacity_total)\n"
+    },
+    "negative_files": {
+      "rules.yaml": "groups:\n- name: invalid-number-contract\n  interval: 1m\n  rules:\n  - record: capacity:valid_ratio\n    expr: (capacity_used / capacity_total) and on(instance)(capacity_total > 0)\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供promtool 3.5和Python/PyYAML。编辑rules.yaml，fixtures.yaml提供固定Prometheus规则测试输入；无需学员自建Prometheus，也不连接生产。\n\n## 操作任务\ncapacity:valid_ratio仅在total为有限正数、used为非负且不大于total时输出used/total，保留instance。零分母、负total、NaN、Inf、used=NaN、超容量都不输出序列；不能以or vector(0)伪造健康比例。本题将超容量定为输入合同异常，须另行诊断，不声称所有业务都必须如此定义。good输出0.3，容量有效且used为0的empty合法输出0；负used不能通过。\n\n## 产物\n提交rules.yaml，保留题定记录规则和告警的名称、标签合同。\n\n## 验收方法\n执行python3 checks/check.py：官方promtool check rules检查规则，再由promtool test rules真实计算样本、告警pending/firing/恢复。可信fixtures由验收器独立加载，不接受删改测试来通过；允许等价PromQL表达式，不做公式字符串匹配。参考解、原配置、典型错误及重复键四路验证。\n\n## 原理复习\n零值、NaN与空向量在告警中有什么不同？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-promtool",
+      "deliverables": [
+        "rules.yaml"
+      ],
+      "operation": "capacity:valid_ratio仅在total为有限正数、used为非负且不大于total时输出used/total，保留instance。零分母、负total、NaN、Inf、used=NaN、超容量都不输出序列；不能以or vector(0)伪造健康比例。本题将超容量定为输入合同异常，须另行诊断，不声称所有业务都必须如此定义。good输出0.3，容量有效且used为0的empty合法输出0；负used不能通过。",
+      "verification": "官方promtool真实离线执行PromQL与告警时间状态；带独立边界样本。",
+      "capability_gap": [
+        "不运行抓取、服务发现、Alertmanager通知，不将离线规则执行冒充线上链路通过。"
+      ],
+      "failure_examples": [
+        "negative_files对应题目中容易产生误报或错误数值的配置。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "python_modules": [
+          "yaml"
+        ],
+        "commands": [
+          "promtool"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,copy,yaml,subprocess,tempfile,shutil\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);d={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in d:raise ValueError('duplicate key')\n  d[key]=loader.construct_object(v,deep=deep)\n return d\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef load(name):return yaml.load(pathlib.Path(name).read_text(encoding='utf-8'),Loader=Strict)\n\nEXPECTED={'groups': [{'name': 'invalid-number-contract', 'interval': '1m', 'rules': [{'record': 'capacity:valid_ratio', 'expr': '(capacity_used / capacity_total) and on(instance)(capacity_total > 0) and on(instance)(capacity_total < +Inf) and on(instance)(capacity_used >= 0) and on(instance)(capacity_used <= capacity_total)'}]}]}\nFIXTURE={'rule_files': ['rules.yaml'], 'evaluation_interval': '1m', 'fuzzy_compare': True, 'tests': [{'interval': '1m', 'input_series': [{'series': 'capacity_total{instance=\"good\"}', 'values': '100+0x2'}, {'series': 'capacity_used{instance=\"good\"}', 'values': '30+0x2'}, {'series': 'capacity_total{instance=\"empty\"}', 'values': '100+0x2'}, {'series': 'capacity_used{instance=\"empty\"}', 'values': '0+0x2'}, {'series': 'capacity_total{instance=\"negative_used\"}', 'values': '100+0x2'}, {'series': 'capacity_used{instance=\"negative_used\"}', 'values': '-1+0x2'}, {'series': 'capacity_total{instance=\"zero\"}', 'values': '0+0x2'}, {'series': 'capacity_used{instance=\"zero\"}', 'values': '0+0x2'}, {'series': 'capacity_total{instance=\"negative\"}', 'values': '-2+0x2'}, {'series': 'capacity_used{instance=\"negative\"}', 'values': '1+0x2'}, {'series': 'capacity_total{instance=\"nan\"}', 'values': 'NaN NaN NaN'}, {'series': 'capacity_used{instance=\"nan\"}', 'values': '1+0x2'}, {'series': 'capacity_total{instance=\"inf\"}', 'values': '+Inf +Inf +Inf'}, {'series': 'capacity_used{instance=\"inf\"}', 'values': '1+0x2'}, {'series': 'capacity_total{instance=\"bad_used\"}', 'values': '100+0x2'}, {'series': 'capacity_used{instance=\"bad_used\"}', 'values': 'NaN NaN NaN'}, {'series': 'capacity_total{instance=\"overflow\"}', 'values': '100+0x2'}, {'series': 'capacity_used{instance=\"overflow\"}', 'values': '150+0x2'}], 'promql_expr_test': [{'expr': 'capacity:valid_ratio', 'eval_time': '2m', 'exp_samples': [{'labels': 'capacity:valid_ratio{instance=\"good\"}', 'value': 0.3}, {'labels': 'capacity:valid_ratio{instance=\"empty\"}', 'value': 0}]}]}]}\nr=load('rules.yaml')\nassert set(r)=={'groups'} and len(r['groups'])==1\ng=r['groups'][0];assert set(g)=={'name','interval','rules'} and g['name']==EXPECTED['groups'][0]['name'] and g['interval']=='1m'\nassert len(g['rules'])==len(EXPECTED['groups'][0]['rules'])\nfor actual,expected in zip(g['rules'],EXPECTED['groups'][0]['rules']):\n assert set(actual)==set(expected)\n assert {k:v for k,v in actual.items() if k!='expr'}=={k:v for k,v in expected.items() if k!='expr'}\n assert isinstance(actual['expr'],str) and actual['expr'].strip()\n\nassert shutil.which('promtool'),'platform must supply native promtool'\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-rules-') as tmp:\n fixture=copy.deepcopy(FIXTURE);fixture['rule_files']=[str(pathlib.Path('rules.yaml').resolve())]\n path=pathlib.Path(tmp)/'tests.yaml';path.write_text(yaml.safe_dump(fixture,sort_keys=False),encoding='utf-8')\n for args in [['promtool','check','rules','rules.yaml'],['promtool','test','rules',str(path)]]:\n  p=subprocess.run(args,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=15)\n  print(p.stdout);print(p.stderr);assert p.returncode==0,'native rule execution failed'\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-021",
+      "original_type": "interview",
+      "original_title": "零值、NaN与空向量在告警中有什么不同？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

@@ -1,0 +1,87 @@
+[
+  {
+    "id": "curated-advanced-network-003",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 4,
+    "topic": "DNSSEC双KSK过渡交付",
+    "title": "生成可验证的DNSSEC双KSK过渡交付并保留旧父DS",
+    "answer": "```python\nimport pathlib,subprocess,tempfile,shutil,os,json\ndef prepare(zone_file,outdir):\n    source=pathlib.Path(zone_file).resolve();target=pathlib.Path(outdir).resolve()\n    if target.exists():raise FileExistsError(target)\n    staging=pathlib.Path(tempfile.mkdtemp(prefix='.rollover-',dir=target.parent))\n    def run(*args):\n        return subprocess.run(list(args),cwd=staging,capture_output=True,text=True,check=True,timeout=5).stdout.strip()\n    try:\n        (staging/'zone.input').write_bytes(source.read_bytes())\n        run('named-checkzone','example.test','zone.input')\n        (staging/'keys').mkdir()\n        base=['dnssec-keygen','-a','ECDSAP256SHA256','-n','ZONE','-K','keys']\n        old=run(*base,'-f','KSK','example.test')\n        new=run(*base,'-f','KSK','example.test')\n        zsk=run(*base,'example.test')\n        old_ds=run('dnssec-dsfromkey','-2','keys/'+old+'.key')+'\\n'\n        new_ds=run('dnssec-dsfromkey','-2','keys/'+new+'.key')+'\\n'\n        (staging/'old.ds').write_text(old_ds)\n        (staging/'new.ds').write_text(new_ds)\n        (staging/'parent.ds').write_text(old_ds)\n        run('dnssec-signzone','-S','-K','keys','-n','1','-a','-o','example.test','-e','now+3600','-f','zone.signed','zone.input')\n        run('dnssec-verify','-o','example.test','zone.signed')\n        (staging/'manifest.json').write_text(json.dumps({'old_ksk':old,'new_ksk':new,'zsk':zsk,'phase':'double-publish-parent-old','can_retire_old':False}))\n        os.rename(staging,target)\n    finally:\n        if staging.exists():shutil.rmtree(staging)\n```\n\n原理补充：\n先区分密钥角色与所用轮换方案，建立父DS、子DNSKEY、RRSIG和递归缓存的时间线。新公钥可见不代表所有验证器已建立新信任链，旧DS或旧签名仍可能在缓存中；必须等方案要求的预发布、双签或父区更新及相关TTL窗口完成。核验多个独立验证器而非只查权威答案。验收新旧缓存路径都能验证，撤旧前保存恢复所需材料。发生验证失败时按现有链恢复有效签名或DS组合，不能为了快速恢复永久关闭验证并宣称轮换完成。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "解释题设中的因果关系和证据边界",
+      "比较方案约束而非套用单一参数",
+      "给出可验证的判断或处理顺序"
+    ],
+    "references": [
+      "https://www.rfc-editor.org/info/rfc6781/"
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "files": {
+      "task.py": "def prepare(zone_file,outdir):\n    raise NotImplementedError\n",
+      "zone.input": "$ORIGIN example.test.\n$TTL 60\n@ IN SOA ns.example.test. hostmaster.example.test. (2026102301 3600 600 86400 60)\n@ IN NS ns.example.test.\nns IN A 192.0.2.53\nwww IN A 192.0.2.80\n"
+    },
+    "solution_files": {
+      "task.py": "import pathlib,subprocess,tempfile,shutil,os,json\ndef prepare(zone_file,outdir):\n    source=pathlib.Path(zone_file).resolve();target=pathlib.Path(outdir).resolve()\n    if target.exists():raise FileExistsError(target)\n    staging=pathlib.Path(tempfile.mkdtemp(prefix='.rollover-',dir=target.parent))\n    def run(*args):\n        return subprocess.run(list(args),cwd=staging,capture_output=True,text=True,check=True,timeout=5).stdout.strip()\n    try:\n        (staging/'zone.input').write_bytes(source.read_bytes())\n        run('named-checkzone','example.test','zone.input')\n        (staging/'keys').mkdir()\n        base=['dnssec-keygen','-a','ECDSAP256SHA256','-n','ZONE','-K','keys']\n        old=run(*base,'-f','KSK','example.test')\n        new=run(*base,'-f','KSK','example.test')\n        zsk=run(*base,'example.test')\n        old_ds=run('dnssec-dsfromkey','-2','keys/'+old+'.key')+'\\n'\n        new_ds=run('dnssec-dsfromkey','-2','keys/'+new+'.key')+'\\n'\n        (staging/'old.ds').write_text(old_ds)\n        (staging/'new.ds').write_text(new_ds)\n        (staging/'parent.ds').write_text(old_ds)\n        run('dnssec-signzone','-S','-K','keys','-n','1','-a','-o','example.test','-e','now+3600','-f','zone.signed','zone.input')\n        run('dnssec-verify','-o','example.test','zone.signed')\n        (staging/'manifest.json').write_text(json.dumps({'old_ksk':old,'new_ksk':new,'zsk':zsk,'phase':'double-publish-parent-old','can_retire_old':False}))\n        os.rename(staging,target)\n    finally:\n        if staging.exists():shutil.rmtree(staging)\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib,subprocess,tempfile,shutil,os,json\ndef prepare(zone_file,outdir):\n    source=pathlib.Path(zone_file).resolve();target=pathlib.Path(outdir).resolve()\n    if target.exists():raise FileExistsError(target)\n    staging=pathlib.Path(tempfile.mkdtemp(prefix='.rollover-',dir=target.parent))\n    def run(*args):\n        return subprocess.run(list(args),cwd=staging,capture_output=True,text=True,check=True,timeout=5).stdout.strip()\n    try:\n        (staging/'zone.input').write_bytes(source.read_bytes())\n        run('named-checkzone','example.test','zone.input')\n        (staging/'keys').mkdir()\n        base=['dnssec-keygen','-a','ECDSAP256SHA256','-n','ZONE','-K','keys']\n        old=run(*base,'-f','KSK','example.test')\n        new=run(*base,'-f','KSK','example.test')\n        zsk=run(*base,'example.test')\n        old_ds=run('dnssec-dsfromkey','-2','keys/'+old+'.key')+'\\n'\n        new_ds=run('dnssec-dsfromkey','-2','keys/'+new+'.key')+'\\n'\n        (staging/'old.ds').write_text(old_ds)\n        (staging/'new.ds').write_text(new_ds)\n        (staging/'parent.ds').write_text(new_ds)\n        run('dnssec-signzone','-S','-K','keys','-n','1','-a','-o','example.test','-e','now+3600','-f','zone.signed','zone.input')\n        run('dnssec-verify','-o','example.test','zone.signed')\n        (staging/'manifest.json').write_text(json.dumps({'old_ksk':old,'new_ksk':new,'zsk':zsk,'phase':'double-publish-parent-old','can_retire_old':False}))\n        os.rename(staging,target)\n    finally:\n        if staging.exists():shutil.rmtree(staging)\n"
+    },
+    "run": "python3 checks/check.py",
+    "body": "## 环境与初始材料\n非root隔离Linux，Python3及BIND离线工具。提供zone.input，所有密钥均为本题临时测试钥；不启动DNS、不访问外网、不修改父区。只生成3把P-256小规模密钥，签名固定单线程。\n\n## 操作任务\n实现task.py中的prepare(zone_file,outdir)，交付DNSSEC双KSK过渡目录：生成独立旧KSK、新KSK及ZSK（ECDSAP256SHA256），保留两把KSK的DNSKEY及其对DNSKEY RRset的签名；父区尚未更新DS，因此parent.ds必须保持旧KSK的SHA256 DS。输出old.ds/new.ds、keys内三组公私钥、真实签名zone.signed及manifest.json（old_ksk/new_ksk/zsk为工具返回basename，phase=double-publish-parent-old，can_retire_old=false）。单线程签名-n1，测试有效期一小时；原有www A保持192.0.2.80。完成语法和签名验证后才发布目标目录；已存在目标抛FileExistsError且原内容不变，坏zone失败时不留下目标或暂存目录。此题只演练父DS仍旧的过渡状态，不在未观察TTL/父区更新时撤旧钥。\n\n## 提交产物\ntask.py。运行后生成delivery/zone.signed、old.ds、new.ds、parent.ds、manifest.json与keys/三组密钥；它们是本题验收产物，不提交私钥到真实仓库或对外发布。\n\n## 验收方法\npython3 checks/check.py真实调用keygen/signzone/verify/dsfromkey：核对两KSK与一ZSK、两份DNSKEY签名、DS对应关系，保留业务A记录；篡改签名后A记录须被dnssec-verify拒绝。还验证目标已存在及坏zone时不破坏已有交付、不留下半成品。全部断言通过退出0。仅离线签名与工件一致性通过，不能据此宣称公网DNSSEC信任链、父区DS传播和缓存TTL已验证。\n\n失败示例：新DNSKEY已发布就把parent.ds写成新DS，掩盖真实父区仍是旧DS的状态，会错误允许撤旧钥。",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现task.py中的prepare(zone_file,outdir)，交付DNSSEC双KSK过渡目录：生成独立旧KSK、新KSK及ZSK（ECDSAP256SHA256），保留两把KSK的DNSKEY及其对DNSKEY RRset的签名；父区尚未更新DS，因此parent.ds必须保持旧KSK的SHA256 DS。输出old.ds/new.ds、keys内三组公私钥、真实签名zone.signed及manifest.json（old_ksk/new_ksk/zsk为工具返回basename，phase=double-publish-parent-old，can_retire_old=false）。单线程签名-n1，测试有效期一小时；原有www A保持192.0.2.80。完成语法和签名验证后才发布目标目录；已存在目标抛FileExistsError且原内容不变，坏zone失败时不留下目标或暂存目录。此题只演练父DS仍旧的过渡状态，不在未观察TTL/父区更新时撤旧钥。",
+      "deliverables": [
+        "task.py"
+      ],
+      "generated_artifacts": [
+        "delivery/zone.signed",
+        "delivery/old.ds",
+        "delivery/new.ds",
+        "delivery/parent.ds",
+        "delivery/manifest.json",
+        "delivery/keys/"
+      ],
+      "verification": "真实离线DNSSEC签名校验、DS对应、篡改拒绝、双KSK过渡及失败清理",
+      "failure_examples": [
+        "未经父区确认就把parent.ds改成新DS"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,sys,json,subprocess\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nroot=pathlib.Path.cwd()\ndef run(*args,check=True):\n    return subprocess.run(list(args),capture_output=True,text=True,timeout=5,check=check)\ntask.prepare('zone.input','delivery')\nd=root/'delivery';manifest=json.loads((d/'manifest.json').read_text())\nassert manifest['phase']=='double-publish-parent-old' and manifest['can_retire_old'] is False\nold,new,zsk=[manifest[k] for k in ['old_ksk','new_ksk','zsk']]\nassert len({old,new,zsk})==3\nfor name in [old,new,zsk]:\n    assert pathlib.Path(name).name==name\n    assert (d/'keys'/(name+'.key')).is_file() and (d/'keys'/(name+'.private')).is_file()\ndef ds(text):\n    return {tuple(line.upper().split()) for line in text.splitlines() if line.strip() and not line.startswith(';')}\nold_ds=ds(run('dnssec-dsfromkey','-2',str(d/'keys'/(old+'.key'))).stdout)\nnew_ds=ds(run('dnssec-dsfromkey','-2',str(d/'keys'/(new+'.key'))).stdout)\nassert len(old_ds)==len(new_ds)==1 and old_ds!=new_ds\nassert ds((d/'old.ds').read_text())==old_ds and ds((d/'new.ds').read_text())==new_ds\nassert ds((d/'parent.ds').read_text())==old_ds\nzone_ds=ds(run('dnssec-dsfromkey','-2','-f',str(d/'zone.signed'),'example.test').stdout)\nassert zone_ds==old_ds|new_ds,zone_ds\nassert all(row[-2]=='2' for row in zone_ds),zone_ds\nrun('dnssec-verify','-o','example.test',str(d/'zone.signed'))\ncanonical=d/'canonical.zone'\nrun('named-checkzone','-D','-o',str(canonical),'example.test',str(d/'zone.signed'))\nrows=[line.split() for line in canonical.read_text().splitlines() if line.strip() and not line.startswith(';')]\nkeys=[r for r in rows if r[3]=='DNSKEY']\nassert sorted(r[4] for r in keys)==['256','257','257']\nassert all(r[5:7]==['3','13'] for r in keys)\nrrsigs=[r for r in rows if r[3]=='RRSIG' and r[4]=='DNSKEY']\ntags={int(r[10]) for r in rrsigs}\nassert int(old.rsplit('+',1)[1]) in tags and int(new.rsplit('+',1)[1]) in tags\nassert [r for r in rows if r[0]=='www.example.test.' and r[3]=='A'][0][4]=='192.0.2.80'\ntampered=canonical.read_text().replace('192.0.2.80','192.0.2.81');assert tampered!=canonical.read_text()\n(d/'tampered.zone').write_text(tampered)\nassert run('dnssec-verify','-o','example.test',str(d/'tampered.zone'),check=False).returncode!=0\nbefore={str(p.relative_to(d)):p.read_bytes() for p in d.rglob('*') if p.is_file()}\ntry:task.prepare('zone.input','delivery')\nexcept FileExistsError:pass\nelse:raise AssertionError('existing delivery must not be overwritten')\nassert before=={str(p.relative_to(d)):p.read_bytes() for p in d.rglob('*') if p.is_file()}\npathlib.Path('broken.zone').write_text('this is not a valid zone')\ntry:task.prepare('broken.zone','broken-delivery')\nexcept (ValueError,subprocess.CalledProcessError):pass\nelse:raise AssertionError('broken zone accepted')\nassert not pathlib.Path('broken-delivery').exists()\nassert not list(root.glob('.rollover-*'))\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "named-checkzone",
+          "dnssec-keygen",
+          "dnssec-signzone",
+          "dnssec-verify",
+          "dnssec-dsfromkey"
+        ]
+      }
+    },
+    "case_signature": "network-dnssec|dual-ksk-parent-old|cryptographic-artifacts-and-tamper-reject",
+    "conversion": {
+      "original_id": "curated-advanced-network-003",
+      "original_title": "DNSSEC换签名密钥时，新DNSKEY已发布但父区DS尚未更新，怎样判断何时可以撤旧密钥？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

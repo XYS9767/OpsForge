@@ -1,0 +1,218 @@
+[
+  {
+    "id": "curated-parallel-envoy-053",
+    "module": "envoy",
+    "category": "Envoy",
+    "level": 2,
+    "topic": "路由、协议与代理",
+    "title": "真实Envoy虚拟主机优先级：精确、后缀、前缀、默认不按列表首条选择",
+    "answer": "```python\ndef virtual_hosts():\n    domains=[('fallback',['*']),('prefix',['api.*']),('suffix',['*.example.test']),('exact',['api.example.test'])]\n    return [{'name':name,'domains':patterns,'routes':[{'match':{'prefix':'/'},'direct_response':{'status':200,'body':{'inline_string':name}}}]} for name,patterns in domains]\n```\n\n原题知识说明：\n匹配优先级和域名格式由配置规则决定，默认通配可能吞掉未预期域名。测试精确、子域、端口及未知Host，验证落到预期路由；控制面里有对应域名不证明实例已激活该版本。",
+    "type": "code",
+    "source": "OpsForge Envoy 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 操作任务\n实现virtual_hosts()返回4个Envoy虚拟主机：exact域api.example.test、suffix域*.example.test、prefix域api.*、fallback域*；各自返回HTTP200且正文为其name，路由匹配/。夹具启用strip_any_host_port并将主机列表正反两序实际启动，大小写、端口、深层子域、非子域和重叠api.example.test均须得到正确主机。默认主机可排首位，不能按Route首匹配经验解释域选择；*.example.test不得扩成*example.test。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Envoy1.36.13域匹配和HTTP Host矩阵，使用直接响应隔离域选择，不代表鉴权或上游健康已通过。",
+    "rubric": [
+      "对象和阶段区分准确",
+      "适用条件明确",
+      "结论有可核验证据"
+    ],
+    "hints": [],
+    "references": [
+      "https://raw.githubusercontent.com/envoyproxy/envoy/v1.36.13/api/envoy/config/route/v3/route_components.proto"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-envoy-053",
+      "original_title": "Envoy虚拟主机的精确域名与通配匹配为何需要专门请求矩阵？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def virtual_hosts():\n    domains=[('fallback',['*']),('prefix',['api.*']),('suffix',['*.example.test']),('exact',['api.example.test'])]\n    return [{'name':name,'domains':patterns,'routes':[{'match':{'prefix':'/'},'direct_response':{'status':200,'body':{'inline_string':name}}}]} for name,patterns in domains]\n"
+    },
+    "negative_files": {
+      "task.py": "def virtual_hosts():\n    domains=[('fallback',['*']),('prefix',['api.*']),('suffix',['*example.test']),('exact',['api.example.test'])]\n    return [{'name':name,'domains':patterns,'routes':[{'match':{'prefix':'/'},'direct_response':{'status':200,'body':{'inline_string':name}}}]} for name,patterns in domains]\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现virtual_hosts()返回4个Envoy虚拟主机：exact域api.example.test、suffix域*.example.test、prefix域api.*、fallback域*；各自返回HTTP200且正文为其name，路由匹配/。夹具启用strip_any_host_port并将主机列表正反两序实际启动，大小写、端口、深层子域、非子域和重叠api.example.test均须得到正确主机。默认主机可排首位，不能按Route首匹配经验解释域选择；*.example.test不得扩成*example.test。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Envoy1.36.13域匹配和HTTP Host矩阵，使用直接响应隔离域选择，不代表鉴权或上游健康已通过。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "envoy"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/envoy_native.py": "\"\"\"Pinned standalone Envoy and loopback-only HTTP peers, no image or host changes.\"\"\"\nimport copy,http.server,json,os,pathlib,shutil,socket,subprocess,tempfile,threading,time,urllib.error,urllib.request\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\ndef request(base,path,method='GET',body=None,headers=None):\n req=urllib.request.Request(base+path,data=body,method=method,headers=headers or {})\n opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n try:\n  with opener.open(req,timeout=3) as response:return response.status,response.read(),dict(response.headers)\n except urllib.error.HTTPError as response:\n  try:return response.code,response.read(),dict(response.headers)\n  finally:response.close()\n\nclass Upstream:\n def __init__(self,status=200):self.status=status;self.requests=[];self.lock=threading.Lock()\n def __enter__(self):\n  owner=self\n  class Handler(http.server.BaseHTTPRequestHandler):\n   protocol_version='HTTP/1.1'\n   def log_message(self,*args):pass\n   def respond(self):\n    raw=self.rfile.read(int(self.headers.get('Content-Length',0)))\n    with owner.lock:owner.requests.append({'method':self.command,'path':self.path,'body':raw.decode('utf8'),'headers':dict(self.headers)});index=len(owner.requests)\n    status=owner.status(self.command,self.path,index) if callable(owner.status) else owner.status\n    body=json.dumps({'method':self.command,'path':self.path,'attempt':index}).encode()\n    self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers()\n    try:self.wfile.write(body);self.wfile.flush()\n    except (BrokenPipeError,ConnectionResetError):pass\n   do_GET=do_POST=do_PUT=respond\n  self.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);self.port=self.server.server_port\n  self.thread=threading.Thread(target=lambda:self.server.serve_forever(poll_interval=.02),daemon=True);self.thread.start();return self\n def __exit__(self,*args):self.server.shutdown();self.server.server_close();self.thread.join(2)\n\ndef bootstrap(upstream_port):\n return {'node':{'id':'private-probe','cluster':'opsforge'},\n  'admin':{'address':{'socket_address':{'address':'127.0.0.1','port_value':0}}},\n  'static_resources':{'listeners':[{'name':'ingress','address':{'socket_address':{'address':'127.0.0.1','port_value':0}},'filter_chains':[{'filters':[{'name':'envoy.filters.network.http_connection_manager','typed_config':{\n   '@type':'type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager','stat_prefix':'ingress','codec_type':'AUTO',\n   'route_config':{'name':'local','virtual_hosts':[{'name':'service','domains':['*'],'routes':[{'match':{'prefix':'/'},'route':{'cluster':'service','timeout':'1s'}}]}]},\n   'http_filters':[{'name':'envoy.filters.http.router','typed_config':{'@type':'type.googleapis.com/envoy.extensions.filters.http.router.v3.Router'}}]}}]}]}],\n  'clusters':[{'name':'service','connect_timeout':'0.2s','type':'STATIC','lb_policy':'ROUND_ROBIN','load_assignment':{'cluster_name':'service','endpoints':[{'lb_endpoints':[{'endpoint':{'address':{'socket_address':{'address':'127.0.0.1','port_value':upstream_port}}}}]}]}}]}}\n\ndef hcm(config):return config['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\ndef routes(config):return hcm(config)['route_config']['virtual_hosts'][0]['routes']\n\nclass Envoy:\n def __init__(self,config,binary='envoy',version='1.36.13',log_level='error'):self.config=copy.deepcopy(config);self.process=None;self.temp=None;self.log=None;self.binary=binary;self.version=version;self.log_level=log_level\n def __enter__(self):\n  binary=shutil.which(self.binary)\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: standalone Envoy missing')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '/'+self.version+'/' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Envoy'+self.version+' required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-envoy-');self.root=pathlib.Path(self.temp.name);port=free_port();admin=free_port()\n  while admin==port:admin=free_port()\n  self.config['static_resources']['listeners'][0]['address']['socket_address']['port_value']=port\n  self.config['admin']['address']['socket_address']['port_value']=admin\n  self.base='http://127.0.0.1:'+str(port);self.admin='http://127.0.0.1:'+str(admin)\n  path=self.root/'bootstrap.json';path.write_text(json.dumps(self.config),encoding='utf8');self.log=(self.root/'envoy.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--config-path',str(path),'--disable-hot-restart','--concurrency','1','--log-level',self.log_level],cwd=self.root,stdout=self.log,stderr=self.log)\n   deadline=time.monotonic()+5\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:raise RuntimeError('Envoy startup failed: '+(self.root/'envoy.log').read_text(errors='replace')[-2400:])\n    try:\n     if request(self.admin,'/ready')[0]==200:break\n    except (OSError,urllib.error.URLError):pass\n    time.sleep(.02)\n   else:raise RuntimeError('Envoy private readiness deadline')\n   print('NATIVE_ENVOY_READY:'+self.version,flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,method='GET',body=None,headers=None):return request(self.base,path,method,body,headers)\n def stats(self):return {r['name']:r['value'] for r in json.loads(request(self.admin,'/stats?format=json')[1])['stats'] if 'name' in r and 'value' in r}\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student Envoy operation failed: '+type(error).__name__) from error\n",
+        "checks/check.py": "import sys,pathlib,copy,json\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom envoy_native import Envoy,Upstream,bootstrap,hcm,request,student\nprint('NATIVE_LINUX_READY',flush=True)\nwith Upstream() as upstream:\n hosts=student(task.virtual_hosts)\n for values in (hosts,list(reversed(copy.deepcopy(hosts)))):\n  config=bootstrap(upstream.port);manager=hcm(config);manager['strip_any_host_port']=True;manager['route_config']['virtual_hosts']=values\n  with Envoy(config) as proxy:\n   matrix=[('api.example.test','exact'),('API.EXAMPLE.TEST','exact'),('api.example.test:8080','exact'),('worker.example.test','suffix'),('deep.worker.example.test','suffix'),('api.other.test','prefix'),('api.example.test.attacker','prefix'),('other.test','fallback'),('evil-example.test','fallback'),('example.test','fallback')]\n   for domain,expected in matrix:\n    status,body,_=proxy.request('/probe',headers={'Host':domain});assert (status,body)==(200,expected.encode()),(domain,status,body)\n assert not upstream.requests,'direct response unexpectedly contacted upstream'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "envoy"
+    ]
+  },
+  {
+    "id": "curated-parallel-envoy-056",
+    "module": "envoy",
+    "category": "Envoy",
+    "level": 2,
+    "topic": "路由、协议与代理",
+    "title": "真实Envoy路由首匹配：先放精确GET健康例外，再拒绝管理路径段",
+    "answer": "```python\nimport copy\ndef order_routes(config):\n    result=copy.deepcopy(config)\n    manager=result['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\n    routes=manager['route_config']['virtual_hosts'][0]['routes']\n    by_name={r['name']:r for r in routes}\n    if len(routes)!=3 or set(by_name)!={'admin-deny','admin-health','public'}:raise ValueError('exact three named routes required')\n    manager['route_config']['virtual_hosts'][0]['routes']=[by_name['admin-health'],by_name['admin-deny'],by_name['public']]\n    return result\n```\n\n原题知识说明：\n路由通常依规则顺序选择匹配动作，宽泛规则可能先截获流量。审查具体配置使用的匹配机制并为重叠路径建立正反样例，更新时验证原路径不被新规则遮蔽。",
+    "type": "code",
+    "source": "OpsForge Envoy 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 操作任务\n实现order_routes(config)深拷贝并调整唯一虚拟主机内3条具名路由顺序：精确GET /admin/health健康例外先于path_separated_prefix=/admin拒绝，最后是public兜底。只可调整顺序，必须原样保留每条完整规则和配置其余部分，不得扩大例外、删除方法限制或将管理前缀改成普通字符前缀。输入不变，缺少或重名规则ValueError。实际旧配置GET健康也403，修复须GET健康200、POST健康403、管理子路径403、/administrator仍public；查询串不改变精确路径匹配。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Envoy路由顺序、方法条件及路径段匹配；合成直接响应不证明外部管理端点的真实身份授权。",
+    "rubric": [
+      "对象和阶段区分准确",
+      "适用条件明确",
+      "结论有可核验证据"
+    ],
+    "hints": [],
+    "references": [
+      "https://raw.githubusercontent.com/envoyproxy/envoy/v1.36.13/api/envoy/config/route/v3/route_components.proto"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-envoy-056",
+      "original_title": "多个Route都能匹配请求时，为什么规则排列会影响结果？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef order_routes(config):\n    result=copy.deepcopy(config)\n    manager=result['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\n    routes=manager['route_config']['virtual_hosts'][0]['routes']\n    by_name={r['name']:r for r in routes}\n    if len(routes)!=3 or set(by_name)!={'admin-deny','admin-health','public'}:raise ValueError('exact three named routes required')\n    manager['route_config']['virtual_hosts'][0]['routes']=[by_name['admin-health'],by_name['admin-deny'],by_name['public']]\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef order_routes(config):\n    result=copy.deepcopy(config)\n    manager=result['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\n    routes=manager['route_config']['virtual_hosts'][0]['routes']\n    by_name={r['name']:r for r in routes}\n    if len(routes)!=3 or set(by_name)!={'admin-deny','admin-health','public'}:raise ValueError('exact three named routes required')\n    manager['route_config']['virtual_hosts'][0]['routes']=[by_name['admin-deny'],by_name['admin-health'],by_name['public']]\n    return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现order_routes(config)深拷贝并调整唯一虚拟主机内3条具名路由顺序：精确GET /admin/health健康例外先于path_separated_prefix=/admin拒绝，最后是public兜底。只可调整顺序，必须原样保留每条完整规则和配置其余部分，不得扩大例外、删除方法限制或将管理前缀改成普通字符前缀。输入不变，缺少或重名规则ValueError。实际旧配置GET健康也403，修复须GET健康200、POST健康403、管理子路径403、/administrator仍public；查询串不改变精确路径匹配。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Envoy路由顺序、方法条件及路径段匹配；合成直接响应不证明外部管理端点的真实身份授权。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "envoy"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/envoy_native.py": "\"\"\"Pinned standalone Envoy and loopback-only HTTP peers, no image or host changes.\"\"\"\nimport copy,http.server,json,os,pathlib,shutil,socket,subprocess,tempfile,threading,time,urllib.error,urllib.request\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\ndef request(base,path,method='GET',body=None,headers=None):\n req=urllib.request.Request(base+path,data=body,method=method,headers=headers or {})\n opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n try:\n  with opener.open(req,timeout=3) as response:return response.status,response.read(),dict(response.headers)\n except urllib.error.HTTPError as response:\n  try:return response.code,response.read(),dict(response.headers)\n  finally:response.close()\n\nclass Upstream:\n def __init__(self,status=200):self.status=status;self.requests=[];self.lock=threading.Lock()\n def __enter__(self):\n  owner=self\n  class Handler(http.server.BaseHTTPRequestHandler):\n   protocol_version='HTTP/1.1'\n   def log_message(self,*args):pass\n   def respond(self):\n    raw=self.rfile.read(int(self.headers.get('Content-Length',0)))\n    with owner.lock:owner.requests.append({'method':self.command,'path':self.path,'body':raw.decode('utf8'),'headers':dict(self.headers)});index=len(owner.requests)\n    status=owner.status(self.command,self.path,index) if callable(owner.status) else owner.status\n    body=json.dumps({'method':self.command,'path':self.path,'attempt':index}).encode()\n    self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers()\n    try:self.wfile.write(body);self.wfile.flush()\n    except (BrokenPipeError,ConnectionResetError):pass\n   do_GET=do_POST=do_PUT=respond\n  self.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);self.port=self.server.server_port\n  self.thread=threading.Thread(target=lambda:self.server.serve_forever(poll_interval=.02),daemon=True);self.thread.start();return self\n def __exit__(self,*args):self.server.shutdown();self.server.server_close();self.thread.join(2)\n\ndef bootstrap(upstream_port):\n return {'node':{'id':'private-probe','cluster':'opsforge'},\n  'admin':{'address':{'socket_address':{'address':'127.0.0.1','port_value':0}}},\n  'static_resources':{'listeners':[{'name':'ingress','address':{'socket_address':{'address':'127.0.0.1','port_value':0}},'filter_chains':[{'filters':[{'name':'envoy.filters.network.http_connection_manager','typed_config':{\n   '@type':'type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager','stat_prefix':'ingress','codec_type':'AUTO',\n   'route_config':{'name':'local','virtual_hosts':[{'name':'service','domains':['*'],'routes':[{'match':{'prefix':'/'},'route':{'cluster':'service','timeout':'1s'}}]}]},\n   'http_filters':[{'name':'envoy.filters.http.router','typed_config':{'@type':'type.googleapis.com/envoy.extensions.filters.http.router.v3.Router'}}]}}]}]}],\n  'clusters':[{'name':'service','connect_timeout':'0.2s','type':'STATIC','lb_policy':'ROUND_ROBIN','load_assignment':{'cluster_name':'service','endpoints':[{'lb_endpoints':[{'endpoint':{'address':{'socket_address':{'address':'127.0.0.1','port_value':upstream_port}}}}]}]}}]}}\n\ndef hcm(config):return config['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\ndef routes(config):return hcm(config)['route_config']['virtual_hosts'][0]['routes']\n\nclass Envoy:\n def __init__(self,config,binary='envoy',version='1.36.13',log_level='error'):self.config=copy.deepcopy(config);self.process=None;self.temp=None;self.log=None;self.binary=binary;self.version=version;self.log_level=log_level\n def __enter__(self):\n  binary=shutil.which(self.binary)\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: standalone Envoy missing')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '/'+self.version+'/' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Envoy'+self.version+' required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-envoy-');self.root=pathlib.Path(self.temp.name);port=free_port();admin=free_port()\n  while admin==port:admin=free_port()\n  self.config['static_resources']['listeners'][0]['address']['socket_address']['port_value']=port\n  self.config['admin']['address']['socket_address']['port_value']=admin\n  self.base='http://127.0.0.1:'+str(port);self.admin='http://127.0.0.1:'+str(admin)\n  path=self.root/'bootstrap.json';path.write_text(json.dumps(self.config),encoding='utf8');self.log=(self.root/'envoy.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--config-path',str(path),'--disable-hot-restart','--concurrency','1','--log-level',self.log_level],cwd=self.root,stdout=self.log,stderr=self.log)\n   deadline=time.monotonic()+5\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:raise RuntimeError('Envoy startup failed: '+(self.root/'envoy.log').read_text(errors='replace')[-2400:])\n    try:\n     if request(self.admin,'/ready')[0]==200:break\n    except (OSError,urllib.error.URLError):pass\n    time.sleep(.02)\n   else:raise RuntimeError('Envoy private readiness deadline')\n   print('NATIVE_ENVOY_READY:'+self.version,flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,method='GET',body=None,headers=None):return request(self.base,path,method,body,headers)\n def stats(self):return {r['name']:r['value'] for r in json.loads(request(self.admin,'/stats?format=json')[1])['stats'] if 'name' in r and 'value' in r}\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student Envoy operation failed: '+type(error).__name__) from error\n",
+        "checks/check.py": "import sys,pathlib,copy,json\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom envoy_native import Envoy,Upstream,bootstrap,hcm,request,student\nprint('NATIVE_LINUX_READY',flush=True)\nwith Upstream() as upstream:\n config=bootstrap(upstream.port);manager=hcm(config)\n manager['route_config']['virtual_hosts'][0]['routes']=[\n  {'name':'admin-deny','match':{'path_separated_prefix':'/admin'},'direct_response':{'status':403,'body':{'inline_string':'denied'}}},\n  {'name':'admin-health','match':{'path':'/admin/health','headers':[{'name':':method','string_match':{'exact':'GET'}}]},'direct_response':{'status':200,'body':{'inline_string':'health'}}},\n  {'name':'public','match':{'prefix':'/'},'direct_response':{'status':200,'body':{'inline_string':'public'}}}]\n with Envoy(config) as old:assert old.request('/admin/health')[0]==403 and old.request('/administrator')[1]==b'public'\n before=copy.deepcopy(config);fixed=student(task.order_routes,config);assert config==before,'input changed'\n original={r['name']:r for r in hcm(before)['route_config']['virtual_hosts'][0]['routes']};final={r['name']:r for r in hcm(fixed)['route_config']['virtual_hosts'][0]['routes']}\n assert original==final,'policy content changed instead of ordering'\n with Envoy(fixed) as proxy:\n  for path,method,status,body in [('/admin/health','GET',200,b'health'),('/admin/health?ready=1','GET',200,b'health'),('/admin/health','POST',403,b'denied'),('/admin','GET',403,b'denied'),('/admin/health/extra','GET',403,b'denied'),('/admin/users','GET',403,b'denied'),('/administrator','GET',200,b'public'),('/other','GET',200,b'public')]:\n   got=proxy.request(path,method,body=b'' if method=='POST' else None);assert got[:2]==(status,body),(path,method,got[:2])\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "envoy"
+    ]
+  },
+  {
+    "id": "curated-parallel-envoy-055",
+    "module": "envoy",
+    "category": "Envoy",
+    "level": 3,
+    "topic": "安全、证书与身份",
+    "title": "真实RBAC每路由覆盖：只让精确健康路径跳过过滤器，业务仍受全局规则约束",
+    "answer": "```python\nimport copy\ndef scope_bypass(config):\n    result=copy.deepcopy(config)\n    manager=result['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\n    routes=manager['route_config']['virtual_hosts'][0]['routes']\n    health=[r for r in routes if r.get('name')=='health' and r.get('match')=={'path':'/healthz'}]\n    if len(health)!=1:raise ValueError('one exact health route required')\n    key='envoy.filters.http.rbac'\n    for route in routes:\n        settings=route.get('typed_per_filter_config',{})\n        settings.pop(key,None)\n        if not settings:route.pop('typed_per_filter_config',None)\n    health[0].setdefault('typed_per_filter_config',{})[key]={'@type':'type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute'}\n    return result\n```\n\n原题知识说明：\n过滤器可能在全局、虚拟主机和路由层存在配置差异，局部覆盖可改变认证或限流行为。展开最终配置并测试该路由的拒绝路径，不能因全局启用了插件就断言全部路由受保护。",
+    "type": "code",
+    "source": "OpsForge Envoy 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 操作任务\n实现scope_bypass(config)，深拷贝后仅在唯一name=health且match恰为path=/healthz的路由放置空RBACPerRoute覆盖以禁用该路径RBAC；从其他路由移除RBAC覆盖，保留其他过滤器覆盖、全局RBAC和路由动作，不改输入。缺失或歧义健康路径ValueError。实际初态业务兜底错误禁用全局RBAC而健康被403，修复后精确健康200，/healthz/extra及业务默认403，题定合成approved请求200。不能全局关闭过滤器或扩大健康前缀。x-exercise-approved仅为隔离策略夹具的可控标记，不充当真实身份凭据。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Envoy RBACPerRoute覆盖与全局enforcement作用域；approved头是测试标记，不是可信认证身份，不覆盖JWT或真实外部授权。",
+    "rubric": [
+      "对象和阶段区分准确",
+      "适用条件明确",
+      "结论有可核验证据"
+    ],
+    "hints": [],
+    "references": [
+      "https://raw.githubusercontent.com/envoyproxy/envoy/v1.36.13/api/envoy/extensions/filters/http/rbac/v3/rbac.proto"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-envoy-055",
+      "original_title": "某条路由覆盖或禁用过滤器时，为什么应检查全局安全假设？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef scope_bypass(config):\n    result=copy.deepcopy(config)\n    manager=result['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\n    routes=manager['route_config']['virtual_hosts'][0]['routes']\n    health=[r for r in routes if r.get('name')=='health' and r.get('match')=={'path':'/healthz'}]\n    if len(health)!=1:raise ValueError('one exact health route required')\n    key='envoy.filters.http.rbac'\n    for route in routes:\n        settings=route.get('typed_per_filter_config',{})\n        settings.pop(key,None)\n        if not settings:route.pop('typed_per_filter_config',None)\n    health[0].setdefault('typed_per_filter_config',{})[key]={'@type':'type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute'}\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef scope_bypass(config):\n    result=copy.deepcopy(config)\n    manager=result['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\n    routes=manager['route_config']['virtual_hosts'][0]['routes']\n    health=[r for r in routes if r.get('name')=='health' and r.get('match')=={'path':'/healthz'}]\n    if len(health)!=1:raise ValueError('one exact health route required')\n    key='envoy.filters.http.rbac'\n    for route in routes:\n        settings=route.get('typed_per_filter_config',{})\n        pass\n        if not settings:route.pop('typed_per_filter_config',None)\n    health[0].setdefault('typed_per_filter_config',{})[key]={'@type':'type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute'}\n    return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现scope_bypass(config)，深拷贝后仅在唯一name=health且match恰为path=/healthz的路由放置空RBACPerRoute覆盖以禁用该路径RBAC；从其他路由移除RBAC覆盖，保留其他过滤器覆盖、全局RBAC和路由动作，不改输入。缺失或歧义健康路径ValueError。实际初态业务兜底错误禁用全局RBAC而健康被403，修复后精确健康200，/healthz/extra及业务默认403，题定合成approved请求200。不能全局关闭过滤器或扩大健康前缀。x-exercise-approved仅为隔离策略夹具的可控标记，不充当真实身份凭据。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Envoy RBACPerRoute覆盖与全局enforcement作用域；approved头是测试标记，不是可信认证身份，不覆盖JWT或真实外部授权。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "envoy"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/envoy_native.py": "\"\"\"Pinned standalone Envoy and loopback-only HTTP peers, no image or host changes.\"\"\"\nimport copy,http.server,json,os,pathlib,shutil,socket,subprocess,tempfile,threading,time,urllib.error,urllib.request\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\ndef request(base,path,method='GET',body=None,headers=None):\n req=urllib.request.Request(base+path,data=body,method=method,headers=headers or {})\n opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n try:\n  with opener.open(req,timeout=3) as response:return response.status,response.read(),dict(response.headers)\n except urllib.error.HTTPError as response:\n  try:return response.code,response.read(),dict(response.headers)\n  finally:response.close()\n\nclass Upstream:\n def __init__(self,status=200):self.status=status;self.requests=[];self.lock=threading.Lock()\n def __enter__(self):\n  owner=self\n  class Handler(http.server.BaseHTTPRequestHandler):\n   protocol_version='HTTP/1.1'\n   def log_message(self,*args):pass\n   def respond(self):\n    raw=self.rfile.read(int(self.headers.get('Content-Length',0)))\n    with owner.lock:owner.requests.append({'method':self.command,'path':self.path,'body':raw.decode('utf8'),'headers':dict(self.headers)});index=len(owner.requests)\n    status=owner.status(self.command,self.path,index) if callable(owner.status) else owner.status\n    body=json.dumps({'method':self.command,'path':self.path,'attempt':index}).encode()\n    self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers()\n    try:self.wfile.write(body);self.wfile.flush()\n    except (BrokenPipeError,ConnectionResetError):pass\n   do_GET=do_POST=do_PUT=respond\n  self.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);self.port=self.server.server_port\n  self.thread=threading.Thread(target=lambda:self.server.serve_forever(poll_interval=.02),daemon=True);self.thread.start();return self\n def __exit__(self,*args):self.server.shutdown();self.server.server_close();self.thread.join(2)\n\ndef bootstrap(upstream_port):\n return {'node':{'id':'private-probe','cluster':'opsforge'},\n  'admin':{'address':{'socket_address':{'address':'127.0.0.1','port_value':0}}},\n  'static_resources':{'listeners':[{'name':'ingress','address':{'socket_address':{'address':'127.0.0.1','port_value':0}},'filter_chains':[{'filters':[{'name':'envoy.filters.network.http_connection_manager','typed_config':{\n   '@type':'type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager','stat_prefix':'ingress','codec_type':'AUTO',\n   'route_config':{'name':'local','virtual_hosts':[{'name':'service','domains':['*'],'routes':[{'match':{'prefix':'/'},'route':{'cluster':'service','timeout':'1s'}}]}]},\n   'http_filters':[{'name':'envoy.filters.http.router','typed_config':{'@type':'type.googleapis.com/envoy.extensions.filters.http.router.v3.Router'}}]}}]}]}],\n  'clusters':[{'name':'service','connect_timeout':'0.2s','type':'STATIC','lb_policy':'ROUND_ROBIN','load_assignment':{'cluster_name':'service','endpoints':[{'lb_endpoints':[{'endpoint':{'address':{'socket_address':{'address':'127.0.0.1','port_value':upstream_port}}}}]}]}}]}}\n\ndef hcm(config):return config['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\ndef routes(config):return hcm(config)['route_config']['virtual_hosts'][0]['routes']\n\nclass Envoy:\n def __init__(self,config,binary='envoy',version='1.36.13',log_level='error'):self.config=copy.deepcopy(config);self.process=None;self.temp=None;self.log=None;self.binary=binary;self.version=version;self.log_level=log_level\n def __enter__(self):\n  binary=shutil.which(self.binary)\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: standalone Envoy missing')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '/'+self.version+'/' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Envoy'+self.version+' required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-envoy-');self.root=pathlib.Path(self.temp.name);port=free_port();admin=free_port()\n  while admin==port:admin=free_port()\n  self.config['static_resources']['listeners'][0]['address']['socket_address']['port_value']=port\n  self.config['admin']['address']['socket_address']['port_value']=admin\n  self.base='http://127.0.0.1:'+str(port);self.admin='http://127.0.0.1:'+str(admin)\n  path=self.root/'bootstrap.json';path.write_text(json.dumps(self.config),encoding='utf8');self.log=(self.root/'envoy.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--config-path',str(path),'--disable-hot-restart','--concurrency','1','--log-level',self.log_level],cwd=self.root,stdout=self.log,stderr=self.log)\n   deadline=time.monotonic()+5\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:raise RuntimeError('Envoy startup failed: '+(self.root/'envoy.log').read_text(errors='replace')[-2400:])\n    try:\n     if request(self.admin,'/ready')[0]==200:break\n    except (OSError,urllib.error.URLError):pass\n    time.sleep(.02)\n   else:raise RuntimeError('Envoy private readiness deadline')\n   print('NATIVE_ENVOY_READY:'+self.version,flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,method='GET',body=None,headers=None):return request(self.base,path,method,body,headers)\n def stats(self):return {r['name']:r['value'] for r in json.loads(request(self.admin,'/stats?format=json')[1])['stats'] if 'name' in r and 'value' in r}\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student Envoy operation failed: '+type(error).__name__) from error\n",
+        "checks/check.py": "import sys,pathlib,copy,json\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom envoy_native import Envoy,Upstream,bootstrap,hcm,request,student\nprint('NATIVE_LINUX_READY',flush=True)\nwith Upstream() as upstream:\n config=bootstrap(upstream.port);manager=hcm(config)\n rbac={'name':'envoy.filters.http.rbac','typed_config':{'@type':'type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBAC','rules':{'action':'ALLOW','policies':{'synthetic-approved':{'permissions':[{'any':True}],'principals':[{'header':{'name':'x-exercise-approved','string_match':{'exact':'yes'}}}]}}}}}\n manager['http_filters'].insert(0,rbac)\n disable={'@type':'type.googleapis.com/envoy.extensions.filters.http.rbac.v3.RBACPerRoute'}\n manager['route_config']['virtual_hosts'][0]['routes']=[\n  {'name':'health','match':{'path':'/healthz'},'direct_response':{'status':200,'body':{'inline_string':'healthy'}}},\n  {'name':'business','match':{'prefix':'/'},'route':{'cluster':'service'},'typed_per_filter_config':{'envoy.filters.http.rbac':disable}}]\n with Envoy(config) as old:assert old.request('/private')[0]==200 and old.request('/healthz')[0]==403\n before=copy.deepcopy(config);fixed=student(task.scope_bypass,config);assert before==config\n assert hcm(fixed)['http_filters']==manager['http_filters'],'global policy changed'\n with Envoy(fixed) as proxy:\n  assert proxy.request('/healthz')[0:2]==(200,b'healthy')\n  for path in ['/private','/healthz/extra','/other']:\n   assert proxy.request(path)[0]==403,(path,'route override leaked')\n   assert proxy.request(path,headers={'x-exercise-approved':'yes'})[0]==200\n  assert proxy.request('/private',headers={'x-exercise-approved':'no'})[0]==403\n  assert proxy.stats().get('http.ingress.rbac.denied',0)>=4\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "envoy"
+    ]
+  }
+]

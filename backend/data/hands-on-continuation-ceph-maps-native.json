@@ -1,0 +1,221 @@
+[
+  {
+    "id": "curated-parallel-ceph-015",
+    "module": "ceph",
+    "category": "Ceph",
+    "level": 1,
+    "topic": "架构与数据放置",
+    "title": "真实CRUSH设备类别：生成SSD shadow-root规则并验证256个放置输入",
+    "answer": "```python\nimport subprocess\ndef add_rule(source,destination):\n    result=subprocess.run(['crushtool','-i',source,'--create-replicated-rule','ssd_only','root','host','--device-class','ssd','-o',destination],capture_output=True,text=True,timeout=10)\n    if result.returncode:raise RuntimeError('approved class rule compilation failed')\n```\n\n原题知识说明：\nCRUSH规则可选择设备类别，避免把不同介质混作同一性能池。核对OSD class及pool规则，验收对象映射和实际设备，不只修改显示标签。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Ceph Squid 官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现add_rule(source,destination)：只运行crushtool -i source --create-replicated-rule ssd_only root host --device-class ssd -o destination；非零退出RuntimeError。不改源map、设备class或已有规则。平台固定Ceph16.2.15、3 host各一SSD一HDD；新规则take root~ssd、chooseleaf host，实际256个输入每个2副本均SSD，原规则仍保持原映射。禁止连接Ceph集群。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Ceph16.2.15 crushtool离线算法、已编译map与class shadow tree。256为有限CRUSH输入，不等于真实PG或对象已迁移；不证明OSD数据、live池绑定或生产恢复。既有lab002跨host静态检查不再改编计数。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://docs.ceph.com/en/pacific/man/8/crushtool/",
+      "https://docs.ceph.com/en/pacific/man/8/osdmaptool/"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-ceph-015",
+      "original_title": "Ceph device class如何帮助隔离SSD和HDD池？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import subprocess\ndef add_rule(source,destination):\n    result=subprocess.run(['crushtool','-i',source,'--create-replicated-rule','ssd_only','root','host','--device-class','ssd','-o',destination],capture_output=True,text=True,timeout=10)\n    if result.returncode:raise RuntimeError('approved class rule compilation failed')\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef add_rule(source,destination):\n    result=subprocess.run(['crushtool','-i',source,'--create-replicated-rule','ssd_only','root','host','--device-class','hdd','-o',destination],capture_output=True,text=True,timeout=10)\n    if result.returncode:raise RuntimeError('approved class rule compilation failed')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像与只读官方Ceph16.2.15数据文件；离线map实验，不构建镜像、不连接集群",
+      "operation": "实现add_rule(source,destination)：只运行crushtool -i source --create-replicated-rule ssd_only root host --device-class ssd -o destination；非零退出RuntimeError。不改源map、设备class或已有规则。平台固定Ceph16.2.15、3 host各一SSD一HDD；新规则take root~ssd、chooseleaf host，实际256个输入每个2副本均SSD，原规则仍保持原映射。禁止连接Ceph集群。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Ceph16.2.15 crushtool离线算法、已编译map与class shadow tree。256为有限CRUSH输入，不等于真实PG或对象已迁移；不证明OSD数据、live池绑定或生产恢复。既有lab002跨host静态检查不再改编计数。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "crushtool",
+          "osdmaptool"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/ceph_native.py": "\"\"\"Official Ceph16.2.15 offline map algorithms, not an emulated or live cluster.\"\"\"\nimport hashlib,json,pathlib,re,subprocess,tempfile\ndef run(tool,*args):\n result=subprocess.run([tool,*map(str,args)],capture_output=True,text=True,timeout=15)\n if result.returncode:raise RuntimeError('private Ceph map operation failed: '+result.stderr[-1800:])\n return result.stdout,result.stderr\ndef dump(tool,*args):\n text=run(tool,*args)[0]\n if '{' not in text:raise RuntimeError('Ceph map JSON missing')\n return json.loads(text[text.index('{'):])\ndef mappings(path,rule=0):\n out,err=run('crushtool','-i',path,'--test','--rule',rule,'--num-rep','2','--min-x','0','--max-x','255','--show-mappings')\n values={int(x):json.loads(devices) for x,devices in re.findall(r'CRUSH rule \\d+ x (\\d+) (\\[[^\\]]*\\])',out+err)}\n if set(values)!=set(range(256)):raise RuntimeError('finite CRUSH mapping incomplete')\n return values\ndef weight(path):\n data=dump('crushtool','-i',path,'--dump','--format','json')\n return next(item['weight']/65536 for bucket in data['buckets'] for item in bucket['items'] if item['id']==0)\nclass CephMaps:\n def __enter__(self):\n  assert 'ceph version 16.2.15 ' in run('osdmaptool','--version')[0]\n  self.temp=tempfile.TemporaryDirectory(prefix='of-ceph-maps-');self.root=pathlib.Path(self.temp.name)\n  try:\n   self.original=self.root/'original.crush';self.classified=self.root/'classified.crush';text=self.root/'map.txt'\n   run('crushtool','--build','--num_osds','6','host','straw2','2','root','straw2','0','-o',self.original)\n   run('crushtool','-d',self.original,'-o',text);source=text.read_text()\n   for i in range(6):source=re.sub(r'(?m)^device '+str(i)+r' osd\\.'+str(i)+r'$',lambda m:m[0]+' class '+('ssd' if i%2==0 else 'hdd'),source)\n   text.write_text(source);run('crushtool','-c',text,'-o',self.classified)\n   self.osdmap=self.root/'original.osdmap';run('osdmaptool','--createsimple','6','--with-default-pool',self.osdmap)\n   print('NATIVE_CEPH_MAP_TOOLS_READY:16.2.15',flush=True);return self\n  except BaseException:self.temp.cleanup();raise\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,hashlib,copy\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom ceph_native import CephMaps,run,dump,mappings,weight\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()\nwith CephMaps() as fixture:\n original=fixture.classified;destination=fixture.root/'ssd-only.crush';before=digest(original);old=dump('crushtool','-i',original,'--dump','--format','json')\n assert any(i%2==1 for ids in mappings(original).values() for i in ids)\n print('NATIVE_CEPH_ACTUAL_MIXED_SSD_HDD_CLASSES_THREE_HOSTS_OLD_RULE_CAN_SELECT_HDD',flush=True)\n print('STUDENT_OPERATION_ENTERED:compile_new_class_shadow_root_rule_and_test_all256_inputs',flush=True)\n try:task.add_rule(str(original),str(destination))\n except Exception as error:raise AssertionError('student actual Ceph class rule compilation failed') from error\n actual=dump('crushtool','-i',destination,'--dump','--format','json');rule=next((row for row in actual['rules'] if row['rule_name']=='ssd_only'),None)\n assert rule and rule['steps'][0]['item_name']=='root~ssd' and rule['steps'][1]['type']=='host'\n assert actual['devices']==old['devices'] and next(row for row in actual['rules'] if row['rule_id']==0)==old['rules'][0]\n values=mappings(destination,rule['rule_id']);assert len(values)==256 and all(len(ids)==2 and len(set(ids))==2 and all(i in (0,2,4) for i in ids) for ids in values.values())\n assert digest(original)==before and mappings(destination,0)==mappings(original,0)\n print('NATIVE_CEPH_SSD_ONLY_SHADOW_TREE_256_REAL_CRUSH_PLACEMENTS_OLD_RULE_AND_SOURCE_UNCHANGED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "ceph"
+    ]
+  },
+  {
+    "id": "curated-parallel-ceph-031",
+    "module": "ceph",
+    "category": "Ceph",
+    "level": 2,
+    "topic": "架构与数据放置",
+    "title": "真实CRUSH变更预览：两张二进制map逐输入成员差集，零应用到集群",
+    "answer": "```python\nimport subprocess,re,json\ndef preview(before,after):\n    def placements(path):\n        result=subprocess.run(['crushtool','-i',path,'--test','--rule','0','--num-rep','2','--min-x','0','--max-x','255','--show-mappings'],capture_output=True,text=True,timeout=10)\n        if result.returncode:raise RuntimeError('finite native map test failed')\n        values={int(x):json.loads(ids) for x,ids in re.findall(r'CRUSH rule \\d+ x (\\d+) (\\[[^\\]]*\\])',result.stdout+result.stderr)}\n        if set(values)!=set(range(256)):raise RuntimeError('incomplete finite mapping')\n        return values\n    old=placements(before);new=placements(after);moved=[]\n    for x in range(256):\n        removed=sorted(set(old[x])-set(new[x]));added=sorted(set(new[x])-set(old[x]))\n        if removed or added:moved.append({'input':x,'removed':removed,'added':added})\n    return {'moved':moved,'unchanged':256-len(moved)}\n```\n\n原题知识说明：\n放置规则改变可引发大规模数据迁移并改变故障域覆盖。对比代表PG映射、目标容量和迁移量，限定批次及回退，不能把树编辑看成纯显示变更。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Ceph Squid 官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现preview(before,after)，分别实际crushtool --test rule0,num-rep2,min-x0,max-x255,--show-mappings，解析完整256输入，非零退出或输入缺失RuntimeError。按输入升序比较成员集合，返回{moved:[{input,removed:排序旧减新,added:排序新减旧}],unchanged:其余数}。相同map无迁移；不把成员顺序变化当新增/删除，不改两文件、不连接集群。候选将osd.5 CRUSH权重降0，验收真实有限映射变化与逐项增删。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Ceph16.2.15 CRUSH算法对批准候选二进制map进行256输入有限预览，给出成员变化而非容量/时长估算。不调用--simulate随机放置、不apply，未证明实际pool/PG、backfill、客户端IO或退役机架已恢复。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://docs.ceph.com/en/pacific/man/8/crushtool/",
+      "https://docs.ceph.com/en/pacific/man/8/osdmaptool/"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-ceph-031",
+      "original_title": "为什么修改CRUSH树之前要模拟对象映射变化？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import subprocess,re,json\ndef preview(before,after):\n    def placements(path):\n        result=subprocess.run(['crushtool','-i',path,'--test','--rule','0','--num-rep','2','--min-x','0','--max-x','255','--show-mappings'],capture_output=True,text=True,timeout=10)\n        if result.returncode:raise RuntimeError('finite native map test failed')\n        values={int(x):json.loads(ids) for x,ids in re.findall(r'CRUSH rule \\d+ x (\\d+) (\\[[^\\]]*\\])',result.stdout+result.stderr)}\n        if set(values)!=set(range(256)):raise RuntimeError('incomplete finite mapping')\n        return values\n    old=placements(before);new=placements(after);moved=[]\n    for x in range(256):\n        removed=sorted(set(old[x])-set(new[x]));added=sorted(set(new[x])-set(old[x]))\n        if removed or added:moved.append({'input':x,'removed':removed,'added':added})\n    return {'moved':moved,'unchanged':256-len(moved)}\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess,re,json\ndef preview(before,after):\n    def placements(path):\n        result=subprocess.run(['crushtool','-i',path,'--test','--rule','0','--num-rep','2','--min-x','0','--max-x','255','--show-mappings'],capture_output=True,text=True,timeout=10)\n        if result.returncode:raise RuntimeError('finite native map test failed')\n        values={int(x):json.loads(ids) for x,ids in re.findall(r'CRUSH rule \\d+ x (\\d+) (\\[[^\\]]*\\])',result.stdout+result.stderr)}\n        if set(values)!=set(range(256)):raise RuntimeError('incomplete finite mapping')\n        return values\n    old=placements(before);new=placements(before);moved=[]\n    for x in range(256):\n        removed=sorted(set(old[x])-set(new[x]));added=sorted(set(new[x])-set(old[x]))\n        if removed or added:moved.append({'input':x,'removed':removed,'added':added})\n    return {'moved':moved,'unchanged':256-len(moved)}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像与只读官方Ceph16.2.15数据文件；离线map实验，不构建镜像、不连接集群",
+      "operation": "实现preview(before,after)，分别实际crushtool --test rule0,num-rep2,min-x0,max-x255,--show-mappings，解析完整256输入，非零退出或输入缺失RuntimeError。按输入升序比较成员集合，返回{moved:[{input,removed:排序旧减新,added:排序新减旧}],unchanged:其余数}。相同map无迁移；不把成员顺序变化当新增/删除，不改两文件、不连接集群。候选将osd.5 CRUSH权重降0，验收真实有限映射变化与逐项增删。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Ceph16.2.15 CRUSH算法对批准候选二进制map进行256输入有限预览，给出成员变化而非容量/时长估算。不调用--simulate随机放置、不apply，未证明实际pool/PG、backfill、客户端IO或退役机架已恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "crushtool",
+          "osdmaptool"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/ceph_native.py": "\"\"\"Official Ceph16.2.15 offline map algorithms, not an emulated or live cluster.\"\"\"\nimport hashlib,json,pathlib,re,subprocess,tempfile\ndef run(tool,*args):\n result=subprocess.run([tool,*map(str,args)],capture_output=True,text=True,timeout=15)\n if result.returncode:raise RuntimeError('private Ceph map operation failed: '+result.stderr[-1800:])\n return result.stdout,result.stderr\ndef dump(tool,*args):\n text=run(tool,*args)[0]\n if '{' not in text:raise RuntimeError('Ceph map JSON missing')\n return json.loads(text[text.index('{'):])\ndef mappings(path,rule=0):\n out,err=run('crushtool','-i',path,'--test','--rule',rule,'--num-rep','2','--min-x','0','--max-x','255','--show-mappings')\n values={int(x):json.loads(devices) for x,devices in re.findall(r'CRUSH rule \\d+ x (\\d+) (\\[[^\\]]*\\])',out+err)}\n if set(values)!=set(range(256)):raise RuntimeError('finite CRUSH mapping incomplete')\n return values\ndef weight(path):\n data=dump('crushtool','-i',path,'--dump','--format','json')\n return next(item['weight']/65536 for bucket in data['buckets'] for item in bucket['items'] if item['id']==0)\nclass CephMaps:\n def __enter__(self):\n  assert 'ceph version 16.2.15 ' in run('osdmaptool','--version')[0]\n  self.temp=tempfile.TemporaryDirectory(prefix='of-ceph-maps-');self.root=pathlib.Path(self.temp.name)\n  try:\n   self.original=self.root/'original.crush';self.classified=self.root/'classified.crush';text=self.root/'map.txt'\n   run('crushtool','--build','--num_osds','6','host','straw2','2','root','straw2','0','-o',self.original)\n   run('crushtool','-d',self.original,'-o',text);source=text.read_text()\n   for i in range(6):source=re.sub(r'(?m)^device '+str(i)+r' osd\\.'+str(i)+r'$',lambda m:m[0]+' class '+('ssd' if i%2==0 else 'hdd'),source)\n   text.write_text(source);run('crushtool','-c',text,'-o',self.classified)\n   self.osdmap=self.root/'original.osdmap';run('osdmaptool','--createsimple','6','--with-default-pool',self.osdmap)\n   print('NATIVE_CEPH_MAP_TOOLS_READY:16.2.15',flush=True);return self\n  except BaseException:self.temp.cleanup();raise\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,hashlib,copy\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom ceph_native import CephMaps,run,dump,mappings,weight\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()\nwith CephMaps() as fixture:\n original=fixture.original;candidate=fixture.root/'candidate.crush';run('crushtool','-i',original,'--reweight-item','osd.5','0','-o',candidate)\n old=mappings(original);new=mappings(candidate);hashes=(digest(original),digest(candidate));expected=[]\n for x in range(256):\n  removed=sorted(set(old[x])-set(new[x]));added=sorted(set(new[x])-set(old[x]))\n  if removed or added:expected.append({'input':x,'removed':removed,'added':added})\n assert 0<len(expected)<256 and any(row['removed']==[5] and row['added'] for row in expected)\n assert all(5 not in ids and len(ids)==2 and len({i//2 for i in ids})==2 for ids in new.values())\n print('NATIVE_CEPH_REAL_CANDIDATE_CRUSH_WEIGHT_ZERO_CHANGED_SOME_NOT_ALL_FINITE_INPUTS',flush=True)\n print('STUDENT_OPERATION_ENTERED:read_both_real_maps_compute_member_movement_preview_without_apply',flush=True)\n try:result=task.preview(str(original),str(candidate))\n except Exception as error:raise AssertionError('student actual CRUSH map preview failed') from error\n assert result=={'moved':expected,'unchanged':256-len(expected)},'movement preview incomplete or confused before/after mapping'\n assert task.preview(str(original),str(original))=={'moved':[],'unchanged':256}\n assert (digest(original),digest(candidate))==hashes\n print('NATIVE_CEPH_MAPPING_MOVEMENT '+json.dumps({'inputs':256,'moved':len(expected),'unchanged':256-len(expected)}),flush=True)\n print('NATIVE_CEPH_EXACT_REMOVED_ADDED_MEMBERS_NO_CLUSTER_CONTACT_OR_MAP_MUTATION',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "ceph"
+    ]
+  },
+  {
+    "id": "curated-parallel-ceph-016",
+    "module": "ceph",
+    "category": "Ceph",
+    "level": 1,
+    "topic": "架构与数据放置",
+    "title": "真实OSDMap与CRUSH权重分离：临时out端点和容量权重变更各自核对",
+    "answer": "```python\nimport subprocess,json,pathlib,shutil\ndef inspect(original,candidate,directory):\n    def call(*args):\n        result=subprocess.run(list(map(str,args)),capture_output=True,text=True,timeout=10)\n        if result.returncode:raise RuntimeError('approved map inspection failed')\n        return result.stdout\n    def decode(text):return json.loads(text[text.index('{'):])\n    def view(path,name,*flags):\n        exported=pathlib.Path(directory)/name\n        state=decode(call('osdmaptool','--mark-up-in',*flags,'--export-crush',exported,'--dump','json',path))\n        data=decode(call('crushtool','-i',exported,'--dump','--format','json'))\n        capacity=next(item['weight']/65536 for bucket in data['buckets'] for item in bucket['items'] if item['id']==0)\n        return {'osd_weight':state['osds'][0]['weight'],'crush_weight':capacity}\n    initial=view(original,'base.crush')\n    temporary=view(original,'temporary.crush','--mark-out','0')\n    shutil.copyfile(original,candidate)\n    call('osdmaptool','--adjust-crush-weight','0:0','--save',candidate)\n    changed=view(candidate,'changed.crush','--adjust-crush-weight','0:0')\n    return {'baseline':initial,'temporary_out':temporary,'crush_changed':changed}\n```\n\n原题知识说明：\nCRUSH权重通常反映设备相对容量，OSD reweight可临时降低承载比例并影响放置。改变都会触发迁移风险，应记录来源与回退并验证均衡。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Ceph Squid 官方文档核对",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现inspect(original,candidate,directory)。每个视图必须由同一次osdmaptool执行同时--dump json和--export-crush到私有文件，再用crushtool --dump读该导出中OSD0容量weight/65536。基准使用--mark-up-in；临时out追加--mark-out0。复制original到candidate，只在候选执行--adjust-crush-weight 0:0 --save；候选视图使用--mark-up-in再--adjust-crush-weight 0:0并在同一次命令导出CRUSH和JSON。返回{baseline:{osd_weight:1,crush_weight:1},temporary_out:{osd_weight:0,crush_weight:1},crush_changed:{osd_weight:1,crush_weight:0}}。mark-up-in会把零CRUSH权重恢复1，所以不得把一次临时JSON与另一次磁盘导出拼成视图。所有子进程非零RuntimeError；原文件字节保持，不连集群。工具临时视图不代表线上ceph osd reweight。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Ceph16.2.15 OSDMap临时out端点与CRUSH容量权重，每个对照均由同一次工具进程同时导出JSON/CRUSH，避免拼接不同临时视图。没有线上MON/OSD，不证明任意小数临时reweight、集群持久化命令、balancer或数据重平衡。与031映射变化量不同。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://docs.ceph.com/en/pacific/man/8/crushtool/",
+      "https://docs.ceph.com/en/pacific/man/8/osdmaptool/"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-ceph-016",
+      "original_title": "Ceph crush weight与临时reweight为什么不是同一参数？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import subprocess,json,pathlib,shutil\ndef inspect(original,candidate,directory):\n    def call(*args):\n        result=subprocess.run(list(map(str,args)),capture_output=True,text=True,timeout=10)\n        if result.returncode:raise RuntimeError('approved map inspection failed')\n        return result.stdout\n    def decode(text):return json.loads(text[text.index('{'):])\n    def view(path,name,*flags):\n        exported=pathlib.Path(directory)/name\n        state=decode(call('osdmaptool','--mark-up-in',*flags,'--export-crush',exported,'--dump','json',path))\n        data=decode(call('crushtool','-i',exported,'--dump','--format','json'))\n        capacity=next(item['weight']/65536 for bucket in data['buckets'] for item in bucket['items'] if item['id']==0)\n        return {'osd_weight':state['osds'][0]['weight'],'crush_weight':capacity}\n    initial=view(original,'base.crush')\n    temporary=view(original,'temporary.crush','--mark-out','0')\n    shutil.copyfile(original,candidate)\n    call('osdmaptool','--adjust-crush-weight','0:0','--save',candidate)\n    changed=view(candidate,'changed.crush','--adjust-crush-weight','0:0')\n    return {'baseline':initial,'temporary_out':temporary,'crush_changed':changed}\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess,json,pathlib,shutil\ndef inspect(original,candidate,directory):\n    def call(*args):\n        result=subprocess.run(list(map(str,args)),capture_output=True,text=True,timeout=10)\n        if result.returncode:raise RuntimeError('approved map inspection failed')\n        return result.stdout\n    def decode(text):return json.loads(text[text.index('{'):])\n    def view(path,name,*flags):\n        exported=pathlib.Path(directory)/name\n        state=decode(call('osdmaptool','--mark-up-in',*flags,'--export-crush',exported,'--dump','json',path))\n        data=decode(call('crushtool','-i',exported,'--dump','--format','json'))\n        capacity=next(item['weight']/65536 for bucket in data['buckets'] for item in bucket['items'] if item['id']==0)\n        return {'osd_weight':capacity,'crush_weight':capacity}\n    initial=view(original,'base.crush')\n    temporary=view(original,'temporary.crush','--mark-out','0')\n    shutil.copyfile(original,candidate)\n    call('osdmaptool','--adjust-crush-weight','0:0','--save',candidate)\n    changed=view(candidate,'changed.crush','--adjust-crush-weight','0:0')\n    return {'baseline':initial,'temporary_out':temporary,'crush_changed':changed}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有lab镜像与只读官方Ceph16.2.15数据文件；离线map实验，不构建镜像、不连接集群",
+      "operation": "实现inspect(original,candidate,directory)。每个视图必须由同一次osdmaptool执行同时--dump json和--export-crush到私有文件，再用crushtool --dump读该导出中OSD0容量weight/65536。基准使用--mark-up-in；临时out追加--mark-out0。复制original到candidate，只在候选执行--adjust-crush-weight 0:0 --save；候选视图使用--mark-up-in再--adjust-crush-weight 0:0并在同一次命令导出CRUSH和JSON。返回{baseline:{osd_weight:1,crush_weight:1},temporary_out:{osd_weight:0,crush_weight:1},crush_changed:{osd_weight:1,crush_weight:0}}。mark-up-in会把零CRUSH权重恢复1，所以不得把一次临时JSON与另一次磁盘导出拼成视图。所有子进程非零RuntimeError；原文件字节保持，不连集群。工具临时视图不代表线上ceph osd reweight。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Ceph16.2.15 OSDMap临时out端点与CRUSH容量权重，每个对照均由同一次工具进程同时导出JSON/CRUSH，避免拼接不同临时视图。没有线上MON/OSD，不证明任意小数临时reweight、集群持久化命令、balancer或数据重平衡。与031映射变化量不同。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 45,
+      "requires": {
+        "commands": [
+          "crushtool",
+          "osdmaptool"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/ceph_native.py": "\"\"\"Official Ceph16.2.15 offline map algorithms, not an emulated or live cluster.\"\"\"\nimport hashlib,json,pathlib,re,subprocess,tempfile\ndef run(tool,*args):\n result=subprocess.run([tool,*map(str,args)],capture_output=True,text=True,timeout=15)\n if result.returncode:raise RuntimeError('private Ceph map operation failed: '+result.stderr[-1800:])\n return result.stdout,result.stderr\ndef dump(tool,*args):\n text=run(tool,*args)[0]\n if '{' not in text:raise RuntimeError('Ceph map JSON missing')\n return json.loads(text[text.index('{'):])\ndef mappings(path,rule=0):\n out,err=run('crushtool','-i',path,'--test','--rule',rule,'--num-rep','2','--min-x','0','--max-x','255','--show-mappings')\n values={int(x):json.loads(devices) for x,devices in re.findall(r'CRUSH rule \\d+ x (\\d+) (\\[[^\\]]*\\])',out+err)}\n if set(values)!=set(range(256)):raise RuntimeError('finite CRUSH mapping incomplete')\n return values\ndef weight(path):\n data=dump('crushtool','-i',path,'--dump','--format','json')\n return next(item['weight']/65536 for bucket in data['buckets'] for item in bucket['items'] if item['id']==0)\nclass CephMaps:\n def __enter__(self):\n  assert 'ceph version 16.2.15 ' in run('osdmaptool','--version')[0]\n  self.temp=tempfile.TemporaryDirectory(prefix='of-ceph-maps-');self.root=pathlib.Path(self.temp.name)\n  try:\n   self.original=self.root/'original.crush';self.classified=self.root/'classified.crush';text=self.root/'map.txt'\n   run('crushtool','--build','--num_osds','6','host','straw2','2','root','straw2','0','-o',self.original)\n   run('crushtool','-d',self.original,'-o',text);source=text.read_text()\n   for i in range(6):source=re.sub(r'(?m)^device '+str(i)+r' osd\\.'+str(i)+r'$',lambda m:m[0]+' class '+('ssd' if i%2==0 else 'hdd'),source)\n   text.write_text(source);run('crushtool','-c',text,'-o',self.classified)\n   self.osdmap=self.root/'original.osdmap';run('osdmaptool','--createsimple','6','--with-default-pool',self.osdmap)\n   print('NATIVE_CEPH_MAP_TOOLS_READY:16.2.15',flush=True);return self\n  except BaseException:self.temp.cleanup();raise\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,hashlib,copy\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom ceph_native import CephMaps,run,dump,mappings,weight\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef digest(path):return hashlib.sha256(path.read_bytes()).hexdigest()\nwith CephMaps() as fixture:\n original=fixture.osdmap;candidate=fixture.root/'candidate.osdmap';before=digest(original)\n assert dump('osdmaptool','--mark-up-in','--dump','json',original)['osds'][0]['weight']==1\n assert dump('osdmaptool','--mark-up-in','--mark-out','0','--dump','json',original)['osds'][0]['weight']==0\n print('NATIVE_CEPH_OSDMAP_TEMPORARY_OUT_WEIGHT_SEPARATE_FROM_CRUSH_CAPACITY_MAP',flush=True)\n print('STUDENT_OPERATION_ENTERED:compare_baseline_temporary_out_and_changed_crush_on_owned_copy',flush=True)\n commands=[];original_run=task.subprocess.run\n def traced(args,*positional,**kwargs):commands.append(list(map(str,args)));return original_run(args,*positional,**kwargs)\n task.subprocess.run=traced\n try:\n  try:result=task.inspect(str(original),str(candidate),str(fixture.root))\n  except Exception as error:raise AssertionError('student actual Ceph weight boundary inspection failed') from error\n finally:task.subprocess.run=original_run\n assert result=={'baseline':{'osd_weight':1,'crush_weight':1},'temporary_out':{'osd_weight':0,'crush_weight':1},'crush_changed':{'osd_weight':1,'crush_weight':0}},'OSDMap override and CRUSH capacity weight conflated'\n paired=[args for args in commands if pathlib.Path(args[0]).name=='osdmaptool' and '--export-crush' in args and '--dump' in args and '--mark-up-in' in args]\n assert len(paired)==3 and any('--mark-out' in args and args[args.index('--mark-out')+1]=='0' for args in paired) and any('--adjust-crush-weight' in args and args[args.index('--adjust-crush-weight')+1]=='0:0' for args in paired),'JSON and CRUSH must come from each same actual temporary view'\n assert digest(original)==before and candidate.is_file()\n exported=fixture.root/'independent.crush';state=dump('osdmaptool','--mark-up-in','--adjust-crush-weight','0:0','--export-crush',exported,'--dump','json',candidate)\n assert weight(exported)==0 and state['osds'][0]['weight']==1\n print('NATIVE_CEPH_REAL_OSDMAP_AND_CRUSH_INDEPENDENT_WEIGHT_FIELDS_SOURCE_BYTES_PRESERVED',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "ceph"
+    ]
+  }
+]

@@ -1,0 +1,94 @@
+[
+  {
+    "id": "curated-feishu-w-041",
+    "module": "network",
+    "category": "网络与 DNS",
+    "level": 3,
+    "topic": "内核TCP统计与进程归属证据",
+    "title": "用真实ss与ip采集连接字节并关联进程，区分网卡总量",
+    "body": "## 环境与初始材料\n非root Linux、Python3、iproute2的ss/ip，内核提供TCP_INFO字节计数。验收提供peers.json并启动同一普通用户的3个临时回环客户端，所有端口随机。提供collect.py骨架，不需要root、eBPF或原始套接字。\n\n## 操作任务\n实现collect.py peers.json，只读运行真实ip -s -j link与ss -tinHp，采集lo的累计收发字节，并把指定peer_ports的IPv4回环ESTAB客户端连接关联到PID和本地端口。输出JSON字段interface/rx_bytes/tx_bytes/connections；每连接含local_port、peer_port、pid、bytes_sent、bytes_received。端口列表必须是非空、不重复的1024–65535整数列表，错误返回2且stdout为空。不要把服务端反向连接、其他对端或网卡总量冒充目标进程计数。\n\n## 提交产物\ncollect.py完整程序；执行python3 collect.py peers.json向stdout输出一个JSON对象，成功返回0。ip/ss失败不可静默当零流量。累计字节不是速率，本题用两次样本差判断流量归属，不承诺物理网络容量。\n\n## 验收方法\n普通用户启动三个真实TCP客户端进程，发送动态长度消息后读取内核ss统计；核对两个指定目的端口的真实PID、本地端口及已发送/接收字节，再增加不同流量验证逐连接增量。第三连接也发流量，因此网卡总量只能关联参考，不等于两条业务连接之和。另验证非法/重复/布尔端口不扩大采集范围。全部断言通过退出0，停止全部本题进程；不抓包、不封禁、不读取其他用户的受保护进程信息。\n\n失败示例：只按127.0.0.1筛选会混入服务端方向和无关连接；把采集器PID填给每条连接会把别的进程流量错误归属自己。",
+    "answer": "```python\nimport json,re,subprocess,sys\ndef collect(ports):\n    if not isinstance(ports,list) or not ports or any(type(p)is not int or not 1024<=p<=65535 for p in ports) or len(set(ports))!=len(ports):raise ValueError('unique numeric high ports required')\n    interfaces=json.loads(subprocess.check_output(['ip','-s','-j','link','show','dev','lo'],text=True,timeout=2))\n    counters=interfaces[0].get('stats64',interfaces[0].get('stats'))\n    raw=subprocess.check_output(['ss','-t','-i','-n','-H','-p'],text=True,timeout=2)\n    records=[];current=None\n    for line in raw.splitlines():\n        if line and not line[0].isspace():\n            current=None;parts=line.split()\n            if len(parts)<5 or parts[0]!='ESTAB':continue\n            local,peer=parts[3],parts[4]\n            if not local.startswith('127.0.0.1:') or not peer.startswith('127.0.0.1:'):continue\n            local_port=int(local.rsplit(':',1)[1]);peer_port=int(peer.rsplit(':',1)[1])\n            pid=re.search(r'\\bpid=(\\d+)',line)\n            if peer_port not in ports or not pid:continue\n            current={'local_port':local_port,'peer_port':peer_port,'pid':int(pid.group(1))}\n        elif current is not None:\n            sent=re.search(r'\\bbytes_sent:(\\d+)',line);received=re.search(r'\\bbytes_received:(\\d+)',line)\n            if sent and received:\n                current.update(bytes_sent=int(sent.group(1)),bytes_received=int(received.group(1)))\n                records.append(current);current=None\n    return {'interface':'lo','rx_bytes':int(counters['rx']['bytes']),'tx_bytes':int(counters['tx']['bytes']),\n            'connections':sorted(records,key=lambda r:(r['peer_port'],r['local_port'],r['pid']))}\nif __name__=='__main__':\n    try:result=collect(json.load(open(sys.argv[1]))['peer_ports'])\n    except (ValueError,TypeError,KeyError,IndexError,OSError,subprocess.SubprocessError):raise SystemExit(2)\n    print(json.dumps(result,sort_keys=True))\n```\n\nss条目按连接四元组关联PID，后续缩进行提供内核TCP_INFO字节。只读同一用户所属客户端，无法看见其他用户PID时不能猜测。网卡统计包括协议头和其他连接，不能用它替代进程字节。\n\n原理说明：\n先固定时间窗口和接口，区分物理出口与veth/bridge重复计数；查看字节率、包率、丢包及连接分布，再按地址端口关联进程、应用请求量与近期批任务。需要抓包时限制对象、时长和载荷，不能因流量大就断定攻击。验收异常来源、预期业务峰值及受控缓解后的错误率，不盲目封禁所有来源。",
+    "type": "code",
+    "source": "飞书 W / IPGrwR4n4i69WJktQVlcHczfnEb / block:SJi8dIH9woP1wAx7p4GcXjKpnce",
+    "source_block_id": "SJi8dIH9woP1wAx7p4GcXjKpnce",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "飞书W逐题补缺审校",
+    "hints": [],
+    "rubric": [
+      "按目标对端限定客户端方向",
+      "PID与本地端口来自真实内核连接证据",
+      "两轮累计字节增量与网卡总量分别报告"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "SJi8dIH9woP1wAx7p4GcXjKpnce",
+          "EY8PdcFd1osOSVxa9lrczO3qnPc",
+          "GzvxdhdInotbLbx2Xt6cEuHJn5b",
+          "QZkAd4l0goAdT7xF6mGctaKankc",
+          "Slh1dwtL8otOMWx9FJNcZ735nDe",
+          "D8DediTpGoO4mvxitpFcbS7Jned",
+          "FXojdowdNog0W4xHvLRcQApXn3c",
+          "IMbidbAeHopiZsxSjw9cMEejnCc",
+          "Gstxd8dsWoVXzsxhNxUcP9jknBe",
+          "X8std9caHolGCRxZ2Wfcwyl2nse",
+          "FDTsd5I6ao9nHSxTcwhcBJ7JnDf"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "collect.py": "raise NotImplementedError(\"collect actual ss and ip counters\")\n"
+    },
+    "solution_files": {
+      "collect.py": "import json,re,subprocess,sys\ndef collect(ports):\n    if not isinstance(ports,list) or not ports or any(type(p)is not int or not 1024<=p<=65535 for p in ports) or len(set(ports))!=len(ports):raise ValueError('unique numeric high ports required')\n    interfaces=json.loads(subprocess.check_output(['ip','-s','-j','link','show','dev','lo'],text=True,timeout=2))\n    counters=interfaces[0].get('stats64',interfaces[0].get('stats'))\n    raw=subprocess.check_output(['ss','-t','-i','-n','-H','-p'],text=True,timeout=2)\n    records=[];current=None\n    for line in raw.splitlines():\n        if line and not line[0].isspace():\n            current=None;parts=line.split()\n            if len(parts)<5 or parts[0]!='ESTAB':continue\n            local,peer=parts[3],parts[4]\n            if not local.startswith('127.0.0.1:') or not peer.startswith('127.0.0.1:'):continue\n            local_port=int(local.rsplit(':',1)[1]);peer_port=int(peer.rsplit(':',1)[1])\n            pid=re.search(r'\\bpid=(\\d+)',line)\n            if peer_port not in ports or not pid:continue\n            current={'local_port':local_port,'peer_port':peer_port,'pid':int(pid.group(1))}\n        elif current is not None:\n            sent=re.search(r'\\bbytes_sent:(\\d+)',line);received=re.search(r'\\bbytes_received:(\\d+)',line)\n            if sent and received:\n                current.update(bytes_sent=int(sent.group(1)),bytes_received=int(received.group(1)))\n                records.append(current);current=None\n    return {'interface':'lo','rx_bytes':int(counters['rx']['bytes']),'tx_bytes':int(counters['tx']['bytes']),\n            'connections':sorted(records,key=lambda r:(r['peer_port'],r['local_port'],r['pid']))}\nif __name__=='__main__':\n    try:result=collect(json.load(open(sys.argv[1]))['peer_ports'])\n    except (ValueError,TypeError,KeyError,IndexError,OSError,subprocess.SubprocessError):raise SystemExit(2)\n    print(json.dumps(result,sort_keys=True))\n"
+    },
+    "negative_files": {
+      "collect.py": "import json,re,subprocess,sys\ndef collect(ports):\n    if not isinstance(ports,list) or not ports or any(type(p)is not int or not 1024<=p<=65535 for p in ports) or len(set(ports))!=len(ports):raise ValueError('unique numeric high ports required')\n    interfaces=json.loads(subprocess.check_output(['ip','-s','-j','link','show','dev','lo'],text=True,timeout=2))\n    counters=interfaces[0].get('stats64',interfaces[0].get('stats'))\n    raw=subprocess.check_output(['ss','-t','-i','-n','-H','-p'],text=True,timeout=2)\n    records=[];current=None\n    for line in raw.splitlines():\n        if line and not line[0].isspace():\n            current=None;parts=line.split()\n            if len(parts)<5 or parts[0]!='ESTAB':continue\n            local,peer=parts[3],parts[4]\n            if not local.startswith('127.0.0.1:') or not peer.startswith('127.0.0.1:'):continue\n            local_port=int(local.rsplit(':',1)[1]);peer_port=int(peer.rsplit(':',1)[1])\n            pid=re.search(r'\\bpid=(\\d+)',line)\n            if peer_port not in ports or not pid:continue\n            current={'local_port':local_port,'peer_port':peer_port,'pid':0}\n        elif current is not None:\n            sent=re.search(r'\\bbytes_sent:(\\d+)',line);received=re.search(r'\\bbytes_received:(\\d+)',line)\n            if sent and received:\n                current.update(bytes_sent=int(sent.group(1)),bytes_received=int(received.group(1)))\n                records.append(current);current=None\n    return {'interface':'lo','rx_bytes':int(counters['rx']['bytes']),'tx_bytes':int(counters['tx']['bytes']),\n            'connections':sorted(records,key=lambda r:(r['peer_port'],r['local_port'],r['pid']))}\nif __name__=='__main__':\n    try:result=collect(json.load(open(sys.argv[1]))['peer_ports'])\n    except (ValueError,TypeError,KeyError,IndexError,OSError,subprocess.SubprocessError):raise SystemExit(2)\n    print(json.dumps(result,sort_keys=True))\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "ss",
+          "ip"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import json,os,pathlib,socket,subprocess,sys,threading,time,secrets\nroot=pathlib.Path.cwd();servers=[];threads=[];workers=[];stop=threading.Event()\ndef serve(listener):\n    listener.settimeout(.2)\n    while not stop.is_set():\n        try:conn,_=listener.accept()\n        except socket.timeout:continue\n        with conn:\n            conn.settimeout(.2);pending=b''\n            while not stop.is_set():\n                try:data=conn.recv(65536)\n                except socket.timeout:continue\n                if not data:break\n                pending+=data\n                # Requests are length-prefixed; one response byte per complete payload.\n                while len(pending)>=4 and len(pending)>=4+int.from_bytes(pending[:4],'big'):\n                    size=int.from_bytes(pending[:4],'big');pending=pending[4+size:];conn.sendall(b'K')\nWORKER=r\"\"\"import socket,sys,json\ns=socket.create_connection(('127.0.0.1',int(sys.argv[1])));s.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)\nprint(json.dumps({'port':s.getsockname()[1]}),flush=True)\nfor line in sys.stdin:\n n=int(line);s.sendall(n.to_bytes(4,'big')+b'x'*n);assert s.recv(1)==b'K';print('ok',flush=True)\ns.close()\n\"\"\"\ntry:\n    ports=[]\n    for _ in range(3):\n        listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen();servers.append(listener);ports.append(listener.getsockname()[1])\n        thread=threading.Thread(target=serve,args=(listener,));thread.start();threads.append(thread)\n        proc=subprocess.Popen([sys.executable,'-c',WORKER,str(ports[-1])],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)\n        local=json.loads(proc.stdout.readline())['port'];workers.append((proc,local))\n    def send(index,size):\n        proc,_=workers[index];proc.stdin.write(str(size)+'\\n');proc.stdin.flush();assert proc.stdout.readline()=='ok\\n'\n    initial=[700+secrets.randbelow(500),900+secrets.randbelow(500),1200]\n    for i,size in enumerate(initial):send(i,size)\n    (root/'peers.json').write_text(json.dumps({'peer_ports':ports[:2]}))\n    def read():\n        p=subprocess.run([sys.executable,'collect.py','peers.json'],capture_output=True,text=True,timeout=4)\n        assert p.returncode==0,p.stderr;value=json.loads(p.stdout)\n        assert set(value)=={'interface','rx_bytes','tx_bytes','connections'} and value['interface']=='lo'\n        assert type(value['rx_bytes']) is int and type(value['tx_bytes']) is int\n        rows=value['connections'];assert len(rows)==2,'must select destination peers, not all loopback sockets or server direction'\n        index={row['peer_port']:row for row in rows};assert set(index)==set(ports[:2])\n        for i in range(2):\n            row=index[ports[i]];assert set(row)=={'local_port','peer_port','pid','bytes_sent','bytes_received'}\n            assert row['pid']==workers[i][0].pid and row['local_port']==workers[i][1],'socket-to-process attribution mismatch'\n            assert type(row['bytes_sent']) is int and type(row['bytes_received']) is int\n        return value,index\n    before,first=read()\n    for i in range(2):assert first[ports[i]]['bytes_sent']==initial[i]+4 and first[ports[i]]['bytes_received']==1\n    delta=[4096+secrets.randbelow(2048),8192+secrets.randbelow(2048)]\n    for i,size in enumerate(delta):send(i,size)\n    send(2,20000) # Excluded socket changes the interface aggregate too.\n    after,last=read()\n    for i in range(2):\n        assert last[ports[i]]['bytes_sent']-first[ports[i]]['bytes_sent']==delta[i]+4\n        assert last[ports[i]]['bytes_received']-first[ports[i]]['bytes_received']==1\n    assert after['tx_bytes']>before['tx_bytes'] and after['rx_bytes']>before['rx_bytes']\n    assert after['tx_bytes']-before['tx_bytes']>sum(delta),'interface total includes other sockets and protocol bytes'\n    for bad in ([],[ports[0],ports[0]],[True],['12345'],[80],[{}],[[12345]],None):\n        (root/'peers.json').write_text(json.dumps({'peer_ports':bad}))\n        p=subprocess.run([sys.executable,'collect.py','peers.json'],capture_output=True,text=True,timeout=4)\n        assert p.returncode==2 and not p.stdout.strip(),'invalid scope must not silently widen collection'\nfinally:\n    for proc,_ in workers:\n        if proc.stdin:proc.stdin.close()\n        try:proc.wait(timeout=2)\n        except subprocess.TimeoutExpired:proc.kill();proc.wait()\n        if proc.stdout:proc.stdout.close()\n        if proc.stderr:proc.stderr.close()\n    stop.set()\n    for thread in threads:thread.join(2);assert not thread.is_alive()\n    for listener in servers:listener.close()\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现collect.py peers.json，只读运行真实ip -s -j link与ss -tinHp，采集lo的累计收发字节，并把指定peer_ports的IPv4回环ESTAB客户端连接关联到PID和本地端口。输出JSON字段interface/rx_bytes/tx_bytes/connections；每连接含local_port、peer_port、pid、bytes_sent、bytes_received。端口列表必须是非空、不重复的1024–65535整数列表，错误返回2且stdout为空。不要把服务端反向连接、其他对端或网卡总量冒充目标进程计数。",
+      "deliverables": [
+        "collect.py"
+      ],
+      "verification": "普通用户启动三个真实TCP客户端进程，发送动态长度消息后读取内核ss统计；核对两个指定目的端口的真实PID、本地端口及已发送/接收字节，再增加不同流量验证逐连接增量。第三连接也发流量，因此网卡总量只能关联参考，不等于两条业务连接之和。另验证非法/重复/布尔端口不扩大采集范围。全部断言通过退出0，停止全部本题进程；不抓包、不封禁、不读取其他用户的受保护进程信息。",
+      "failure_examples": [
+        "只按127.0.0.1筛选会混入服务端方向和无关连接；把采集器PID填给每条连接会把别的进程流量错误归属自己。"
+      ]
+    },
+    "case_signature": "curated-feishu-w-041|ss-kernel-byte-deltas-own-process-peer-scope",
+    "conversion": {
+      "original_id": "curated-feishu-w-041",
+      "original_title": "主机网络吞吐突增时，如何把网卡总量关联到业务连接和进程？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  }
+]

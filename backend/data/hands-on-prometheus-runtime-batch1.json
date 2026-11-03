@@ -1,0 +1,500 @@
+[
+  {
+    "id": "curated-parallel-prometheus-085",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 3,
+    "topic": "服务发现与标签处理",
+    "title": "修复up正常时业务路径序列塌缩",
+    "answer": "```yaml\njob_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\n```\n\n原labeldrop删掉path使/pay=7和/browse=11落入相同序列。恢复两个原始路径的独立序列，up=1，两个值分别7和11，总量18。不能丢掉任一路径、改造样本值或让上游降维冒充修复。\n\n验收器直接观察原生Prometheus结果：健康up值不能代替业务指标完整性；必须同时检查标签与数值。不能通过放宽容量、删除关键指标或把测试改为空集来通过。\n\n本题在Prometheus 3.5的真实复现中，up仍为1、lastError为空、duplicate_timestamp计数为0，但路径序列已从两条塌缩为一条；不把这一现象写成抓取失败或声称出现了duplicate sample日志。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "对比原始输出和重标记后的完整标签，确认多条样本映射到同一序列。",
+      "回退该标签删除规则或按正确业务语义在源端/记录规则聚合；不直接提高限制。",
+      "验证摄入无冲突、查询总量正确并评估故障期间缺样。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/",
+      "https://prometheus.io/docs/prometheus/latest/querying/api/"
+    ],
+    "incident_signature": "prometheus-metric-relabel-labeldrop-collision",
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\nmetric_relabel_configs:\n- action: labeldrop\n  regex: path\n",
+      "metrics.txt": "# HELP demo_requests_total Public fixed request counter\n# TYPE demo_requests_total counter\ndemo_requests_total{path=\"/pay\"} 7\ndemo_requests_total{path=\"/browse\"} 11\n"
+    },
+    "solution_files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\n"
+    },
+    "negative_files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\nmetric_relabel_configs:\n- source_labels:\n  - path\n  regex: /browse\n  action: drop\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供Prometheus 3.5、Python/PyYAML。job.yaml是固定采集配置中的一个完整scrape job，metrics.txt为本地测试端返回的实际样本。19100/19101是题目占位地址，验收会换成本工作区127.0.0.1随机端口；无需学员另开Kubernetes，不访问业务服务。\n\n## 操作任务\n本题在Prometheus 3.5的真实复现中，up仍为1、lastError为空、duplicate_timestamp计数为0，但路径序列已从两条塌缩为一条；不把这一现象写成抓取失败或声称出现了duplicate sample日志。\n原labeldrop删掉path使/pay=7和/browse=11落入相同序列。恢复两个原始路径的独立序列，up=1，两个值分别7和11，总量18。不能丢掉任一路径、改造样本值或让上游降维冒充修复。\n\n## 产物\n提交job.yaml，保留exercise作业名、1s间隔和500ms超时、固定目标材料及本题要求的业务标签。仅调整题目要求的配置；服务地址、全局配置、远端存储由隔离验收器控制。\n\n## 验收方法\n执行python3 checks/check.py。真正启动短生命周期Prometheus和本地固定指标HTTP端，通过/api/v1/targets、实际PromQL查询和必要的/-/reload验证。正确配置应达到给定的样本数、值与标签；原错误及典型错误必须失败。并非只做YAML解析。进程只监听127.0.0.1，限时/限内存并finally退出；报告不代表生产部署通过。\n\n## 原理复习\n新增metric_relabel删除路径标签后目标报duplicate sample，怎样恢复？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-prometheus-service",
+      "deliverables": [
+        "job.yaml"
+      ],
+      "operation": "原labeldrop删掉path使/pay=7和/browse=11落入相同序列。恢复两个原始路径的独立序列，up=1，两个值分别7和11，总量18。不能丢掉任一路径、改造样本值或让上游降维冒充修复。",
+      "verification": "native Prometheus loopback scrape/target/query/reload behavior",
+      "capability_gap": [
+        "原生服务合同已本地验证；平台实验镜像需带prometheus可执行文件，缺工具应显示能力不可用。",
+        "不访问或修改任何生产监控服务。"
+      ],
+      "failure_examples": [
+        "negative_files包含能掩盖症状但不满足业务样本/标签合同的错误修复。"
+      ]
+    },
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-085",
+      "original_type": "case",
+      "original_title": "新增metric_relabel删除路径标签后目标报duplicate sample，怎样恢复？",
+      "original_version": 1,
+      "theory_retained": true
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 55,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/native.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\ndef execute(CASE):\n candidate=yaml.load(pathlib.Path(\"job.yaml\").read_text(encoding=\"utf-8\"),Loader=Strict)\n assert isinstance(candidate,dict) and pathlib.Path(\"job.yaml\").stat().st_size<=32768\n allowed={\"job_name\",\"scrape_interval\",\"scrape_timeout\",\"static_configs\",\"file_sd_configs\",\"relabel_configs\",\"metric_relabel_configs\",\"sample_limit\",\"fallback_scrape_protocol\",\"scrape_protocols\"}\n assert set(candidate)<=allowed\n assert candidate[\"job_name\"]==\"exercise\" and candidate[\"scrape_interval\"]==\"1s\"\n assert candidate[\"scrape_timeout\"] in [\"500ms\",\"2s\"]\n if CASE[\"mode\"]==\"budget\":assert candidate.get(\"sample_limit\")==3,\"capacity budget must stay3\"\n for name in [\"static_configs\",\"file_sd_configs\"]:\n  assert candidate.get(name)==CASE[\"fixed\"].get(name),\"keep supplied discovery/target inventory\"\n servers=[];threads=[];proc=None;guard=None;stop=threading.Event();guard_fail=[];stats={\"peak_rss_bytes\":0,\"terminated\":False}\n def fixture(body,content):\n  class Handler(http.server.BaseHTTPRequestHandler):\n   def do_GET(self):\n    data=body.encode();self.send_response(200);self.send_header(\"Content-Type\",content);self.send_header(\"Content-Length\",str(len(data)));self.end_headers();self.wfile.write(data)\n   def log_message(self,*a):pass\n  server=http.server.ThreadingHTTPServer((\"127.0.0.1\",0),Handler);servers.append(server)\n  t=threading.Thread(target=server.serve_forever,daemon=True);t.start();threads.append(t)\n  return server.server_port\n try:\n  with tempfile.TemporaryDirectory(prefix=\"native-prom-scrape-\") as d:\n   root=pathlib.Path(d)\n   port1=fixture(CASE[\"metrics\"],\"application/octet-stream\" if CASE[\"mode\"]==\"content-type\" else \"text/plain; version=0.0.4; charset=utf-8\")\n   port2=fixture('# TYPE demo_requests_total counter\\ndemo_requests_total{path=\"/old\"} 3\\n',\"text/plain; version=0.0.4\")\n   with socket.socket() as sock:sock.bind((\"127.0.0.1\",0));port=sock.getsockname()[1]\n   def mapped(value):\n    if isinstance(value,str):return value.replace(\"127.0.0.1:19100\",\"127.0.0.1:\"+str(port1)).replace(\"127.0.0.1:19101\",\"127.0.0.1:\"+str(port2))\n    if isinstance(value,dict):return {k:mapped(v) for k,v in value.items()}\n    if isinstance(value,list):return [mapped(v) for v in value]\n    return value\n   job=mapped(candidate)\n   if CASE.get(\"discovery\"):\n    (root/\"inventory.json\").write_text(json.dumps(mapped(CASE[\"discovery\"])),encoding=\"utf-8\")\n    job[\"file_sd_configs\"][0][\"files\"]=[str(root/\"inventory.json\")]\n   config=root/\"prometheus.yaml\"\n   def write(job):config.write_text(yaml.safe_dump({\"global\":{\"scrape_interval\":\"1s\",\"scrape_timeout\":\"500ms\"},\"scrape_configs\":[job]},sort_keys=False),encoding=\"utf-8\")\n   baseline=mapped(copy.deepcopy(CASE[\"base_job\"]));baseline[\"static_configs\"][0][\"labels\"][\"config_version\"]=\"v1\"\n   write(baseline if CASE[\"mode\"]==\"reload\" else job)\n   binary=shutil.which(\"prometheus\");assert binary,\"platform must supply native prometheus\"\n   env=dict(os.environ,GOMAXPROCS=\"2\",GOMEMLIMIT=\"96MiB\")\n   with (root/\"server.log\").open(\"wb\") as log:\n    proc=subprocess.Popen([binary,\"--config.file=\"+str(config),\"--storage.tsdb.path=\"+str(root/\"data\"),\"--storage.tsdb.retention.time=1h\",\"--storage.tsdb.wal-segment-size=10MB\",\"--query.max-concurrency=2\",\"--query.timeout=2s\",\"--web.listen-address=127.0.0.1:\"+str(port),\"--web.enable-lifecycle\",\"--log.level=error\"],stdout=log,stderr=log,env=env,cwd=root)\n    deadline=time.monotonic()+40\n    def monitor():\n     while not stop.wait(.1):\n      if proc.poll() is not None:return\n      try:\n       amount=rss(proc.pid);stats[\"peak_rss_bytes\"]=max(stats[\"peak_rss_bytes\"],amount)\n       if amount>384*1024*1024 or time.monotonic()>deadline:\n        guard_fail.append(\"resource ceiling\");proc.kill();return\n      except Exception as exc:\n       if proc.poll() is None:guard_fail.append(str(exc));proc.kill()\n       return\n    guard=threading.Thread(target=monitor,daemon=True);guard.start()\n    base=\"http://127.0.0.1:\"+str(port)\n    def request(path,post=False):\n     req=urllib.request.Request(base+path,data=b\"\" if post else None)\n     try:\n      with urllib.request.urlopen(req,timeout=1) as r:return r.status,r.read()\n     except urllib.error.HTTPError as exc:return exc.code,exc.read()\n    def api(path):\n     code,data=request(path);assert code==200,(code,data.decode(errors=\"replace\"))\n     return json.loads(data)\n    def query(expr):return api(\"/api/v1/query?\"+urllib.parse.urlencode({\"query\":expr}))[\"data\"][\"result\"]\n    def wait(fn,label,seconds=10):\n     end=time.monotonic()+seconds;last=None\n     while time.monotonic()<end:\n      if guard_fail:raise AssertionError(\"resource guard: \"+repr(guard_fail))\n      if proc.poll() is not None:raise AssertionError(\"Prometheus exited: \"+(root/\"server.log\").read_text(errors=\"replace\"))\n      try:\n       value=fn()\n       if value:return value\n      except (urllib.error.URLError,TimeoutError,ConnectionError,OSError) as exc:last=repr(exc)\n      time.sleep(.15)\n     raise AssertionError(label+\"; last=\"+str(last))\n    try:\n     wait(lambda:request(\"/-/ready\")[0]==200,\"server not ready\",8)\n     if CASE[\"mode\"]==\"reload\":\n      wait(lambda:len(query('demo_requests_total{config_version=\"v1\"}'))==2,\"baseline not scraped\")\n      write(job);code,data=request(\"/-/reload\",True);assert code==200,\"candidate reload rejected: \"+data.decode(errors=\"replace\")\n      since=time.time()\n      wait(lambda:len(query('demo_requests_total{config_version=\"v2\",service=\"shop\"}'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})')),\"v2 not effective\")\n      config.write_text(\"global:\\n  unknown_setting: true\\n\",encoding=\"utf-8\")\n      code,_=request(\"/-/reload\",True);assert code>=400,\"invalid reload accepted\"\n      since=time.time()\n      wait(lambda:len(query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})')),\"invalid reload damaged live config\")\n      write(baseline);code,_=request(\"/-/reload\",True);assert code==200\n      since=time.time()\n      wait(lambda:len(query('timestamp(demo_requests_total{config_version=\"v1\",service=\"shop\"})'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v1\",service=\"shop\"})')),\"rollback not effective\")\n      print(\"native reload validated: v1 -> v2 -> rejected invalid -> fresh v2 -> fresh v1\")\n     else:\n      expected=2 if CASE[\"mode\"] in [\"meta\",\"discovery\"] else 1\n      targets=wait(lambda:api(\"/api/v1/targets?state=any\")[\"data\"],\"targets unavailable\")\n      wait(lambda:len(query(\"up\"))>=expected,\"no up samples\",10)\n      targets=api(\"/api/v1/targets?state=any\")[\"data\"]\n      print(\"native target state:\",json.dumps(targets,ensure_ascii=False)[:5000])\n      assert len(targets[\"activeTargets\"])==expected,\"wrong active target count\"\n      if CASE[\"mode\"]==\"discovery\":assert len(targets[\"droppedTargets\"])==1,\"lab target must remain dropped\"\n      health=query(\"up\");assert len(health)==expected and all(x[\"value\"][1]==\"1\" for x in health),\"native scrape failed\"\n      business=query(\"demo_requests_total\")\n      assert len(business)==2*expected,\"lost or added business series\"\n      assert sum(float(x[\"value\"][1]) for x in business)==18*expected,\"business values differ\"\n      for item in business:\n       labels=item[\"metric\"];value=float(item[\"value\"][1])\n       assert labels.get(\"path\") in [\"/pay\",\"/browse\"] and value=={\"/pay\":7,\"/browse\":11}[labels[\"path\"]]\n       assert labels.get(\"env\")==\"prod\" and labels.get(\"service\")==\"shop\"\n       assert not any(k.startswith(\"__meta_\") for k in labels)\n       if CASE[\"mode\"]==\"address\":assert labels.get(\"instance\")==\"checkout-api\" and \"real_address\" not in labels\n      if CASE[\"mode\"]==\"meta\":assert {x[\"metric\"].get(\"zone\") for x in business}=={\"cn-east\",\"cn-west\"}\n      if CASE[\"mode\"]==\"discovery\":assert {x[\"metric\"].get(\"region\") for x in business}=={\"cn-east\",\"cn-west\"}\n      if CASE[\"mode\"] in [\"budget\",\"stages\"]:assert query(\"debug_session_bytes\")==[],\"debug family leaked\"\n      if CASE[\"mode\"]==\"budget\":\n       healthdata=query(\"app_health\");assert len(healthdata)==1 and healthdata[0][\"value\"][1]==\"1\"\n      print(\"native scrape and business contract passed\")\n    finally:\n     stop.set()\n     if proc.poll() is None:\n      proc.terminate()\n      try:proc.wait(timeout=4)\n      except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n     stats[\"terminated\"]=proc.poll() is not None\n     if guard:guard.join(timeout=2)\n     assert not guard_fail,\"resource guard fired: \"+repr(guard_fail)\n finally:\n  stop.set()\n  if proc is not None and proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  if guard:guard.join(timeout=2)\n  for server in servers:server.shutdown();server.server_close()\n  for t in threads:t.join(timeout=2)\n  print(\"native child lifecycle:\",json.dumps(stats))\n\n",
+        "checks/check.py": "import runpy\nrunpy.run_path(\"checks/native.py\")[\"execute\"]({'mode': 'collision', 'metrics': '# HELP demo_requests_total Public fixed request counter\\n# TYPE demo_requests_total counter\\ndemo_requests_total{path=\"/pay\"} 7\\ndemo_requests_total{path=\"/browse\"} 11\\n', 'base_job': {'job_name': 'exercise', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'static_configs': [{'targets': ['127.0.0.1:19100'], 'labels': {'env': 'prod', 'service': 'shop'}}]}, 'discovery': None, 'fixed': {'static_configs': [{'targets': ['127.0.0.1:19100'], 'labels': {'env': 'prod', 'service': 'shop'}}]}})\n"
+      }
+    },
+    "run": "python3 checks/check.py"
+  },
+  {
+    "id": "curated-parallel-prometheus-086",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 3,
+    "topic": "抓取配置与采集质量",
+    "title": "在真实采集中削减调试基数并保住三条必要样本",
+    "answer": "```yaml\njob_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\nsample_limit: 3\nmetric_relabel_configs:\n- source_labels:\n  - __name__\n  regex: debug_session_bytes\n  action: drop\n```\n\nsample_limit固定3，不得调高。移除debug_session_bytes十条临时调试序列，同时保留两个业务请求路径和app_health=1。验证原目标HTTP200但up=0可被修复，修复后up=1且业务总量18；仅保留健康指标不算修复。\n\n验收器直接观察原生Prometheus结果：健康up值不能代替业务指标完整性；必须同时检查标签与数值。不能通过放宽容量、删除关键指标或把测试改为空集来通过。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "读取scrape_samples_post_metric_relabeling等抓取证据与原始样本分布，定位膨胀指标。",
+      "先停用无必要高基数输出或精准丢弃，再在容量评估后决定是否提高上限。",
+      "验证整次抓取恢复和关键指标覆盖，不能把目标200当成功。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/",
+      "https://prometheus.io/docs/prometheus/latest/querying/api/"
+    ],
+    "incident_signature": "prometheus-sample-limit-whole-scrape-failure",
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\nsample_limit: 3\n",
+      "metrics.txt": "# HELP demo_requests_total Public fixed request counter\n# TYPE demo_requests_total counter\ndemo_requests_total{path=\"/pay\"} 7\ndemo_requests_total{path=\"/browse\"} 11\n# TYPE app_health gauge\napp_health 1\ndebug_session_bytes{session=\"s0\"} 1\ndebug_session_bytes{session=\"s1\"} 2\ndebug_session_bytes{session=\"s2\"} 3\ndebug_session_bytes{session=\"s3\"} 4\ndebug_session_bytes{session=\"s4\"} 5\ndebug_session_bytes{session=\"s5\"} 6\ndebug_session_bytes{session=\"s6\"} 7\ndebug_session_bytes{session=\"s7\"} 8\ndebug_session_bytes{session=\"s8\"} 9\ndebug_session_bytes{session=\"s9\"} 10\n"
+    },
+    "solution_files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\nsample_limit: 3\nmetric_relabel_configs:\n- source_labels:\n  - __name__\n  regex: debug_session_bytes\n  action: drop\n"
+    },
+    "negative_files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\nsample_limit: 3\nmetric_relabel_configs:\n- source_labels:\n  - __name__\n  regex: app_health\n  action: keep\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供Prometheus 3.5、Python/PyYAML。job.yaml是固定采集配置中的一个完整scrape job，metrics.txt为本地测试端返回的实际样本。19100/19101是题目占位地址，验收会换成本工作区127.0.0.1随机端口；无需学员另开Kubernetes，不访问业务服务。\n\n## 操作任务\nsample_limit固定3，不得调高。移除debug_session_bytes十条临时调试序列，同时保留两个业务请求路径和app_health=1。验证原目标HTTP200但up=0可被修复，修复后up=1且业务总量18；仅保留健康指标不算修复。\n\n## 产物\n提交job.yaml，保留exercise作业名、1s间隔和500ms超时、固定目标材料及本题要求的业务标签。仅调整题目要求的配置；服务地址、全局配置、远端存储由隔离验收器控制。\n\n## 验收方法\n执行python3 checks/check.py。真正启动短生命周期Prometheus和本地固定指标HTTP端，通过/api/v1/targets、实际PromQL查询和必要的/-/reload验证。正确配置应达到给定的样本数、值与标签；原错误及典型错误必须失败。并非只做YAML解析。进程只监听127.0.0.1，限时/限内存并finally退出；报告不代表生产部署通过。\n\n## 原理复习\n目标HTTP200但up=0，lastError明确超过sample_limit，新增指标标签组合暴涨。如何处理？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-prometheus-service",
+      "deliverables": [
+        "job.yaml"
+      ],
+      "operation": "sample_limit固定3，不得调高。移除debug_session_bytes十条临时调试序列，同时保留两个业务请求路径和app_health=1。验证原目标HTTP200但up=0可被修复，修复后up=1且业务总量18；仅保留健康指标不算修复。",
+      "verification": "native Prometheus loopback scrape/target/query/reload behavior",
+      "capability_gap": [
+        "原生服务合同已本地验证；平台实验镜像需带prometheus可执行文件，缺工具应显示能力不可用。",
+        "不访问或修改任何生产监控服务。"
+      ],
+      "failure_examples": [
+        "negative_files包含能掩盖症状但不满足业务样本/标签合同的错误修复。"
+      ]
+    },
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-086",
+      "original_type": "case",
+      "original_title": "目标HTTP200但up=0，lastError明确超过sample_limit，新增指标标签组合暴涨。如何处理？",
+      "original_version": 1,
+      "theory_retained": true
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 55,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/native.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\ndef execute(CASE):\n candidate=yaml.load(pathlib.Path(\"job.yaml\").read_text(encoding=\"utf-8\"),Loader=Strict)\n assert isinstance(candidate,dict) and pathlib.Path(\"job.yaml\").stat().st_size<=32768\n allowed={\"job_name\",\"scrape_interval\",\"scrape_timeout\",\"static_configs\",\"file_sd_configs\",\"relabel_configs\",\"metric_relabel_configs\",\"sample_limit\",\"fallback_scrape_protocol\",\"scrape_protocols\"}\n assert set(candidate)<=allowed\n assert candidate[\"job_name\"]==\"exercise\" and candidate[\"scrape_interval\"]==\"1s\"\n assert candidate[\"scrape_timeout\"] in [\"500ms\",\"2s\"]\n if CASE[\"mode\"]==\"budget\":assert candidate.get(\"sample_limit\")==3,\"capacity budget must stay3\"\n for name in [\"static_configs\",\"file_sd_configs\"]:\n  assert candidate.get(name)==CASE[\"fixed\"].get(name),\"keep supplied discovery/target inventory\"\n servers=[];threads=[];proc=None;guard=None;stop=threading.Event();guard_fail=[];stats={\"peak_rss_bytes\":0,\"terminated\":False}\n def fixture(body,content):\n  class Handler(http.server.BaseHTTPRequestHandler):\n   def do_GET(self):\n    data=body.encode();self.send_response(200);self.send_header(\"Content-Type\",content);self.send_header(\"Content-Length\",str(len(data)));self.end_headers();self.wfile.write(data)\n   def log_message(self,*a):pass\n  server=http.server.ThreadingHTTPServer((\"127.0.0.1\",0),Handler);servers.append(server)\n  t=threading.Thread(target=server.serve_forever,daemon=True);t.start();threads.append(t)\n  return server.server_port\n try:\n  with tempfile.TemporaryDirectory(prefix=\"native-prom-scrape-\") as d:\n   root=pathlib.Path(d)\n   port1=fixture(CASE[\"metrics\"],\"application/octet-stream\" if CASE[\"mode\"]==\"content-type\" else \"text/plain; version=0.0.4; charset=utf-8\")\n   port2=fixture('# TYPE demo_requests_total counter\\ndemo_requests_total{path=\"/old\"} 3\\n',\"text/plain; version=0.0.4\")\n   with socket.socket() as sock:sock.bind((\"127.0.0.1\",0));port=sock.getsockname()[1]\n   def mapped(value):\n    if isinstance(value,str):return value.replace(\"127.0.0.1:19100\",\"127.0.0.1:\"+str(port1)).replace(\"127.0.0.1:19101\",\"127.0.0.1:\"+str(port2))\n    if isinstance(value,dict):return {k:mapped(v) for k,v in value.items()}\n    if isinstance(value,list):return [mapped(v) for v in value]\n    return value\n   job=mapped(candidate)\n   if CASE.get(\"discovery\"):\n    (root/\"inventory.json\").write_text(json.dumps(mapped(CASE[\"discovery\"])),encoding=\"utf-8\")\n    job[\"file_sd_configs\"][0][\"files\"]=[str(root/\"inventory.json\")]\n   config=root/\"prometheus.yaml\"\n   def write(job):config.write_text(yaml.safe_dump({\"global\":{\"scrape_interval\":\"1s\",\"scrape_timeout\":\"500ms\"},\"scrape_configs\":[job]},sort_keys=False),encoding=\"utf-8\")\n   baseline=mapped(copy.deepcopy(CASE[\"base_job\"]));baseline[\"static_configs\"][0][\"labels\"][\"config_version\"]=\"v1\"\n   write(baseline if CASE[\"mode\"]==\"reload\" else job)\n   binary=shutil.which(\"prometheus\");assert binary,\"platform must supply native prometheus\"\n   env=dict(os.environ,GOMAXPROCS=\"2\",GOMEMLIMIT=\"96MiB\")\n   with (root/\"server.log\").open(\"wb\") as log:\n    proc=subprocess.Popen([binary,\"--config.file=\"+str(config),\"--storage.tsdb.path=\"+str(root/\"data\"),\"--storage.tsdb.retention.time=1h\",\"--storage.tsdb.wal-segment-size=10MB\",\"--query.max-concurrency=2\",\"--query.timeout=2s\",\"--web.listen-address=127.0.0.1:\"+str(port),\"--web.enable-lifecycle\",\"--log.level=error\"],stdout=log,stderr=log,env=env,cwd=root)\n    deadline=time.monotonic()+40\n    def monitor():\n     while not stop.wait(.1):\n      if proc.poll() is not None:return\n      try:\n       amount=rss(proc.pid);stats[\"peak_rss_bytes\"]=max(stats[\"peak_rss_bytes\"],amount)\n       if amount>384*1024*1024 or time.monotonic()>deadline:\n        guard_fail.append(\"resource ceiling\");proc.kill();return\n      except Exception as exc:\n       if proc.poll() is None:guard_fail.append(str(exc));proc.kill()\n       return\n    guard=threading.Thread(target=monitor,daemon=True);guard.start()\n    base=\"http://127.0.0.1:\"+str(port)\n    def request(path,post=False):\n     req=urllib.request.Request(base+path,data=b\"\" if post else None)\n     try:\n      with urllib.request.urlopen(req,timeout=1) as r:return r.status,r.read()\n     except urllib.error.HTTPError as exc:return exc.code,exc.read()\n    def api(path):\n     code,data=request(path);assert code==200,(code,data.decode(errors=\"replace\"))\n     return json.loads(data)\n    def query(expr):return api(\"/api/v1/query?\"+urllib.parse.urlencode({\"query\":expr}))[\"data\"][\"result\"]\n    def wait(fn,label,seconds=10):\n     end=time.monotonic()+seconds;last=None\n     while time.monotonic()<end:\n      if guard_fail:raise AssertionError(\"resource guard: \"+repr(guard_fail))\n      if proc.poll() is not None:raise AssertionError(\"Prometheus exited: \"+(root/\"server.log\").read_text(errors=\"replace\"))\n      try:\n       value=fn()\n       if value:return value\n      except (urllib.error.URLError,TimeoutError,ConnectionError,OSError) as exc:last=repr(exc)\n      time.sleep(.15)\n     raise AssertionError(label+\"; last=\"+str(last))\n    try:\n     wait(lambda:request(\"/-/ready\")[0]==200,\"server not ready\",8)\n     if CASE[\"mode\"]==\"reload\":\n      wait(lambda:len(query('demo_requests_total{config_version=\"v1\"}'))==2,\"baseline not scraped\")\n      write(job);code,data=request(\"/-/reload\",True);assert code==200,\"candidate reload rejected: \"+data.decode(errors=\"replace\")\n      since=time.time()\n      wait(lambda:len(query('demo_requests_total{config_version=\"v2\",service=\"shop\"}'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})')),\"v2 not effective\")\n      config.write_text(\"global:\\n  unknown_setting: true\\n\",encoding=\"utf-8\")\n      code,_=request(\"/-/reload\",True);assert code>=400,\"invalid reload accepted\"\n      since=time.time()\n      wait(lambda:len(query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})')),\"invalid reload damaged live config\")\n      write(baseline);code,_=request(\"/-/reload\",True);assert code==200\n      since=time.time()\n      wait(lambda:len(query('timestamp(demo_requests_total{config_version=\"v1\",service=\"shop\"})'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v1\",service=\"shop\"})')),\"rollback not effective\")\n      print(\"native reload validated: v1 -> v2 -> rejected invalid -> fresh v2 -> fresh v1\")\n     else:\n      expected=2 if CASE[\"mode\"] in [\"meta\",\"discovery\"] else 1\n      targets=wait(lambda:api(\"/api/v1/targets?state=any\")[\"data\"],\"targets unavailable\")\n      wait(lambda:len(query(\"up\"))>=expected,\"no up samples\",10)\n      targets=api(\"/api/v1/targets?state=any\")[\"data\"]\n      print(\"native target state:\",json.dumps(targets,ensure_ascii=False)[:5000])\n      assert len(targets[\"activeTargets\"])==expected,\"wrong active target count\"\n      if CASE[\"mode\"]==\"discovery\":assert len(targets[\"droppedTargets\"])==1,\"lab target must remain dropped\"\n      health=query(\"up\");assert len(health)==expected and all(x[\"value\"][1]==\"1\" for x in health),\"native scrape failed\"\n      business=query(\"demo_requests_total\")\n      assert len(business)==2*expected,\"lost or added business series\"\n      assert sum(float(x[\"value\"][1]) for x in business)==18*expected,\"business values differ\"\n      for item in business:\n       labels=item[\"metric\"];value=float(item[\"value\"][1])\n       assert labels.get(\"path\") in [\"/pay\",\"/browse\"] and value=={\"/pay\":7,\"/browse\":11}[labels[\"path\"]]\n       assert labels.get(\"env\")==\"prod\" and labels.get(\"service\")==\"shop\"\n       assert not any(k.startswith(\"__meta_\") for k in labels)\n       if CASE[\"mode\"]==\"address\":assert labels.get(\"instance\")==\"checkout-api\" and \"real_address\" not in labels\n      if CASE[\"mode\"]==\"meta\":assert {x[\"metric\"].get(\"zone\") for x in business}=={\"cn-east\",\"cn-west\"}\n      if CASE[\"mode\"]==\"discovery\":assert {x[\"metric\"].get(\"region\") for x in business}=={\"cn-east\",\"cn-west\"}\n      if CASE[\"mode\"] in [\"budget\",\"stages\"]:assert query(\"debug_session_bytes\")==[],\"debug family leaked\"\n      if CASE[\"mode\"]==\"budget\":\n       healthdata=query(\"app_health\");assert len(healthdata)==1 and healthdata[0][\"value\"][1]==\"1\"\n      print(\"native scrape and business contract passed\")\n    finally:\n     stop.set()\n     if proc.poll() is None:\n      proc.terminate()\n      try:proc.wait(timeout=4)\n      except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n     stats[\"terminated\"]=proc.poll() is not None\n     if guard:guard.join(timeout=2)\n     assert not guard_fail,\"resource guard fired: \"+repr(guard_fail)\n finally:\n  stop.set()\n  if proc is not None and proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  if guard:guard.join(timeout=2)\n  for server in servers:server.shutdown();server.server_close()\n  for t in threads:t.join(timeout=2)\n  print(\"native child lifecycle:\",json.dumps(stats))\n\n",
+        "checks/check.py": "import runpy\nrunpy.run_path(\"checks/native.py\")[\"execute\"]({'mode': 'budget', 'metrics': '# HELP demo_requests_total Public fixed request counter\\n# TYPE demo_requests_total counter\\ndemo_requests_total{path=\"/pay\"} 7\\ndemo_requests_total{path=\"/browse\"} 11\\n# TYPE app_health gauge\\napp_health 1\\ndebug_session_bytes{session=\"s0\"} 1\\ndebug_session_bytes{session=\"s1\"} 2\\ndebug_session_bytes{session=\"s2\"} 3\\ndebug_session_bytes{session=\"s3\"} 4\\ndebug_session_bytes{session=\"s4\"} 5\\ndebug_session_bytes{session=\"s5\"} 6\\ndebug_session_bytes{session=\"s6\"} 7\\ndebug_session_bytes{session=\"s7\"} 8\\ndebug_session_bytes{session=\"s8\"} 9\\ndebug_session_bytes{session=\"s9\"} 10\\n', 'base_job': {'job_name': 'exercise', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'static_configs': [{'targets': ['127.0.0.1:19100'], 'labels': {'env': 'prod', 'service': 'shop'}}]}, 'discovery': None, 'fixed': {'static_configs': [{'targets': ['127.0.0.1:19100'], 'labels': {'env': 'prod', 'service': 'shop'}}]}})\n"
+      }
+    },
+    "run": "python3 checks/check.py"
+  },
+  {
+    "id": "curated-parallel-prometheus-038",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "服务发现与标签处理",
+    "title": "将服务发现元标签带入实际存储的分区序列",
+    "answer": "```yaml\njob_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nfile_sd_configs:\n- files:\n  - inventory.json\n  refresh_interval: 1s\nrelabel_configs:\n- source_labels:\n  - __meta_zone\n  target_label: zone\n```\n\ninventory.json包含东西两个节点，__meta_zone在发现阶段存在但不会自动存入样本。将各自zone复制为公开zone标签；两个节点各保留/pay=7、/browse=11，总量36，两个zone分别cn-east/cn-west，不能统一写死。__meta_标签不得遗留在查询结果。\n\n验收器直接观察原生Prometheus结果：健康up值不能代替业务指标完整性；必须同时检查标签与数值。不能通过放宽容量、删除关键指标或把测试改为空集来通过。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "它们是服务发现提供的临时元数据，目标重标记结束后内部标签通常被移除。",
+      "需要的值应复制到稳定普通标签，同时评估基数与敏感性。",
+      "不能在PromQL中假定所有发现元数据自动存在。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/",
+      "https://prometheus.io/docs/prometheus/latest/querying/api/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nfile_sd_configs:\n- files:\n  - inventory.json\n  refresh_interval: 1s\nrelabel_configs: []\n",
+      "metrics.txt": "# HELP demo_requests_total Public fixed request counter\n# TYPE demo_requests_total counter\ndemo_requests_total{path=\"/pay\"} 7\ndemo_requests_total{path=\"/browse\"} 11\n",
+      "inventory.json": "[\n  {\n    \"targets\": [\n      \"127.0.0.1:19100\"\n    ],\n    \"labels\": {\n      \"node\": \"node-cn-east\",\n      \"__meta_zone\": \"cn-east\",\n      \"env\": \"prod\",\n      \"service\": \"shop\"\n    }\n  },\n  {\n    \"targets\": [\n      \"127.0.0.1:19100\"\n    ],\n    \"labels\": {\n      \"node\": \"node-cn-west\",\n      \"__meta_zone\": \"cn-west\",\n      \"env\": \"prod\",\n      \"service\": \"shop\"\n    }\n  }\n]"
+    },
+    "solution_files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nfile_sd_configs:\n- files:\n  - inventory.json\n  refresh_interval: 1s\nrelabel_configs:\n- source_labels:\n  - __meta_zone\n  target_label: zone\n"
+    },
+    "negative_files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nfile_sd_configs:\n- files:\n  - inventory.json\n  refresh_interval: 1s\nrelabel_configs:\n- target_label: zone\n  replacement: cn-east\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供Prometheus 3.5、Python/PyYAML。job.yaml是固定采集配置中的一个完整scrape job，metrics.txt为本地测试端返回的实际样本。19100/19101是题目占位地址，验收会换成本工作区127.0.0.1随机端口；无需学员另开Kubernetes，不访问业务服务。\n\n## 操作任务\ninventory.json包含东西两个节点，__meta_zone在发现阶段存在但不会自动存入样本。将各自zone复制为公开zone标签；两个节点各保留/pay=7、/browse=11，总量36，两个zone分别cn-east/cn-west，不能统一写死。__meta_标签不得遗留在查询结果。\n\n## 产物\n提交job.yaml，保留exercise作业名、1s间隔和500ms超时、固定目标材料及本题要求的业务标签。仅调整题目要求的配置；服务地址、全局配置、远端存储由隔离验收器控制。\n\n## 验收方法\n执行python3 checks/check.py。真正启动短生命周期Prometheus和本地固定指标HTTP端，通过/api/v1/targets、实际PromQL查询和必要的/-/reload验证。正确配置应达到给定的样本数、值与标签；原错误及典型错误必须失败。并非只做YAML解析。进程只监听127.0.0.1，限时/限内存并finally退出；报告不代表生产部署通过。\n\n## 原理复习\n__meta标签为什么需要显式复制后才能长期查询？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-prometheus-service",
+      "deliverables": [
+        "job.yaml"
+      ],
+      "operation": "inventory.json包含东西两个节点，__meta_zone在发现阶段存在但不会自动存入样本。将各自zone复制为公开zone标签；两个节点各保留/pay=7、/browse=11，总量36，两个zone分别cn-east/cn-west，不能统一写死。__meta_标签不得遗留在查询结果。",
+      "verification": "native Prometheus loopback scrape/target/query/reload behavior",
+      "capability_gap": [
+        "原生服务合同已本地验证；平台实验镜像需带prometheus可执行文件，缺工具应显示能力不可用。",
+        "不访问或修改任何生产监控服务。"
+      ],
+      "failure_examples": [
+        "negative_files包含能掩盖症状但不满足业务样本/标签合同的错误修复。"
+      ]
+    },
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-038",
+      "original_type": "interview",
+      "original_title": "__meta标签为什么需要显式复制后才能长期查询？",
+      "original_version": 1,
+      "theory_retained": true
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 55,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/native.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\ndef execute(CASE):\n candidate=yaml.load(pathlib.Path(\"job.yaml\").read_text(encoding=\"utf-8\"),Loader=Strict)\n assert isinstance(candidate,dict) and pathlib.Path(\"job.yaml\").stat().st_size<=32768\n allowed={\"job_name\",\"scrape_interval\",\"scrape_timeout\",\"static_configs\",\"file_sd_configs\",\"relabel_configs\",\"metric_relabel_configs\",\"sample_limit\",\"fallback_scrape_protocol\",\"scrape_protocols\"}\n assert set(candidate)<=allowed\n assert candidate[\"job_name\"]==\"exercise\" and candidate[\"scrape_interval\"]==\"1s\"\n assert candidate[\"scrape_timeout\"] in [\"500ms\",\"2s\"]\n if CASE[\"mode\"]==\"budget\":assert candidate.get(\"sample_limit\")==3,\"capacity budget must stay3\"\n for name in [\"static_configs\",\"file_sd_configs\"]:\n  assert candidate.get(name)==CASE[\"fixed\"].get(name),\"keep supplied discovery/target inventory\"\n servers=[];threads=[];proc=None;guard=None;stop=threading.Event();guard_fail=[];stats={\"peak_rss_bytes\":0,\"terminated\":False}\n def fixture(body,content):\n  class Handler(http.server.BaseHTTPRequestHandler):\n   def do_GET(self):\n    data=body.encode();self.send_response(200);self.send_header(\"Content-Type\",content);self.send_header(\"Content-Length\",str(len(data)));self.end_headers();self.wfile.write(data)\n   def log_message(self,*a):pass\n  server=http.server.ThreadingHTTPServer((\"127.0.0.1\",0),Handler);servers.append(server)\n  t=threading.Thread(target=server.serve_forever,daemon=True);t.start();threads.append(t)\n  return server.server_port\n try:\n  with tempfile.TemporaryDirectory(prefix=\"native-prom-scrape-\") as d:\n   root=pathlib.Path(d)\n   port1=fixture(CASE[\"metrics\"],\"application/octet-stream\" if CASE[\"mode\"]==\"content-type\" else \"text/plain; version=0.0.4; charset=utf-8\")\n   port2=fixture('# TYPE demo_requests_total counter\\ndemo_requests_total{path=\"/old\"} 3\\n',\"text/plain; version=0.0.4\")\n   with socket.socket() as sock:sock.bind((\"127.0.0.1\",0));port=sock.getsockname()[1]\n   def mapped(value):\n    if isinstance(value,str):return value.replace(\"127.0.0.1:19100\",\"127.0.0.1:\"+str(port1)).replace(\"127.0.0.1:19101\",\"127.0.0.1:\"+str(port2))\n    if isinstance(value,dict):return {k:mapped(v) for k,v in value.items()}\n    if isinstance(value,list):return [mapped(v) for v in value]\n    return value\n   job=mapped(candidate)\n   if CASE.get(\"discovery\"):\n    (root/\"inventory.json\").write_text(json.dumps(mapped(CASE[\"discovery\"])),encoding=\"utf-8\")\n    job[\"file_sd_configs\"][0][\"files\"]=[str(root/\"inventory.json\")]\n   config=root/\"prometheus.yaml\"\n   def write(job):config.write_text(yaml.safe_dump({\"global\":{\"scrape_interval\":\"1s\",\"scrape_timeout\":\"500ms\"},\"scrape_configs\":[job]},sort_keys=False),encoding=\"utf-8\")\n   baseline=mapped(copy.deepcopy(CASE[\"base_job\"]));baseline[\"static_configs\"][0][\"labels\"][\"config_version\"]=\"v1\"\n   write(baseline if CASE[\"mode\"]==\"reload\" else job)\n   binary=shutil.which(\"prometheus\");assert binary,\"platform must supply native prometheus\"\n   env=dict(os.environ,GOMAXPROCS=\"2\",GOMEMLIMIT=\"96MiB\")\n   with (root/\"server.log\").open(\"wb\") as log:\n    proc=subprocess.Popen([binary,\"--config.file=\"+str(config),\"--storage.tsdb.path=\"+str(root/\"data\"),\"--storage.tsdb.retention.time=1h\",\"--storage.tsdb.wal-segment-size=10MB\",\"--query.max-concurrency=2\",\"--query.timeout=2s\",\"--web.listen-address=127.0.0.1:\"+str(port),\"--web.enable-lifecycle\",\"--log.level=error\"],stdout=log,stderr=log,env=env,cwd=root)\n    deadline=time.monotonic()+40\n    def monitor():\n     while not stop.wait(.1):\n      if proc.poll() is not None:return\n      try:\n       amount=rss(proc.pid);stats[\"peak_rss_bytes\"]=max(stats[\"peak_rss_bytes\"],amount)\n       if amount>384*1024*1024 or time.monotonic()>deadline:\n        guard_fail.append(\"resource ceiling\");proc.kill();return\n      except Exception as exc:\n       if proc.poll() is None:guard_fail.append(str(exc));proc.kill()\n       return\n    guard=threading.Thread(target=monitor,daemon=True);guard.start()\n    base=\"http://127.0.0.1:\"+str(port)\n    def request(path,post=False):\n     req=urllib.request.Request(base+path,data=b\"\" if post else None)\n     try:\n      with urllib.request.urlopen(req,timeout=1) as r:return r.status,r.read()\n     except urllib.error.HTTPError as exc:return exc.code,exc.read()\n    def api(path):\n     code,data=request(path);assert code==200,(code,data.decode(errors=\"replace\"))\n     return json.loads(data)\n    def query(expr):return api(\"/api/v1/query?\"+urllib.parse.urlencode({\"query\":expr}))[\"data\"][\"result\"]\n    def wait(fn,label,seconds=10):\n     end=time.monotonic()+seconds;last=None\n     while time.monotonic()<end:\n      if guard_fail:raise AssertionError(\"resource guard: \"+repr(guard_fail))\n      if proc.poll() is not None:raise AssertionError(\"Prometheus exited: \"+(root/\"server.log\").read_text(errors=\"replace\"))\n      try:\n       value=fn()\n       if value:return value\n      except (urllib.error.URLError,TimeoutError,ConnectionError,OSError) as exc:last=repr(exc)\n      time.sleep(.15)\n     raise AssertionError(label+\"; last=\"+str(last))\n    try:\n     wait(lambda:request(\"/-/ready\")[0]==200,\"server not ready\",8)\n     if CASE[\"mode\"]==\"reload\":\n      wait(lambda:len(query('demo_requests_total{config_version=\"v1\"}'))==2,\"baseline not scraped\")\n      write(job);code,data=request(\"/-/reload\",True);assert code==200,\"candidate reload rejected: \"+data.decode(errors=\"replace\")\n      since=time.time()\n      wait(lambda:len(query('demo_requests_total{config_version=\"v2\",service=\"shop\"}'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})')),\"v2 not effective\")\n      config.write_text(\"global:\\n  unknown_setting: true\\n\",encoding=\"utf-8\")\n      code,_=request(\"/-/reload\",True);assert code>=400,\"invalid reload accepted\"\n      since=time.time()\n      wait(lambda:len(query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})')),\"invalid reload damaged live config\")\n      write(baseline);code,_=request(\"/-/reload\",True);assert code==200\n      since=time.time()\n      wait(lambda:len(query('timestamp(demo_requests_total{config_version=\"v1\",service=\"shop\"})'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v1\",service=\"shop\"})')),\"rollback not effective\")\n      print(\"native reload validated: v1 -> v2 -> rejected invalid -> fresh v2 -> fresh v1\")\n     else:\n      expected=2 if CASE[\"mode\"] in [\"meta\",\"discovery\"] else 1\n      targets=wait(lambda:api(\"/api/v1/targets?state=any\")[\"data\"],\"targets unavailable\")\n      wait(lambda:len(query(\"up\"))>=expected,\"no up samples\",10)\n      targets=api(\"/api/v1/targets?state=any\")[\"data\"]\n      print(\"native target state:\",json.dumps(targets,ensure_ascii=False)[:5000])\n      assert len(targets[\"activeTargets\"])==expected,\"wrong active target count\"\n      if CASE[\"mode\"]==\"discovery\":assert len(targets[\"droppedTargets\"])==1,\"lab target must remain dropped\"\n      health=query(\"up\");assert len(health)==expected and all(x[\"value\"][1]==\"1\" for x in health),\"native scrape failed\"\n      business=query(\"demo_requests_total\")\n      assert len(business)==2*expected,\"lost or added business series\"\n      assert sum(float(x[\"value\"][1]) for x in business)==18*expected,\"business values differ\"\n      for item in business:\n       labels=item[\"metric\"];value=float(item[\"value\"][1])\n       assert labels.get(\"path\") in [\"/pay\",\"/browse\"] and value=={\"/pay\":7,\"/browse\":11}[labels[\"path\"]]\n       assert labels.get(\"env\")==\"prod\" and labels.get(\"service\")==\"shop\"\n       assert not any(k.startswith(\"__meta_\") for k in labels)\n       if CASE[\"mode\"]==\"address\":assert labels.get(\"instance\")==\"checkout-api\" and \"real_address\" not in labels\n      if CASE[\"mode\"]==\"meta\":assert {x[\"metric\"].get(\"zone\") for x in business}=={\"cn-east\",\"cn-west\"}\n      if CASE[\"mode\"]==\"discovery\":assert {x[\"metric\"].get(\"region\") for x in business}=={\"cn-east\",\"cn-west\"}\n      if CASE[\"mode\"] in [\"budget\",\"stages\"]:assert query(\"debug_session_bytes\")==[],\"debug family leaked\"\n      if CASE[\"mode\"]==\"budget\":\n       healthdata=query(\"app_health\");assert len(healthdata)==1 and healthdata[0][\"value\"][1]==\"1\"\n      print(\"native scrape and business contract passed\")\n    finally:\n     stop.set()\n     if proc.poll() is None:\n      proc.terminate()\n      try:proc.wait(timeout=4)\n      except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n     stats[\"terminated\"]=proc.poll() is not None\n     if guard:guard.join(timeout=2)\n     assert not guard_fail,\"resource guard fired: \"+repr(guard_fail)\n finally:\n  stop.set()\n  if proc is not None and proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  if guard:guard.join(timeout=2)\n  for server in servers:server.shutdown();server.server_close()\n  for t in threads:t.join(timeout=2)\n  print(\"native child lifecycle:\",json.dumps(stats))\n\n",
+        "checks/check.py": "import runpy\nrunpy.run_path(\"checks/native.py\")[\"execute\"]({'mode': 'meta', 'metrics': '# HELP demo_requests_total Public fixed request counter\\n# TYPE demo_requests_total counter\\ndemo_requests_total{path=\"/pay\"} 7\\ndemo_requests_total{path=\"/browse\"} 11\\n', 'base_job': {'job_name': 'exercise', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'static_configs': [{'targets': ['127.0.0.1:19100'], 'labels': {'env': 'prod', 'service': 'shop'}}]}, 'discovery': [{'targets': ['127.0.0.1:19100'], 'labels': {'node': 'node-cn-east', '__meta_zone': 'cn-east', 'env': 'prod', 'service': 'shop'}}, {'targets': ['127.0.0.1:19100'], 'labels': {'node': 'node-cn-west', '__meta_zone': 'cn-west', 'env': 'prod', 'service': 'shop'}}], 'fixed': {'file_sd_configs': [{'files': ['inventory.json'], 'refresh_interval': '1s'}]}})\n"
+      }
+    },
+    "run": "python3 checks/check.py"
+  },
+  {
+    "id": "curated-parallel-prometheus-039",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "服务发现与标签处理",
+    "title": "同时修正实际抓取地址与稳定的逻辑instance身份",
+    "answer": "```yaml\njob_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19101\n  labels:\n    env: prod\n    service: shop\n    real_address: 127.0.0.1:19100\nrelabel_configs:\n- source_labels:\n  - real_address\n  target_label: __address__\n- target_label: instance\n  replacement: checkout-api\n- action: labeldrop\n  regex: real_address\n```\n\n19101端是错误但仍HTTP200的旧端，仅返回请求值3；19100端是正确端，返回两路径合计18。使用发现材料real_address修正__address__，同时把instance固定为checkout-api。不要把改instance当成实际改抓取端点，也不要让逻辑instance随端口变化；最终不保留real_address标签。\n\n验收器直接观察原生Prometheus结果：健康up值不能代替业务指标完整性；必须同时检查标签与数值。不能通过放宽容量、删除关键指标或把测试改为空集来通过。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "__address__影响实际抓取端点，instance通常用于最终序列身份。",
+      "只修改instance不会改变网络连接目标，改地址后还应确认identity是否正确。",
+      "错误配置可能让显示名称与实际机器不一致。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/",
+      "https://prometheus.io/docs/prometheus/latest/querying/api/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19101\n  labels:\n    env: prod\n    service: shop\n    real_address: 127.0.0.1:19100\nrelabel_configs:\n- target_label: instance\n  replacement: checkout-api\n- action: labeldrop\n  regex: real_address\n",
+      "metrics.txt": "# HELP demo_requests_total Public fixed request counter\n# TYPE demo_requests_total counter\ndemo_requests_total{path=\"/pay\"} 7\ndemo_requests_total{path=\"/browse\"} 11\n"
+    },
+    "solution_files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19101\n  labels:\n    env: prod\n    service: shop\n    real_address: 127.0.0.1:19100\nrelabel_configs:\n- source_labels:\n  - real_address\n  target_label: __address__\n- target_label: instance\n  replacement: checkout-api\n- action: labeldrop\n  regex: real_address\n"
+    },
+    "negative_files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19101\n  labels:\n    env: prod\n    service: shop\n    real_address: 127.0.0.1:19100\nrelabel_configs:\n- source_labels:\n  - real_address\n  target_label: __address__\n- action: labeldrop\n  regex: real_address\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供Prometheus 3.5、Python/PyYAML。job.yaml是固定采集配置中的一个完整scrape job，metrics.txt为本地测试端返回的实际样本。19100/19101是题目占位地址，验收会换成本工作区127.0.0.1随机端口；无需学员另开Kubernetes，不访问业务服务。\n\n## 操作任务\n19101端是错误但仍HTTP200的旧端，仅返回请求值3；19100端是正确端，返回两路径合计18。使用发现材料real_address修正__address__，同时把instance固定为checkout-api。不要把改instance当成实际改抓取端点，也不要让逻辑instance随端口变化；最终不保留real_address标签。\n\n## 产物\n提交job.yaml，保留exercise作业名、1s间隔和500ms超时、固定目标材料及本题要求的业务标签。仅调整题目要求的配置；服务地址、全局配置、远端存储由隔离验收器控制。\n\n## 验收方法\n执行python3 checks/check.py。真正启动短生命周期Prometheus和本地固定指标HTTP端，通过/api/v1/targets、实际PromQL查询和必要的/-/reload验证。正确配置应达到给定的样本数、值与标签；原错误及典型错误必须失败。并非只做YAML解析。进程只监听127.0.0.1，限时/限内存并finally退出；报告不代表生产部署通过。\n\n## 原理复习\n修改__address__与修改instance有什么区别？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-prometheus-service",
+      "deliverables": [
+        "job.yaml"
+      ],
+      "operation": "19101端是错误但仍HTTP200的旧端，仅返回请求值3；19100端是正确端，返回两路径合计18。使用发现材料real_address修正__address__，同时把instance固定为checkout-api。不要把改instance当成实际改抓取端点，也不要让逻辑instance随端口变化；最终不保留real_address标签。",
+      "verification": "native Prometheus loopback scrape/target/query/reload behavior",
+      "capability_gap": [
+        "原生服务合同已本地验证；平台实验镜像需带prometheus可执行文件，缺工具应显示能力不可用。",
+        "不访问或修改任何生产监控服务。"
+      ],
+      "failure_examples": [
+        "negative_files包含能掩盖症状但不满足业务样本/标签合同的错误修复。"
+      ]
+    },
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-039",
+      "original_type": "interview",
+      "original_title": "修改__address__与修改instance有什么区别？",
+      "original_version": 1,
+      "theory_retained": true
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 55,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/native.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\ndef execute(CASE):\n candidate=yaml.load(pathlib.Path(\"job.yaml\").read_text(encoding=\"utf-8\"),Loader=Strict)\n assert isinstance(candidate,dict) and pathlib.Path(\"job.yaml\").stat().st_size<=32768\n allowed={\"job_name\",\"scrape_interval\",\"scrape_timeout\",\"static_configs\",\"file_sd_configs\",\"relabel_configs\",\"metric_relabel_configs\",\"sample_limit\",\"fallback_scrape_protocol\",\"scrape_protocols\"}\n assert set(candidate)<=allowed\n assert candidate[\"job_name\"]==\"exercise\" and candidate[\"scrape_interval\"]==\"1s\"\n assert candidate[\"scrape_timeout\"] in [\"500ms\",\"2s\"]\n if CASE[\"mode\"]==\"budget\":assert candidate.get(\"sample_limit\")==3,\"capacity budget must stay3\"\n for name in [\"static_configs\",\"file_sd_configs\"]:\n  assert candidate.get(name)==CASE[\"fixed\"].get(name),\"keep supplied discovery/target inventory\"\n servers=[];threads=[];proc=None;guard=None;stop=threading.Event();guard_fail=[];stats={\"peak_rss_bytes\":0,\"terminated\":False}\n def fixture(body,content):\n  class Handler(http.server.BaseHTTPRequestHandler):\n   def do_GET(self):\n    data=body.encode();self.send_response(200);self.send_header(\"Content-Type\",content);self.send_header(\"Content-Length\",str(len(data)));self.end_headers();self.wfile.write(data)\n   def log_message(self,*a):pass\n  server=http.server.ThreadingHTTPServer((\"127.0.0.1\",0),Handler);servers.append(server)\n  t=threading.Thread(target=server.serve_forever,daemon=True);t.start();threads.append(t)\n  return server.server_port\n try:\n  with tempfile.TemporaryDirectory(prefix=\"native-prom-scrape-\") as d:\n   root=pathlib.Path(d)\n   port1=fixture(CASE[\"metrics\"],\"application/octet-stream\" if CASE[\"mode\"]==\"content-type\" else \"text/plain; version=0.0.4; charset=utf-8\")\n   port2=fixture('# TYPE demo_requests_total counter\\ndemo_requests_total{path=\"/old\"} 3\\n',\"text/plain; version=0.0.4\")\n   with socket.socket() as sock:sock.bind((\"127.0.0.1\",0));port=sock.getsockname()[1]\n   def mapped(value):\n    if isinstance(value,str):return value.replace(\"127.0.0.1:19100\",\"127.0.0.1:\"+str(port1)).replace(\"127.0.0.1:19101\",\"127.0.0.1:\"+str(port2))\n    if isinstance(value,dict):return {k:mapped(v) for k,v in value.items()}\n    if isinstance(value,list):return [mapped(v) for v in value]\n    return value\n   job=mapped(candidate)\n   if CASE.get(\"discovery\"):\n    (root/\"inventory.json\").write_text(json.dumps(mapped(CASE[\"discovery\"])),encoding=\"utf-8\")\n    job[\"file_sd_configs\"][0][\"files\"]=[str(root/\"inventory.json\")]\n   config=root/\"prometheus.yaml\"\n   def write(job):config.write_text(yaml.safe_dump({\"global\":{\"scrape_interval\":\"1s\",\"scrape_timeout\":\"500ms\"},\"scrape_configs\":[job]},sort_keys=False),encoding=\"utf-8\")\n   baseline=mapped(copy.deepcopy(CASE[\"base_job\"]));baseline[\"static_configs\"][0][\"labels\"][\"config_version\"]=\"v1\"\n   write(baseline if CASE[\"mode\"]==\"reload\" else job)\n   binary=shutil.which(\"prometheus\");assert binary,\"platform must supply native prometheus\"\n   env=dict(os.environ,GOMAXPROCS=\"2\",GOMEMLIMIT=\"96MiB\")\n   with (root/\"server.log\").open(\"wb\") as log:\n    proc=subprocess.Popen([binary,\"--config.file=\"+str(config),\"--storage.tsdb.path=\"+str(root/\"data\"),\"--storage.tsdb.retention.time=1h\",\"--storage.tsdb.wal-segment-size=10MB\",\"--query.max-concurrency=2\",\"--query.timeout=2s\",\"--web.listen-address=127.0.0.1:\"+str(port),\"--web.enable-lifecycle\",\"--log.level=error\"],stdout=log,stderr=log,env=env,cwd=root)\n    deadline=time.monotonic()+40\n    def monitor():\n     while not stop.wait(.1):\n      if proc.poll() is not None:return\n      try:\n       amount=rss(proc.pid);stats[\"peak_rss_bytes\"]=max(stats[\"peak_rss_bytes\"],amount)\n       if amount>384*1024*1024 or time.monotonic()>deadline:\n        guard_fail.append(\"resource ceiling\");proc.kill();return\n      except Exception as exc:\n       if proc.poll() is None:guard_fail.append(str(exc));proc.kill()\n       return\n    guard=threading.Thread(target=monitor,daemon=True);guard.start()\n    base=\"http://127.0.0.1:\"+str(port)\n    def request(path,post=False):\n     req=urllib.request.Request(base+path,data=b\"\" if post else None)\n     try:\n      with urllib.request.urlopen(req,timeout=1) as r:return r.status,r.read()\n     except urllib.error.HTTPError as exc:return exc.code,exc.read()\n    def api(path):\n     code,data=request(path);assert code==200,(code,data.decode(errors=\"replace\"))\n     return json.loads(data)\n    def query(expr):return api(\"/api/v1/query?\"+urllib.parse.urlencode({\"query\":expr}))[\"data\"][\"result\"]\n    def wait(fn,label,seconds=10):\n     end=time.monotonic()+seconds;last=None\n     while time.monotonic()<end:\n      if guard_fail:raise AssertionError(\"resource guard: \"+repr(guard_fail))\n      if proc.poll() is not None:raise AssertionError(\"Prometheus exited: \"+(root/\"server.log\").read_text(errors=\"replace\"))\n      try:\n       value=fn()\n       if value:return value\n      except (urllib.error.URLError,TimeoutError,ConnectionError,OSError) as exc:last=repr(exc)\n      time.sleep(.15)\n     raise AssertionError(label+\"; last=\"+str(last))\n    try:\n     wait(lambda:request(\"/-/ready\")[0]==200,\"server not ready\",8)\n     if CASE[\"mode\"]==\"reload\":\n      wait(lambda:len(query('demo_requests_total{config_version=\"v1\"}'))==2,\"baseline not scraped\")\n      write(job);code,data=request(\"/-/reload\",True);assert code==200,\"candidate reload rejected: \"+data.decode(errors=\"replace\")\n      since=time.time()\n      wait(lambda:len(query('demo_requests_total{config_version=\"v2\",service=\"shop\"}'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})')),\"v2 not effective\")\n      config.write_text(\"global:\\n  unknown_setting: true\\n\",encoding=\"utf-8\")\n      code,_=request(\"/-/reload\",True);assert code>=400,\"invalid reload accepted\"\n      since=time.time()\n      wait(lambda:len(query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})')),\"invalid reload damaged live config\")\n      write(baseline);code,_=request(\"/-/reload\",True);assert code==200\n      since=time.time()\n      wait(lambda:len(query('timestamp(demo_requests_total{config_version=\"v1\",service=\"shop\"})'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v1\",service=\"shop\"})')),\"rollback not effective\")\n      print(\"native reload validated: v1 -> v2 -> rejected invalid -> fresh v2 -> fresh v1\")\n     else:\n      expected=2 if CASE[\"mode\"] in [\"meta\",\"discovery\"] else 1\n      targets=wait(lambda:api(\"/api/v1/targets?state=any\")[\"data\"],\"targets unavailable\")\n      wait(lambda:len(query(\"up\"))>=expected,\"no up samples\",10)\n      targets=api(\"/api/v1/targets?state=any\")[\"data\"]\n      print(\"native target state:\",json.dumps(targets,ensure_ascii=False)[:5000])\n      assert len(targets[\"activeTargets\"])==expected,\"wrong active target count\"\n      if CASE[\"mode\"]==\"discovery\":assert len(targets[\"droppedTargets\"])==1,\"lab target must remain dropped\"\n      health=query(\"up\");assert len(health)==expected and all(x[\"value\"][1]==\"1\" for x in health),\"native scrape failed\"\n      business=query(\"demo_requests_total\")\n      assert len(business)==2*expected,\"lost or added business series\"\n      assert sum(float(x[\"value\"][1]) for x in business)==18*expected,\"business values differ\"\n      for item in business:\n       labels=item[\"metric\"];value=float(item[\"value\"][1])\n       assert labels.get(\"path\") in [\"/pay\",\"/browse\"] and value=={\"/pay\":7,\"/browse\":11}[labels[\"path\"]]\n       assert labels.get(\"env\")==\"prod\" and labels.get(\"service\")==\"shop\"\n       assert not any(k.startswith(\"__meta_\") for k in labels)\n       if CASE[\"mode\"]==\"address\":assert labels.get(\"instance\")==\"checkout-api\" and \"real_address\" not in labels\n      if CASE[\"mode\"]==\"meta\":assert {x[\"metric\"].get(\"zone\") for x in business}=={\"cn-east\",\"cn-west\"}\n      if CASE[\"mode\"]==\"discovery\":assert {x[\"metric\"].get(\"region\") for x in business}=={\"cn-east\",\"cn-west\"}\n      if CASE[\"mode\"] in [\"budget\",\"stages\"]:assert query(\"debug_session_bytes\")==[],\"debug family leaked\"\n      if CASE[\"mode\"]==\"budget\":\n       healthdata=query(\"app_health\");assert len(healthdata)==1 and healthdata[0][\"value\"][1]==\"1\"\n      print(\"native scrape and business contract passed\")\n    finally:\n     stop.set()\n     if proc.poll() is None:\n      proc.terminate()\n      try:proc.wait(timeout=4)\n      except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n     stats[\"terminated\"]=proc.poll() is not None\n     if guard:guard.join(timeout=2)\n     assert not guard_fail,\"resource guard fired: \"+repr(guard_fail)\n finally:\n  stop.set()\n  if proc is not None and proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  if guard:guard.join(timeout=2)\n  for server in servers:server.shutdown();server.server_close()\n  for t in threads:t.join(timeout=2)\n  print(\"native child lifecycle:\",json.dumps(stats))\n\n",
+        "checks/check.py": "import runpy\nrunpy.run_path(\"checks/native.py\")[\"execute\"]({'mode': 'address', 'metrics': '# HELP demo_requests_total Public fixed request counter\\n# TYPE demo_requests_total counter\\ndemo_requests_total{path=\"/pay\"} 7\\ndemo_requests_total{path=\"/browse\"} 11\\n', 'base_job': {'job_name': 'exercise', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'static_configs': [{'targets': ['127.0.0.1:19100'], 'labels': {'env': 'prod', 'service': 'shop'}}]}, 'discovery': None, 'fixed': {'static_configs': [{'targets': ['127.0.0.1:19101'], 'labels': {'env': 'prod', 'service': 'shop', 'real_address': '127.0.0.1:19100'}}]}})\n"
+      }
+    },
+    "run": "python3 checks/check.py"
+  },
+  {
+    "id": "curated-parallel-prometheus-046",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 2,
+    "topic": "抓取配置与采集质量",
+    "title": "为错误Content-Type的旧指标端配置实际解析回退",
+    "answer": "```yaml\njob_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\nfallback_scrape_protocol: PrometheusText0.0.4\n```\n\n固定端点返回Prometheus文本，但Content-Type故意为application/octet-stream，且本题不能修改该端点。配置受支持的回退解析协议，真实抓取两个路径合计18。只改变Accept优先级不会修复响应Content-Type；不得全局放宽其他目标或删除本目标。\n\n验收器直接观察原生Prometheus结果：健康up值不能代替业务指标完整性；必须同时检查标签与数值。不能通过放宽容量、删除关键指标或把测试改为空集来通过。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "Prometheus依据内容协商与类型解析指标，版本对缺失或无效类型的容忍不同。",
+      "按目标版本配置正确exposition格式与响应头，必要时使用明确支持的fallback配置。",
+      "不能把HTML错误页当指标文本。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/",
+      "https://prometheus.io/docs/prometheus/latest/querying/api/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\n",
+      "metrics.txt": "# HELP demo_requests_total Public fixed request counter\n# TYPE demo_requests_total counter\ndemo_requests_total{path=\"/pay\"} 7\ndemo_requests_total{path=\"/browse\"} 11\n"
+    },
+    "solution_files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\nfallback_scrape_protocol: PrometheusText0.0.4\n"
+    },
+    "negative_files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\nscrape_protocols:\n- PrometheusText0.0.4\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供Prometheus 3.5、Python/PyYAML。job.yaml是固定采集配置中的一个完整scrape job，metrics.txt为本地测试端返回的实际样本。19100/19101是题目占位地址，验收会换成本工作区127.0.0.1随机端口；无需学员另开Kubernetes，不访问业务服务。\n\n## 操作任务\n固定端点返回Prometheus文本，但Content-Type故意为application/octet-stream，且本题不能修改该端点。配置受支持的回退解析协议，真实抓取两个路径合计18。只改变Accept优先级不会修复响应Content-Type；不得全局放宽其他目标或删除本目标。\n\n## 产物\n提交job.yaml，保留exercise作业名、1s间隔和500ms超时、固定目标材料及本题要求的业务标签。仅调整题目要求的配置；服务地址、全局配置、远端存储由隔离验收器控制。\n\n## 验收方法\n执行python3 checks/check.py。真正启动短生命周期Prometheus和本地固定指标HTTP端，通过/api/v1/targets、实际PromQL查询和必要的/-/reload验证。正确配置应达到给定的样本数、值与标签；原错误及典型错误必须失败。并非只做YAML解析。进程只监听127.0.0.1，限时/限内存并finally退出；报告不代表生产部署通过。\n\n## 原理复习\n目标Content-Type错误为何在较新版本可能导致抓取失败？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-prometheus-service",
+      "deliverables": [
+        "job.yaml"
+      ],
+      "operation": "固定端点返回Prometheus文本，但Content-Type故意为application/octet-stream，且本题不能修改该端点。配置受支持的回退解析协议，真实抓取两个路径合计18。只改变Accept优先级不会修复响应Content-Type；不得全局放宽其他目标或删除本目标。",
+      "verification": "native Prometheus loopback scrape/target/query/reload behavior",
+      "capability_gap": [
+        "原生服务合同已本地验证；平台实验镜像需带prometheus可执行文件，缺工具应显示能力不可用。",
+        "不访问或修改任何生产监控服务。"
+      ],
+      "failure_examples": [
+        "negative_files包含能掩盖症状但不满足业务样本/标签合同的错误修复。"
+      ]
+    },
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-046",
+      "original_type": "interview",
+      "original_title": "目标Content-Type错误为何在较新版本可能导致抓取失败？",
+      "original_version": 1,
+      "theory_retained": true
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 55,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "prometheus:v3.5"
+        ]
+      },
+      "test_files": {
+        "checks/native.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\ndef execute(CASE):\n candidate=yaml.load(pathlib.Path(\"job.yaml\").read_text(encoding=\"utf-8\"),Loader=Strict)\n assert isinstance(candidate,dict) and pathlib.Path(\"job.yaml\").stat().st_size<=32768\n allowed={\"job_name\",\"scrape_interval\",\"scrape_timeout\",\"static_configs\",\"file_sd_configs\",\"relabel_configs\",\"metric_relabel_configs\",\"sample_limit\",\"fallback_scrape_protocol\",\"scrape_protocols\"}\n assert set(candidate)<=allowed\n assert candidate[\"job_name\"]==\"exercise\" and candidate[\"scrape_interval\"]==\"1s\"\n assert candidate[\"scrape_timeout\"] in [\"500ms\",\"2s\"]\n if CASE[\"mode\"]==\"budget\":assert candidate.get(\"sample_limit\")==3,\"capacity budget must stay3\"\n for name in [\"static_configs\",\"file_sd_configs\"]:\n  assert candidate.get(name)==CASE[\"fixed\"].get(name),\"keep supplied discovery/target inventory\"\n servers=[];threads=[];proc=None;guard=None;stop=threading.Event();guard_fail=[];stats={\"peak_rss_bytes\":0,\"terminated\":False}\n def fixture(body,content):\n  class Handler(http.server.BaseHTTPRequestHandler):\n   def do_GET(self):\n    data=body.encode();self.send_response(200);self.send_header(\"Content-Type\",content);self.send_header(\"Content-Length\",str(len(data)));self.end_headers();self.wfile.write(data)\n   def log_message(self,*a):pass\n  server=http.server.ThreadingHTTPServer((\"127.0.0.1\",0),Handler);servers.append(server)\n  t=threading.Thread(target=server.serve_forever,daemon=True);t.start();threads.append(t)\n  return server.server_port\n try:\n  with tempfile.TemporaryDirectory(prefix=\"native-prom-scrape-\") as d:\n   root=pathlib.Path(d)\n   port1=fixture(CASE[\"metrics\"],\"application/octet-stream\" if CASE[\"mode\"]==\"content-type\" else \"text/plain; version=0.0.4; charset=utf-8\")\n   port2=fixture('# TYPE demo_requests_total counter\\ndemo_requests_total{path=\"/old\"} 3\\n',\"text/plain; version=0.0.4\")\n   with socket.socket() as sock:sock.bind((\"127.0.0.1\",0));port=sock.getsockname()[1]\n   def mapped(value):\n    if isinstance(value,str):return value.replace(\"127.0.0.1:19100\",\"127.0.0.1:\"+str(port1)).replace(\"127.0.0.1:19101\",\"127.0.0.1:\"+str(port2))\n    if isinstance(value,dict):return {k:mapped(v) for k,v in value.items()}\n    if isinstance(value,list):return [mapped(v) for v in value]\n    return value\n   job=mapped(candidate)\n   if CASE.get(\"discovery\"):\n    (root/\"inventory.json\").write_text(json.dumps(mapped(CASE[\"discovery\"])),encoding=\"utf-8\")\n    job[\"file_sd_configs\"][0][\"files\"]=[str(root/\"inventory.json\")]\n   config=root/\"prometheus.yaml\"\n   def write(job):config.write_text(yaml.safe_dump({\"global\":{\"scrape_interval\":\"1s\",\"scrape_timeout\":\"500ms\"},\"scrape_configs\":[job]},sort_keys=False),encoding=\"utf-8\")\n   baseline=mapped(copy.deepcopy(CASE[\"base_job\"]));baseline[\"static_configs\"][0][\"labels\"][\"config_version\"]=\"v1\"\n   write(baseline if CASE[\"mode\"]==\"reload\" else job)\n   binary=shutil.which(\"prometheus\");assert binary,\"platform must supply native prometheus\"\n   env=dict(os.environ,GOMAXPROCS=\"2\",GOMEMLIMIT=\"96MiB\")\n   with (root/\"server.log\").open(\"wb\") as log:\n    proc=subprocess.Popen([binary,\"--config.file=\"+str(config),\"--storage.tsdb.path=\"+str(root/\"data\"),\"--storage.tsdb.retention.time=1h\",\"--storage.tsdb.wal-segment-size=10MB\",\"--query.max-concurrency=2\",\"--query.timeout=2s\",\"--web.listen-address=127.0.0.1:\"+str(port),\"--web.enable-lifecycle\",\"--log.level=error\"],stdout=log,stderr=log,env=env,cwd=root)\n    deadline=time.monotonic()+40\n    def monitor():\n     while not stop.wait(.1):\n      if proc.poll() is not None:return\n      try:\n       amount=rss(proc.pid);stats[\"peak_rss_bytes\"]=max(stats[\"peak_rss_bytes\"],amount)\n       if amount>384*1024*1024 or time.monotonic()>deadline:\n        guard_fail.append(\"resource ceiling\");proc.kill();return\n      except Exception as exc:\n       if proc.poll() is None:guard_fail.append(str(exc));proc.kill()\n       return\n    guard=threading.Thread(target=monitor,daemon=True);guard.start()\n    base=\"http://127.0.0.1:\"+str(port)\n    def request(path,post=False):\n     req=urllib.request.Request(base+path,data=b\"\" if post else None)\n     try:\n      with urllib.request.urlopen(req,timeout=1) as r:return r.status,r.read()\n     except urllib.error.HTTPError as exc:return exc.code,exc.read()\n    def api(path):\n     code,data=request(path);assert code==200,(code,data.decode(errors=\"replace\"))\n     return json.loads(data)\n    def query(expr):return api(\"/api/v1/query?\"+urllib.parse.urlencode({\"query\":expr}))[\"data\"][\"result\"]\n    def wait(fn,label,seconds=10):\n     end=time.monotonic()+seconds;last=None\n     while time.monotonic()<end:\n      if guard_fail:raise AssertionError(\"resource guard: \"+repr(guard_fail))\n      if proc.poll() is not None:raise AssertionError(\"Prometheus exited: \"+(root/\"server.log\").read_text(errors=\"replace\"))\n      try:\n       value=fn()\n       if value:return value\n      except (urllib.error.URLError,TimeoutError,ConnectionError,OSError) as exc:last=repr(exc)\n      time.sleep(.15)\n     raise AssertionError(label+\"; last=\"+str(last))\n    try:\n     wait(lambda:request(\"/-/ready\")[0]==200,\"server not ready\",8)\n     if CASE[\"mode\"]==\"reload\":\n      wait(lambda:len(query('demo_requests_total{config_version=\"v1\"}'))==2,\"baseline not scraped\")\n      write(job);code,data=request(\"/-/reload\",True);assert code==200,\"candidate reload rejected: \"+data.decode(errors=\"replace\")\n      since=time.time()\n      wait(lambda:len(query('demo_requests_total{config_version=\"v2\",service=\"shop\"}'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})')),\"v2 not effective\")\n      config.write_text(\"global:\\n  unknown_setting: true\\n\",encoding=\"utf-8\")\n      code,_=request(\"/-/reload\",True);assert code>=400,\"invalid reload accepted\"\n      since=time.time()\n      wait(lambda:len(query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})')),\"invalid reload damaged live config\")\n      write(baseline);code,_=request(\"/-/reload\",True);assert code==200\n      since=time.time()\n      wait(lambda:len(query('timestamp(demo_requests_total{config_version=\"v1\",service=\"shop\"})'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v1\",service=\"shop\"})')),\"rollback not effective\")\n      print(\"native reload validated: v1 -> v2 -> rejected invalid -> fresh v2 -> fresh v1\")\n     else:\n      expected=2 if CASE[\"mode\"] in [\"meta\",\"discovery\"] else 1\n      targets=wait(lambda:api(\"/api/v1/targets?state=any\")[\"data\"],\"targets unavailable\")\n      wait(lambda:len(query(\"up\"))>=expected,\"no up samples\",10)\n      targets=api(\"/api/v1/targets?state=any\")[\"data\"]\n      print(\"native target state:\",json.dumps(targets,ensure_ascii=False)[:5000])\n      assert len(targets[\"activeTargets\"])==expected,\"wrong active target count\"\n      if CASE[\"mode\"]==\"discovery\":assert len(targets[\"droppedTargets\"])==1,\"lab target must remain dropped\"\n      health=query(\"up\");assert len(health)==expected and all(x[\"value\"][1]==\"1\" for x in health),\"native scrape failed\"\n      business=query(\"demo_requests_total\")\n      assert len(business)==2*expected,\"lost or added business series\"\n      assert sum(float(x[\"value\"][1]) for x in business)==18*expected,\"business values differ\"\n      for item in business:\n       labels=item[\"metric\"];value=float(item[\"value\"][1])\n       assert labels.get(\"path\") in [\"/pay\",\"/browse\"] and value=={\"/pay\":7,\"/browse\":11}[labels[\"path\"]]\n       assert labels.get(\"env\")==\"prod\" and labels.get(\"service\")==\"shop\"\n       assert not any(k.startswith(\"__meta_\") for k in labels)\n       if CASE[\"mode\"]==\"address\":assert labels.get(\"instance\")==\"checkout-api\" and \"real_address\" not in labels\n      if CASE[\"mode\"]==\"meta\":assert {x[\"metric\"].get(\"zone\") for x in business}=={\"cn-east\",\"cn-west\"}\n      if CASE[\"mode\"]==\"discovery\":assert {x[\"metric\"].get(\"region\") for x in business}=={\"cn-east\",\"cn-west\"}\n      if CASE[\"mode\"] in [\"budget\",\"stages\"]:assert query(\"debug_session_bytes\")==[],\"debug family leaked\"\n      if CASE[\"mode\"]==\"budget\":\n       healthdata=query(\"app_health\");assert len(healthdata)==1 and healthdata[0][\"value\"][1]==\"1\"\n      print(\"native scrape and business contract passed\")\n    finally:\n     stop.set()\n     if proc.poll() is None:\n      proc.terminate()\n      try:proc.wait(timeout=4)\n      except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n     stats[\"terminated\"]=proc.poll() is not None\n     if guard:guard.join(timeout=2)\n     assert not guard_fail,\"resource guard fired: \"+repr(guard_fail)\n finally:\n  stop.set()\n  if proc is not None and proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  if guard:guard.join(timeout=2)\n  for server in servers:server.shutdown();server.server_close()\n  for t in threads:t.join(timeout=2)\n  print(\"native child lifecycle:\",json.dumps(stats))\n\n",
+        "checks/check.py": "import runpy\nrunpy.run_path(\"checks/native.py\")[\"execute\"]({'mode': 'content-type', 'metrics': '# HELP demo_requests_total Public fixed request counter\\n# TYPE demo_requests_total counter\\ndemo_requests_total{path=\"/pay\"} 7\\ndemo_requests_total{path=\"/browse\"} 11\\n', 'base_job': {'job_name': 'exercise', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'static_configs': [{'targets': ['127.0.0.1:19100'], 'labels': {'env': 'prod', 'service': 'shop'}}]}, 'discovery': None, 'fixed': {'static_configs': [{'targets': ['127.0.0.1:19100'], 'labels': {'env': 'prod', 'service': 'shop'}}]}})\n"
+      }
+    },
+    "run": "python3 checks/check.py"
+  },
+  {
+    "id": "curated-parallel-prometheus-066",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 3,
+    "topic": "抓取配置与采集质量",
+    "title": "完成有效重载、无效重载保护与回退的真实验收",
+    "answer": "```yaml\njob_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\n    config_version: v2\n```\n\n隔离服务先以config_version=v1基线运行。修复job.yaml中超过scrape_interval的超时，使配置v2通过/-/reload并实际抓到service=shop的两条业务序列。随后验收器注入无效配置：重载须失败而v2继续提供新样本；最后回退v1并确认新样本标签恢复。不要以文件写入成功当重载成功，不能更换业务service标签。\n\n验收器直接观察原生Prometheus结果：健康up值不能代替业务指标完整性；必须同时检查标签与数值。不能通过放宽容量、删除关键指标或把测试改为空集来通过。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "检查实际配置API、最近重载成功指标和日志，再核对容器挂载或启动参数指向的文件。",
+      "重载失败通常保留旧配置，文件内容本身不是生效证据。",
+      "修正后验证目标增减和关键规则。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/configuration/configuration/",
+      "https://prometheus.io/docs/prometheus/latest/querying/api/"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "yaml",
+    "files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 2s\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\n    config_version: v2\n",
+      "metrics.txt": "# HELP demo_requests_total Public fixed request counter\n# TYPE demo_requests_total counter\ndemo_requests_total{path=\"/pay\"} 7\ndemo_requests_total{path=\"/browse\"} 11\n"
+    },
+    "solution_files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\n    config_version: v2\n"
+    },
+    "negative_files": {
+      "job.yaml": "job_name: exercise\nscrape_interval: 1s\nscrape_timeout: 500ms\nstatic_configs:\n- targets:\n  - 127.0.0.1:19100\n  labels:\n    env: prod\n    service: shop\n    config_version: v2\nrelabel_configs:\n- target_label: service\n  replacement: wrong-service\n"
+    },
+    "body": "## 环境与初始材料\n平台隔离工作区提供Prometheus 3.5、Python/PyYAML。job.yaml是固定采集配置中的一个完整scrape job，metrics.txt为本地测试端返回的实际样本。19100/19101是题目占位地址，验收会换成本工作区127.0.0.1随机端口；无需学员另开Kubernetes，不访问业务服务。\n\n## 操作任务\n隔离服务先以config_version=v1基线运行。修复job.yaml中超过scrape_interval的超时，使配置v2通过/-/reload并实际抓到service=shop的两条业务序列。随后验收器注入无效配置：重载须失败而v2继续提供新样本；最后回退v1并确认新样本标签恢复。不要以文件写入成功当重载成功，不能更换业务service标签。\n\n## 产物\n提交job.yaml，保留exercise作业名、1s间隔和500ms超时、固定目标材料及本题要求的业务标签。仅调整题目要求的配置；服务地址、全局配置、远端存储由隔离验收器控制。\n\n## 验收方法\n执行python3 checks/check.py。真正启动短生命周期Prometheus和本地固定指标HTTP端，通过/api/v1/targets、实际PromQL查询和必要的/-/reload验证。正确配置应达到给定的样本数、值与标签；原错误及典型错误必须失败。并非只做YAML解析。进程只监听127.0.0.1，限时/限内存并finally退出；报告不代表生产部署通过。\n\n## 原理复习\n配置文件改完而Prometheus仍按旧目标抓取，怎样确认重载状态？\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-prometheus-service",
+      "deliverables": [
+        "job.yaml"
+      ],
+      "operation": "隔离服务先以config_version=v1基线运行。修复job.yaml中超过scrape_interval的超时，使配置v2通过/-/reload并实际抓到service=shop的两条业务序列。随后验收器注入无效配置：重载须失败而v2继续提供新样本；最后回退v1并确认新样本标签恢复。不要以文件写入成功当重载成功，不能更换业务service标签。",
+      "verification": "native Prometheus loopback scrape/target/query/reload behavior",
+      "capability_gap": [
+        "原生服务合同已本地验证；平台实验镜像需带prometheus可执行文件，缺工具应显示能力不可用。",
+        "不访问或修改任何生产监控服务。"
+      ],
+      "failure_examples": [
+        "negative_files包含能掩盖症状但不满足业务样本/标签合同的错误修复。"
+      ]
+    },
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-066",
+      "original_type": "interview",
+      "original_title": "配置文件改完而Prometheus仍按旧目标抓取，怎样确认重载状态？",
+      "original_version": 1,
+      "theory_retained": true
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 55,
+      "requires": {
+        "commands": [
+          "prometheus"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/native.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.POINTER(PMC),ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\ndef execute(CASE):\n candidate=yaml.load(pathlib.Path(\"job.yaml\").read_text(encoding=\"utf-8\"),Loader=Strict)\n assert isinstance(candidate,dict) and pathlib.Path(\"job.yaml\").stat().st_size<=32768\n allowed={\"job_name\",\"scrape_interval\",\"scrape_timeout\",\"static_configs\",\"file_sd_configs\",\"relabel_configs\",\"metric_relabel_configs\",\"sample_limit\",\"fallback_scrape_protocol\",\"scrape_protocols\"}\n assert set(candidate)<=allowed\n assert candidate[\"job_name\"]==\"exercise\" and candidate[\"scrape_interval\"]==\"1s\"\n assert candidate[\"scrape_timeout\"] in [\"500ms\",\"2s\"]\n if CASE[\"mode\"]==\"budget\":assert candidate.get(\"sample_limit\")==3,\"capacity budget must stay3\"\n for name in [\"static_configs\",\"file_sd_configs\"]:\n  assert candidate.get(name)==CASE[\"fixed\"].get(name),\"keep supplied discovery/target inventory\"\n servers=[];threads=[];proc=None;guard=None;stop=threading.Event();guard_fail=[];stats={\"peak_rss_bytes\":0,\"terminated\":False}\n def fixture(body,content):\n  class Handler(http.server.BaseHTTPRequestHandler):\n   def do_GET(self):\n    data=body.encode();self.send_response(200);self.send_header(\"Content-Type\",content);self.send_header(\"Content-Length\",str(len(data)));self.end_headers();self.wfile.write(data)\n   def log_message(self,*a):pass\n  server=http.server.ThreadingHTTPServer((\"127.0.0.1\",0),Handler);servers.append(server)\n  t=threading.Thread(target=server.serve_forever,daemon=True);t.start();threads.append(t)\n  return server.server_port\n try:\n  with tempfile.TemporaryDirectory(prefix=\"native-prom-scrape-\") as d:\n   root=pathlib.Path(d)\n   port1=fixture(CASE[\"metrics\"],\"application/octet-stream\" if CASE[\"mode\"]==\"content-type\" else \"text/plain; version=0.0.4; charset=utf-8\")\n   port2=fixture('# TYPE demo_requests_total counter\\ndemo_requests_total{path=\"/old\"} 3\\n',\"text/plain; version=0.0.4\")\n   with socket.socket() as sock:sock.bind((\"127.0.0.1\",0));port=sock.getsockname()[1]\n   def mapped(value):\n    if isinstance(value,str):return value.replace(\"127.0.0.1:19100\",\"127.0.0.1:\"+str(port1)).replace(\"127.0.0.1:19101\",\"127.0.0.1:\"+str(port2))\n    if isinstance(value,dict):return {k:mapped(v) for k,v in value.items()}\n    if isinstance(value,list):return [mapped(v) for v in value]\n    return value\n   job=mapped(candidate)\n   if CASE.get(\"discovery\"):\n    (root/\"inventory.json\").write_text(json.dumps(mapped(CASE[\"discovery\"])),encoding=\"utf-8\")\n    job[\"file_sd_configs\"][0][\"files\"]=[str(root/\"inventory.json\")]\n   config=root/\"prometheus.yaml\"\n   def write(job):config.write_text(yaml.safe_dump({\"global\":{\"scrape_interval\":\"1s\",\"scrape_timeout\":\"500ms\"},\"scrape_configs\":[job]},sort_keys=False),encoding=\"utf-8\")\n   baseline=mapped(copy.deepcopy(CASE[\"base_job\"]));baseline[\"static_configs\"][0][\"labels\"][\"config_version\"]=\"v1\"\n   write(baseline if CASE[\"mode\"]==\"reload\" else job)\n   binary=shutil.which(\"prometheus\");assert binary,\"platform must supply native prometheus\"\n   env=dict(os.environ,GOMAXPROCS=\"2\",GOMEMLIMIT=\"96MiB\")\n   with (root/\"server.log\").open(\"wb\") as log:\n    proc=subprocess.Popen([binary,\"--config.file=\"+str(config),\"--storage.tsdb.path=\"+str(root/\"data\"),\"--storage.tsdb.retention.time=1h\",\"--storage.tsdb.wal-segment-size=10MB\",\"--query.max-concurrency=2\",\"--query.timeout=2s\",\"--web.listen-address=127.0.0.1:\"+str(port),\"--web.enable-lifecycle\",\"--log.level=error\"],stdout=log,stderr=log,env=env,cwd=root)\n    deadline=time.monotonic()+40\n    def monitor():\n     while not stop.wait(.1):\n      if proc.poll() is not None:return\n      try:\n       amount=rss(proc.pid);stats[\"peak_rss_bytes\"]=max(stats[\"peak_rss_bytes\"],amount)\n       if amount>384*1024*1024 or time.monotonic()>deadline:\n        guard_fail.append(\"resource ceiling\");proc.kill();return\n      except Exception as exc:\n       if proc.poll() is None:guard_fail.append(str(exc));proc.kill()\n       return\n    guard=threading.Thread(target=monitor,daemon=True);guard.start()\n    base=\"http://127.0.0.1:\"+str(port)\n    def request(path,post=False):\n     req=urllib.request.Request(base+path,data=b\"\" if post else None)\n     try:\n      with urllib.request.urlopen(req,timeout=1) as r:return r.status,r.read()\n     except urllib.error.HTTPError as exc:return exc.code,exc.read()\n    def api(path):\n     code,data=request(path);assert code==200,(code,data.decode(errors=\"replace\"))\n     return json.loads(data)\n    def query(expr):return api(\"/api/v1/query?\"+urllib.parse.urlencode({\"query\":expr}))[\"data\"][\"result\"]\n    def wait(fn,label,seconds=10):\n     end=time.monotonic()+seconds;last=None\n     while time.monotonic()<end:\n      if guard_fail:raise AssertionError(\"resource guard: \"+repr(guard_fail))\n      if proc.poll() is not None:raise AssertionError(\"Prometheus exited: \"+(root/\"server.log\").read_text(errors=\"replace\"))\n      try:\n       value=fn()\n       if value:return value\n      except (urllib.error.URLError,TimeoutError,ConnectionError,OSError) as exc:last=repr(exc)\n      time.sleep(.15)\n     raise AssertionError(label+\"; last=\"+str(last))\n    try:\n     wait(lambda:request(\"/-/ready\")[0]==200,\"server not ready\",8)\n     if CASE[\"mode\"]==\"reload\":\n      wait(lambda:len(query('demo_requests_total{config_version=\"v1\"}'))==2,\"baseline not scraped\")\n      write(job);code,data=request(\"/-/reload\",True);assert code==200,\"candidate reload rejected: \"+data.decode(errors=\"replace\")\n      since=time.time()\n      wait(lambda:len(query('demo_requests_total{config_version=\"v2\",service=\"shop\"}'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})')),\"v2 not effective\")\n      config.write_text(\"global:\\n  unknown_setting: true\\n\",encoding=\"utf-8\")\n      code,_=request(\"/-/reload\",True);assert code>=400,\"invalid reload accepted\"\n      since=time.time()\n      wait(lambda:len(query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v2\",service=\"shop\"})')),\"invalid reload damaged live config\")\n      write(baseline);code,_=request(\"/-/reload\",True);assert code==200\n      since=time.time()\n      wait(lambda:len(query('timestamp(demo_requests_total{config_version=\"v1\",service=\"shop\"})'))==2 and all(float(x[\"value\"][1])>=since for x in query('timestamp(demo_requests_total{config_version=\"v1\",service=\"shop\"})')),\"rollback not effective\")\n      print(\"native reload validated: v1 -> v2 -> rejected invalid -> fresh v2 -> fresh v1\")\n     else:\n      expected=2 if CASE[\"mode\"] in [\"meta\",\"discovery\"] else 1\n      targets=wait(lambda:api(\"/api/v1/targets?state=any\")[\"data\"],\"targets unavailable\")\n      wait(lambda:len(query(\"up\"))>=expected,\"no up samples\",10)\n      targets=api(\"/api/v1/targets?state=any\")[\"data\"]\n      print(\"native target state:\",json.dumps(targets,ensure_ascii=False)[:5000])\n      assert len(targets[\"activeTargets\"])==expected,\"wrong active target count\"\n      if CASE[\"mode\"]==\"discovery\":assert len(targets[\"droppedTargets\"])==1,\"lab target must remain dropped\"\n      health=query(\"up\");assert len(health)==expected and all(x[\"value\"][1]==\"1\" for x in health),\"native scrape failed\"\n      business=query(\"demo_requests_total\")\n      assert len(business)==2*expected,\"lost or added business series\"\n      assert sum(float(x[\"value\"][1]) for x in business)==18*expected,\"business values differ\"\n      for item in business:\n       labels=item[\"metric\"];value=float(item[\"value\"][1])\n       assert labels.get(\"path\") in [\"/pay\",\"/browse\"] and value=={\"/pay\":7,\"/browse\":11}[labels[\"path\"]]\n       assert labels.get(\"env\")==\"prod\" and labels.get(\"service\")==\"shop\"\n       assert not any(k.startswith(\"__meta_\") for k in labels)\n       if CASE[\"mode\"]==\"address\":assert labels.get(\"instance\")==\"checkout-api\" and \"real_address\" not in labels\n      if CASE[\"mode\"]==\"meta\":assert {x[\"metric\"].get(\"zone\") for x in business}=={\"cn-east\",\"cn-west\"}\n      if CASE[\"mode\"]==\"discovery\":assert {x[\"metric\"].get(\"region\") for x in business}=={\"cn-east\",\"cn-west\"}\n      if CASE[\"mode\"] in [\"budget\",\"stages\"]:assert query(\"debug_session_bytes\")==[],\"debug family leaked\"\n      if CASE[\"mode\"]==\"budget\":\n       healthdata=query(\"app_health\");assert len(healthdata)==1 and healthdata[0][\"value\"][1]==\"1\"\n      print(\"native scrape and business contract passed\")\n    finally:\n     stop.set()\n     if proc.poll() is None:\n      proc.terminate()\n      try:proc.wait(timeout=4)\n      except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n     stats[\"terminated\"]=proc.poll() is not None\n     if guard:guard.join(timeout=2)\n     assert not guard_fail,\"resource guard fired: \"+repr(guard_fail)\n finally:\n  stop.set()\n  if proc is not None and proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  if guard:guard.join(timeout=2)\n  for server in servers:server.shutdown();server.server_close()\n  for t in threads:t.join(timeout=2)\n  print(\"native child lifecycle:\",json.dumps(stats))\n\n",
+        "checks/check.py": "import runpy\nrunpy.run_path(\"checks/native.py\")[\"execute\"]({'mode': 'reload', 'metrics': '# HELP demo_requests_total Public fixed request counter\\n# TYPE demo_requests_total counter\\ndemo_requests_total{path=\"/pay\"} 7\\ndemo_requests_total{path=\"/browse\"} 11\\n', 'base_job': {'job_name': 'exercise', 'scrape_interval': '1s', 'scrape_timeout': '500ms', 'static_configs': [{'targets': ['127.0.0.1:19100'], 'labels': {'env': 'prod', 'service': 'shop'}}]}, 'discovery': None, 'fixed': {'static_configs': [{'targets': ['127.0.0.1:19100'], 'labels': {'env': 'prod', 'service': 'shop', 'config_version': 'v2'}}]}})\n"
+      }
+    },
+    "run": "python3 checks/check.py"
+  }
+]

@@ -1,0 +1,215 @@
+[
+  {
+    "id": "src-b01e9d8e2b6621f8",
+    "title": "上下文管理器在异常路径也清理资源",
+    "answer": "```python\nclass ContextResource:\n    def __init__(self,events,suppress=False):self.events=events;self.suppress=suppress\n    def __enter__(self):self.events.append('acquire');return self\n    def __exit__(self,exc_type,exc,tb):\n        self.events.append('release')\n        return bool(self.suppress and exc_type is not None)\n```\n\n原题知识说明：\n上下文管理器通过 __enter__/__exit__ 或 contextlib.contextmanager 控制资源获取和释放，with 块异常时也会调用退出逻辑。__exit__ 返回真会抑制异常，应明确设计；文件和锁常用该机制，但机器掉电不保证 Python 清理代码执行。",
+    "category": "Python 运维开发",
+    "difficulty": "进阶",
+    "section": "高级",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "original_category": "Python",
+    "original_title": "解释一下上下文管理",
+    "module": "python",
+    "topic": "对象与程序组织",
+    "level": 2,
+    "body": "## 操作任务\n实现ContextResource，with进入时记录acquire，退出时无论成功或异常都恰好记录一次release。只在明确选择suppress=True且块内异常时抑制异常；普通模式必须传播原异常。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n仅验证Python同步上下文协议与明确异常抑制策略；进程崩溃或断电不保证退出代码运行。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "python"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "src-b01e9d8e2b6621f8",
+      "original_title": "解释一下上下文管理",
+      "original_type": "source"
+    },
+    "references": [],
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "class ContextResource:\n    def __init__(self,events,suppress=False):self.events=events;self.suppress=suppress\n    def __enter__(self):self.events.append('acquire');return self\n    def __exit__(self,exc_type,exc,tb):\n        self.events.append('release')\n        return bool(self.suppress and exc_type is not None)\n"
+    },
+    "negative_files": {
+      "task.py": "class ContextResource:\n    def __init__(self,events,suppress=False):self.events=events;self.suppress=suppress\n    def __enter__(self):self.events.append('acquire');return self\n    def __exit__(self,exc_type,exc,tb):self.events.append('release');return True\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现ContextResource，with进入时记录acquire，退出时无论成功或异常都恰好记录一次release。只在明确选择suppress=True且块内异常时抑制异常；普通模式必须传播原异常。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "仅验证Python同步上下文协议与明确异常抑制策略；进程崩溃或断电不保证退出代码运行。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: Python runtime semantics',flush=True)\nevents=[]\nwith task.ContextResource(events) as resource:assert isinstance(resource,task.ContextResource)\nassert events==['acquire','release']\nevents=[]\ntry:\n with task.ContextResource(events):raise RuntimeError('sentinel')\nexcept RuntimeError as exc:assert str(exc)=='sentinel'\nelse:raise AssertionError('exception was suppressed')\nassert events==['acquire','release']\nevents=[]\nwith task.ContextResource(events,suppress=True):raise ValueError('explicit')\nassert events==['acquire','release']\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "src-de42ce8d9aa8a3d7",
+    "title": "通过memoryview安全修改支持缓冲协议的连续字节区",
+    "answer": "```python\ndef write_byte(buffer, index, value):\n    view = memoryview(buffer)\n    unsigned = None\n    try:\n        if view.ndim != 1 or view.format not in ('B', 'b') or not view.c_contiguous:\n            raise ValueError('one-dimensional contiguous byte buffer required')\n        if view.readonly:\n            raise ValueError('writable buffer required')\n        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < view.nbytes:\n            raise IndexError('byte index out of range')\n        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 255:\n            raise ValueError('byte value out of range')\n        if view.format == 'b':\n            unsigned = view.cast('B')\n            unsigned[index] = value\n        else:\n            view[index] = value\n    finally:\n        if unsigned is not None:\n            unsigned.release()\n        view.release()\n```\n\n原题知识说明：\n缓冲协议允许对象暴露连续或非连续的内存视图供消费者访问，memoryview 可在支持的对象间减少复制。需注意格式、维度、读写权限和底层对象生命周期；它不是网络缓冲策略，也不保证所有操作零复制。",
+    "category": "Python 运维开发",
+    "difficulty": "进阶",
+    "section": "高级",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。\n本轮边界核查：支持的 B/b 视图中 0..255 表示物理 unsigned byte，必须共享原底层存储；不释放调用者拥有的视图，不扩展其它 buffer 格式。",
+    "original_category": "Python",
+    "original_title": "解释一下缓冲协议",
+    "module": "python",
+    "topic": "对象与程序组织",
+    "level": 2,
+    "body": "## 操作任务\n实现write_byte(buffer,index,value)，使用memoryview验证单维连续、可写、字节格式视图后原地写入。拒绝只读bytes、非连续切片、越界索引和值域错误；通过视图写入必须反映到底层bytearray。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n验证常见连续字节缓冲区上的安全原地修改；不宣称每个支持缓冲协议的对象均可写或零复制。\n\n范围说明：支持的 B/b 视图中 0..255 表示物理 unsigned byte，必须共享原底层存储；不释放调用者拥有的视图，不扩展其它 buffer 格式。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "python"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "src-de42ce8d9aa8a3d7",
+      "original_title": "解释一下缓冲协议",
+      "original_type": "source"
+    },
+    "references": [],
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def write_byte(buffer, index, value):\n    view = memoryview(buffer)\n    unsigned = None\n    try:\n        if view.ndim != 1 or view.format not in ('B', 'b') or not view.c_contiguous:\n            raise ValueError('one-dimensional contiguous byte buffer required')\n        if view.readonly:\n            raise ValueError('writable buffer required')\n        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < view.nbytes:\n            raise IndexError('byte index out of range')\n        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 255:\n            raise ValueError('byte value out of range')\n        if view.format == 'b':\n            unsigned = view.cast('B')\n            unsigned[index] = value\n        else:\n            view[index] = value\n    finally:\n        if unsigned is not None:\n            unsigned.release()\n        view.release()\n"
+    },
+    "negative_files": {
+      "task.py": "def write_byte(buffer,index,value):\n    view=memoryview(buffer);view[index]=value\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现write_byte(buffer,index,value)，使用memoryview验证单维连续、可写、字节格式视图后原地写入。拒绝只读bytes、非连续切片、越界索引和值域错误；通过视图写入必须反映到底层bytearray。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "验证常见连续字节缓冲区上的安全原地修改；不宣称每个支持缓冲协议的对象均可写或零复制。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: Python runtime semantics',flush=True)\ndef must_raise(fn,types):\n try:fn()\n except types:return\n except Exception as exc:raise AssertionError('wrong rejection exception') from exc\n raise AssertionError('invalid input accepted')\nb=bytearray(b'abc');view=memoryview(b);task.write_byte(view,1,ord('Z'));assert b==b'aZc'\nmust_raise(lambda:task.write_byte(b'abc',0,1),(ValueError,))\nmust_raise(lambda:task.write_byte(memoryview(bytearray(b'abcd'))[::2],0,1),(ValueError,))\nfor index,value,types in [(-1,1,(IndexError,)),(3,1,(IndexError,)),(0,256,(ValueError,)),(0,True,(ValueError,))]:must_raise(lambda:task.write_byte(bytearray(b'abc'),index,value),types)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n\ndef valid_byte_write(buffer, index, value):\n    try:\n        task.write_byte(buffer, index, value)\n    except (ValueError, IndexError, TypeError, BufferError) as error:\n        raise AssertionError('valid supported byte-view write rejected') from error\nfor format in ['B','b']:\n    raw = bytearray(b'abc')\n    caller = memoryview(raw) if format == 'B' else memoryview(raw).cast('b')\n    try:\n        for number in range(256):\n            valid_byte_write(caller, 1, number)\n            assert raw == bytes([ord('a'),number,ord('c')]), 'physical unsigned byte not written to shared backing buffer'\n            assert caller.nbytes == 3 and caller.format == format\n        for index,value,error in [(True,1,IndexError),(-1,1,IndexError),(3,1,IndexError),\n                                  (0,-1,ValueError),(0,256,ValueError),(0,True,ValueError)]:\n            prior = bytes(raw)\n            must_raise(lambda:task.write_byte(caller,index,value),(error,))\n            assert bytes(raw) == prior and caller.nbytes == 3, 'invalid write changed bytes or released caller view'\n    finally:\n        caller.release()\ntwo = memoryview(bytearray(4)).cast('B', shape=(2,2))\ntry:\n    must_raise(lambda:task.write_byte(two,0,1),(ValueError,))\n    assert two.ndim == 2\nfinally:\n    two.release()\nprint('PHYSICAL_UNSIGNED_BYTE_B_AND_b_CALLER_OWNERSHIP_ERRORS', flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "src-fec06b7afac341bf",
+    "title": "按异常类型处理失败并保证finally清理",
+    "answer": "```python\ndef parse_count(text,events):\n    try:value=int(text)\n    except ValueError as exc:\n        events.append('invalid')\n        raise ValueError('count must be an integer') from exc\n    else:\n        if value<0:raise ValueError('count must be nonnegative')\n        events.append('ok');return value\n    finally:events.append('cleanup')\n```\n\n原题知识说明：\n用 try 执行可能失败的操作，except 捕获可处理的具体异常，else 在无异常时执行，finally 做必要清理。可用 raise 重新抛出并保留上下文，不应裸 except 后静默成功。资源管理优先 with，日志避免泄露凭据。",
+    "category": "Python 运维开发",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "original_category": "Python",
+    "original_title": "解释 异常处理以及如何在Python中使用它",
+    "module": "python",
+    "topic": "异常、测试与调试",
+    "level": 2,
+    "body": "## 操作任务\n实现parse_count(text,events)：try解析非负整数；except只处理ValueError并保留异常上下文后抛出规范错误；else记录成功；finally无论成败都记录cleanup。不得裸except静默返回成功。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n只验证具体异常处理、异常链和finally执行顺序；不替代资源型对象的with管理。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "python"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "src-fec06b7afac341bf",
+      "original_title": "解释 异常处理以及如何在Python中使用它",
+      "original_type": "source"
+    },
+    "references": [],
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def parse_count(text,events):\n    try:value=int(text)\n    except ValueError as exc:\n        events.append('invalid')\n        raise ValueError('count must be an integer') from exc\n    else:\n        if value<0:raise ValueError('count must be nonnegative')\n        events.append('ok');return value\n    finally:events.append('cleanup')\n"
+    },
+    "negative_files": {
+      "task.py": "def parse_count(text,events):\n    try:return int(text)\n    except:events.append('ignored');return 0\n    finally:events.append('cleanup')\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现parse_count(text,events)：try解析非负整数；except只处理ValueError并保留异常上下文后抛出规范错误；else记录成功；finally无论成败都记录cleanup。不得裸except静默返回成功。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "只验证具体异常处理、异常链和finally执行顺序；不替代资源型对象的with管理。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib\nsys.path.insert(0,str(pathlib.Path.cwd()));import task\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: Python runtime semantics',flush=True)\nevents=[];assert task.parse_count('12',events)==12 and events==['ok','cleanup']\nevents=[]\ntry:task.parse_count('bad',events)\nexcept ValueError as exc:assert str(exc)=='count must be an integer' and isinstance(exc.__cause__,ValueError)\nelse:raise AssertionError('parse failure swallowed')\nassert events==['invalid','cleanup']\nevents=[]\ntry:task.parse_count('-1',events)\nexcept ValueError as exc:assert str(exc)=='count must be nonnegative'\nelse:raise AssertionError('negative count accepted')\nassert events==['cleanup']\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

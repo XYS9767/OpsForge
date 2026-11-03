@@ -1,0 +1,70 @@
+[
+  {
+    "id": "curated-parallel-go-109",
+    "module": "go",
+    "category": "Go 运维开发",
+    "level": 4,
+    "topic": "文件数据与时间",
+    "title": "修复缓冲导出丢尾并保留刷新与关闭错误",
+    "answer": "```go\npackage practice\nimport(\"bufio\";\"errors\";\"io\")\nfunc Export(dst io.WriteCloser, records []string)(err error){\n    defer func(){err=errors.Join(err,dst.Close())}()\n    writer:=bufio.NewWriterSize(dst,4096)\n    for _,record:=range records{\n        if _,err=writer.WriteString(record+\"\\n\");err!=nil{return err}\n    }\n    return writer.Flush()\n}\n```\n\n底层 Close 不会替外层 bufio.Writer 刷新。先检查写入和 Flush，再关闭目标；命名返回值配合 errors.Join 保留两类错误。实际磁盘文件与注入式 Writer 分别验证字节落入文件和失败传播。没有 fsync 或原子重命名，因此不能据此承诺断电持久性或旧产物保护。",
+    "type": "code",
+    "incident_signature": "go:bufio-writer-not-flushed",
+    "source": "独立编审：Go特有数据与并发故障",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "用类型/栈/字节证据证明根因",
+      "正确交接开发修复与运维止损",
+      "列出本故障的正常和边界验收"
+    ],
+    "references": [],
+    "related_modules": [
+      "go"
+    ],
+    "language": "Go",
+    "run": "",
+    "body": "## 操作任务\n修复 Export(dst io.WriteCloser, records []string) error。当前实现只关闭底层文件，缓冲尾部丢失。每条记录原字节写入并追加一个换行；空记录也要写换行，nil/空切片不写正文。成功必须在返回前完整 Flush，再且仅再 Close 一次。函数拥有传入目标的关闭责任，正常、写入失败、刷新失败和关闭失败都必须关闭一次。\n写入或刷新失败与关闭失败同时发生时，返回值必须同时支持 errors.Is 检出原错误，不能吞错后报告成功；短写也必须失败。允许采用等价缓冲策略。此函数不提供跨进程原子替换、fsync 断电保证或失败回滚，不能将部分写入失败描述为可安全发布。输入 dst 保证是非 nil 的合法对象；只使用标准库。\n\n## 操作环境\n网页 Go 代码工作区，标准库、隔离临时文件，无外网和业务资源。\n\n## 产物\n`task.go`：完整 Export 实现；保留模块定义。\n\n## 验收方法\n实际编译执行并比较真实文件字节，覆盖空输入、Unicode、4096 字节缓冲边界、多缓冲长度；注入写失败、短写、关闭失败及组合失败，检查 errors.Is、关闭次数与顺序。",
+    "files": {
+      "go.mod": "module practice\n\ngo 1.23\n",
+      "task.go": "package practice\nimport(\"bufio\";\"io\")\nfunc Export(dst io.WriteCloser, records []string)error{\n    writer:=bufio.NewWriterSize(dst,4096)\n    for _,record:=range records{writer.WriteString(record+\"\\n\")}\n    return dst.Close()\n}\n"
+    },
+    "solution_files": {
+      "task.go": "package practice\nimport(\"bufio\";\"errors\";\"io\")\nfunc Export(dst io.WriteCloser, records []string)(err error){\n    defer func(){err=errors.Join(err,dst.Close())}()\n    writer:=bufio.NewWriterSize(dst,4096)\n    for _,record:=range records{\n        if _,err=writer.WriteString(record+\"\\n\");err!=nil{return err}\n    }\n    return writer.Flush()\n}\n"
+    },
+    "negative_files": {
+      "task.go": "package practice\nimport(\"bufio\";\"io\")\nfunc Export(dst io.WriteCloser, records []string)error{\n    writer:=bufio.NewWriterSize(dst,4096)\n    for _,record:=range records{writer.WriteString(record+\"\\n\")}\n    writer.Flush()\n    return dst.Close()\n}\n"
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "isolated Go standard-library workspace",
+      "operation": "修复 Export(dst io.WriteCloser, records []string) error。当前实现只关闭底层文件，缓冲尾部丢失。每条记录原字节写入并追加一个换行；空记录也要写换行，nil/空切片不写正文。成功必须在返回前完整 Flush，再且仅再 Close 一次。函数拥有传入目标的关闭责任，正常、写入失败、刷新失败和关闭失败都必须关闭一次。\n写入或刷新失败与关闭失败同时发生时，返回值必须同时支持 errors.Is 检出原错误，不能吞错后报告成功；短写也必须失败。允许采用等价缓冲策略。此函数不提供跨进程原子替换、fsync 断电保证或失败回滚，不能将部分写入失败描述为可安全发布。输入 dst 保证是非 nil 的合法对象；只使用标准库。",
+      "deliverables": [
+        "task.go"
+      ],
+      "verification": "Compile and execute against temporary files and failure-injecting io.WriteCloser; exact bytes and errors.Is/close-order checks."
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "go test -count=1 -timeout=20s ./...",
+      "timeout": 35,
+      "test_files": {
+        "contract_test.go": "package practice\nimport(\"bytes\";\"errors\";\"io\";\"os\";\"path/filepath\";\"strings\";\"testing\")\ntype sink struct{buffer bytes.Buffer; closed bool; closes,writes,failAfter int; writeErr,closeErr error; short,partial bool; wroteAfterClose bool}\nfunc(s *sink)Write(p []byte)(int,error){\n    if s.closed{s.wroteAfterClose=true;return 0,errors.New(\"write after close\")}\n    s.writes++\n    if s.writeErr!=nil&&(s.failAfter==0||s.buffer.Len()+len(p)>s.failAfter){\n        if s.partial{n:=s.failAfter-s.buffer.Len();if n<0{n=0};s.buffer.Write(p[:n]);return n,s.writeErr}\n        return 0,s.writeErr\n    }\n    if s.short{return len(p)/2,nil}\n    return s.buffer.Write(p)\n}\nfunc(s *sink)Close()error{s.closed=true;s.closes++;return s.closeErr}\nfunc TestExportExactBytes(t *testing.T){\n    for _,records:=range [][]string{nil,{\"\"},{\"甲\",\"🙂\",\"tail\"},{strings.Repeat(\"x\",4095)},{strings.Repeat(\"y\",4096)},{strings.Repeat(\"z\",12289),\"tail\"},{\"a\\nb\",\"line\\r\",\"nul\\x00\"}}{\n        want:=\"\";for _,v:=range records{want+=v+\"\\n\"}\n        s:=&sink{};if err:=Export(s,records);err!=nil{t.Fatal(err)}\n        if s.buffer.String()!=want||s.closes!=1||s.wroteAfterClose{t.Fatalf(\"bytes or lifecycle: want %d got %d closes %d\",len(want),s.buffer.Len(),s.closes)}\n        // A real file confirms the bytes exist after the function returns.\n        path:=filepath.Join(t.TempDir(),\"报告.txt\");f,err:=os.Create(path);if err!=nil{t.Fatal(err)}\n        if err=Export(f,records);err!=nil{t.Fatal(err)}\n        got,err:=os.ReadFile(path);if err!=nil||string(got)!=want{t.Fatal(\"on-disk data differs\",err)}\n        if _,err=f.Write([]byte(\"must be closed\"));err==nil{f.Close();t.Fatal(\"file ownership was not released\")}\n    }\n}\nfunc TestExportErrorsRemainDiscoverable(t *testing.T){\n    writeFailure:=errors.New(\"injected write\");closeFailure:=errors.New(\"injected close\")\n    for _,n:=range []int{1,4095,4096,9000}{\n        for _,failClose:=range []bool{false,true}{\n            s:=&sink{writeErr:writeFailure};if failClose{s.closeErr=closeFailure}\n            err:=Export(s,[]string{strings.Repeat(\"a\",n),\"never complete\"})\n            if !errors.Is(err,writeFailure)||errors.Is(err,closeFailure)!=failClose||s.closes!=1||s.wroteAfterClose{t.Fatal(\"lost failure or wrong cleanup\",n,err,s.closes)}\n        }\n    }\n    s:=&sink{closeErr:closeFailure};err:=Export(s,[]string{\"ok\"})\n    if !errors.Is(err,closeFailure)||s.buffer.String()!=\"ok\\n\"||s.closes!=1{t.Fatal(\"close failure hidden\",err)}\n    for _,records:=range [][]string{nil,{\"payload\"}}{\n        s:=&sink{short:true,closeErr:closeFailure};err:=Export(s,records)\n        if !errors.Is(err,closeFailure)||s.closes!=1{t.Fatal(\"close not retained\")}\n        if len(records)>0&&!errors.Is(err,io.ErrShortWrite){t.Fatal(\"short write accepted\",err)}\n    }\n    // A writer can accept earlier blocks, then return n>0 and an error.\n    // Use a byte budget, not a call count: legal buffer sizes may coalesce writes.\n    for _,partial:=range []bool{false,true}{\n        s:=&sink{writeErr:writeFailure,closeErr:closeFailure,failAfter:5501,partial:partial}\n        err:=Export(s,[]string{strings.Repeat(\"first\",1100),strings.Repeat(\"second\",1000),\"tail\"})\n        if !errors.Is(err,writeFailure)||!errors.Is(err,closeFailure)||s.closes!=1||s.wroteAfterClose{t.Fatal(\"later write failure was lost\",err,s.writes,s.closes)}\n    }\n}\n"
+      },
+      "requires": {
+        "commands": [
+          "go"
+        ]
+      }
+    },
+    "conversion": {
+      "original_id": "curated-parallel-go-109",
+      "original_title": "导出任务返回成功，但小报告文件为0字节，大报告只保留前一部分；使用bufio.Writer后只关闭底层文件。如何桌面排查？",
+      "original_type": "case",
+      "preserve_history": true
+    }
+  }
+]

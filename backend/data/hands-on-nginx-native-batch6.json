@@ -1,0 +1,860 @@
+[
+  {
+    "id": "curated-parallel-nginx-037",
+    "module": "nginx",
+    "category": "Nginx",
+    "level": 2,
+    "topic": "实际复用上游连接，并证明keepalive缓存大小不是活动并发上限",
+    "title": "实际复用上游连接，并证明keepalive缓存大小不是活动并发上限",
+    "answer": "```nginx\ndaemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n upstream app { server 127.0.0.1:@UPSTREAM@; keepalive 2; }\nserver { listen 127.0.0.1:@PORT@;\n location / { proxy_http_version 1.1; proxy_set_header Connection \"\"; proxy_pass http://app; }\n}\n}\n```\n\n配置upstream keepalive 2与HTTP/1.1。连续三个客户端独立连接请求应复用同一个真实源站TCP连接；随后三个并发请求必须都能同时到达源站并成功，不能把keepalive 2误解为最多两个活动连接。验收记录实际对端端口和并发事件，不读取配置字符串推断是否复用。\n\n原理补充：\n它通常限制缓存的空闲上游连接而非所有活动连接总量，范围也与worker有关。结合活动连接、worker数和后端容量理解，核对HTTP版本与连接头；配置缓存数不能替代连接总量控制。",
+    "type": "code",
+    "source": "OpsForge Nginx 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 环境与初始材料\n普通用户Linux、Nginx与Python3。提供nginx.conf安全运行骨架（当前所有请求501）和必要文件；原生Nginx必须前台、1worker、仅监听127.0.0.1:@PORT@，pid/日志/所有临时目录位于@ROOT@。验收将@PORT@替换随机高端口、@ROOT@替换独立临时目录、@UPSTREAM@替换本题回环源站。禁止修改系统Nginx或监听80/443。\n\n## 操作任务\n配置upstream keepalive 2与HTTP/1.1。连续三个客户端独立连接请求应复用同一个真实源站TCP连接；随后三个并发请求必须都能同时到达源站并成功，不能把keepalive 2误解为最多两个活动连接。验收记录实际对端端口和并发事件，不读取配置字符串推断是否复用。\n\n## 提交产物\n完整nginx.conf，保留安全运行骨架，使用原生Nginx指令实现；不得伪造固定响应冒充静态文件、代理或缓存结果。\n\n## 验收方法\npython3 checks/check.py：先nginx -t，随后启动真实Nginx，通过下列任务明确的HTTP状态、响应内容、文件、日志或源站计数逐项验收；初始配置和指定错误配置均应失败，参考配置全部断言通过并退出0。关闭本题全部服务后检查结束；这里只验证本机功能，不声称生产吞吐、云控制面或外网生效。\n\n失败示例：发送Connection:close会使源站每次关闭连接，即使写了keepalive缓存也无法复用。",
+    "rubric": [
+      "技术语义准确",
+      "区分请求处理阶段",
+      "结果可验证"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "nginx"
+    ],
+    "language": "configuration",
+    "difficulty": "进阶",
+    "files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; location / { return 501; } }\n}\n"
+    },
+    "solution_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n upstream app { server 127.0.0.1:@UPSTREAM@; keepalive 2; }\nserver { listen 127.0.0.1:@PORT@;\n location / { proxy_http_version 1.1; proxy_set_header Connection \"\"; proxy_pass http://app; }\n}\n}\n"
+    },
+    "negative_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n upstream app { server 127.0.0.1:@UPSTREAM@; keepalive 2; }\nserver { listen 127.0.0.1:@PORT@;\n location / { proxy_http_version 1.1; proxy_set_header Connection close; proxy_pass http://app; }\n}\n}\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "配置upstream keepalive 2与HTTP/1.1。连续三个客户端独立连接请求应复用同一个真实源站TCP连接；随后三个并发请求必须都能同时到达源站并成功，不能把keepalive 2误解为最多两个活动连接。验收记录实际对端端口和并发事件，不读取配置字符串推断是否复用。",
+      "deliverables": [
+        "nginx.conf"
+      ],
+      "verification": "原生Nginx语法与真实回环HTTP行为，具体通过标准见操作任务，结束时关闭本题服务",
+      "failure_examples": [
+        "发送Connection:close会使源站每次关闭连接，即使写了keepalive缓存也无法复用。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,contextlib,socket,subprocess,time,signal,http.client,http.server,threading,json,re,secrets,gzip,concurrent.futures,os\nROOT=pathlib.Path.cwd()\ndef freeport():\n    with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]\ndef request(port,path='/',method='GET',body=None,headers=None,chunked=False):\n    c=http.client.HTTPConnection('127.0.0.1',port,timeout=3)\n    try:\n        c.request(method,path,body=body,headers=headers or {},encode_chunked=chunked)\n        r=c.getresponse();return r.status,r.read(),{k.lower():v for k,v in r.getheaders()}\n    finally:c.close()\n@contextlib.contextmanager\ndef origin(delay=0):\n    records=[];lock=threading.Lock()\n    class Handler(http.server.BaseHTTPRequestHandler):\n        def log_message(self,*args):pass\n        def serve(self):\n            data=self.rfile.read(int(self.headers.get('Content-Length','0')))\n            with lock:\n                item={'path':self.path,'method':self.command,'length':len(data),'body':data.hex(),'sequence':len(records)+1};records.append(item)\n            if delay:time.sleep(delay)\n            content=json.dumps(item).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(content)));self.send_header('Cache-Control','public,max-age=30');self.end_headers()\n            try:self.wfile.write(content)\n            except OSError:pass\n        do_GET=do_POST=do_PUT=serve\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port,records\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\n@contextlib.contextmanager\ndef nginx(values=None):\n    values=dict(values or {});port=freeport();values['PORT']=port;values['ROOT']=str(ROOT)\n    config=pathlib.Path('nginx.conf').read_text()\n    for key,value in values.items():config=config.replace('@'+key+'@',str(value))\n    assert not re.search(r'@[A-Z]+@',config),'unresolved placeholder'\n    assert re.search(r'\\bdaemon\\s+off\\s*;',config) and re.search(r'\\bworker_processes\\s+1\\s*;',config)\n    endpoints=re.findall(r'\\blisten\\s+([^;\\s]+)',config);assert endpoints and all(p=='127.0.0.1:'+str(port) for p in endpoints)\n    for directive in ['pid','error_log','client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path']:\n        match=re.search(r'\\b'+directive+r'\\s+([^;\\s]+)',config);assert match and pathlib.Path(match[1]).is_relative_to(ROOT),directive\n    pathlib.Path('rendered.conf').write_text(config);command=['nginx','-p',str(ROOT)+'/', '-c',str(ROOT/'rendered.conf')]\n    syntax=subprocess.run(command+['-t'],capture_output=True,text=True,timeout=3);assert syntax.returncode==0,syntax.stderr\n    log=open('nginx-process.log','wb');p=subprocess.Popen(command,stdout=log,stderr=log)\n    try:\n        for _ in range(100):\n            assert p.poll() is None,pathlib.Path('nginx-process.log').read_text(errors='replace')\n            try:\n                with socket.create_connection(('127.0.0.1',port),timeout=.02):break\n            except OSError:time.sleep(.01)\n        else:raise AssertionError('not listening')\n        yield port\n    finally:\n        if p.poll() is None:p.send_signal(signal.SIGQUIT)\n        try:p.wait(timeout=3)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=1)\n        log.close();assert p.returncode==0,p.returncode\n\n@contextlib.contextmanager\ndef service(handler):\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\nclass Quiet(http.server.BaseHTTPRequestHandler):\n    def log_message(self,*args):pass\n    def answer(self,status,body=b'',headers=None):\n        self.send_response(status)\n        for k,v in (headers or []):self.send_header(k,v)\n        self.send_header('Content-Length',str(len(body)));self.end_headers()\n        try:self.wfile.write(body)\n        except OSError:pass\n\n\npeers=[];arrivals=[];release=threading.Event();lock=threading.Lock()\nclass Reuse(Quiet):\n    protocol_version='HTTP/1.1'\n    def do_GET(self):\n        with lock:peers.append(self.client_address)\n        if self.path.startswith('/hold'):\n            with lock:arrivals.append(self.path)\n            if not release.wait(2):self.answer(504,b'gate timeout');return\n        self.answer(200,b'actual upstream')\nwith service(Reuse) as a:\n    with nginx({'UPSTREAM':a}) as p:\n        for _ in range(3):assert request(p,'/',headers={'Connection':'close'})[0]==200\n        assert len(set(peers))==1,'upstream connection not reused'\n        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:\n            fs=[pool.submit(request,p,f'/hold/{i}') for i in range(3)]\n            try:\n                until=time.monotonic()+1.5\n                while len(arrivals)<3 and time.monotonic()<until:time.sleep(.01)\n                assert len(arrivals)==3,'keepalive confused with active connection cap'\n            finally:release.set()\n            assert all(f.result()[0]==200 for f in fs)\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "nginx"
+        ]
+      }
+    },
+    "case_signature": "nginx-native|curated-parallel-nginx-037|实际复用上游连接，并证明keepalive缓存大小不是活动并发上限",
+    "reference_docs": [
+      "https://nginx.org/en/docs/http/ngx_http_upstream_module.html#keepalive"
+    ],
+    "conversion": {
+      "original_id": "curated-parallel-nginx-037",
+      "original_title": "upstream keepalive数值是否就是总并发连接上限？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-parallel-nginx-038",
+    "module": "nginx",
+    "category": "Nginx",
+    "level": 2,
+    "topic": "限定客户端连接的请求次数，验证第二次响应后平滑重连",
+    "title": "限定客户端连接的请求次数，验证第二次响应后平滑重连",
+    "answer": "```nginx\ndaemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; keepalive_timeout 10s; keepalive_requests 2;\n location / { return 200 \"ready\"; }\n}\n}\n```\n\n普通HTTP/1.1客户端在一条连接上完成两次请求；第一次响应应保持连接，第二次带Connection:close并正常返回完整正文。第三次请求新建TCP连接仍成功。本题设置keepalive_requests 2而不是禁用keepalive，也不是限制整个用户只能访问两次。\n\n原理补充：\n它们分别影响两段连接的握手成本、资源占用和空闲寿命。某一段复用不代表另一段复用；观察连接建立率、后端负载与尾延迟，避免长空闲连接耗尽资源。",
+    "type": "code",
+    "source": "OpsForge Nginx 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 环境与初始材料\n普通用户Linux、Nginx与Python3。提供nginx.conf安全运行骨架（当前所有请求501）和必要文件；原生Nginx必须前台、1worker、仅监听127.0.0.1:@PORT@，pid/日志/所有临时目录位于@ROOT@。验收将@PORT@替换随机高端口、@ROOT@替换独立临时目录、@UPSTREAM@替换本题回环源站。禁止修改系统Nginx或监听80/443。\n\n## 操作任务\n普通HTTP/1.1客户端在一条连接上完成两次请求；第一次响应应保持连接，第二次带Connection:close并正常返回完整正文。第三次请求新建TCP连接仍成功。本题设置keepalive_requests 2而不是禁用keepalive，也不是限制整个用户只能访问两次。\n\n## 提交产物\n完整nginx.conf，保留安全运行骨架，使用原生Nginx指令实现；不得伪造固定响应冒充静态文件、代理或缓存结果。\n\n## 验收方法\npython3 checks/check.py：先nginx -t，随后启动真实Nginx，通过下列任务明确的HTTP状态、响应内容、文件、日志或源站计数逐项验收；初始配置和指定错误配置均应失败，参考配置全部断言通过并退出0。关闭本题全部服务后检查结束；这里只验证本机功能，不声称生产吞吐、云控制面或外网生效。\n\n失败示例：每次请求后关闭连接虽能返回200，却破坏两次请求在同一连接上的复用契约。",
+    "rubric": [
+      "技术语义准确",
+      "区分请求处理阶段",
+      "结果可验证"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "nginx"
+    ],
+    "language": "configuration",
+    "difficulty": "进阶",
+    "files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; location / { return 501; } }\n}\n"
+    },
+    "solution_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; keepalive_timeout 10s; keepalive_requests 2;\n location / { return 200 \"ready\"; }\n}\n}\n"
+    },
+    "negative_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; keepalive_timeout 10s; keepalive_requests 1;\n location / { return 200 \"ready\"; }\n}\n}\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "普通HTTP/1.1客户端在一条连接上完成两次请求；第一次响应应保持连接，第二次带Connection:close并正常返回完整正文。第三次请求新建TCP连接仍成功。本题设置keepalive_requests 2而不是禁用keepalive，也不是限制整个用户只能访问两次。",
+      "deliverables": [
+        "nginx.conf"
+      ],
+      "verification": "原生Nginx语法与真实回环HTTP行为，具体通过标准见操作任务，结束时关闭本题服务",
+      "failure_examples": [
+        "每次请求后关闭连接虽能返回200，却破坏两次请求在同一连接上的复用契约。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,contextlib,socket,subprocess,time,signal,http.client,http.server,threading,json,re,secrets,gzip,concurrent.futures,os\nROOT=pathlib.Path.cwd()\ndef freeport():\n    with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]\ndef request(port,path='/',method='GET',body=None,headers=None,chunked=False):\n    c=http.client.HTTPConnection('127.0.0.1',port,timeout=3)\n    try:\n        c.request(method,path,body=body,headers=headers or {},encode_chunked=chunked)\n        r=c.getresponse();return r.status,r.read(),{k.lower():v for k,v in r.getheaders()}\n    finally:c.close()\n@contextlib.contextmanager\ndef origin(delay=0):\n    records=[];lock=threading.Lock()\n    class Handler(http.server.BaseHTTPRequestHandler):\n        def log_message(self,*args):pass\n        def serve(self):\n            data=self.rfile.read(int(self.headers.get('Content-Length','0')))\n            with lock:\n                item={'path':self.path,'method':self.command,'length':len(data),'body':data.hex(),'sequence':len(records)+1};records.append(item)\n            if delay:time.sleep(delay)\n            content=json.dumps(item).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(content)));self.send_header('Cache-Control','public,max-age=30');self.end_headers()\n            try:self.wfile.write(content)\n            except OSError:pass\n        do_GET=do_POST=do_PUT=serve\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port,records\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\n@contextlib.contextmanager\ndef nginx(values=None):\n    values=dict(values or {});port=freeport();values['PORT']=port;values['ROOT']=str(ROOT)\n    config=pathlib.Path('nginx.conf').read_text()\n    for key,value in values.items():config=config.replace('@'+key+'@',str(value))\n    assert not re.search(r'@[A-Z]+@',config),'unresolved placeholder'\n    assert re.search(r'\\bdaemon\\s+off\\s*;',config) and re.search(r'\\bworker_processes\\s+1\\s*;',config)\n    endpoints=re.findall(r'\\blisten\\s+([^;\\s]+)',config);assert endpoints and all(p=='127.0.0.1:'+str(port) for p in endpoints)\n    for directive in ['pid','error_log','client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path']:\n        match=re.search(r'\\b'+directive+r'\\s+([^;\\s]+)',config);assert match and pathlib.Path(match[1]).is_relative_to(ROOT),directive\n    pathlib.Path('rendered.conf').write_text(config);command=['nginx','-p',str(ROOT)+'/', '-c',str(ROOT/'rendered.conf')]\n    syntax=subprocess.run(command+['-t'],capture_output=True,text=True,timeout=3);assert syntax.returncode==0,syntax.stderr\n    log=open('nginx-process.log','wb');p=subprocess.Popen(command,stdout=log,stderr=log)\n    try:\n        for _ in range(100):\n            assert p.poll() is None,pathlib.Path('nginx-process.log').read_text(errors='replace')\n            try:\n                with socket.create_connection(('127.0.0.1',port),timeout=.02):break\n            except OSError:time.sleep(.01)\n        else:raise AssertionError('not listening')\n        yield port\n    finally:\n        if p.poll() is None:p.send_signal(signal.SIGQUIT)\n        try:p.wait(timeout=3)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=1)\n        log.close();assert p.returncode==0,p.returncode\n\n@contextlib.contextmanager\ndef service(handler):\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\nclass Quiet(http.server.BaseHTTPRequestHandler):\n    def log_message(self,*args):pass\n    def answer(self,status,body=b'',headers=None):\n        self.send_response(status)\n        for k,v in (headers or []):self.send_header(k,v)\n        self.send_header('Content-Length',str(len(body)));self.end_headers()\n        try:self.wfile.write(body)\n        except OSError:pass\n\n\nwith nginx() as p:\n    c=http.client.HTTPConnection('127.0.0.1',p,timeout=2)\n    try:\n        c.request('GET','/one');first_socket=c.sock;first_port=c.sock.getsockname()[1];r=c.getresponse();assert r.status==200 and r.read()==b'ready' and (r.getheader('Connection') or '').lower()!='close'\n        c.request('GET','/two');assert c.sock is first_socket;r=c.getresponse();assert r.status==200 and r.read()==b'ready' and (r.getheader('Connection') or '').lower()=='close'\n        assert c.sock is None\n        c.request('GET','/three');assert c.sock.getsockname()[1]!=first_port;r=c.getresponse();assert r.status==200 and r.read()==b'ready'\n    finally:c.close()\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "nginx"
+        ]
+      }
+    },
+    "case_signature": "nginx-native|curated-parallel-nginx-038|限定客户端连接的请求次数，验证第二次响应后平滑重连",
+    "reference_docs": [
+      "https://nginx.org/en/docs/http/ngx_http_core_module.html#keepalive_requests"
+    ],
+    "conversion": {
+      "original_id": "curated-parallel-nginx-038",
+      "original_title": "为什么客户端keepalive与上游keepalive要分别调优？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-parallel-nginx-039",
+    "module": "nginx",
+    "category": "Nginx",
+    "level": 2,
+    "topic": "交付原生3:1加权轮询，依据真实后端接收数量验收",
+    "title": "交付原生3:1加权轮询，依据真实后端接收数量验收",
+    "answer": "```nginx\ndaemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n upstream weighted_app { server 127.0.0.1:@A@ weight=3; server 127.0.0.1:@B@ weight=1; }\nserver { listen 127.0.0.1:@PORT@;\n location / { proxy_pass http://weighted_app; }\n}\n}\n```\n\n两个健康回环源站A/B容量权重3:1，串行16次请求应由A处理12次、B处理4次；两端实际收到的路径与返回身份一致。不得在入口固定拼接A/B响应来伪造分布。这里只验证稳定健康条件下原生加权轮询，不声称故障期或短窗口能严格保持任意比例。\n\n原理补充：\n轮询分配请求，权重调整相对份额，least_conn关注活跃连接等信息；连接数不必然代表请求计算成本。按长短请求混合、容量差异及故障恢复验证分布，而不是只比较单次请求落点。 ip_hash按客户端IP等规则形成亲和，不能保证热用户均匀分布；所有策略都需结合后端失败处理与实际版本能力验证。",
+    "type": "code",
+    "source": "OpsForge Nginx 运维专题",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 环境与初始材料\n普通用户Linux、Nginx与Python3。提供nginx.conf安全运行骨架（当前所有请求501）和必要文件；原生Nginx必须前台、1worker、仅监听127.0.0.1:@PORT@，pid/日志/所有临时目录位于@ROOT@。验收将@PORT@替换随机高端口、@ROOT@替换独立临时目录、@UPSTREAM@替换本题回环源站。禁止修改系统Nginx或监听80/443。\n\n## 操作任务\n两个健康回环源站A/B容量权重3:1，串行16次请求应由A处理12次、B处理4次；两端实际收到的路径与返回身份一致。不得在入口固定拼接A/B响应来伪造分布。这里只验证稳定健康条件下原生加权轮询，不声称故障期或短窗口能严格保持任意比例。\n\n## 提交产物\n完整nginx.conf，保留安全运行骨架，使用原生Nginx指令实现；不得伪造固定响应冒充静态文件、代理或缓存结果。\n\n## 验收方法\npython3 checks/check.py：先nginx -t，随后启动真实Nginx，通过下列任务明确的HTTP状态、响应内容、文件、日志或源站计数逐项验收；初始配置和指定错误配置均应失败，参考配置全部断言通过并退出0。关闭本题全部服务后检查结束；这里只验证本机功能，不声称生产吞吐、云控制面或外网生效。\n\n失败示例：默认等权会分成8:8，表面两个节点都可访问但没有实现容量权重。",
+    "rubric": [
+      "技术语义准确",
+      "区分请求处理阶段",
+      "结果可验证"
+    ],
+    "hints": [],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+      "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+      "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb"
+    ],
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "EkDEdB8H8otWh7xhJMxcp7wJnW4",
+        "question": "2、nginx负载均衡的算法："
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "BnNRd8JnPosFudxy2eMcs8hhnRw",
+        "question": "15、nginx的负责均衡算法，三个以上"
+      }
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "EkDEdB8H8otWh7xhJMxcp7wJnW4"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "BnNRd8JnPosFudxy2eMcs8hhnRw"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+        "block_ids": [
+          "VJu7d6J0wokWlxxodn5c7S94nWh",
+          "PxkkdbsOgoTNQyxlHhXc0GlonWy",
+          "Xtj9dapO6oroDyxukKCc0BpInPc",
+          "XuLldgfBbotT0axUFARczcVSnnB",
+          "SWb9dc7Vwo8mwnxkpK4cOTx4nsk"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+        "block_ids": [
+          "RLSVd2np5oAGSUxU4QdcQNXfnzd",
+          "MMdZdNtqiod4UAxJMm8cjemQnNb",
+          "CmKSdHpKEomHydxC3sVcv5yOnve",
+          "Vexxdh0WCoIv6Kxra3CcX67mn0g",
+          "QFyedir4ZoRT5xxmRWQc82v1nsC",
+          "DMc2d5YpDoTrBmxYR10cgUoLnwh"
+        ]
+      },
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "UFo3duazxo2c5uxpbincxFaYnk5",
+          "JFi1db9Y0oUUB7xqwcrcPmUNnWb",
+          "GQMydeSXlousF5xmMRScDdjxniB",
+          "WFLSdAqcJoB0xmxbzCXcjl5jnAT",
+          "ANPedXNpuosq8OxBG33cbUw5nCd",
+          "GZtfdwOSJoxGlfxVh5lcP2lknhh"
+        ]
+      }
+    ],
+    "related_modules": [
+      "nginx"
+    ],
+    "language": "configuration",
+    "difficulty": "进阶",
+    "files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; location / { return 501; } }\n}\n"
+    },
+    "solution_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n upstream weighted_app { server 127.0.0.1:@A@ weight=3; server 127.0.0.1:@B@ weight=1; }\nserver { listen 127.0.0.1:@PORT@;\n location / { proxy_pass http://weighted_app; }\n}\n}\n"
+    },
+    "negative_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n upstream weighted_app { server 127.0.0.1:@A@ weight=1; server 127.0.0.1:@B@ weight=1; }\nserver { listen 127.0.0.1:@PORT@;\n location / { proxy_pass http://weighted_app; }\n}\n}\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "两个健康回环源站A/B容量权重3:1，串行16次请求应由A处理12次、B处理4次；两端实际收到的路径与返回身份一致。不得在入口固定拼接A/B响应来伪造分布。这里只验证稳定健康条件下原生加权轮询，不声称故障期或短窗口能严格保持任意比例。",
+      "deliverables": [
+        "nginx.conf"
+      ],
+      "verification": "原生Nginx语法与真实回环HTTP行为，具体通过标准见操作任务，结束时关闭本题服务",
+      "failure_examples": [
+        "默认等权会分成8:8，表面两个节点都可访问但没有实现容量权重。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,contextlib,socket,subprocess,time,signal,http.client,http.server,threading,json,re,secrets,gzip,concurrent.futures,os\nROOT=pathlib.Path.cwd()\ndef freeport():\n    with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]\ndef request(port,path='/',method='GET',body=None,headers=None,chunked=False):\n    c=http.client.HTTPConnection('127.0.0.1',port,timeout=3)\n    try:\n        c.request(method,path,body=body,headers=headers or {},encode_chunked=chunked)\n        r=c.getresponse();return r.status,r.read(),{k.lower():v for k,v in r.getheaders()}\n    finally:c.close()\n@contextlib.contextmanager\ndef origin(delay=0):\n    records=[];lock=threading.Lock()\n    class Handler(http.server.BaseHTTPRequestHandler):\n        def log_message(self,*args):pass\n        def serve(self):\n            data=self.rfile.read(int(self.headers.get('Content-Length','0')))\n            with lock:\n                item={'path':self.path,'method':self.command,'length':len(data),'body':data.hex(),'sequence':len(records)+1};records.append(item)\n            if delay:time.sleep(delay)\n            content=json.dumps(item).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(content)));self.send_header('Cache-Control','public,max-age=30');self.end_headers()\n            try:self.wfile.write(content)\n            except OSError:pass\n        do_GET=do_POST=do_PUT=serve\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port,records\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\n@contextlib.contextmanager\ndef nginx(values=None):\n    values=dict(values or {});port=freeport();values['PORT']=port;values['ROOT']=str(ROOT)\n    config=pathlib.Path('nginx.conf').read_text()\n    for key,value in values.items():config=config.replace('@'+key+'@',str(value))\n    assert not re.search(r'@[A-Z]+@',config),'unresolved placeholder'\n    assert re.search(r'\\bdaemon\\s+off\\s*;',config) and re.search(r'\\bworker_processes\\s+1\\s*;',config)\n    endpoints=re.findall(r'\\blisten\\s+([^;\\s]+)',config);assert endpoints and all(p=='127.0.0.1:'+str(port) for p in endpoints)\n    for directive in ['pid','error_log','client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path']:\n        match=re.search(r'\\b'+directive+r'\\s+([^;\\s]+)',config);assert match and pathlib.Path(match[1]).is_relative_to(ROOT),directive\n    pathlib.Path('rendered.conf').write_text(config);command=['nginx','-p',str(ROOT)+'/', '-c',str(ROOT/'rendered.conf')]\n    syntax=subprocess.run(command+['-t'],capture_output=True,text=True,timeout=3);assert syntax.returncode==0,syntax.stderr\n    log=open('nginx-process.log','wb');p=subprocess.Popen(command,stdout=log,stderr=log)\n    try:\n        for _ in range(100):\n            assert p.poll() is None,pathlib.Path('nginx-process.log').read_text(errors='replace')\n            try:\n                with socket.create_connection(('127.0.0.1',port),timeout=.02):break\n            except OSError:time.sleep(.01)\n        else:raise AssertionError('not listening')\n        yield port\n    finally:\n        if p.poll() is None:p.send_signal(signal.SIGQUIT)\n        try:p.wait(timeout=3)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=1)\n        log.close();assert p.returncode==0,p.returncode\n\n@contextlib.contextmanager\ndef service(handler):\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\nclass Quiet(http.server.BaseHTTPRequestHandler):\n    def log_message(self,*args):pass\n    def answer(self,status,body=b'',headers=None):\n        self.send_response(status)\n        for k,v in (headers or []):self.send_header(k,v)\n        self.send_header('Content-Length',str(len(body)));self.end_headers()\n        try:self.wfile.write(body)\n        except OSError:pass\n\n\nhits={'A':[],'B':[]}\ndef backend(name):\n    class Node(Quiet):\n        def do_GET(self):hits[name].append(self.path);self.answer(200,(name+'|'+self.path).encode())\n    return Node\nwith service(backend('A')) as a,service(backend('B')) as b:\n    with nginx({'A':a,'B':b}) as p:\n        for i in range(16):\n            path=f'/job/{i}';s,body,h=request(p,path);assert s==200 and body in [('A|'+path).encode(),('B|'+path).encode()]\n        assert len(hits['A'])==12 and len(hits['B'])==4\n        assert sorted(hits['A']+hits['B'])==sorted(f'/job/{i}' for i in range(16))\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "nginx"
+        ]
+      }
+    },
+    "case_signature": "nginx-native|curated-parallel-nginx-039|交付原生3:1加权轮询，依据真实后端接收数量验收",
+    "reference_docs": [
+      "https://nginx.org/en/docs/http/ngx_http_upstream_module.html#server"
+    ],
+    "conversion": {
+      "original_id": "curated-parallel-nginx-039",
+      "original_title": "轮询、权重和least_conn各依赖怎样的判断？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-parallel-nginx-052",
+    "module": "nginx",
+    "category": "Nginx",
+    "level": 3,
+    "topic": "修复新资源发布后仍404：只取消文件打开错误缓存",
+    "title": "修复新资源发布后仍404：只取消文件打开错误缓存",
+    "answer": "```nginx\ndaemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n open_file_cache max=20 inactive=10s; open_file_cache_valid 5s; open_file_cache_errors off;\nserver { listen 127.0.0.1:@PORT@; root @ROOT@/site;\n location / { log_not_found off; }\n}\n}\n```\n\n保留普通文件open_file_cache配置，但禁止缓存ENOENT等打开错误。先请求尚未发布的release.txt得到404，再原子创建该文件；下一次请求必须立即得到真实新内容，无需等待open_file_cache_valid五秒。对比正向缓存：stable.txt先读取并缓存，原子替换它后在valid窗口内仍读到旧实体，证明并未关闭全部文件缓存。因此本题只避免负向缓存，不承诺已存在文件更新立即可见。不得靠重载/重启或入口固定200掩盖新文件尚不存在。\n\n原理补充：\n它缓存文件相关信息或错误状态，具体有效期和校验设置影响新文件或变更被观察的时机。发布后从实际请求路径检查内容、元数据及缓存行为；不要仅看磁盘文件已更新就断言所有请求一致。",
+    "type": "code",
+    "source": "OpsForge Nginx 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 环境与初始材料\n普通用户Linux、Nginx与Python3。提供nginx.conf安全运行骨架（当前所有请求501）和必要文件；原生Nginx必须前台、1worker、仅监听127.0.0.1:@PORT@，pid/日志/所有临时目录位于@ROOT@。验收将@PORT@替换随机高端口、@ROOT@替换独立临时目录、@UPSTREAM@替换本题回环源站。禁止修改系统Nginx或监听80/443。\n\n## 操作任务\n保留普通文件open_file_cache配置，但禁止缓存ENOENT等打开错误。先请求尚未发布的release.txt得到404，再原子创建该文件；下一次请求必须立即得到真实新内容，无需等待open_file_cache_valid五秒。对比正向缓存：stable.txt先读取并缓存，原子替换它后在valid窗口内仍读到旧实体，证明并未关闭全部文件缓存。因此本题只避免负向缓存，不承诺已存在文件更新立即可见。不得靠重载/重启或入口固定200掩盖新文件尚不存在。\n\n## 提交产物\n完整nginx.conf，保留安全运行骨架，使用原生Nginx指令实现；不得伪造固定响应冒充静态文件、代理或缓存结果。\n\n## 验收方法\npython3 checks/check.py：先nginx -t，随后启动真实Nginx，通过下列任务明确的HTTP状态、响应内容、文件、日志或源站计数逐项验收；初始配置和指定错误配置均应失败，参考配置全部断言通过并退出0。关闭本题全部服务后检查结束；这里只验证本机功能，不声称生产吞吐、云控制面或外网生效。\n\n失败示例：缓存首次ENOENT会让新文件创建后仍返回404；这与浏览器缓存或文件权限失败的根因不同。",
+    "rubric": [
+      "技术语义准确",
+      "区分请求处理阶段",
+      "结果可验证"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "nginx"
+    ],
+    "language": "configuration",
+    "difficulty": "综合",
+    "files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; location / { return 501; } }\n}\n",
+      "site/stable.txt": "stable content"
+    },
+    "solution_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n open_file_cache max=20 inactive=10s; open_file_cache_valid 5s; open_file_cache_errors off;\nserver { listen 127.0.0.1:@PORT@; root @ROOT@/site;\n location / { log_not_found off; }\n}\n}\n"
+    },
+    "negative_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n open_file_cache max=20 inactive=10s; open_file_cache_valid 5s; open_file_cache_errors on;\nserver { listen 127.0.0.1:@PORT@; root @ROOT@/site;\n location / { log_not_found off; }\n}\n}\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "保留普通文件open_file_cache配置，但禁止缓存ENOENT等打开错误。先请求尚未发布的release.txt得到404，再原子创建该文件；下一次请求必须立即得到真实新内容，无需等待open_file_cache_valid五秒。对比正向缓存：stable.txt先读取并缓存，原子替换它后在valid窗口内仍读到旧实体，证明并未关闭全部文件缓存。因此本题只避免负向缓存，不承诺已存在文件更新立即可见。不得靠重载/重启或入口固定200掩盖新文件尚不存在。",
+      "deliverables": [
+        "nginx.conf"
+      ],
+      "verification": "原生Nginx语法与真实回环HTTP行为，具体通过标准见操作任务，结束时关闭本题服务",
+      "failure_examples": [
+        "缓存首次ENOENT会让新文件创建后仍返回404；这与浏览器缓存或文件权限失败的根因不同。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,contextlib,socket,subprocess,time,signal,http.client,http.server,threading,json,re,secrets,gzip,concurrent.futures,os\nROOT=pathlib.Path.cwd()\ndef freeport():\n    with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]\ndef request(port,path='/',method='GET',body=None,headers=None,chunked=False):\n    c=http.client.HTTPConnection('127.0.0.1',port,timeout=3)\n    try:\n        c.request(method,path,body=body,headers=headers or {},encode_chunked=chunked)\n        r=c.getresponse();return r.status,r.read(),{k.lower():v for k,v in r.getheaders()}\n    finally:c.close()\n@contextlib.contextmanager\ndef origin(delay=0):\n    records=[];lock=threading.Lock()\n    class Handler(http.server.BaseHTTPRequestHandler):\n        def log_message(self,*args):pass\n        def serve(self):\n            data=self.rfile.read(int(self.headers.get('Content-Length','0')))\n            with lock:\n                item={'path':self.path,'method':self.command,'length':len(data),'body':data.hex(),'sequence':len(records)+1};records.append(item)\n            if delay:time.sleep(delay)\n            content=json.dumps(item).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(content)));self.send_header('Cache-Control','public,max-age=30');self.end_headers()\n            try:self.wfile.write(content)\n            except OSError:pass\n        do_GET=do_POST=do_PUT=serve\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port,records\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\n@contextlib.contextmanager\ndef nginx(values=None):\n    values=dict(values or {});port=freeport();values['PORT']=port;values['ROOT']=str(ROOT)\n    config=pathlib.Path('nginx.conf').read_text()\n    for key,value in values.items():config=config.replace('@'+key+'@',str(value))\n    assert not re.search(r'@[A-Z]+@',config),'unresolved placeholder'\n    assert re.search(r'\\bdaemon\\s+off\\s*;',config) and re.search(r'\\bworker_processes\\s+1\\s*;',config)\n    endpoints=re.findall(r'\\blisten\\s+([^;\\s]+)',config);assert endpoints and all(p=='127.0.0.1:'+str(port) for p in endpoints)\n    for directive in ['pid','error_log','client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path']:\n        match=re.search(r'\\b'+directive+r'\\s+([^;\\s]+)',config);assert match and pathlib.Path(match[1]).is_relative_to(ROOT),directive\n    pathlib.Path('rendered.conf').write_text(config);command=['nginx','-p',str(ROOT)+'/', '-c',str(ROOT/'rendered.conf')]\n    syntax=subprocess.run(command+['-t'],capture_output=True,text=True,timeout=3);assert syntax.returncode==0,syntax.stderr\n    log=open('nginx-process.log','wb');p=subprocess.Popen(command,stdout=log,stderr=log)\n    try:\n        for _ in range(100):\n            assert p.poll() is None,pathlib.Path('nginx-process.log').read_text(errors='replace')\n            try:\n                with socket.create_connection(('127.0.0.1',port),timeout=.02):break\n            except OSError:time.sleep(.01)\n        else:raise AssertionError('not listening')\n        yield port\n    finally:\n        if p.poll() is None:p.send_signal(signal.SIGQUIT)\n        try:p.wait(timeout=3)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=1)\n        log.close();assert p.returncode==0,p.returncode\n\n@contextlib.contextmanager\ndef service(handler):\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\nclass Quiet(http.server.BaseHTTPRequestHandler):\n    def log_message(self,*args):pass\n    def answer(self,status,body=b'',headers=None):\n        self.send_response(status)\n        for k,v in (headers or []):self.send_header(k,v)\n        self.send_header('Content-Length',str(len(body)));self.end_headers()\n        try:self.wfile.write(body)\n        except OSError:pass\n\n\ntoken=secrets.token_hex(16).encode()\nwith nginx() as p:\n    assert request(p,'/stable.txt')[0:2]==(200,b'stable content')\n    assert request(p,'/release.txt')[0]==404\n    pathlib.Path('site/release.tmp').write_bytes(token);os.replace('site/release.tmp','site/release.txt')\n    assert request(p,'/release.txt')[0:2]==(200,token),'cached ENOENT hides newly published resource'\n    pathlib.Path('site/stable.new').write_bytes(b'replaced stable');os.replace('site/stable.new','site/stable.txt')\n    for _ in range(3):assert request(p,'/stable.txt')[0:2]==(200,b'stable content'),'positive file cache was disabled'\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "nginx"
+        ]
+      }
+    },
+    "case_signature": "nginx-native|curated-parallel-nginx-052|修复新资源发布后仍404：只取消文件打开错误缓存",
+    "reference_docs": [
+      "https://nginx.org/en/docs/http/ngx_http_core_module.html#open_file_cache_errors"
+    ],
+    "conversion": {
+      "original_id": "curated-parallel-nginx-052",
+      "original_title": "open_file_cache为什么可能影响刚发布文件的可见性判断？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-parallel-nginx-062",
+    "module": "nginx",
+    "category": "Nginx",
+    "level": 3,
+    "topic": "验证访问日志缓冲与定时flush，区分未落盘和请求未到达",
+    "title": "验证访问日志缓冲与定时flush，区分未落盘和请求未到达",
+    "answer": "```nginx\ndaemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n log_format buffered '$uri';\nserver { listen 127.0.0.1:@PORT@; access_log @ROOT@/buffered.log buffered buffer=32k flush=2s;\n location / { return 200 \"ok\"; }\n}\n}\n```\n\n配置32KiB访问日志缓冲与2秒flush。请求/logged实际200后，小记录应先留在缓冲而非立即写盘；在限定等待内自动落盘且恰好一条，不依赖停止Nginx触发flush。第二条请求也需自动落盘，不能丢失或重复。验收关注缓冲与定时刷新行为，不把测试等待上限当成生产精确定时SLA。\n\n原理补充：\n日志可能尚在缓冲或等待刷新，进程异常也可能影响未落盘内容。按配置检查刷新、轮转和集中采集延迟，通过请求ID及时间关联，不要仅以实时tail缺一行推断请求从未经过代理。",
+    "type": "code",
+    "source": "OpsForge Nginx 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 环境与初始材料\n普通用户Linux、Nginx与Python3。提供nginx.conf安全运行骨架（当前所有请求501）和必要文件；原生Nginx必须前台、1worker、仅监听127.0.0.1:@PORT@，pid/日志/所有临时目录位于@ROOT@。验收将@PORT@替换随机高端口、@ROOT@替换独立临时目录、@UPSTREAM@替换本题回环源站。禁止修改系统Nginx或监听80/443。\n\n## 操作任务\n配置32KiB访问日志缓冲与2秒flush。请求/logged实际200后，小记录应先留在缓冲而非立即写盘；在限定等待内自动落盘且恰好一条，不依赖停止Nginx触发flush。第二条请求也需自动落盘，不能丢失或重复。验收关注缓冲与定时刷新行为，不把测试等待上限当成生产精确定时SLA。\n\n## 提交产物\n完整nginx.conf，保留安全运行骨架，使用原生Nginx指令实现；不得伪造固定响应冒充静态文件、代理或缓存结果。\n\n## 验收方法\npython3 checks/check.py：先nginx -t，随后启动真实Nginx，通过下列任务明确的HTTP状态、响应内容、文件、日志或源站计数逐项验收；初始配置和指定错误配置均应失败，参考配置全部断言通过并退出0。关闭本题全部服务后检查结束；这里只验证本机功能，不声称生产吞吐、云控制面或外网生效。\n\n失败示例：只配置buffer而忘记flush，小流量时日志会长期留在内存，服务运行中无法在限定时间看到记录。",
+    "rubric": [
+      "技术语义准确",
+      "证据能支持结论",
+      "范围及恢复可控"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "nginx"
+    ],
+    "language": "configuration",
+    "difficulty": "综合",
+    "files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; location / { return 501; } }\n}\n"
+    },
+    "solution_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n log_format buffered '$uri';\nserver { listen 127.0.0.1:@PORT@; access_log @ROOT@/buffered.log buffered buffer=32k flush=2s;\n location / { return 200 \"ok\"; }\n}\n}\n"
+    },
+    "negative_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n log_format buffered '$uri';\nserver { listen 127.0.0.1:@PORT@; access_log @ROOT@/buffered.log buffered buffer=32k;\n location / { return 200 \"ok\"; }\n}\n}\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "配置32KiB访问日志缓冲与2秒flush。请求/logged实际200后，小记录应先留在缓冲而非立即写盘；在限定等待内自动落盘且恰好一条，不依赖停止Nginx触发flush。第二条请求也需自动落盘，不能丢失或重复。验收关注缓冲与定时刷新行为，不把测试等待上限当成生产精确定时SLA。",
+      "deliverables": [
+        "nginx.conf"
+      ],
+      "verification": "原生Nginx语法与真实回环HTTP行为，具体通过标准见操作任务，结束时关闭本题服务",
+      "failure_examples": [
+        "只配置buffer而忘记flush，小流量时日志会长期留在内存，服务运行中无法在限定时间看到记录。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,contextlib,socket,subprocess,time,signal,http.client,http.server,threading,json,re,secrets,gzip,concurrent.futures,os\nROOT=pathlib.Path.cwd()\ndef freeport():\n    with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]\ndef request(port,path='/',method='GET',body=None,headers=None,chunked=False):\n    c=http.client.HTTPConnection('127.0.0.1',port,timeout=3)\n    try:\n        c.request(method,path,body=body,headers=headers or {},encode_chunked=chunked)\n        r=c.getresponse();return r.status,r.read(),{k.lower():v for k,v in r.getheaders()}\n    finally:c.close()\n@contextlib.contextmanager\ndef origin(delay=0):\n    records=[];lock=threading.Lock()\n    class Handler(http.server.BaseHTTPRequestHandler):\n        def log_message(self,*args):pass\n        def serve(self):\n            data=self.rfile.read(int(self.headers.get('Content-Length','0')))\n            with lock:\n                item={'path':self.path,'method':self.command,'length':len(data),'body':data.hex(),'sequence':len(records)+1};records.append(item)\n            if delay:time.sleep(delay)\n            content=json.dumps(item).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(content)));self.send_header('Cache-Control','public,max-age=30');self.end_headers()\n            try:self.wfile.write(content)\n            except OSError:pass\n        do_GET=do_POST=do_PUT=serve\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port,records\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\n@contextlib.contextmanager\ndef nginx(values=None):\n    values=dict(values or {});port=freeport();values['PORT']=port;values['ROOT']=str(ROOT)\n    config=pathlib.Path('nginx.conf').read_text()\n    for key,value in values.items():config=config.replace('@'+key+'@',str(value))\n    assert not re.search(r'@[A-Z]+@',config),'unresolved placeholder'\n    assert re.search(r'\\bdaemon\\s+off\\s*;',config) and re.search(r'\\bworker_processes\\s+1\\s*;',config)\n    endpoints=re.findall(r'\\blisten\\s+([^;\\s]+)',config);assert endpoints and all(p=='127.0.0.1:'+str(port) for p in endpoints)\n    for directive in ['pid','error_log','client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path']:\n        match=re.search(r'\\b'+directive+r'\\s+([^;\\s]+)',config);assert match and pathlib.Path(match[1]).is_relative_to(ROOT),directive\n    pathlib.Path('rendered.conf').write_text(config);command=['nginx','-p',str(ROOT)+'/', '-c',str(ROOT/'rendered.conf')]\n    syntax=subprocess.run(command+['-t'],capture_output=True,text=True,timeout=3);assert syntax.returncode==0,syntax.stderr\n    log=open('nginx-process.log','wb');p=subprocess.Popen(command,stdout=log,stderr=log)\n    try:\n        for _ in range(100):\n            assert p.poll() is None,pathlib.Path('nginx-process.log').read_text(errors='replace')\n            try:\n                with socket.create_connection(('127.0.0.1',port),timeout=.02):break\n            except OSError:time.sleep(.01)\n        else:raise AssertionError('not listening')\n        yield port\n    finally:\n        if p.poll() is None:p.send_signal(signal.SIGQUIT)\n        try:p.wait(timeout=3)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=1)\n        log.close();assert p.returncode==0,p.returncode\n\n@contextlib.contextmanager\ndef service(handler):\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\nclass Quiet(http.server.BaseHTTPRequestHandler):\n    def log_message(self,*args):pass\n    def answer(self,status,body=b'',headers=None):\n        self.send_response(status)\n        for k,v in (headers or []):self.send_header(k,v)\n        self.send_header('Content-Length',str(len(body)));self.end_headers()\n        try:self.wfile.write(body)\n        except OSError:pass\n\n\nwith nginx() as p:\n    log=ROOT/'buffered.log';assert request(p,'/logged')[0]==200\n    assert not log.exists() or log.read_bytes()==b'','buffer unexpectedly disabled'\n    end=time.monotonic()+3.5\n    while time.monotonic()<end:\n        if log.exists() and b'/logged\\n' in log.read_bytes():break\n        time.sleep(.03)\n    else:raise AssertionError('automatic flush missing')\n    assert log.read_bytes()==b'/logged\\n'\n    assert request(p,'/second')[0]==200\n    end=time.monotonic()+3.5\n    while time.monotonic()<end:\n        if log.read_bytes()==b'/logged\\n/second\\n':break\n        time.sleep(.03)\n    else:raise AssertionError('second flush missing')\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "nginx"
+        ]
+      }
+    },
+    "case_signature": "nginx-native|curated-parallel-nginx-062|验证访问日志缓冲与定时flush，区分未落盘和请求未到达",
+    "reference_docs": [
+      "https://nginx.org/en/docs/http/ngx_http_log_module.html#access_log"
+    ],
+    "conversion": {
+      "original_id": "curated-parallel-nginx-062",
+      "original_title": "配置access日志缓冲后，为什么文件尾部暂时没记录不等于请求没到达？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-parallel-nginx-073",
+    "module": "nginx",
+    "category": "Nginx",
+    "level": 3,
+    "topic": "区分同为403的入口拒绝与上游拒绝，交付可解析原生日志",
+    "title": "区分同为403的入口拒绝与上游拒绝，交付可解析原生日志",
+    "answer": "```nginx\ndaemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n log_format origin escape=json '{\"uri\":\"$uri\",\"status\":$status,\"upstream_status\":\"$upstream_status\",\"upstream_addr\":\"$upstream_addr\"}';\nserver { listen 127.0.0.1:@PORT@; access_log @ROOT@/origin.log origin;\n location = /edge-denied { return 403; }\n location / { proxy_pass http://127.0.0.1:@UPSTREAM@; }\n}\n}\n```\n\n保持/edge-denied由Nginx直接403，/app-denied由实际上游403。JSON访问日志必须分别记录uri、最终status、upstream_status和upstream_addr：本题escape=json时入口拒绝的两个上游字段均为空字符串；上游拒绝记录真实403及回环端口。不能把普通日志的缺值占位符照搬到JSON模式，也不能仅记录status后靠猜测归因。\n\n原理补充：\n记录status及upstream_status、目标地址和相关耗时，并对照error日志与应用请求ID。没有上游尝试、重试多次和上游主动报错的证据不同；不能看到403或500就默认属于应用或默认属于Nginx。",
+    "type": "code",
+    "source": "OpsForge Nginx 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 环境与初始材料\n普通用户Linux、Nginx与Python3。提供nginx.conf安全运行骨架（当前所有请求501）和必要文件；原生Nginx必须前台、1worker、仅监听127.0.0.1:@PORT@，pid/日志/所有临时目录位于@ROOT@。验收将@PORT@替换随机高端口、@ROOT@替换独立临时目录、@UPSTREAM@替换本题回环源站。禁止修改系统Nginx或监听80/443。\n\n## 操作任务\n保持/edge-denied由Nginx直接403，/app-denied由实际上游403。JSON访问日志必须分别记录uri、最终status、upstream_status和upstream_addr：本题escape=json时入口拒绝的两个上游字段均为空字符串；上游拒绝记录真实403及回环端口。不能把普通日志的缺值占位符照搬到JSON模式，也不能仅记录status后靠猜测归因。\n\n## 提交产物\n完整nginx.conf，保留安全运行骨架，使用原生Nginx指令实现；不得伪造固定响应冒充静态文件、代理或缓存结果。\n\n## 验收方法\npython3 checks/check.py：先nginx -t，随后启动真实Nginx，通过下列任务明确的HTTP状态、响应内容、文件、日志或源站计数逐项验收；初始配置和指定错误配置均应失败，参考配置全部断言通过并退出0。关闭本题全部服务后检查结束；这里只验证本机功能，不声称生产吞吐、云控制面或外网生效。\n\n失败示例：把最终status重复写成upstream_status会把入口拒绝也归因到上游，真实无回源路径断言失败。",
+    "rubric": [
+      "技术语义准确",
+      "证据能支持结论",
+      "范围及恢复可控"
+    ],
+    "hints": [],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/IPGrwR4n4i69WJktQVlcHczfnEb",
+        "block_ids": [
+          "Bzpddu5OhocXtVxcnAfcg5VCnac",
+          "B6hCdXsYgoddMAx7SsWcygRlnbc",
+          "DfkVd8l5qojEpQxpC69cipDCnlh",
+          "MsE2dnmk2otzIrxhAcDcoa5jnic",
+          "OAnadf4FXowXNhxuInwco5jvnph",
+          "A4podgZcBo09Lmx7DVlcE8G2nDd",
+          "GaCodfQf2oYbZJxGxHEcNDu5nGd",
+          "Tnmrdi0Yfop1EuxG7Pic0aranbb",
+          "Ht1IdEswbodVfxxVBvQcBfH6nPe",
+          "C6G1dCKWwoEKNMxxk6Sc4cx5nyd",
+          "WChndwTHRo29f8xjISLco2OxnWf",
+          "AsJ0dz0hHobOjzxvz32cpbYenef",
+          "UvArditWQonac2xCFZzck9fknOe",
+          "Ij5EdGVyfofznpxFVC6cimw1nzc",
+          "DKXLd5xIkoUUXtxgdiKcW2Ginne",
+          "H0fZdtz0vo8ScoxYZ5qcekPQnQe",
+          "UK6IdyxuKoBqexxh55CcLnchnud",
+          "FvGTdtsyBoEONgxPyxocKCjJnOd",
+          "KSaKdyZb8o2kHZx4qPNc4ahZnab",
+          "NDFYdHJChoqr9uxeBfPccFPyngb",
+          "MVAkdgZlMoABHAxx01rciHKenPf",
+          "HoPodOI4aomqe1xTqUJc8Aq6nvf",
+          "DJEddtnpzoT8LOxCJVjcBjdtndh",
+          "Oj4vdojlwor7Vwx5LeOcNTYcnMd",
+          "YdLudPTCwo5V7mx141xcnfVRndh",
+          "MIKKdfgQjoNi9WxhWi8cfh9gnke",
+          "BwCWdmpEGotmcJxU1oNcvxt0nEc",
+          "K0wfdk11FoRqSjxtl43cuiPnnid",
+          "UYeYdDxpZo8jToxafnIcYUiynsc",
+          "CPzhd7WUGoHZ5qx8lBncwJbjnYf"
+        ]
+      }
+    ],
+    "related_modules": [
+      "nginx"
+    ],
+    "language": "configuration",
+    "difficulty": "综合",
+    "files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; location / { return 501; } }\n}\n"
+    },
+    "solution_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n log_format origin escape=json '{\"uri\":\"$uri\",\"status\":$status,\"upstream_status\":\"$upstream_status\",\"upstream_addr\":\"$upstream_addr\"}';\nserver { listen 127.0.0.1:@PORT@; access_log @ROOT@/origin.log origin;\n location = /edge-denied { return 403; }\n location / { proxy_pass http://127.0.0.1:@UPSTREAM@; }\n}\n}\n"
+    },
+    "negative_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n log_format origin escape=json '{\"uri\":\"$uri\",\"status\":$status,\"upstream_status\":\"$status\",\"upstream_addr\":\"$upstream_addr\"}';\nserver { listen 127.0.0.1:@PORT@; access_log @ROOT@/origin.log origin;\n location = /edge-denied { return 403; }\n location / { proxy_pass http://127.0.0.1:@UPSTREAM@; }\n}\n}\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "保持/edge-denied由Nginx直接403，/app-denied由实际上游403。JSON访问日志必须分别记录uri、最终status、upstream_status和upstream_addr：本题escape=json时入口拒绝的两个上游字段均为空字符串；上游拒绝记录真实403及回环端口。不能把普通日志的缺值占位符照搬到JSON模式，也不能仅记录status后靠猜测归因。",
+      "deliverables": [
+        "nginx.conf"
+      ],
+      "verification": "原生Nginx语法与真实回环HTTP行为，具体通过标准见操作任务，结束时关闭本题服务",
+      "failure_examples": [
+        "把最终status重复写成upstream_status会把入口拒绝也归因到上游，真实无回源路径断言失败。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,contextlib,socket,subprocess,time,signal,http.client,http.server,threading,json,re,secrets,gzip,concurrent.futures,os\nROOT=pathlib.Path.cwd()\ndef freeport():\n    with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]\ndef request(port,path='/',method='GET',body=None,headers=None,chunked=False):\n    c=http.client.HTTPConnection('127.0.0.1',port,timeout=3)\n    try:\n        c.request(method,path,body=body,headers=headers or {},encode_chunked=chunked)\n        r=c.getresponse();return r.status,r.read(),{k.lower():v for k,v in r.getheaders()}\n    finally:c.close()\n@contextlib.contextmanager\ndef origin(delay=0):\n    records=[];lock=threading.Lock()\n    class Handler(http.server.BaseHTTPRequestHandler):\n        def log_message(self,*args):pass\n        def serve(self):\n            data=self.rfile.read(int(self.headers.get('Content-Length','0')))\n            with lock:\n                item={'path':self.path,'method':self.command,'length':len(data),'body':data.hex(),'sequence':len(records)+1};records.append(item)\n            if delay:time.sleep(delay)\n            content=json.dumps(item).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(content)));self.send_header('Cache-Control','public,max-age=30');self.end_headers()\n            try:self.wfile.write(content)\n            except OSError:pass\n        do_GET=do_POST=do_PUT=serve\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port,records\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\n@contextlib.contextmanager\ndef nginx(values=None):\n    values=dict(values or {});port=freeport();values['PORT']=port;values['ROOT']=str(ROOT)\n    config=pathlib.Path('nginx.conf').read_text()\n    for key,value in values.items():config=config.replace('@'+key+'@',str(value))\n    assert not re.search(r'@[A-Z]+@',config),'unresolved placeholder'\n    assert re.search(r'\\bdaemon\\s+off\\s*;',config) and re.search(r'\\bworker_processes\\s+1\\s*;',config)\n    endpoints=re.findall(r'\\blisten\\s+([^;\\s]+)',config);assert endpoints and all(p=='127.0.0.1:'+str(port) for p in endpoints)\n    for directive in ['pid','error_log','client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path']:\n        match=re.search(r'\\b'+directive+r'\\s+([^;\\s]+)',config);assert match and pathlib.Path(match[1]).is_relative_to(ROOT),directive\n    pathlib.Path('rendered.conf').write_text(config);command=['nginx','-p',str(ROOT)+'/', '-c',str(ROOT/'rendered.conf')]\n    syntax=subprocess.run(command+['-t'],capture_output=True,text=True,timeout=3);assert syntax.returncode==0,syntax.stderr\n    log=open('nginx-process.log','wb');p=subprocess.Popen(command,stdout=log,stderr=log)\n    try:\n        for _ in range(100):\n            assert p.poll() is None,pathlib.Path('nginx-process.log').read_text(errors='replace')\n            try:\n                with socket.create_connection(('127.0.0.1',port),timeout=.02):break\n            except OSError:time.sleep(.01)\n        else:raise AssertionError('not listening')\n        yield port\n    finally:\n        if p.poll() is None:p.send_signal(signal.SIGQUIT)\n        try:p.wait(timeout=3)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=1)\n        log.close();assert p.returncode==0,p.returncode\n\n@contextlib.contextmanager\ndef service(handler):\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\nclass Quiet(http.server.BaseHTTPRequestHandler):\n    def log_message(self,*args):pass\n    def answer(self,status,body=b'',headers=None):\n        self.send_response(status)\n        for k,v in (headers or []):self.send_header(k,v)\n        self.send_header('Content-Length',str(len(body)));self.end_headers()\n        try:self.wfile.write(body)\n        except OSError:pass\n\n\nhits=[]\nclass Denied(Quiet):\n    def do_GET(self):hits.append(self.path);self.answer(403,b'upstream denied')\nwith service(Denied) as a:\n    with nginx({'UPSTREAM':a}) as p:\n        assert request(p,'/edge-denied')[0]==403 and hits==[]\n        assert request(p,'/app-denied')[0:2]==(403,b'upstream denied') and hits==['/app-denied']\n        lines=[json.loads(x) for x in pathlib.Path('origin.log').read_text().splitlines()];assert len(lines)==2\n        assert lines[0]=={'uri':'/edge-denied','status':403,'upstream_status':'','upstream_addr':''},lines\n        assert lines[1]=={'uri':'/app-denied','status':403,'upstream_status':'403','upstream_addr':f'127.0.0.1:{a}'}\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "nginx"
+        ]
+      }
+    },
+    "case_signature": "nginx-native|curated-parallel-nginx-073|区分同为403的入口拒绝与上游拒绝，交付可解析原生日志",
+    "reference_docs": [
+      "https://nginx.org/en/docs/http/ngx_http_upstream_module.html#variables"
+    ],
+    "conversion": {
+      "original_id": "curated-parallel-nginx-073",
+      "original_title": "怎样区分代理自身拒绝请求与上游返回相同状态码？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-parallel-nginx-074",
+    "module": "nginx",
+    "category": "Nginx",
+    "level": 3,
+    "topic": "记录一次请求的完整上游尝试链，不把多值字段压成单个成功值",
+    "title": "记录一次请求的完整上游尝试链，不把多值字段压成单个成功值",
+    "answer": "```nginx\ndaemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n log_format attempts escape=json '{\"status\":$status,\"attempt_status\":\"$upstream_status\",\"attempt_addr\":\"$upstream_addr\",\"attempt_time\":\"$upstream_response_time\"}';\nupstream trace_app { server 127.0.0.1:@A@; server 127.0.0.1:@B@ backup; }\nserver { listen 127.0.0.1:@PORT@; access_log @ROOT@/attempts.log attempts;\n location / { proxy_pass http://trace_app; proxy_next_upstream http_503; proxy_next_upstream_tries 2; }\n}\n}\n```\n\n保留题目给定的主节点503、备用节点200自动重试流程，为它配置JSON访问日志：最终status=200，上游状态链为503, 200，地址链按主/备顺序，耗时链有两个可解析非负数并与尝试一一对应。两个节点都必须真实收到相同请求。该任务考日志合同，不把首个失败隐藏为最终成功值。\n\n原理补充：\n同一请求可能经历重试或多次处理，上游字段可能反映多次尝试。按格式对应各阶段，而不是把整串误当一个时间或端点；同时检查是否在已产生副作用后重试。",
+    "type": "code",
+    "source": "OpsForge Nginx 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 环境与初始材料\n普通用户Linux、Nginx与Python3。提供nginx.conf安全运行骨架（当前所有请求501）和必要文件；原生Nginx必须前台、1worker、仅监听127.0.0.1:@PORT@，pid/日志/所有临时目录位于@ROOT@。验收将@PORT@替换随机高端口、@ROOT@替换独立临时目录、@UPSTREAM@替换本题回环源站。禁止修改系统Nginx或监听80/443。\n\n## 操作任务\n保留题目给定的主节点503、备用节点200自动重试流程，为它配置JSON访问日志：最终status=200，上游状态链为503, 200，地址链按主/备顺序，耗时链有两个可解析非负数并与尝试一一对应。两个节点都必须真实收到相同请求。该任务考日志合同，不把首个失败隐藏为最终成功值。\n\n## 提交产物\n完整nginx.conf，保留安全运行骨架，使用原生Nginx指令实现；不得伪造固定响应冒充静态文件、代理或缓存结果。\n\n## 验收方法\npython3 checks/check.py：先nginx -t，随后启动真实Nginx，通过下列任务明确的HTTP状态、响应内容、文件、日志或源站计数逐项验收；初始配置和指定错误配置均应失败，参考配置全部断言通过并退出0。关闭本题全部服务后检查结束；这里只验证本机功能，不声称生产吞吐、云控制面或外网生效。\n\n失败示例：只写$status会把两次尝试压成一个200，失去失败节点与重试成本的证据。",
+    "rubric": [
+      "技术语义准确",
+      "证据能支持结论",
+      "范围及恢复可控"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "nginx"
+    ],
+    "language": "configuration",
+    "difficulty": "综合",
+    "files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; location / { return 501; } }\n}\n"
+    },
+    "solution_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n log_format attempts escape=json '{\"status\":$status,\"attempt_status\":\"$upstream_status\",\"attempt_addr\":\"$upstream_addr\",\"attempt_time\":\"$upstream_response_time\"}';\nupstream trace_app { server 127.0.0.1:@A@; server 127.0.0.1:@B@ backup; }\nserver { listen 127.0.0.1:@PORT@; access_log @ROOT@/attempts.log attempts;\n location / { proxy_pass http://trace_app; proxy_next_upstream http_503; proxy_next_upstream_tries 2; }\n}\n}\n"
+    },
+    "negative_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n log_format attempts escape=json '{\"status\":$status,\"attempt_status\":\"$status\",\"attempt_addr\":\"$upstream_addr\",\"attempt_time\":\"$upstream_response_time\"}';\nupstream trace_app { server 127.0.0.1:@A@; server 127.0.0.1:@B@ backup; }\nserver { listen 127.0.0.1:@PORT@; access_log @ROOT@/attempts.log attempts;\n location / { proxy_pass http://trace_app; proxy_next_upstream http_503; proxy_next_upstream_tries 2; }\n}\n}\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "保留题目给定的主节点503、备用节点200自动重试流程，为它配置JSON访问日志：最终status=200，上游状态链为503, 200，地址链按主/备顺序，耗时链有两个可解析非负数并与尝试一一对应。两个节点都必须真实收到相同请求。该任务考日志合同，不把首个失败隐藏为最终成功值。",
+      "deliverables": [
+        "nginx.conf"
+      ],
+      "verification": "原生Nginx语法与真实回环HTTP行为，具体通过标准见操作任务，结束时关闭本题服务",
+      "failure_examples": [
+        "只写$status会把两次尝试压成一个200，失去失败节点与重试成本的证据。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,contextlib,socket,subprocess,time,signal,http.client,http.server,threading,json,re,secrets,gzip,concurrent.futures,os\nROOT=pathlib.Path.cwd()\ndef freeport():\n    with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]\ndef request(port,path='/',method='GET',body=None,headers=None,chunked=False):\n    c=http.client.HTTPConnection('127.0.0.1',port,timeout=3)\n    try:\n        c.request(method,path,body=body,headers=headers or {},encode_chunked=chunked)\n        r=c.getresponse();return r.status,r.read(),{k.lower():v for k,v in r.getheaders()}\n    finally:c.close()\n@contextlib.contextmanager\ndef origin(delay=0):\n    records=[];lock=threading.Lock()\n    class Handler(http.server.BaseHTTPRequestHandler):\n        def log_message(self,*args):pass\n        def serve(self):\n            data=self.rfile.read(int(self.headers.get('Content-Length','0')))\n            with lock:\n                item={'path':self.path,'method':self.command,'length':len(data),'body':data.hex(),'sequence':len(records)+1};records.append(item)\n            if delay:time.sleep(delay)\n            content=json.dumps(item).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(content)));self.send_header('Cache-Control','public,max-age=30');self.end_headers()\n            try:self.wfile.write(content)\n            except OSError:pass\n        do_GET=do_POST=do_PUT=serve\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port,records\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\n@contextlib.contextmanager\ndef nginx(values=None):\n    values=dict(values or {});port=freeport();values['PORT']=port;values['ROOT']=str(ROOT)\n    config=pathlib.Path('nginx.conf').read_text()\n    for key,value in values.items():config=config.replace('@'+key+'@',str(value))\n    assert not re.search(r'@[A-Z]+@',config),'unresolved placeholder'\n    assert re.search(r'\\bdaemon\\s+off\\s*;',config) and re.search(r'\\bworker_processes\\s+1\\s*;',config)\n    endpoints=re.findall(r'\\blisten\\s+([^;\\s]+)',config);assert endpoints and all(p=='127.0.0.1:'+str(port) for p in endpoints)\n    for directive in ['pid','error_log','client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path']:\n        match=re.search(r'\\b'+directive+r'\\s+([^;\\s]+)',config);assert match and pathlib.Path(match[1]).is_relative_to(ROOT),directive\n    pathlib.Path('rendered.conf').write_text(config);command=['nginx','-p',str(ROOT)+'/', '-c',str(ROOT/'rendered.conf')]\n    syntax=subprocess.run(command+['-t'],capture_output=True,text=True,timeout=3);assert syntax.returncode==0,syntax.stderr\n    log=open('nginx-process.log','wb');p=subprocess.Popen(command,stdout=log,stderr=log)\n    try:\n        for _ in range(100):\n            assert p.poll() is None,pathlib.Path('nginx-process.log').read_text(errors='replace')\n            try:\n                with socket.create_connection(('127.0.0.1',port),timeout=.02):break\n            except OSError:time.sleep(.01)\n        else:raise AssertionError('not listening')\n        yield port\n    finally:\n        if p.poll() is None:p.send_signal(signal.SIGQUIT)\n        try:p.wait(timeout=3)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=1)\n        log.close();assert p.returncode==0,p.returncode\n\n@contextlib.contextmanager\ndef service(handler):\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\nclass Quiet(http.server.BaseHTTPRequestHandler):\n    def log_message(self,*args):pass\n    def answer(self,status,body=b'',headers=None):\n        self.send_response(status)\n        for k,v in (headers or []):self.send_header(k,v)\n        self.send_header('Content-Length',str(len(body)));self.end_headers()\n        try:self.wfile.write(body)\n        except OSError:pass\n\n\nhits=[]\nclass Fail(Quiet):\n    def do_GET(self):hits.append(('A',self.path));self.answer(503,b'try other')\nclass Okay(Quiet):\n    def do_GET(self):hits.append(('B',self.path));self.answer(200,b'backup accepted')\nwith service(Fail) as a,service(Okay) as b:\n    with nginx({'A':a,'B':b}) as p:\n        assert request(p,'/work')[0:2]==(200,b'backup accepted') and hits==[('A','/work'),('B','/work')]\n        lines=pathlib.Path('attempts.log').read_text().splitlines();assert len(lines)==1;item=json.loads(lines[0])\n        assert item['status']==200 and item['attempt_status'].split(', ')==['503','200']\n        assert item['attempt_addr'].split(', ')==[f'127.0.0.1:{a}',f'127.0.0.1:{b}']\n        times=item['attempt_time'].split(', ');assert len(times)==2 and all(float(t)>=0 for t in times)\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "nginx"
+        ]
+      }
+    },
+    "case_signature": "nginx-native|curated-parallel-nginx-074|记录一次请求的完整上游尝试链，不把多值字段压成单个成功值",
+    "reference_docs": [
+      "https://nginx.org/en/docs/http/ngx_http_upstream_module.html#var_upstream_status"
+    ],
+    "conversion": {
+      "original_id": "curated-parallel-nginx-074",
+      "original_title": "一条日志中出现多个upstream地址或时间时，应如何解释？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-parallel-nginx-082",
+    "module": "nginx",
+    "category": "Nginx",
+    "level": 3,
+    "topic": "用map审查方法与版本组合，拒绝缺失和未定义组合",
+    "title": "用map审查方法与版本组合，拒绝缺失和未定义组合",
+    "answer": "```nginx\ndaemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n map \"$request_method:$http_x_api_version\" $route { default invalid; \"GET:v1\" read-v1; \"POST:v2\" write-v2; }\nserver { listen 127.0.0.1:@PORT@;\n location / { if ($route = invalid) { return 400; }\n  proxy_set_header X-Route $route; proxy_pass http://127.0.0.1:@UPSTREAM@;\n }\n}\n}\n```\n\n仅GET加X-Api-Version:v1映射read-v1，POST加v2映射write-v2；其余组合、缺失版本、v1evil近似值均400且不触达源站。合法请求向真实源站设置可信X-Route，覆盖客户端伪造同名头；POST正文保持完整。用map把两个属性共同判断，不能只看版本或使用宽松前缀匹配。\n\n原理补充：\nmap将源变量映射到目标变量，适合集中表达匹配与默认分支，避免在多处复制条件。检查缺省、大小写及正则匹配顺序，目标值仍应在合法上下文使用；映射不自动验证不可信输入。",
+    "type": "code",
+    "source": "OpsForge Nginx 运维专题",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 环境与初始材料\n普通用户Linux、Nginx与Python3。提供nginx.conf安全运行骨架（当前所有请求501）和必要文件；原生Nginx必须前台、1worker、仅监听127.0.0.1:@PORT@，pid/日志/所有临时目录位于@ROOT@。验收将@PORT@替换随机高端口、@ROOT@替换独立临时目录、@UPSTREAM@替换本题回环源站。禁止修改系统Nginx或监听80/443。\n\n## 操作任务\n仅GET加X-Api-Version:v1映射read-v1，POST加v2映射write-v2；其余组合、缺失版本、v1evil近似值均400且不触达源站。合法请求向真实源站设置可信X-Route，覆盖客户端伪造同名头；POST正文保持完整。用map把两个属性共同判断，不能只看版本或使用宽松前缀匹配。\n\n## 提交产物\n完整nginx.conf，保留安全运行骨架，使用原生Nginx指令实现；不得伪造固定响应冒充静态文件、代理或缓存结果。\n\n## 验收方法\npython3 checks/check.py：先nginx -t，随后启动真实Nginx，通过下列任务明确的HTTP状态、响应内容、文件、日志或源站计数逐项验收；初始配置和指定错误配置均应失败，参考配置全部断言通过并退出0。关闭本题全部服务后检查结束；这里只验证本机功能，不声称生产吞吐、云控制面或外网生效。\n\n失败示例：方法与版本组合写错会同时拒绝合法写入并放行未定义组合，测试覆盖正反两路。",
+    "rubric": [
+      "技术语义准确",
+      "证据能支持结论",
+      "范围及恢复可控"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "nginx"
+    ],
+    "language": "configuration",
+    "difficulty": "综合",
+    "files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; location / { return 501; } }\n}\n"
+    },
+    "solution_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n map \"$request_method:$http_x_api_version\" $route { default invalid; \"GET:v1\" read-v1; \"POST:v2\" write-v2; }\nserver { listen 127.0.0.1:@PORT@;\n location / { if ($route = invalid) { return 400; }\n  proxy_set_header X-Route $route; proxy_pass http://127.0.0.1:@UPSTREAM@;\n }\n}\n}\n"
+    },
+    "negative_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n map \"$request_method:$http_x_api_version\" $route { default invalid; \"GET:v1\" read-v1; \"POST:v1\" write-v2; }\nserver { listen 127.0.0.1:@PORT@;\n location / { if ($route = invalid) { return 400; }\n  proxy_set_header X-Route $route; proxy_pass http://127.0.0.1:@UPSTREAM@;\n }\n}\n}\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "仅GET加X-Api-Version:v1映射read-v1，POST加v2映射write-v2；其余组合、缺失版本、v1evil近似值均400且不触达源站。合法请求向真实源站设置可信X-Route，覆盖客户端伪造同名头；POST正文保持完整。用map把两个属性共同判断，不能只看版本或使用宽松前缀匹配。",
+      "deliverables": [
+        "nginx.conf"
+      ],
+      "verification": "原生Nginx语法与真实回环HTTP行为，具体通过标准见操作任务，结束时关闭本题服务",
+      "failure_examples": [
+        "方法与版本组合写错会同时拒绝合法写入并放行未定义组合，测试覆盖正反两路。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,contextlib,socket,subprocess,time,signal,http.client,http.server,threading,json,re,secrets,gzip,concurrent.futures,os\nROOT=pathlib.Path.cwd()\ndef freeport():\n    with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]\ndef request(port,path='/',method='GET',body=None,headers=None,chunked=False):\n    c=http.client.HTTPConnection('127.0.0.1',port,timeout=3)\n    try:\n        c.request(method,path,body=body,headers=headers or {},encode_chunked=chunked)\n        r=c.getresponse();return r.status,r.read(),{k.lower():v for k,v in r.getheaders()}\n    finally:c.close()\n@contextlib.contextmanager\ndef origin(delay=0):\n    records=[];lock=threading.Lock()\n    class Handler(http.server.BaseHTTPRequestHandler):\n        def log_message(self,*args):pass\n        def serve(self):\n            data=self.rfile.read(int(self.headers.get('Content-Length','0')))\n            with lock:\n                item={'path':self.path,'method':self.command,'length':len(data),'body':data.hex(),'sequence':len(records)+1};records.append(item)\n            if delay:time.sleep(delay)\n            content=json.dumps(item).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(content)));self.send_header('Cache-Control','public,max-age=30');self.end_headers()\n            try:self.wfile.write(content)\n            except OSError:pass\n        do_GET=do_POST=do_PUT=serve\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port,records\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\n@contextlib.contextmanager\ndef nginx(values=None):\n    values=dict(values or {});port=freeport();values['PORT']=port;values['ROOT']=str(ROOT)\n    config=pathlib.Path('nginx.conf').read_text()\n    for key,value in values.items():config=config.replace('@'+key+'@',str(value))\n    assert not re.search(r'@[A-Z]+@',config),'unresolved placeholder'\n    assert re.search(r'\\bdaemon\\s+off\\s*;',config) and re.search(r'\\bworker_processes\\s+1\\s*;',config)\n    endpoints=re.findall(r'\\blisten\\s+([^;\\s]+)',config);assert endpoints and all(p=='127.0.0.1:'+str(port) for p in endpoints)\n    for directive in ['pid','error_log','client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path']:\n        match=re.search(r'\\b'+directive+r'\\s+([^;\\s]+)',config);assert match and pathlib.Path(match[1]).is_relative_to(ROOT),directive\n    pathlib.Path('rendered.conf').write_text(config);command=['nginx','-p',str(ROOT)+'/', '-c',str(ROOT/'rendered.conf')]\n    syntax=subprocess.run(command+['-t'],capture_output=True,text=True,timeout=3);assert syntax.returncode==0,syntax.stderr\n    log=open('nginx-process.log','wb');p=subprocess.Popen(command,stdout=log,stderr=log)\n    try:\n        for _ in range(100):\n            assert p.poll() is None,pathlib.Path('nginx-process.log').read_text(errors='replace')\n            try:\n                with socket.create_connection(('127.0.0.1',port),timeout=.02):break\n            except OSError:time.sleep(.01)\n        else:raise AssertionError('not listening')\n        yield port\n    finally:\n        if p.poll() is None:p.send_signal(signal.SIGQUIT)\n        try:p.wait(timeout=3)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=1)\n        log.close();assert p.returncode==0,p.returncode\n\n@contextlib.contextmanager\ndef service(handler):\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\nclass Quiet(http.server.BaseHTTPRequestHandler):\n    def log_message(self,*args):pass\n    def answer(self,status,body=b'',headers=None):\n        self.send_response(status)\n        for k,v in (headers or []):self.send_header(k,v)\n        self.send_header('Content-Length',str(len(body)));self.end_headers()\n        try:self.wfile.write(body)\n        except OSError:pass\n\n\ncalls=[]\nclass Routing(Quiet):\n    def serve(self):\n        body=self.rfile.read(int(self.headers.get('Content-Length','0')));item={'route':self.headers.get('X-Route'),'method':self.command,'body':body.decode()};calls.append(item);self.answer(200,json.dumps(item).encode())\n    do_GET=do_POST=serve\nwith service(Routing) as a:\n    with nginx({'UPSTREAM':a}) as p:\n        for method,version,route,body in [('GET','v1','read-v1',None),('POST','v2','write-v2',b'change')]:\n            s,b,h=request(p,'/',method,body,{'X-Api-Version':version,'X-Route':'forged'});assert s==200 and json.loads(b)=={'route':route,'method':method,'body':(body or b'').decode()}\n        for method,headers in [('POST',{'X-Api-Version':'v1'}),('GET',{'X-Api-Version':'v2'}),('GET',{}),('GET',{'X-Api-Version':'v1evil'})]:assert request(p,'/',method,headers=headers)[0]==400\n        assert len(calls)==2\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "nginx"
+        ]
+      }
+    },
+    "case_signature": "nginx-native|curated-parallel-nginx-082|用map审查方法与版本组合，拒绝缺失和未定义组合",
+    "reference_docs": [
+      "https://nginx.org/en/docs/http/ngx_http_map_module.html"
+    ],
+    "conversion": {
+      "original_id": "curated-parallel-nginx-082",
+      "original_title": "map如何帮助把多个请求属性归纳为可审查的策略值？",
+      "original_type": "interview",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-parallel-nginx-086",
+    "module": "nginx",
+    "category": "Nginx",
+    "level": 3,
+    "topic": "条件日志保留全部错误证据，压缩成功与跳转日志量",
+    "title": "编写Nginx条件日志验收CLI：按请求ID核对全部错误证据且不篡改输入",
+    "answer": "```nginx\ndaemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n map $status $should_log { ~^[45] 1; default 0; }\nlog_format failures escape=json '{\"id\":\"$http_x_request_id\",\"uri\":\"$uri\",\"status\":$status}';\nserver { listen 127.0.0.1:@PORT@; access_log @ROOT@/failures.log failures if=$should_log;\n location = /okay { return 200 \"ok\"; }\n location = /redirect { return 302 /okay; }\n location = /switch { return 101; }\n location = /failed { return 503; }\n location / { return 404; }\n}\n}\n```\n```python\nimport collections,json,re,sys\n\ndef unique(pairs):\n    out={}\n    for key,value in pairs:\n        if key in out:raise ValueError('duplicate JSON key')\n        out[key]=value\n    return out\n\ndef record(value):\n    if not isinstance(value,dict) or set(value)!={'id','uri','status'}:raise ValueError('record schema')\n    if not isinstance(value['id'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',value['id']):raise ValueError('request id')\n    if not isinstance(value['uri'],str) or not value['uri'].startswith('/'):raise ValueError('normalized URI')\n    if type(value['status']) is not int or not 100<=value['status']<=599:raise ValueError('status')\n    return value\n\ndef parse(text):\n    try:return json.loads(text,object_pairs_hook=unique)\n    except RecursionError as error:raise ValueError('excessive JSON nesting') from error\n\ndef audit(receipts,raw_log):\n    if not isinstance(receipts,list) or not isinstance(raw_log,str):raise ValueError('input types')\n    expected={}\n    for row in receipts:\n        record(row)\n        if row['id'] in expected:raise ValueError('duplicate receipt id')\n        expected[row['id']]=row\n    observed=[]\n    for line in raw_log.split('\\n'):\n        if line.strip():observed.append(record(parse(line)))\n    counts=collections.Counter(row['id'] for row in observed)\n    good={row['id'] for row in observed if expected.get(row['id'])==row}\n    missing=sorted(key for key,row in expected.items() if row['status']>=400 and key not in good)\n    unexpected=sorted({row['id'] for row in observed if row['id'] not in expected or expected[row['id']]['status']<400})\n    duplicate=sorted(key for key,count in counts.items() if count>1)\n    mismatched=sorted({row['id'] for row in observed if row['id'] in expected and row!=expected[row['id']]})\n    return {'request_count':len(receipts),'expected_error_count':sum(row['status']>=400 for row in receipts),'logged_count':len(observed),\n            'missing_ids':missing,'unexpected_ids':unexpected,'duplicate_ids':duplicate,'mismatched_ids':mismatched,\n            'passed':not any((missing,unexpected,duplicate,mismatched))}\n\ndef main():\n    if len(sys.argv)!=3:raise ValueError('usage: audit.py receipts.json failures.log')\n    with open(sys.argv[1],encoding='utf8') as f:receipts=parse(f.read())\n    with open(sys.argv[2],encoding='utf8') as f:log=f.read()\n    print(json.dumps(audit(receipts,log),ensure_ascii=False,allow_nan=False))\n\nif __name__=='__main__':\n    try:main()\n    except (ValueError,TypeError,OSError) as error:\n        print(str(error),file=sys.stderr);sys.exit(2)\n```",
+    "type": "code",
+    "source": "OpsForge Nginx 运维专题",
+    "version": 3,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "原ID从配置实操深化为实际Python日志验收编程，保留真实Nginx行为；执行范围限本地证据核对。",
+    "pack": "traffic-completion-20261021",
+    "body": "## 环境与初始材料\n普通用户Linux、真实Nginx与Python3；提供安全nginx.conf骨架及audit.py骨架。只使用回环高端口、临时prefix/日志/PID，不修改系统Nginx。@ROOT@/@PORT@由可信验收替换。\n\n## 操作任务\n完成两件协作工作：配置Nginx仅记录4xx/5xx，1xx/2xx/3xx不记录，保留每个错误请求（包括重复路径），日志为escape=json的JSONL，恰含id=$http_x_request_id、uri=$uri、status数值；并编写Python日志验收程序。业务端点/okay返回200，/redirect跳到/okay返回302，/failed返回503，/switch返回101，其余404；101仅用于状态日志边界，不声称升级协议业务成功。\naudit(receipts,raw_log)接收HTTP接收回执列表及Nginx日志文本。每记录恰含id/uri/status；id匹配[A-Za-z0-9_-]{1,80}，uri为/开头字符串（是已记录的规范化URI，不是原始URL），status为100..599整数且非bool。回执id唯一。空白日志行忽略；日志id可重复，由诊断报告说明；重复JSON键、非法记录或输入类型应拒绝。\n报告恰含request_count/expected_error_count/logged_count/missing_ids/unexpected_ids/duplicate_ids/mismatched_ids/passed。expected_error_count为回执status>=400数目；正确日志需三字段与对应回执全部相等。missing_ids为无任何正确日志的错误回执；unexpected_ids为日志中的未知id或回执对应2xx/3xx；duplicate_ids为日志出现超过1次的id；mismatched_ids为有对应回执但字段不等的日志id。四列表去重升序；只有四者均空才passed=true。未知id不重复列入mismatched；同id既有正确也有错误日志时不missing但仍mismatched。空回执和空日志允许通过。\n`python3 audit.py receipts.json failures.log`只在stdout输出一个上述JSON。非法输入退出2且仅stderr报错；证据缺漏等审计不合格仍退出0、passed=false（程序成功完成诊断）。不得修改输入对象或文件。\n\n## 提交产物\nnginx.conf和audit.py，保留安全骨架和真实业务响应；审计程序必须读取本次真实日志，不得伪造正确报告。\n\n## 验收方法\n先nginx -t，启动真实非root Nginx，发起带唯一ID的200/302/404/503混合HTTP及重复路径，停止后核对原生JSONL与CLI。另注入漏记、重复、错状态/URI、误记2xx、未知ID、乱序、转义URI、非法JSON/重复键及输入保留边界；四路和独立突变共同验收。\n\n## 能力边界\n只核对给定回执与本次本地日志，不证明回执收集完备性、不估算未记录生产流量、不证明生产吞吐或分布式链路；不以采样行数冒充全量请求。\n",
+    "rubric": [
+      "技术语义准确",
+      "证据能支持结论",
+      "范围及恢复可控"
+    ],
+    "hints": [],
+    "references": [],
+    "related_modules": [
+      "nginx"
+    ],
+    "language": "python",
+    "difficulty": "综合",
+    "files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; location / { return 501; } }\n}\n",
+      "audit.py": "def audit(receipts, raw_log):\n    raise NotImplementedError(\"reconcile real request evidence\")\n\nif __name__==\"__main__\":\n    raise SystemExit(1)\n"
+    },
+    "solution_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n map $status $should_log { ~^[45] 1; default 0; }\nlog_format failures escape=json '{\"id\":\"$http_x_request_id\",\"uri\":\"$uri\",\"status\":$status}';\nserver { listen 127.0.0.1:@PORT@; access_log @ROOT@/failures.log failures if=$should_log;\n location = /okay { return 200 \"ok\"; }\n location = /redirect { return 302 /okay; }\n location = /switch { return 101; }\n location = /failed { return 503; }\n location / { return 404; }\n}\n}\n",
+      "audit.py": "import collections,json,re,sys\n\ndef unique(pairs):\n    out={}\n    for key,value in pairs:\n        if key in out:raise ValueError('duplicate JSON key')\n        out[key]=value\n    return out\n\ndef record(value):\n    if not isinstance(value,dict) or set(value)!={'id','uri','status'}:raise ValueError('record schema')\n    if not isinstance(value['id'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',value['id']):raise ValueError('request id')\n    if not isinstance(value['uri'],str) or not value['uri'].startswith('/'):raise ValueError('normalized URI')\n    if type(value['status']) is not int or not 100<=value['status']<=599:raise ValueError('status')\n    return value\n\ndef parse(text):\n    try:return json.loads(text,object_pairs_hook=unique)\n    except RecursionError as error:raise ValueError('excessive JSON nesting') from error\n\ndef audit(receipts,raw_log):\n    if not isinstance(receipts,list) or not isinstance(raw_log,str):raise ValueError('input types')\n    expected={}\n    for row in receipts:\n        record(row)\n        if row['id'] in expected:raise ValueError('duplicate receipt id')\n        expected[row['id']]=row\n    observed=[]\n    for line in raw_log.split('\\n'):\n        if line.strip():observed.append(record(parse(line)))\n    counts=collections.Counter(row['id'] for row in observed)\n    good={row['id'] for row in observed if expected.get(row['id'])==row}\n    missing=sorted(key for key,row in expected.items() if row['status']>=400 and key not in good)\n    unexpected=sorted({row['id'] for row in observed if row['id'] not in expected or expected[row['id']]['status']<400})\n    duplicate=sorted(key for key,count in counts.items() if count>1)\n    mismatched=sorted({row['id'] for row in observed if row['id'] in expected and row!=expected[row['id']]})\n    return {'request_count':len(receipts),'expected_error_count':sum(row['status']>=400 for row in receipts),'logged_count':len(observed),\n            'missing_ids':missing,'unexpected_ids':unexpected,'duplicate_ids':duplicate,'mismatched_ids':mismatched,\n            'passed':not any((missing,unexpected,duplicate,mismatched))}\n\ndef main():\n    if len(sys.argv)!=3:raise ValueError('usage: audit.py receipts.json failures.log')\n    with open(sys.argv[1],encoding='utf8') as f:receipts=parse(f.read())\n    with open(sys.argv[2],encoding='utf8') as f:log=f.read()\n    print(json.dumps(audit(receipts,log),ensure_ascii=False,allow_nan=False))\n\nif __name__=='__main__':\n    try:main()\n    except (ValueError,TypeError,OSError) as error:\n        print(str(error),file=sys.stderr);sys.exit(2)\n"
+    },
+    "negative_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n map $status $should_log { ~^[45] 1; default 0; }\nlog_format failures escape=json '{\"id\":\"$http_x_request_id\",\"uri\":\"$uri\",\"status\":$status}';\nserver { listen 127.0.0.1:@PORT@; access_log @ROOT@/failures.log failures if=$should_log;\n location = /okay { return 200 \"ok\"; }\n location = /redirect { return 302 /okay; }\n location = /switch { return 101; }\n location = /failed { return 503; }\n location / { return 404; }\n}\n}\n",
+      "audit.py": "import collections,json,re,sys\n\ndef unique(pairs):\n    out={}\n    for key,value in pairs:\n        if key in out:raise ValueError('duplicate JSON key')\n        out[key]=value\n    return out\n\ndef record(value):\n    if not isinstance(value,dict) or set(value)!={'id','uri','status'}:raise ValueError('record schema')\n    if not isinstance(value['id'],str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,80}',value['id']):raise ValueError('request id')\n    if not isinstance(value['uri'],str) or not value['uri'].startswith('/'):raise ValueError('normalized URI')\n    if type(value['status']) is not int or not 100<=value['status']<=599:raise ValueError('status')\n    return value\n\ndef parse(text):\n    try:return json.loads(text,object_pairs_hook=unique)\n    except RecursionError as error:raise ValueError('excessive JSON nesting') from error\n\ndef audit(receipts,raw_log):\n    if not isinstance(receipts,list) or not isinstance(raw_log,str):raise ValueError('input types')\n    expected={}\n    for row in receipts:\n        record(row)\n        if row['id'] in expected:raise ValueError('duplicate receipt id')\n        expected[row['id']]=row\n    observed=[]\n    for line in raw_log.split('\\n'):\n        if line.strip():observed.append(record(parse(line)))\n    counts=collections.Counter(row['id'] for row in observed)\n    good={row['id'] for row in observed if expected.get(row['id'])==row}\n    missing=sorted(key for key,row in expected.items() if row['status']>=400 and key not in good)\n    unexpected=sorted({row['id'] for row in observed if row['id'] not in expected or expected[row['id']]['status']<400})\n    duplicate=sorted(key for key,count in counts.items() if count>1)\n    mismatched=sorted({row['id'] for row in observed if row['id'] in expected and row!=expected[row['id']]})\n    return {'request_count':len(receipts),'expected_error_count':len(receipts),'logged_count':len(observed),\n            'missing_ids':missing,'unexpected_ids':unexpected,'duplicate_ids':duplicate,'mismatched_ids':mismatched,\n            'passed':not any((missing,unexpected,duplicate,mismatched))}\n\ndef main():\n    if len(sys.argv)!=3:raise ValueError('usage: audit.py receipts.json failures.log')\n    with open(sys.argv[1],encoding='utf8') as f:receipts=parse(f.read())\n    with open(sys.argv[2],encoding='utf8') as f:log=f.read()\n    print(json.dumps(audit(receipts,log),ensure_ascii=False,allow_nan=False))\n\nif __name__=='__main__':\n    try:main()\n    except (ValueError,TypeError,OSError) as error:\n        print(str(error),file=sys.stderr);sys.exit(2)\n"
+    },
+    "run": "python3 checks/check.py",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "真实条件日志策略与请求ID级完整性验收程序",
+      "deliverables": [
+        "nginx.conf",
+        "audit.py"
+      ],
+      "verification": "真实Nginx回环HTTP、只读证据CLI与独立边界断言",
+      "failure_examples": [
+        "把4xx也排除会丢失客户端失败和访问异常证据，新增404与重复503序列能发现遗漏。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,contextlib,socket,subprocess,time,signal,http.client,http.server,threading,json,re,secrets,gzip,concurrent.futures,os\nROOT=pathlib.Path.cwd()\ndef freeport():\n    with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]\ndef request(port,path='/',method='GET',body=None,headers=None,chunked=False):\n    c=http.client.HTTPConnection('127.0.0.1',port,timeout=3)\n    try:\n        c.request(method,path,body=body,headers=headers or {},encode_chunked=chunked)\n        r=c.getresponse();return r.status,r.read(),{k.lower():v for k,v in r.getheaders()}\n    finally:c.close()\n@contextlib.contextmanager\ndef origin(delay=0):\n    records=[];lock=threading.Lock()\n    class Handler(http.server.BaseHTTPRequestHandler):\n        def log_message(self,*args):pass\n        def serve(self):\n            data=self.rfile.read(int(self.headers.get('Content-Length','0')))\n            with lock:\n                item={'path':self.path,'method':self.command,'length':len(data),'body':data.hex(),'sequence':len(records)+1};records.append(item)\n            if delay:time.sleep(delay)\n            content=json.dumps(item).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(content)));self.send_header('Cache-Control','public,max-age=30');self.end_headers()\n            try:self.wfile.write(content)\n            except OSError:pass\n        do_GET=do_POST=do_PUT=serve\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port,records\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\n@contextlib.contextmanager\ndef nginx(values=None):\n    values=dict(values or {});port=freeport();values['PORT']=port;values['ROOT']=str(ROOT)\n    config=pathlib.Path('nginx.conf').read_text()\n    for key,value in values.items():config=config.replace('@'+key+'@',str(value))\n    assert not re.search(r'@[A-Z]+@',config),'unresolved placeholder'\n    assert re.search(r'\\bdaemon\\s+off\\s*;',config) and re.search(r'\\bworker_processes\\s+1\\s*;',config)\n    endpoints=re.findall(r'\\blisten\\s+([^;\\s]+)',config);assert endpoints and all(p=='127.0.0.1:'+str(port) for p in endpoints)\n    for directive in ['pid','error_log','client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path']:\n        match=re.search(r'\\b'+directive+r'\\s+([^;\\s]+)',config);assert match and pathlib.Path(match[1]).is_relative_to(ROOT),directive\n    pathlib.Path('rendered.conf').write_text(config);command=['nginx','-p',str(ROOT)+'/', '-c',str(ROOT/'rendered.conf')]\n    syntax=subprocess.run(command+['-t'],capture_output=True,text=True,timeout=3);assert syntax.returncode==0,syntax.stderr\n    log=open('nginx-process.log','wb');p=subprocess.Popen(command,stdout=log,stderr=log)\n    try:\n        for _ in range(100):\n            assert p.poll() is None,pathlib.Path('nginx-process.log').read_text(errors='replace')\n            try:\n                with socket.create_connection(('127.0.0.1',port),timeout=.02):break\n            except OSError:time.sleep(.01)\n        else:raise AssertionError('not listening')\n        yield port\n    finally:\n        if p.poll() is None:p.send_signal(signal.SIGQUIT)\n        try:p.wait(timeout=3)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=1)\n        log.close();assert p.returncode==0,p.returncode\n\n@contextlib.contextmanager\ndef service(handler):\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\nclass Quiet(http.server.BaseHTTPRequestHandler):\n    def log_message(self,*args):pass\n    def answer(self,status,body=b'',headers=None):\n        self.send_response(status)\n        for k,v in (headers or []):self.send_header(k,v)\n        self.send_header('Content-Length',str(len(body)));self.end_headers()\n        try:self.wfile.write(body)\n        except OSError:pass\n\n\n\nimport sys,copy,tempfile\nsys.path.insert(0,str(ROOT))\nfrom audit import audit\n\ndef cli(receipts,log,valid=True,raw_receipts=None):\n    with tempfile.TemporaryDirectory() as tmp:\n        a=pathlib.Path(tmp)/'HTTP receipts.json';b=pathlib.Path(tmp)/'Nginx failures.log'\n        a.write_text(json.dumps(receipts) if raw_receipts is None else raw_receipts,encoding='utf8');b.write_text(log,encoding='utf8')\n        before=(a.read_bytes(),b.read_bytes())\n        p=subprocess.run([sys.executable,str(ROOT/'audit.py'),str(a),str(b)],capture_output=True,text=True,timeout=3)\n        assert (a.read_bytes(),b.read_bytes())==before,'input evidence modified'\n        if not valid:\n            assert p.returncode==2 and not p.stdout and p.stderr,(p.returncode,p.stdout,p.stderr)\n            return\n        assert p.returncode==0,(p.returncode,p.stdout,p.stderr)\n        return json.loads(p.stdout)\n\ndef logs(rows):return ''.join(json.dumps(row,ensure_ascii=False)+'\\n' for row in rows)\ndef expect(receipts,observed,missing=(),unexpected=(),duplicate=(),mismatched=()):\n    raw=logs(observed);original=copy.deepcopy(receipts)\n    out={'request_count':len(receipts),'expected_error_count':sum(r['status']>=400 for r in receipts),'logged_count':len(observed),\n         'missing_ids':list(missing),'unexpected_ids':list(unexpected),'duplicate_ids':list(duplicate),'mismatched_ids':list(mismatched),\n         'passed':not any([missing,unexpected,duplicate,mismatched])}\n    try:actual=audit(receipts,raw)\n    except ValueError as error:raise AssertionError('valid JSON evidence rejected') from error\n    assert actual==out\n    assert receipts==original\n    assert cli(receipts,raw)==out\n\nreceipts=[]\nwith nginx() as port:\n    for i,(path,status) in enumerate([('/okay',200),('/redirect',302),('/missing',404),('/failed',503),('/another',404),('/failed',503),('/switch',101)]):\n        key='run-'+str(i)\n        assert request(port,path,headers={'X-Request-Id':key})[0]==status\n        receipts.append({'id':key,'uri':path,'status':status})\nraw=pathlib.Path('failures.log').read_text()\nobserved=[json.loads(line) for line in raw.splitlines()]\nassert observed==[r for r in receipts if r['status']>=400],observed\nexpect(receipts,observed)\nexpect(receipts,observed[:-1],missing=('run-5',))\nexpect(receipts,observed+observed[:1],duplicate=('run-2',))\nwrong=copy.deepcopy(observed);wrong[0]['status']=500\nexpect(receipts,wrong,missing=('run-2',),mismatched=('run-2',))\nwrong=copy.deepcopy(observed);wrong[0]['uri']='/other'\nexpect(receipts,wrong,missing=('run-2',),mismatched=('run-2',))\nexpect(receipts,observed+[receipts[0]],unexpected=('run-0',))\nexpect(receipts,observed+[{'id':'foreign','uri':'/x','status':500}],unexpected=('foreign',))\nexpect([],[])\nexpect([{'id':'success','uri':'/new','status':204},{'id':'redirect','uri':'/new','status':304}],[])\nspecial=[{'id':'quoted','uri':'/quote\"back\\\\slash','status':499}]\nexpect(special,special)\nfor uri in ['/unicode\\u2028separator','/unicode\\u2029paragraph','/escaped\\r\\ncontrol']:\n    special=[{'id':'unicode','uri':uri,'status':500}]\n    expect(special,special)\nassert audit(receipts,'\\n'+raw+'\\n')['passed']\nexpect(receipts,list(reversed(observed)))\nfor invalid_log in ['not-json\\n','[]\\n',json.dumps({'id':'x','uri':'/','status':True})+'\\n','{\"id\":\"x\",\"id\":\"y\",\"uri\":\"/\",\"status\":500}\\n']:\n    cli(receipts,invalid_log,False)\nfor invalid_receipts in [receipts+receipts[:1],{},[{'id':'bad id','uri':'/','status':500}],[{'id':'x','uri':'/','status':600}],[{'id':'x','uri':'no-slash','status':500}]]:\n    cli(invalid_receipts,raw,False)\ncli(receipts,raw,False,raw_receipts='[{\"id\":\"x\",\"id\":\"y\",\"uri\":\"/\",\"status\":500}]')\ndeep='['*20000+'0'+']'*20000\ncli(receipts,deep,False)\ncli(receipts,raw,False,raw_receipts=deep)\nfor rs,ls in [({},raw),(None,raw),(receipts,b'bytes are not text'),(receipts,None)]:\n    try:audit(rs,ls)\n    except ValueError:pass\n    except Exception as e:raise AssertionError('API must normalize invalid input to ValueError') from e\n    else:raise AssertionError('API accepted invalid types')\nprint('NGINX_NATIVE_LOG_RECONCILIATION_OK')\n"
+      },
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "nginx"
+        ]
+      }
+    },
+    "case_signature": "nginx-native|curated-parallel-nginx-086|条件日志保留全部错误证据，压缩成功与跳转日志量",
+    "reference_docs": [
+      "https://nginx.org/en/docs/http/ngx_http_log_module.html#access_log"
+    ],
+    "conversion": {
+      "original_id": "curated-parallel-nginx-086",
+      "original_title": "对高流量access日志采样时，如何避免失去关键故障证据？",
+      "original_type": "interview",
+      "preserve_history": true
+    },
+    "question_format": "code"
+  },
+  {
+    "id": "curated-feishu-questions-029",
+    "module": "nginx",
+    "category": "Nginx",
+    "level": 2,
+    "topic": "交付基础Referer防盗链，并实测它不能代替访问授权",
+    "title": "交付基础Referer防盗链，并实测它不能代替访问授权",
+    "answer": "```nginx\ndaemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; server_name static.lab; root @ROOT@/site;\n location /images/ { valid_referers none server_names *.partner.lab;\n  if ($invalid_referer) { return 403; }\n }\n location / { return 404; }\n}\n}\n```\n\n/images/下真实图片允许无Referer、static.lab本站与partner.lab子域来源；外部来源及static.lab.evil近似域名403。客户端手工伪造合法Referer仍能成功，必须据此理解该规则只是基础防盗链而非认证授权。图片内容运行时随机生成；不能固定返回成功来代替文件检查。\n\n原理补充：\n以下片段放入已有server，示例站点example.com及其子域允许，缺少Referer也允许；按需求决定是否保留none/blocked。示例未加载。\n```nginx\nlocation ~* \\.(jpg|jpeg|gif|png)$ {\n    root /srv/www;\n    valid_referers none blocked example.com *.example.com;\n    if ($invalid_referer) {\n        return 403;\n    }\n    try_files $uri =404;\n}\n```\n用合法域、其他域、缺失头、被修改头及不存在图片分别验证。Referer可被伪造，浏览器也可能合法省略，所以仅减少普通外站引用，不保护敏感资源；真正授权需可信身份或有期限签名URL。直接返回403避免把错误图片重定向回同一规则造成循环。",
+    "type": "code",
+    "source": "Feishu MVfdwCd0Ri6Kr3kN9UecklhonSg 编审补缺",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "feishu-questions-20261021",
+    "hints": [],
+    "rubric": [
+      "说明机制和适用边界",
+      "给出可验证的证据与结果"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/MVfdwCd0Ri6Kr3kN9UecklhonSg",
+        "block_ids": [
+          "Pz7Od7TEyoPTm8xzG8bcyqvnnDh",
+          "Q6PtdTMnsom5Ikx65n1cj5L8nYb"
+        ]
+      }
+    ],
+    "related_modules": [
+      "nginx"
+    ],
+    "language": "configuration",
+    "difficulty": "进阶",
+    "files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; location / { return 501; } }\n}\n",
+      "site/images/pixel.bin": "placeholder"
+    },
+    "solution_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; server_name static.lab; root @ROOT@/site;\n location /images/ { valid_referers none server_names *.partner.lab;\n  if ($invalid_referer) { return 403; }\n }\n location / { return 404; }\n}\n}\n"
+    },
+    "negative_files": {
+      "nginx.conf": "daemon off;\nworker_processes 1;\npid @ROOT@/nginx.pid;\nerror_log @ROOT@/error.log;\nevents { worker_connections 64; }\nhttp {\n access_log off;\n client_body_temp_path @ROOT@/client_body;\n proxy_temp_path @ROOT@/proxy_temp;\n fastcgi_temp_path @ROOT@/fastcgi_temp;\n uwsgi_temp_path @ROOT@/uwsgi_temp;\n scgi_temp_path @ROOT@/scgi_temp;\n server { listen 127.0.0.1:@PORT@; server_name static.lab; root @ROOT@/site;\n location /images/ { valid_referers none server_names *.partner.lab;\n  \n }\n location / { return 404; }\n}\n}\n"
+    },
+    "run": "python3 checks/check.py",
+    "body": "## 环境与初始材料\n普通用户Linux、Nginx与Python3。提供nginx.conf安全运行骨架（当前所有请求501）和必要文件；原生Nginx必须前台、1worker、仅监听127.0.0.1:@PORT@，pid/日志/所有临时目录位于@ROOT@。验收将@PORT@替换随机高端口、@ROOT@替换独立临时目录、@UPSTREAM@替换本题回环源站。禁止修改系统Nginx或监听80/443。\n\n## 操作任务\n/images/下真实图片允许无Referer、static.lab本站与partner.lab子域来源；外部来源及static.lab.evil近似域名403。客户端手工伪造合法Referer仍能成功，必须据此理解该规则只是基础防盗链而非认证授权。图片内容运行时随机生成；不能固定返回成功来代替文件检查。\n\n## 提交产物\n完整nginx.conf，保留安全运行骨架，使用原生Nginx指令实现；不得伪造固定响应冒充静态文件、代理或缓存结果。\n\n## 验收方法\npython3 checks/check.py：先nginx -t，随后启动真实Nginx，通过下列任务明确的HTTP状态、响应内容、文件、日志或源站计数逐项验收；初始配置和指定错误配置均应失败，参考配置全部断言通过并退出0。关闭本题全部服务后检查结束；这里只验证本机功能，不声称生产吞吐、云控制面或外网生效。\n\n失败示例：不判断invalid_referer会让外站同样获取图片；另一方面合法头能伪造的测试防止误把防盗链说成授权。",
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "/images/下真实图片允许无Referer、static.lab本站与partner.lab子域来源；外部来源及static.lab.evil近似域名403。客户端手工伪造合法Referer仍能成功，必须据此理解该规则只是基础防盗链而非认证授权。图片内容运行时随机生成；不能固定返回成功来代替文件检查。",
+      "deliverables": [
+        "nginx.conf"
+      ],
+      "verification": "原生Nginx语法与真实回环HTTP行为，具体通过标准见操作任务，结束时关闭本题服务",
+      "failure_examples": [
+        "不判断invalid_referer会让外站同样获取图片；另一方面合法头能伪造的测试防止误把防盗链说成授权。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,contextlib,socket,subprocess,time,signal,http.client,http.server,threading,json,re,secrets,gzip,concurrent.futures,os\nROOT=pathlib.Path.cwd()\ndef freeport():\n    with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]\ndef request(port,path='/',method='GET',body=None,headers=None,chunked=False):\n    c=http.client.HTTPConnection('127.0.0.1',port,timeout=3)\n    try:\n        c.request(method,path,body=body,headers=headers or {},encode_chunked=chunked)\n        r=c.getresponse();return r.status,r.read(),{k.lower():v for k,v in r.getheaders()}\n    finally:c.close()\n@contextlib.contextmanager\ndef origin(delay=0):\n    records=[];lock=threading.Lock()\n    class Handler(http.server.BaseHTTPRequestHandler):\n        def log_message(self,*args):pass\n        def serve(self):\n            data=self.rfile.read(int(self.headers.get('Content-Length','0')))\n            with lock:\n                item={'path':self.path,'method':self.command,'length':len(data),'body':data.hex(),'sequence':len(records)+1};records.append(item)\n            if delay:time.sleep(delay)\n            content=json.dumps(item).encode();self.send_response(200);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(content)));self.send_header('Cache-Control','public,max-age=30');self.end_headers()\n            try:self.wfile.write(content)\n            except OSError:pass\n        do_GET=do_POST=do_PUT=serve\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port,records\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\n@contextlib.contextmanager\ndef nginx(values=None):\n    values=dict(values or {});port=freeport();values['PORT']=port;values['ROOT']=str(ROOT)\n    config=pathlib.Path('nginx.conf').read_text()\n    for key,value in values.items():config=config.replace('@'+key+'@',str(value))\n    assert not re.search(r'@[A-Z]+@',config),'unresolved placeholder'\n    assert re.search(r'\\bdaemon\\s+off\\s*;',config) and re.search(r'\\bworker_processes\\s+1\\s*;',config)\n    endpoints=re.findall(r'\\blisten\\s+([^;\\s]+)',config);assert endpoints and all(p=='127.0.0.1:'+str(port) for p in endpoints)\n    for directive in ['pid','error_log','client_body_temp_path','proxy_temp_path','fastcgi_temp_path','uwsgi_temp_path','scgi_temp_path']:\n        match=re.search(r'\\b'+directive+r'\\s+([^;\\s]+)',config);assert match and pathlib.Path(match[1]).is_relative_to(ROOT),directive\n    pathlib.Path('rendered.conf').write_text(config);command=['nginx','-p',str(ROOT)+'/', '-c',str(ROOT/'rendered.conf')]\n    syntax=subprocess.run(command+['-t'],capture_output=True,text=True,timeout=3);assert syntax.returncode==0,syntax.stderr\n    log=open('nginx-process.log','wb');p=subprocess.Popen(command,stdout=log,stderr=log)\n    try:\n        for _ in range(100):\n            assert p.poll() is None,pathlib.Path('nginx-process.log').read_text(errors='replace')\n            try:\n                with socket.create_connection(('127.0.0.1',port),timeout=.02):break\n            except OSError:time.sleep(.01)\n        else:raise AssertionError('not listening')\n        yield port\n    finally:\n        if p.poll() is None:p.send_signal(signal.SIGQUIT)\n        try:p.wait(timeout=3)\n        except subprocess.TimeoutExpired:p.kill();p.wait(timeout=1)\n        log.close();assert p.returncode==0,p.returncode\n\n@contextlib.contextmanager\ndef service(handler):\n    server=http.server.ThreadingHTTPServer(('127.0.0.1',0),handler);server.daemon_threads=False\n    t=threading.Thread(target=server.serve_forever,kwargs={'poll_interval':.01});t.start()\n    try:yield server.server_port\n    finally:server.shutdown();server.server_close();t.join(1);assert not t.is_alive()\nclass Quiet(http.server.BaseHTTPRequestHandler):\n    def log_message(self,*args):pass\n    def answer(self,status,body=b'',headers=None):\n        self.send_response(status)\n        for k,v in (headers or []):self.send_header(k,v)\n        self.send_header('Content-Length',str(len(body)));self.end_headers()\n        try:self.wfile.write(body)\n        except OSError:pass\n\n\ndata=secrets.token_bytes(128);pathlib.Path('site/images/pixel.bin').write_bytes(data)\nwith nginx() as p:\n    for headers in [{},{'Referer':'https://static.lab/page'},{'Referer':'https://cdn.partner.lab/page'}]:assert request(p,'/images/pixel.bin',headers=headers)[0:2]==(200,data)\n    for bad in ['https://outside.lab/page','https://static.lab.evil/page','https://cdn.partner.lab.evil/page']:\n        assert request(p,'/images/pixel.bin',headers={'Referer':bad})[0]==403\n    # A client can forge this header: deliberately demonstrate the security boundary.\n    assert request(p,'/images/pixel.bin',headers={'Referer':'https://static.lab/forged-by-client'})[0:2]==(200,data)\n    assert request(p,'/images/missing.bin')[0]==404\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "nginx"
+        ]
+      }
+    },
+    "case_signature": "nginx-native|curated-feishu-questions-029|交付基础Referer防盗链，并实测它不能代替访问授权",
+    "reference_docs": [
+      "https://nginx.org/en/docs/http/ngx_http_referer_module.html"
+    ],
+    "conversion": {
+      "original_id": "curated-feishu-questions-029",
+      "original_title": "如何给图片配置基于Referer的基础防盗链，并说明为何不能当真正授权？",
+      "original_type": "practice",
+      "preserve_history": true
+    }
+  }
+]

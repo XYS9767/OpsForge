@@ -1,0 +1,76 @@
+[
+  {
+    "id": "curated-advanced-disk-011",
+    "module": "disk",
+    "category": "磁盘与文件系统",
+    "level": 5,
+    "topic": "存储介质与设备模型",
+    "title": "LUKS2 轮换边界：先验新口令再撤旧槽，实测数据密钥并未改变",
+    "answer": "```python\ndef rotate(backend,compromise):\n    if compromise=='volume_key':\n        return {'status':'requires_data_reencryption','data_key_rotated':False}\n    if compromise!='passphrase':raise ValueError('explicit compromise scope required')\n    backend.add_new_slot()\n    if not backend.verify_new():raise ValueError('new credential not verified; keep old slot')\n    backend.revoke_old_slot()\n    if not backend.verify_new() or backend.verify_old():raise ValueError('revocation verification failed')\n    return {'status':'passphrase_rotated','data_key_rotated':False}\n```\n\n原题知识说明：\n交付威胁模型、密钥槽清单、头部备份与恢复步骤。只撤销旧口令时添加并验证新槽后再移除旧槽；这通常不改变卷内数据加密密钥，若该密钥本身已泄露则需另行评估受支持重加密或数据迁移。重加密涉及长时间I/O、中断恢复和备份可用性，先在副本验证并保留独立恢复材料。验收旧口令拒绝、新凭据恢复及中断状态识别，秘密不进入日志。任一步缺少可靠备份即停止，不能先删除最后可用槽；轮换后历史头部备份的访问能力也必须按威胁模型处理。",
+    "type": "code",
+    "source": "高级能力专项编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "给出题设要求的具体交付物与关键机制",
+      "用可观察结果验证约束和失败分支",
+      "明确停止条件及回退或恢复边界"
+    ],
+    "references": [
+      "https://man7.org/linux/man-pages/man8/cryptsetup-luksDump.8.html",
+      "https://man7.org/linux/man-pages/man8/cryptsetup-luksAddKey.8.html"
+    ],
+    "body": "## 操作任务\n实现rotate(backend,compromise)。backend是题给自有普通文件的受限LUKS适配器，提供add_new_slot/verify_new/revoke_old_slot/verify_old，执行真实cryptsetup2.6.1；初始仅槽0，新增槽1。compromise=passphrase时须先新增槽、验证新凭据严格可用，失败ValueError并保留旧槽；成功后才撤销旧槽，再验新凭据成功且旧凭据拒绝，返回{status:passphrase_rotated,data_key_rotated:False}。compromise=volume_key时不操作backend，返回{status:requires_data_reencryption,data_key_rotated:False}，不能把口令变更宣称修复卷数据密钥泄露；未知范围ValueError且无操作。验收在真实LUKS2普通文件上检查认证、操作先后、卷UUID/数据段及私有数据密钥字节不变；另让实际新凭据校验使用错误文件，要求保留旧恢复路径。不得打印密钥或口令、访问其他设备、创建mapper或挂载。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实cryptsetup/LUKS2元数据、密钥槽和test-passphrase，数据密钥仅在自有临时目录私有比较后清除，不导出；未创建device-mapper、loop设备或挂载，没有执行完整数据重加密或证明生产卷恢复。--disable-locks仅限单进程自有普通文件且/run不可写的夹具；PBKDF参数仅为有界测试，不构成生产加密参数建议。数据密钥泄露分支是拒绝假修复的门禁，真实重加密/头部备份生命周期另行验证。不构建镜像。",
+    "related_modules": [
+      "disk"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-disk-011",
+      "original_title": "为正在使用的LUKS数据卷设计口令轮换和数据密钥重加密的分流决策，不允许把两者混为一次操作。",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def rotate(backend,compromise):\n    if compromise=='volume_key':\n        return {'status':'requires_data_reencryption','data_key_rotated':False}\n    if compromise!='passphrase':raise ValueError('explicit compromise scope required')\n    backend.add_new_slot()\n    if not backend.verify_new():raise ValueError('new credential not verified; keep old slot')\n    backend.revoke_old_slot()\n    if not backend.verify_new() or backend.verify_old():raise ValueError('revocation verification failed')\n    return {'status':'passphrase_rotated','data_key_rotated':False}\n"
+    },
+    "negative_files": {
+      "task.py": "def rotate(backend,compromise):\n    if compromise=='volume_key':\n        return {'status':'requires_data_reencryption','data_key_rotated':False}\n    if compromise!='passphrase':raise ValueError('explicit compromise scope required')\n    backend.add_new_slot()\n    backend.revoke_old_slot()\n    if not backend.verify_new():raise ValueError('new credential not verified; keep old slot')\n    if not backend.verify_new() or backend.verify_old():raise ValueError('revocation verification failed')\n    return {'status':'passphrase_rotated','data_key_rotated':False}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现rotate(backend,compromise)。backend是题给自有普通文件的受限LUKS适配器，提供add_new_slot/verify_new/revoke_old_slot/verify_old，执行真实cryptsetup2.6.1；初始仅槽0，新增槽1。compromise=passphrase时须先新增槽、验证新凭据严格可用，失败ValueError并保留旧槽；成功后才撤销旧槽，再验新凭据成功且旧凭据拒绝，返回{status:passphrase_rotated,data_key_rotated:False}。compromise=volume_key时不操作backend，返回{status:requires_data_reencryption,data_key_rotated:False}，不能把口令变更宣称修复卷数据密钥泄露；未知范围ValueError且无操作。验收在真实LUKS2普通文件上检查认证、操作先后、卷UUID/数据段及私有数据密钥字节不变；另让实际新凭据校验使用错误文件，要求保留旧恢复路径。不得打印密钥或口令、访问其他设备、创建mapper或挂载。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实cryptsetup/LUKS2元数据、密钥槽和test-passphrase，数据密钥仅在自有临时目录私有比较后清除，不导出；未创建device-mapper、loop设备或挂载，没有执行完整数据重加密或证明生产卷恢复。--disable-locks仅限单进程自有普通文件且/run不可写的夹具；PBKDF参数仅为有界测试，不构成生产加密参数建议。数据密钥泄露分支是拒绝假修复的门禁，真实重加密/头部备份生命周期另行验证。不构建镜像。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "cryptsetup"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/luks_native.py": "\"\"\"Real LUKS metadata on an owned regular file; no mapper, mounts or key material in output.\"\"\"\nimport hashlib,json,os,pathlib,secrets,stat,subprocess,tempfile\nclass OwnedLuks:\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='luks-slot-',dir='/workspace');self.root=pathlib.Path(self.temp.name)\n  self.image=self.root/'volume.img';self.old=self.root/'old.key';self.new=self.root/'new.key';self.wrong=self.root/'wrong.key'\n  self.events=[];self.bad_new_verification=False\n  try:\n   with self.image.open('xb') as stream:stream.truncate(32*1024**2)\n   for path in (self.old,self.new,self.wrong):path.write_bytes(secrets.token_bytes(32));os.chmod(path,0o600)\n   os.chmod(self.image,0o600)\n   assert os.geteuid()==1000 and stat.S_ISREG(self.image.stat().st_mode) and self.image.resolve().parent==self.root.resolve()\n   assert 'cryptsetup 2.6.1' in self.command('--version').decode()\n   self.command('luksFormat','--type','luks2','--batch-mode','--disable-locks','--key-file',str(self.old),'--key-slot','0',\n    '--pbkdf','pbkdf2','--pbkdf-force-iterations','1000',str(self.image))\n   self.initial_uuid=self.command('luksUUID',str(self.image))\n   self.initial_segments=self.metadata()['segments'];self.initial_volume_key=self.volume_key(self.old)\n   print('NATIVE_CRYPTSETUP_READY:2.6.1',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def command(self,*args,expect=0):\n  result=subprocess.run(['cryptsetup',*args],capture_output=True,timeout=5)\n  assert result.returncode==expect,(args[0],result.returncode,result.stderr.decode(errors='replace')[-600:])\n  return result.stdout\n def metadata(self):return json.loads(self.command('luksDump','--dump-json-metadata','--disable-locks',str(self.image)))\n def image_hash(self):return hashlib.sha256(self.image.read_bytes()).hexdigest()\n def volume_key(self,key):\n  output=self.root/('internal-volume-key-'+secrets.token_hex(4))\n  self.command('luksDump','--dump-volume-key','--volume-key-file',str(output),'--key-file',str(key),'--disable-locks',str(self.image))\n  raw=output.read_bytes();output.unlink();return raw\n def add_new_slot(self):\n  self.command('luksAddKey','--batch-mode','--disable-locks','--key-file',str(self.old),'--key-slot','1',\n   '--pbkdf','pbkdf2','--pbkdf-force-iterations','1000',str(self.image),str(self.new));self.events.append('add_new')\n def verify_new(self):\n  path=self.wrong if self.bad_new_verification else self.new\n  result=subprocess.run(['cryptsetup','open','--test-passphrase','--disable-locks','--key-slot','1','--key-file',str(path),str(self.image)],capture_output=True,timeout=4)\n  assert result.returncode in (0,2)\n  passed=result.returncode==0;self.events.append('verify_new_'+str(passed));return passed\n def verify_old(self):\n  result=subprocess.run(['cryptsetup','open','--test-passphrase','--disable-locks','--key-file',str(self.old),str(self.image)],capture_output=True,timeout=4)\n  assert result.returncode in (0,2)\n  return result.returncode==0\n def revoke_old_slot(self):\n  self.command('luksKillSlot','--batch-mode','--disable-locks','--key-file',str(self.new),str(self.image),'0');self.events.append('revoke_old')\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,pathlib,sys\nsys.path[:0]=[os.getcwd(),str(pathlib.Path.cwd()/'checks')]\nassert sys.platform=='linux' and os.geteuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nimport task\nfrom luks_native import OwnedLuks\nwith OwnedLuks() as backend:\n before=backend.image_hash()\n print('STUDENT_OPERATION_ENTERED:real_luks2_slot_rotation_new_credential_before_revoke_volume_key_scope_gate',flush=True)\n result=task.rotate(backend,'volume_key')\n assert result=={'status':'requires_data_reencryption','data_key_rotated':False},'passphrase operations falsely claimed to fix compromised data key'\n assert backend.events==[] and backend.image_hash()==before and backend.verify_old()\n result=task.rotate(backend,'passphrase')\n assert result=={'status':'passphrase_rotated','data_key_rotated':False}\n assert backend.events.index('verify_new_True')<backend.events.index('revoke_old'),'old slot revoked before new credential verified'\n assert backend.verify_new() and not backend.verify_old() and set(backend.metadata()['keyslots'])=={'1'}\n assert backend.volume_key(backend.new)==backend.initial_volume_key,'slot rotation unexpectedly changed volume key'\n assert backend.command('luksUUID',str(backend.image))==backend.initial_uuid and backend.metadata()['segments']==backend.initial_segments\n print('NATIVE_LUKS_OLD_REJECTED_NEW_ACCEPTED_ACTUAL_VOLUME_KEY_UUID_SEGMENT_UNCHANGED',flush=True)\nwith OwnedLuks() as backend:\n backend.bad_new_verification=True\n try:task.rotate(backend,'passphrase')\n except ValueError:pass\n else:raise AssertionError('unverified replacement credential accepted')\n assert backend.verify_old() and '0' in backend.metadata()['keyslots'] and 'revoke_old' not in backend.events,'verification failure lost old recovery path'\n assert backend.volume_key(backend.old)==backend.initial_volume_key\nwith OwnedLuks() as backend:\n before=backend.image_hash()\n try:task.rotate(backend,'unknown')\n except ValueError:pass\n else:raise AssertionError('unknown compromise scope accepted')\n assert backend.events==[] and backend.image_hash()==before\nprint('NATIVE_LUKS_REAL_WRONG_NEW_CREDENTIAL_PRESERVES_OLD_NO_KERNEL_MAPPING_OR_MOUNT',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "question_format": "project"
+  }
+]

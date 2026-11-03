@@ -1,0 +1,209 @@
+[
+  {
+    "id": "curated-advanced-python-017",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 5,
+    "topic": "文件、文本与数据处理",
+    "title": "真实Decimal账期复算：退款分币种汇总后舍入，规则版本与环境精度隔离",
+    "body": "## 操作任务\n实现summarize(batches,rule)，batches是逐批可迭代的行，每行恰含currency和amount，最多10000行；currency仅USD/EUR/JPY，amount必须为十进制字符串：可选负号、整数0或1..30位非零开头数字、可选1..6位小数，不收float/指数/NaN。仅支持invoice-v1：各币种含退款的精确金额先汇总，USD/EUR最终保留2位、JPY保留0位，统一ROUND_HALF_EVEN，不逐行或逐批提前舍入，不换汇。返回恰含rule和totals的dict，totals值为Decimal且保留币种精度，无观测币种不补0。采用足够覆盖本合同上界的独立精度/陷阱上下文，不能继承环境低精度导致发布错误，也不能改调用者上下文或输入。未知规则/越界输入ValueError，保留原始金额字符串。本函数只读复算并标记规则，不写已确认账期；不同规则重算须另行审批，不能用无版本总额覆盖历史。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实CPython3.11 Decimal运算与环境Inexact陷阱、跨批次/顺序/大数抵消验收；不连接真实账务系统，不验证外汇或账期审批持久化。",
+    "answer": "```python\nimport decimal,re\ndef summarize(batches,rule):\n    if rule!='invoice-v1':raise ValueError('unsupported billing rule')\n    units={'USD':decimal.Decimal('0.01'),'EUR':decimal.Decimal('0.01'),'JPY':decimal.Decimal('1')}\n    total={};count=0\n    with decimal.localcontext(decimal.Context(prec=50,rounding=decimal.ROUND_HALF_EVEN)):\n        for batch in batches:\n            for row in batch:\n                count+=1\n                if count>10000 or not isinstance(row,dict) or set(row)!={'currency','amount'}:raise ValueError('bounded exact billing rows')\n                currency=row['currency'];amount=row['amount']\n                if not isinstance(currency,str) or currency not in units or not isinstance(amount,str) or not re.fullmatch(r'-?(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,6})?',amount):raise ValueError('exact decimal and approved currency')\n                value=decimal.Decimal(amount)\n                total[currency]=total.get(currency,decimal.Decimal(0))+value\n        totals={currency:amount.quantize(units[currency],rounding=decimal.ROUND_HALF_EVEN) for currency,amount in sorted(total.items())}\n    return {'rule':rule,'totals':totals}\n```\n\n原题知识说明：\n交付输入十进制文本规范、币种最小单位、精度、舍入模式及逐笔或汇总舍入规则。Decimal由二进制float构造可能保留原有误差，使用Decimal并不自动确定业务精度；上下文也会影响运算结果，应在受控局部上下文中处理并记录规则版本。验收包含半舍入边界、负数退款、极大金额、不同币种及改变任务执行顺序，核对明细和总账满足约定而不是随意与float结果比较。对精度不足或非法数值使用明确错误或trap策略，不静默截断。失败不发布结算结果，保留原输入与规则版本供重算；回退规则前确认已发布账期如何更正，不能用新版上下文重算后覆盖旧账而不留差异。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "明确语言运行时与业务合同的边界",
+      "给出可区分正确与失败的具体样例",
+      "说明资源或数据恢复限制"
+    ],
+    "references": [
+      "https://docs.python.org/3.11/library/decimal.html"
+    ],
+    "related_modules": [
+      "python"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-python-017",
+      "original_title": "Python计费汇总采用Decimal，怎样交付精度上下文、舍入时机和跨批次可复算的合同？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import decimal,re\ndef summarize(batches,rule):\n    if rule!='invoice-v1':raise ValueError('unsupported billing rule')\n    units={'USD':decimal.Decimal('0.01'),'EUR':decimal.Decimal('0.01'),'JPY':decimal.Decimal('1')}\n    total={};count=0\n    with decimal.localcontext(decimal.Context(prec=50,rounding=decimal.ROUND_HALF_EVEN)):\n        for batch in batches:\n            for row in batch:\n                count+=1\n                if count>10000 or not isinstance(row,dict) or set(row)!={'currency','amount'}:raise ValueError('bounded exact billing rows')\n                currency=row['currency'];amount=row['amount']\n                if not isinstance(currency,str) or currency not in units or not isinstance(amount,str) or not re.fullmatch(r'-?(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,6})?',amount):raise ValueError('exact decimal and approved currency')\n                value=decimal.Decimal(amount)\n                total[currency]=total.get(currency,decimal.Decimal(0))+value\n        totals={currency:amount.quantize(units[currency],rounding=decimal.ROUND_HALF_EVEN) for currency,amount in sorted(total.items())}\n    return {'rule':rule,'totals':totals}\n"
+    },
+    "negative_files": {
+      "task.py": "import decimal,re\ndef summarize(batches,rule):\n    if rule!='invoice-v1':raise ValueError('unsupported billing rule')\n    units={'USD':decimal.Decimal('0.01'),'EUR':decimal.Decimal('0.01'),'JPY':decimal.Decimal('1')}\n    total={};count=0\n    with decimal.localcontext(decimal.Context(prec=50,rounding=decimal.ROUND_HALF_EVEN)):\n        for batch in batches:\n            for row in batch:\n                count+=1\n                if count>10000 or not isinstance(row,dict) or set(row)!={'currency','amount'}:raise ValueError('bounded exact billing rows')\n                currency=row['currency'];amount=row['amount']\n                if currency not in units or not isinstance(amount,str) or not re.fullmatch(r'-?(?:0|[1-9][0-9]{0,29})(?:\\.[0-9]{1,6})?',amount):raise ValueError('exact decimal and approved currency')\n                value=decimal.Decimal(amount).quantize(units[currency],rounding=decimal.ROUND_HALF_EVEN)\n                total[currency]=total.get(currency,decimal.Decimal(0))+value\n        totals={currency:amount.quantize(units[currency],rounding=decimal.ROUND_HALF_EVEN) for currency,amount in sorted(total.items())}\n    return {'rule':rule,'totals':totals}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现summarize(batches,rule)，batches是逐批可迭代的行，每行恰含currency和amount，最多10000行；currency仅USD/EUR/JPY，amount必须为十进制字符串：可选负号、整数0或1..30位非零开头数字、可选1..6位小数，不收float/指数/NaN。仅支持invoice-v1：各币种含退款的精确金额先汇总，USD/EUR最终保留2位、JPY保留0位，统一ROUND_HALF_EVEN，不逐行或逐批提前舍入，不换汇。返回恰含rule和totals的dict，totals值为Decimal且保留币种精度，无观测币种不补0。采用足够覆盖本合同上界的独立精度/陷阱上下文，不能继承环境低精度导致发布错误，也不能改调用者上下文或输入。未知规则/越界输入ValueError，保留原始金额字符串。本函数只读复算并标记规则，不写已确认账期；不同规则重算须另行审批，不能用无版本总额覆盖历史。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实CPython3.11 Decimal运算与环境Inexact陷阱、跨批次/顺序/大数抵消验收；不连接真实账务系统，不验证外汇或账期审批持久化。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,copy,json,tempfile,contextlib,io\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as error:raise AssertionError('submitted native operation failed') from error\nimport decimal,itertools\nrows=[{'currency':'USD','amount':'0.005'},{'currency':'USD','amount':'0.005'},{'currency':'EUR','amount':'2.345'},{'currency':'EUR','amount':'-0.010'},{'currency':'JPY','amount':'2.5'},{'currency':'JPY','amount':'1.0'}]\nsaved=copy.deepcopy(rows);ambient=decimal.getcontext().copy()\ntry:\n ctx=decimal.getcontext();ctx.prec=7;ctx.rounding=decimal.ROUND_UP;ctx.clear_flags();ctx.traps[decimal.Inexact]=True\n before=(ctx.prec,ctx.rounding,dict(ctx.flags),dict(ctx.traps))\n actual=student(task.summarize,[rows[:2],rows[2:]],'invoice-v1')\n expected={'rule':'invoice-v1','totals':{'USD':decimal.Decimal('0.01'),'EUR':decimal.Decimal('2.34'),'JPY':decimal.Decimal('4')}}\n assert actual==expected,'wrong invoice-level rounding, refund or currency treatment'\n assert all(type(v) is decimal.Decimal for v in actual['totals'].values())\n for currency,exponent in [('USD',-2),('EUR',-2),('JPY',0)]:assert actual['totals'][currency].as_tuple().exponent==exponent\n assert (ctx.prec,ctx.rounding,dict(ctx.flags),dict(ctx.traps))==before,'ambient precision/traps/flags changed'\n for ordered in (rows,list(reversed(rows)),rows[2:]+rows[:2]):\n  assert task.summarize(([row] for row in ordered),'invoice-v1')==expected,'repartitioning changed the confirmed rule result'\n huge=[{'currency':'USD','amount':'999999999999999999999999999999.999999'},{'currency':'USD','amount':'-999999999999999999999999999999.994999'}]\n assert task.summarize([huge],'invoice-v1')['totals']['USD']==decimal.Decimal('0.00'),'large exact cancellation lost subcent facts'\n assert task.summarize([[{'currency':'USD','amount':'0.015'}]],'invoice-v1')['totals']['USD']==decimal.Decimal('0.02')\n assert task.summarize([[]],'invoice-v1')=={'rule':'invoice-v1','totals':{}}\n for amount in ('NaN','Infinity','1e2','+1','01.2','1.0000001',1.2):\n  try:task.summarize([[{'currency':'USD','amount':amount}]],'invoice-v1')\n  except ValueError:pass\n  else:raise AssertionError('noncontract monetary input accepted')\n try:task.summarize([rows],'invoice-v2')\n except ValueError:pass\n else:raise AssertionError('unknown rule silently reinterpreted a billing period')\n assert rows==saved\nfinally:decimal.setcontext(ambient)\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n\ndef bounded_batches(total, width):\n    for start in range(0, total, width):\n        yield ({'currency': 'USD', 'amount': '1.000001'}\n               for _ in range(min(width, total-start)))\n\nctx = decimal.getcontext()\nbudget_before = (ctx.prec, ctx.rounding, dict(ctx.flags), dict(ctx.traps))\nfor width in [10000, 97, 1]:\n    exact = student(task.summarize, bounded_batches(10000, width), 'invoice-v1')\n    assert exact == {'rule': 'invoice-v1',\n                     'totals': {'USD': decimal.Decimal('10000.01')}}\n    assert type(exact['totals']['USD']) is decimal.Decimal\n    assert exact['totals']['USD'].as_tuple().exponent == -2\n    for count in [10001, 10037]:\n        try:\n            task.summarize(bounded_batches(count, width), 'invoice-v1')\n        except ValueError:\n            pass\n        else:\n            raise AssertionError('total input row budget not enforced across batches')\n    assert (ctx.prec, ctx.rounding, dict(ctx.flags), dict(ctx.traps)) == budget_before\nprint('EXACT10000_AND_OVERSIZED_TOTAL_ROWS_ACROSS_PARTITIONS', flush=True)\n\n# Only approved currency strings are accepted; invalid type must be ValueError,\n# as already promised by the billing input-error contract.\nimport decimal as _currency_decimal, copy as _currency_copy\nfor _bad_currency in [None,False,0,[],{},set(),b'USD']:\n    _rows=[[{'currency':_bad_currency,'amount':'1.00'}]]\n    _original=_currency_copy.deepcopy(_rows)\n    _context=str(_currency_decimal.getcontext())\n    try:task.summarize(_rows,'invoice-v1')\n    except ValueError:pass\n    except TypeError as _error:\n        raise AssertionError('unapproved currency input must raise ValueError')from _error\n    else:raise AssertionError('unapproved currency input accepted')\n    assert _rows==_original and str(_currency_decimal.getcontext())==_context\nprint('CURRENCY_TYPE_VALUEERROR_INPUT_CONTEXT_PRESERVATION',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-advanced-python-018",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 5,
+    "topic": "运行环境与工具工程",
+    "title": "真实argparse兼容门槛：禁缩写与静默未知参数，@路径保持字面量且错误脱敏",
+    "body": "## 操作任务\n实现parse(argv)，argv为不超过128个、各不超过256字符且不含NUL的str列表。严格识别--timeout N/--timeout=N（整数1..60默认10）和--dry-run（默认False），targets至少一个非空字符串，返回恰含timeout/dry_run/targets。禁止长选项缩写、未知参数忽略/转发、重复同一选项（含两种等号写法），--后的减号开头文本为数据。@参数文件功能禁用：即使真实文件存在也必须作为普通target字符串，不读取；Unicode及空格路径按已解码argv原样保留。本接口无help输出，任何输入错误ValueError(\"invalid arguments\")且stdout/stderr不回显原参数。使用argparse严格解析，保留输入与每次调用独立性。本次明确拒绝旧脚本的缩写/未知转发，不声称兼容这些调用；交付调用表后由调用方修正或回退旧工具，不能暗中改变默认身份或运行任务。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实CPython3.11 argparse、存在的UTF-8参数文件及敏感参数诊断验收；只解析不执行目标，不改系统参数文件或旧CLI部署。",
+    "answer": "```python\nimport argparse,re\nclass Parser(argparse.ArgumentParser):\n    def error(self,message):raise ValueError('invalid arguments')\nclass Once(argparse.Action):\n    def __call__(self,parser,namespace,values,option_string=None):\n        seen=getattr(namespace,'_seen',set())\n        if self.dest in seen:parser.error('duplicate')\n        seen.add(self.dest);setattr(namespace,'_seen',seen)\n        setattr(namespace,self.dest,True if self.nargs==0 else values)\ndef parse(argv):\n    if not isinstance(argv,list) or len(argv)>128 or any(not isinstance(v,str) or len(v)>256 or '\\0' in v for v in argv):raise ValueError('invalid arguments')\n    def timeout(value):\n        if not re.fullmatch(r'[1-9][0-9]?',value) or not 1<=int(value)<=60:raise argparse.ArgumentTypeError('invalid timeout')\n        return int(value)\n    parser=Parser(add_help=False,allow_abbrev=False,fromfile_prefix_chars=None)\n    parser.add_argument('--timeout',type=timeout,default=10,action=Once)\n    parser.add_argument('--dry-run',action=Once,nargs=0,default=False)\n    parser.add_argument('targets',nargs='+')\n    result=vars(parser.parse_args(argv));result.pop('_seen',None)\n    if any(not value for value in result['targets']):raise ValueError('invalid arguments')\n    return result\n```\n\n原题知识说明：\n交付命令行兼容表、严格选项策略、参数文件规则和退出码，检查默认长选项缩写会不会因新增名称变得歧义或匹配到不同选项。parse_known_args保留未知项不等于安全校验，转发到下游前必须明确边界，不能把拼写错误静默当作第三方参数。启用@参数文件时应限制允许路径、编码与递归输入策略，输入也可能包含秘密，错误提示需脱敏。验收旧调用集、唯一前缀变歧义、以减号开头的数据、重复选项与未知选项，要求含义稳定或明确拒绝。失败回退到旧CLI版本并保留旧参数合同；不能通过忽略所有未知项达成表面兼容，发布说明必须列出需要调用者迁移的行为。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "明确语言运行时与业务合同的边界",
+      "给出可区分正确与失败的具体样例",
+      "说明资源或数据恢复限制"
+    ],
+    "references": [
+      "https://docs.python.org/3.11/library/argparse.html"
+    ],
+    "related_modules": [
+      "python"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-python-018",
+      "original_title": "Python CLI升级新增选项时，怎样验收argparse缩写、未知参数与@文件输入不会改变旧自动化含义？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import argparse,re\nclass Parser(argparse.ArgumentParser):\n    def error(self,message):raise ValueError('invalid arguments')\nclass Once(argparse.Action):\n    def __call__(self,parser,namespace,values,option_string=None):\n        seen=getattr(namespace,'_seen',set())\n        if self.dest in seen:parser.error('duplicate')\n        seen.add(self.dest);setattr(namespace,'_seen',seen)\n        setattr(namespace,self.dest,True if self.nargs==0 else values)\ndef parse(argv):\n    if not isinstance(argv,list) or len(argv)>128 or any(not isinstance(v,str) or len(v)>256 or '\\0' in v for v in argv):raise ValueError('invalid arguments')\n    def timeout(value):\n        if not re.fullmatch(r'[1-9][0-9]?',value) or not 1<=int(value)<=60:raise argparse.ArgumentTypeError('invalid timeout')\n        return int(value)\n    parser=Parser(add_help=False,allow_abbrev=False,fromfile_prefix_chars=None)\n    parser.add_argument('--timeout',type=timeout,default=10,action=Once)\n    parser.add_argument('--dry-run',action=Once,nargs=0,default=False)\n    parser.add_argument('targets',nargs='+')\n    result=vars(parser.parse_args(argv));result.pop('_seen',None)\n    if any(not value for value in result['targets']):raise ValueError('invalid arguments')\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "import argparse,re\nclass Parser(argparse.ArgumentParser):\n    def error(self,message):raise ValueError('invalid arguments')\nclass Once(argparse.Action):\n    def __call__(self,parser,namespace,values,option_string=None):\n        seen=getattr(namespace,'_seen',set())\n        if self.dest in seen:parser.error('duplicate')\n        seen.add(self.dest);setattr(namespace,'_seen',seen)\n        setattr(namespace,self.dest,True if self.nargs==0 else values)\ndef parse(argv):\n    if not isinstance(argv,list) or len(argv)>128 or any(not isinstance(v,str) or len(v)>256 or '\\0' in v for v in argv):raise ValueError('invalid arguments')\n    def timeout(value):\n        if not re.fullmatch(r'[1-9][0-9]?',value) or not 1<=int(value)<=60:raise argparse.ArgumentTypeError('invalid timeout')\n        return int(value)\n    parser=Parser(add_help=False,allow_abbrev=True,fromfile_prefix_chars=None)\n    parser.add_argument('--timeout',type=timeout,default=10,action=Once)\n    parser.add_argument('--dry-run',action=Once,nargs=0,default=False)\n    parser.add_argument('targets',nargs='+')\n    result=vars(parser.parse_args(argv));result.pop('_seen',None)\n    if any(not value for value in result['targets']):raise ValueError('invalid arguments')\n    return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现parse(argv)，argv为不超过128个、各不超过256字符且不含NUL的str列表。严格识别--timeout N/--timeout=N（整数1..60默认10）和--dry-run（默认False），targets至少一个非空字符串，返回恰含timeout/dry_run/targets。禁止长选项缩写、未知参数忽略/转发、重复同一选项（含两种等号写法），--后的减号开头文本为数据。@参数文件功能禁用：即使真实文件存在也必须作为普通target字符串，不读取；Unicode及空格路径按已解码argv原样保留。本接口无help输出，任何输入错误ValueError(\"invalid arguments\")且stdout/stderr不回显原参数。使用argparse严格解析，保留输入与每次调用独立性。本次明确拒绝旧脚本的缩写/未知转发，不声称兼容这些调用；交付调用表后由调用方修正或回退旧工具，不能暗中改变默认身份或运行任务。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实CPython3.11 argparse、存在的UTF-8参数文件及敏感参数诊断验收；只解析不执行目标，不改系统参数文件或旧CLI部署。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,copy,json,tempfile,contextlib,io\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as error:raise AssertionError('submitted native operation failed') from error\nargs=['--timeout','12','--dry-run','服务 A','second'];original=list(args)\nassert student(task.parse,args)=={'timeout':12,'dry_run':True,'targets':['服务 A','second']} and args==original\nassert task.parse(['a'])=={'timeout':10,'dry_run':False,'targets':['a']}\nassert task.parse(['--','-literal','--timeout'])['targets']==['-literal','--timeout']\nwith tempfile.TemporaryDirectory() as directory:\n path=pathlib.Path(directory)/'参数.txt';path.write_text('--timeout\\n59\\nsecret-target\\n',encoding='utf8');reference='@'+str(path)\n assert task.parse([reference])=={'timeout':10,'dry_run':False,'targets':[reference]},'@file silently read unapproved parameter bytes'\n assert path.read_text(encoding='utf8')=='--timeout\\n59\\nsecret-target\\n'\nsecret='fake-sensitive-'+str(os.getpid())\nfor argv in (['--time','3','a'],['--timout',secret,'a'],['--unknown='+secret,'a'],['--timeout','2','--timeout=3','a'],['--dry-run','--dry-run','a'],['--timeout','0','a'],['--timeout','61','a'],['--timeout','1.2','a'],[],[''],['--timeout']):\n capture=io.StringIO()\n with contextlib.redirect_stdout(capture),contextlib.redirect_stderr(capture):\n  try:task.parse(argv)\n  except ValueError as error:assert str(error)=='invalid arguments' and secret not in str(error)\n  else:raise AssertionError('ambiguous/unknown/duplicate/invalid CLI input was accepted')\n assert not capture.getvalue(),'raw CLI arguments leaked to a diagnostic stream'\nassert task.parse(['--timeout=60','a'])['timeout']==60\nassert task.parse(['a'])['timeout']==10,'parse state leaked across invocations'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-advanced-python-021",
+    "module": "python",
+    "category": "Python 运维开发",
+    "level": 5,
+    "topic": "文件、文本与数据处理",
+    "title": "真实UTF-8续读检查点：字节偏移、跨块标量与CRLF记录保真，坏字节定位不推进",
+    "body": "## 操作任务\n实现feed(state,block,final=False)，state恰含offset（已消费原始字节总数，包含pending）、pending（最多3字节未完整UTF-8前缀）、partial（不含LF的未完成记录str）。block为bytes，final为bool，返回(new_state,records)。用严格增量UTF-8解码，完整LF分隔记录移除LF及其前一个CR，保留空行；末尾无LF的非空记录只在final=True输出，孤立末尾CR保留。跨块CRLF不得产生多条记录。新offset增加本次原始字节数，不是字符数；恢复必须同时加载pending和partial，下一块从offset继续，不能再次读取pending字节。每次调用可重建解码器，输入state不改。提供DecodeFailure(ValueError)，非法UTF-8或final残缺时抛异常，offset为第一个错误序列的绝对原始字节位置，raw保存旧pending+本块原字节；失败不推进旧状态、不发布该块部分记录，调用方隔离原字节后决定修复/重放，不得ignore/replace。非法检查点ValueError，pending只能是一个真实未完成字符前缀。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实CPython3.11增量解码、全部切点/逐字节输入和序列化恢复；仅实现解码与记录检查点合同，不声称网络源或输出持久化的跨系统恰好一次。",
+    "answer": "```python\nimport codecs\nclass DecodeFailure(ValueError):\n    def __init__(self,offset,raw):\n        super().__init__('invalid UTF-8 bytes');self.offset=offset;self.raw=raw\ndef feed(state,block,final=False):\n    if not isinstance(state,dict) or set(state)!={'offset','pending','partial'} or type(state['offset']) is not int or type(state['pending']) is not bytes or not isinstance(state['partial'],str) or state['offset']<len(state['pending']) or len(state['pending'])>3 or '\\n' in state['partial'] or type(block) is not bytes or type(final) is not bool:raise ValueError('checkpoint contract')\n    decoder=codecs.getincrementaldecoder('utf-8')('strict')\n    pending=state['pending']\n    try:\n        if decoder.decode(pending,False)!='' or decoder.getstate()[0]!=pending:raise ValueError('pending must be only an incomplete character')\n    except UnicodeDecodeError as error:raise ValueError('invalid checkpoint prefix') from error\n    try:text=decoder.decode(block,final)\n    except UnicodeDecodeError as error:raise DecodeFailure(state['offset']-len(pending)+error.start,pending+block) from error\n    lines=(state['partial']+text).split('\\n');records=[line[:-1] if line.endswith('\\r') else line for line in lines[:-1]];partial=lines[-1]\n    if final and partial:records.append(partial);partial=''\n    return {'offset':state['offset']+len(block),'pending':decoder.getstate()[0],'partial':partial},records\n```\n\n原题知识说明：\n交付原始字节偏移、解码器状态、记录边界与错误处理策略，说明网络块边界不等于字符或换行边界。应使用增量解码器保存未完成字节，流结束时以final状态检查残缺字符；逐块独立decode可能错误拒绝合法多字节文本或静默丢字。断点必须位于可恢复边界，若保存任意字节偏移则需同时保存解码状态，不能用解码后的字符数直接当源文件字节位置。验收将每个多字节字符切在不同位置、跨块CRLF、最后残缺字符及进程重启，核对输出与整流解码一致且不重复遗漏。失败保留原始坏字节与偏移供受控隔离，禁止用ignore清空错误后宣称完整统计；回退解析器仍应理解已保存的检查点版本。",
+    "type": "code",
+    "source": "OpsForge 高阶补充编审 2026-10-22",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "明确语言运行时与业务合同的边界",
+      "给出可区分正确与失败的具体样例",
+      "说明资源或数据恢复限制"
+    ],
+    "references": [
+      "https://docs.python.org/3.11/library/codecs.html"
+    ],
+    "related_modules": [
+      "python"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-python-021",
+      "original_title": "Python按网络块增量解码UTF-8日志时，怎样交付跨块字符与断点恢复的字节位置合同？",
+      "original_type": "practice"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import codecs\nclass DecodeFailure(ValueError):\n    def __init__(self,offset,raw):\n        super().__init__('invalid UTF-8 bytes');self.offset=offset;self.raw=raw\ndef feed(state,block,final=False):\n    if not isinstance(state,dict) or set(state)!={'offset','pending','partial'} or type(state['offset']) is not int or type(state['pending']) is not bytes or not isinstance(state['partial'],str) or state['offset']<len(state['pending']) or len(state['pending'])>3 or '\\n' in state['partial'] or type(block) is not bytes or type(final) is not bool:raise ValueError('checkpoint contract')\n    decoder=codecs.getincrementaldecoder('utf-8')('strict')\n    pending=state['pending']\n    try:\n        if decoder.decode(pending,False)!='' or decoder.getstate()[0]!=pending:raise ValueError('pending must be only an incomplete character')\n    except UnicodeDecodeError as error:raise ValueError('invalid checkpoint prefix') from error\n    try:text=decoder.decode(block,final)\n    except UnicodeDecodeError as error:raise DecodeFailure(state['offset']-len(pending)+error.start,pending+block) from error\n    lines=(state['partial']+text).split('\\n');records=[line[:-1] if line.endswith('\\r') else line for line in lines[:-1]];partial=lines[-1]\n    if final and partial:records.append(partial);partial=''\n    return {'offset':state['offset']+len(block),'pending':decoder.getstate()[0],'partial':partial},records\n"
+    },
+    "negative_files": {
+      "task.py": "import codecs\nclass DecodeFailure(ValueError):\n    def __init__(self,offset,raw):\n        super().__init__('invalid UTF-8 bytes');self.offset=offset;self.raw=raw\ndef feed(state,block,final=False):\n    if not isinstance(state,dict) or set(state)!={'offset','pending','partial'} or type(state['offset']) is not int or type(state['pending']) is not bytes or not isinstance(state['partial'],str) or state['offset']<len(state['pending']) or len(state['pending'])>3 or '\\n' in state['partial'] or type(block) is not bytes or type(final) is not bool:raise ValueError('checkpoint contract')\n    decoder=codecs.getincrementaldecoder('utf-8')('strict')\n    pending=state['pending']\n    try:\n        if decoder.decode(pending,False)!='' or decoder.getstate()[0]!=pending:raise ValueError('pending must be only an incomplete character')\n    except UnicodeDecodeError as error:raise ValueError('invalid checkpoint prefix') from error\n    try:text=block.decode('utf-8')\n    except UnicodeDecodeError as error:raise DecodeFailure(state['offset']-len(pending)+error.start,pending+block) from error\n    lines=(state['partial']+text).split('\\n');records=[line[:-1] if line.endswith('\\r') else line for line in lines[:-1]];partial=lines[-1]\n    if final and partial:records.append(partial);partial=''\n    return {'offset':state['offset']+len(block),'pending':decoder.getstate()[0],'partial':partial},records\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现feed(state,block,final=False)，state恰含offset（已消费原始字节总数，包含pending）、pending（最多3字节未完整UTF-8前缀）、partial（不含LF的未完成记录str）。block为bytes，final为bool，返回(new_state,records)。用严格增量UTF-8解码，完整LF分隔记录移除LF及其前一个CR，保留空行；末尾无LF的非空记录只在final=True输出，孤立末尾CR保留。跨块CRLF不得产生多条记录。新offset增加本次原始字节数，不是字符数；恢复必须同时加载pending和partial，下一块从offset继续，不能再次读取pending字节。每次调用可重建解码器，输入state不改。提供DecodeFailure(ValueError)，非法UTF-8或final残缺时抛异常，offset为第一个错误序列的绝对原始字节位置，raw保存旧pending+本块原字节；失败不推进旧状态、不发布该块部分记录，调用方隔离原字节后决定修复/重放，不得ignore/replace。非法检查点ValueError，pending只能是一个真实未完成字符前缀。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实CPython3.11增量解码、全部切点/逐字节输入和序列化恢复；仅实现解码与记录检查点合同，不声称网络源或输出持久化的跨系统恰好一次。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import os,sys,pathlib,copy,json,tempfile,contextlib,io\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef student(fn,*args):\n print('STUDENT_OPERATION_ENTERED:'+fn.__name__,flush=True)\n try:return fn(*args)\n except Exception as error:raise AssertionError('submitted native operation failed') from error\ndef valid(*args):\n try:return task.feed(*args)\n except Exception as error:raise AssertionError('valid cross-block data was rejected') from error\nraw='开始😀\\r\\n中间é\\n\\n末尾\\r'.encode('utf8');expected=['开始😀','中间é','','末尾\\r']\ninitial={'offset':0,'pending':b'','partial':''}\nstate,records=student(task.feed,copy.deepcopy(initial),raw,True);assert records==expected and state=={'offset':len(raw),'pending':b'','partial':''}\n# A fresh decoder is constructed by every feed; checkpoints survive real byte serialization.\nfor cut in range(len(raw)+1):\n state=copy.deepcopy(initial);out=[]\n for block,final in [(raw[:cut],False),(raw[cut:],True)]:\n  prior=copy.deepcopy(state);state,part=valid(state,block,final);assert prior['offset']+len(block)==state['offset'];out+=part\n assert out==expected and state['pending']==b'' and state['offset']==len(raw)\nstate=copy.deepcopy(initial);out=[]\nfor index,byte in enumerate(raw):\n old=copy.deepcopy(state);state,part=valid(state,bytes([byte]),False);out+=part\n assert state['offset']==index+1 and old['offset']==index\n # Persist bytes explicitly; restoring by offset alone would lose an incomplete scalar/record.\n stored=json.loads(json.dumps({'offset':state['offset'],'pending':state['pending'].hex(),'partial':state['partial']},ensure_ascii=False));state={'offset':stored['offset'],'pending':bytes.fromhex(stored['pending']),'partial':stored['partial']}\nstate,part=valid(state,b'',True);assert out+part==expected\n# Persist and restore in two different interpreter processes, including both a partial line and scalar.\nimport subprocess\nprogram=\"import json,sys,task; x=json.load(sys.stdin); s=x['state']; s['pending']=bytes.fromhex(s['pending']); s,records=task.feed(s,bytes.fromhex(x['block']),x['final']); s['pending']=s['pending'].hex(); print(json.dumps({'state':s,'records':records},ensure_ascii=False))\"\ncut=raw.index('😀'.encode('utf8'))+2;stored={'offset':0,'pending':'','partial':''};out=[]\nfor block,final in [(raw[:cut],False),(raw[cut:],True)]:\n child=subprocess.run([sys.executable,'-c',program],input=json.dumps({'state':stored,'block':block.hex(),'final':final}),capture_output=True,text=True,encoding='utf8',timeout=3)\n assert child.returncode==0,'persisted decoder checkpoint failed after interpreter restart'\n decoded=json.loads(child.stdout);stored=decoded['state'];out+=decoded['records']\nassert out==expected and stored=={'offset':len(raw),'pending':'','partial':''},'restart lost or replayed byte/record state'\nfor first,block,final,offset in [(b'abc\\n',b'\\xff',False,4),(b'A\\xf0',b'\\x28',False,1),(b'ok\\n',b'\\xe4\\xb8',True,3)]:\n state,_=valid(copy.deepcopy(initial),first,False);saved=copy.deepcopy(state)\n try:task.feed(state,block,final)\n except task.DecodeFailure as error:assert error.offset==offset and error.raw==saved['pending']+block\n else:raise AssertionError('bad/incomplete UTF-8 silently dropped or accepted')\n assert state==saved,'failed block advanced or changed the recoverable checkpoint'\nbad={'offset':3,'pending':b'abc','partial':''}\ntry:task.feed(bad,b'',False)\nexcept ValueError:pass\nelse:raise AssertionError('complete characters accepted as pending prefix')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

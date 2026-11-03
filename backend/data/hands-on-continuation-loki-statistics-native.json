@@ -1,0 +1,149 @@
+[
+  {
+    "id": "curated-parallel-loki-023",
+    "module": "loki",
+    "category": "Loki",
+    "level": 1,
+    "topic": "指标查询与告警",
+    "title": "真实总体P90：按服务合并原始样本，不能平均实例分位数或把无样本记为零",
+    "answer": "```python\nimport re\ndef query(app):\n    if not isinstance(app,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',app):raise ValueError('safe application selector')\n    return 'quantile_over_time(0.9, {app=\"'+app+'\"} | json | unwrap latency_ms | __error__=\"\" [1m]) by (service)'\n```\n\n原题知识说明：\n需正确提取每事件延迟及单位，过滤解析失败并明确窗口与采样。若日志只记录慢请求会偏置总体分位数，验收用已知样本对照。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Grafana Loki官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现query(app)返回LogQL，app为小写字母开头的小写数字连字符1..32。日志行JSON有latency_ms，流标签含service/instance；提取数值并在unwrap后过滤__error__，计算最近1分钟每service的原始样本总体P90，结果仅保留service标签。不能先算各实例P90再平均；实例样本数不同会改变总体，不能把多个分位数当可相加统计。无样本返回空向量，不补零。实际数据一实例9个低延迟样本、另一实例1个高延迟样本，另有N/A；原生Loki核对总体插值分位数、标签形状及错误行排除。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Loki3.5.5 quantile_over_time样本聚合和小型确定数据；不验证生产采样偏差、记录规则近似误差、直方图分位数或请求级去重，日志样本定义必须由业务另行保证。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://grafana.com/docs/loki/latest/query/metric_queries/"
+    ],
+    "related_modules": [
+      "loki"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-loki-023",
+      "original_title": "LogQL quantile_over_time得到的延迟分位数依赖哪些输入条件？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import re\ndef query(app):\n    if not isinstance(app,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',app):raise ValueError('safe application selector')\n    return 'quantile_over_time(0.9, {app=\"'+app+'\"} | json | unwrap latency_ms | __error__=\"\" [1m]) by (service)'\n"
+    },
+    "negative_files": {
+      "task.py": "import re\ndef query(app):\n    if not isinstance(app,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',app):raise ValueError('safe application selector')\n    return 'avg by (service) (quantile_over_time(0.9, {app=\"'+app+'\"} | json | unwrap latency_ms | __error__=\"\" [1m]) by (service,instance))'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现query(app)返回LogQL，app为小写字母开头的小写数字连字符1..32。日志行JSON有latency_ms，流标签含service/instance；提取数值并在unwrap后过滤__error__，计算最近1分钟每service的原始样本总体P90，结果仅保留service标签。不能先算各实例P90再平均；实例样本数不同会改变总体，不能把多个分位数当可相加统计。无样本返回空向量，不补零。实际数据一实例9个低延迟样本、另一实例1个高延迟样本，另有N/A；原生Loki核对总体插值分位数、标签形状及错误行排除。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Loki3.5.5 quantile_over_time样本聚合和小型确定数据；不验证生产采样偏差、记录规则近似误差、直方图分位数或请求级去重，日志样本定义必须由业务另行保证。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "loki"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/loki_native.py": "\"\"\"Private standalone Loki 3.5.5, filesystem storage and loopback-only HTTP/gRPC.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.parse,urllib.error\nimport yaml\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Loki:\n def __init__(self,auth=False,structured=False):\n  self.binary=shutil.which('loki');self.process=None;self.auth=auth;self.structured=structured\n  if not self.binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 executable missing')\n  version=subprocess.run([self.binary,'-version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '3.5.5' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-loki-');self.root=pathlib.Path(self.temp.name);http=free_port();grpc=free_port()\n  while grpc==http:grpc=free_port()\n  self.base='http://127.0.0.1:'+str(http);self.log=(self.root/'server.log').open('wb')\n  config={'auth_enabled':self.auth,'server':{'http_listen_address':'127.0.0.1','http_listen_port':http,'grpc_listen_address':'127.0.0.1','grpc_listen_port':grpc,'log_level':'error'},\n   'common':{'instance_addr':'127.0.0.1','path_prefix':str(self.root),'replication_factor':1,'storage':{'filesystem':{'chunks_directory':str(self.root/'chunks'),'rules_directory':str(self.root/'rules')}},'ring':{'kvstore':{'store':'inmemory'}}},\n   'schema_config':{'configs':[{'from':'2020-10-24','store':'tsdb','object_store':'filesystem','schema':'v13','index':{'prefix':'index_','period':'24h'}}]},\n   'ingester':{'lifecycler':{'min_ready_duration':'0s','final_sleep':'0s','heartbeat_period':'100ms'},'wal':{'enabled':False}},\n   'limits_config':{'allow_structured_metadata':self.structured,'max_query_parallelism':2,'tsdb_max_query_parallelism':2,'split_queries_by_interval':'0s','query_timeout':'5s'},\n   'querier':{'max_concurrent':2},'analytics':{'reporting_enabled':False},'pattern_ingester':{'enabled':False},'compactor':{'working_directory':str(self.root/'compactor')}}\n  path=self.root/'config.yaml';path.write_text(yaml.safe_dump(config,sort_keys=False),encoding='utf8')\n  try:\n   self.process=subprocess.Popen([self.binary,'-config.file='+str(path)],cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'192MiB','HOME':str(self.root)})\n   self.wait(lambda:self.request('/ready')==b'ready\\n','private HTTP readiness',seconds=12)\n   print('NATIVE_LOKI_READY:3.5.5',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,data=None,tenant=None,headers=None):\n  outgoing={'Content-Type':'application/json',**(headers or {})}\n  if tenant is not None:outgoing['X-Scope-OrgID']=tenant\n  request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data,ensure_ascii=False).encode(),headers=outgoing)\n  with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as response:\n   raw=response.read();return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n def wait(self,predicate,description,seconds=5):\n  deadline=time.monotonic()+seconds\n  while time.monotonic()<deadline:\n   if self.process.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki exited: '+(self.root/'server.log').read_text(errors='replace')[-2500:])\n   try:\n    value=predicate()\n    if value:return value\n   except (OSError,urllib.error.URLError):pass\n   time.sleep(.04)\n  raise AssertionError('native Loki deadline: '+description)\n def push(self,streams,tenant=None):\n  result=self.request('/loki/api/v1/push',{'streams':streams},tenant=tenant);assert result==b''\n def logs(self,query,start,end,tenant=None):\n  params={'query':query,'start':str(start),'end':str(end),'direction':'forward','limit':'1000'}\n  result=self.request('/loki/api/v1/query_range?'+urllib.parse.urlencode(params),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='streams';return result['data']['result']\n def metric(self,query,at,tenant=None):\n  result=self.request('/loki/api/v1/query?'+urllib.parse.urlencode({'query':query,'time':str(at)}),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='vector';return result['data']['result']\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=4)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if getattr(self,'log',None):self.log.close()\n  self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,time,math,urllib.error\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom loki_native import Loki\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef metric(server,expression,at):\n try:return server.metric(expression,at)\n except urllib.error.HTTPError as error:raise AssertionError('submitted LogQL failed in the ready native engine') from error\nwith Loki() as server:\n at=int(time.time())-1;base=(at-1)*10**9\n groups=[('checkout','a',list(range(1,10))),('checkout','b',[1000]),('search','a',[50,50])]\n streams=[]\n for service,instance,numbers in groups:\n  values=[[str(base+i*10**6),json.dumps({'latency_ms':value})] for i,value in enumerate(numbers)]\n  values.append([str(base+100*10**6),json.dumps({'latency_ms':'N/A'})])\n  streams.append({'stream':{'app':'latency','service':service,'instance':instance},'values':values})\n server.push(streams)\n naive='avg by (service) (quantile_over_time(0.9, {app=\"latency\"} | json | unwrap latency_ms | __error__=\"\" [1m]) by (service,instance))'\n observed=metric(server,naive,at);assert abs(float(next(row['value'][1] for row in observed if row['metric']['service']=='checkout'))-108.1)>100\n print('NATIVE_LOKI_AVERAGED_QUANTILES_DIFFER_FROM_POOLED',flush=True)\n print('STUDENT_OPERATION_ENTERED:query',flush=True)\n result=metric(server,task.query('latency'),at)\n assert len(result)==2 and all(set(row['metric'])=={'service'} for row in result),'instance labels prevented a service-wide sample quantile'\n actual={row['metric']['service']:float(row['value'][1]) for row in result}\n def quantile(values):\n  values=sorted(values);position=(len(values)-1)*.9;left=math.floor(position);right=math.ceil(position);return values[left]+(values[right]-values[left])*(position-left)\n assert abs(actual['checkout']-quantile(list(range(1,10))+[1000]))<1e-6 and actual['search']==50,'per-instance quantiles were averaged rather than pooling raw observations'\n assert metric(server,task.query('absent-app'),at)==[],'no observations invented a zero latency'\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  },
+  {
+    "id": "curated-parallel-loki-055",
+    "module": "loki",
+    "category": "Loki",
+    "level": 2,
+    "topic": "指标查询与告警",
+    "title": "真实错误率零与缺测：有流量无错误返回服务级0，无流量保持空向量",
+    "answer": "```python\nimport re\ndef query(app):\n    if not isinstance(app,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',app):raise ValueError('safe application selector')\n    total='sum by (service) (count_over_time({app=\"'+app+'\"}[1m]))'\n    errors='sum by (service) (count_over_time({app=\"'+app+'\"} | json | status >= 500 | __error__=\"\" [1m]))'\n    return '(('+errors+') or (0 * ('+total+'))) / ('+total+')'\n```\n\n原题知识说明：\n区分无请求、采集缺失和真实零错误，明确除零及缺序列处理。用有流量、无流量和采集断流样本测试，不能简单把所有空值填0。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；Grafana Loki官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-data-20261021",
+    "body": "## 操作任务\n实现query(app)，返回最近1分钟每service的5xx日志行数/全部日志行数，流还有instance标签，JSON行含status。先按service聚合两边，错误分子缺失时只能给有实际总流量的service补0；无流量/不存在的app保持空向量，不能用or vector(0)制造无标签的健康值。结果标签恰为service；示例checkout有2/10个5xx，search有0/5个，未出现服务不得冒充0%。app为小写字母开头的小写数字连字符1..32。明确这是题定每行一观测的日志错误率，不推断重复日志等于独立请求。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实Loki3.5.5向量聚合、or标签匹配与除法；不执行生产告警发布，空向量必须另由缺测规则处理，不承诺所有无数据原因均相同。",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://grafana.com/docs/loki/latest/query/metric_queries/",
+      "https://grafana.com/docs/loki/latest/query/"
+    ],
+    "related_modules": [
+      "loki"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-loki-055",
+      "original_title": "LogQL错误率分母为0或不存在时怎样保持告警语义？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import re\ndef query(app):\n    if not isinstance(app,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',app):raise ValueError('safe application selector')\n    total='sum by (service) (count_over_time({app=\"'+app+'\"}[1m]))'\n    errors='sum by (service) (count_over_time({app=\"'+app+'\"} | json | status >= 500 | __error__=\"\" [1m]))'\n    return '(('+errors+') or (0 * ('+total+'))) / ('+total+')'\n"
+    },
+    "negative_files": {
+      "task.py": "import re\ndef query(app):\n    if not isinstance(app,str) or not re.fullmatch(r'[a-z][a-z0-9-]{0,31}',app):raise ValueError('safe application selector')\n    total='sum by (service) (count_over_time({app=\"'+app+'\"}[1m]))'\n    errors='sum by (service) (count_over_time({app=\"'+app+'\"} | json | status >= 500 | __error__=\"\" [1m]))'\n    return '(('+errors+') / ('+total+')) or vector(0)'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现query(app)，返回最近1分钟每service的5xx日志行数/全部日志行数，流还有instance标签，JSON行含status。先按service聚合两边，错误分子缺失时只能给有实际总流量的service补0；无流量/不存在的app保持空向量，不能用or vector(0)制造无标签的健康值。结果标签恰为service；示例checkout有2/10个5xx，search有0/5个，未出现服务不得冒充0%。app为小写字母开头的小写数字连字符1..32。明确这是题定每行一观测的日志错误率，不推断重复日志等于独立请求。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实Loki3.5.5向量聚合、or标签匹配与除法；不执行生产告警发布，空向量必须另由缺测规则处理，不承诺所有无数据原因均相同。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 60,
+      "requires": {
+        "commands": [
+          "loki"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/loki_native.py": "\"\"\"Private standalone Loki 3.5.5, filesystem storage and loopback-only HTTP/gRPC.\"\"\"\nimport json,os,pathlib,shutil,socket,subprocess,tempfile,time,urllib.request,urllib.parse,urllib.error\nimport yaml\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\nclass Loki:\n def __init__(self,auth=False,structured=False):\n  self.binary=shutil.which('loki');self.process=None;self.auth=auth;self.structured=structured\n  if not self.binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 executable missing')\n  version=subprocess.run([self.binary,'-version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '3.5.5' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki3.5.5 required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-loki-');self.root=pathlib.Path(self.temp.name);http=free_port();grpc=free_port()\n  while grpc==http:grpc=free_port()\n  self.base='http://127.0.0.1:'+str(http);self.log=(self.root/'server.log').open('wb')\n  config={'auth_enabled':self.auth,'server':{'http_listen_address':'127.0.0.1','http_listen_port':http,'grpc_listen_address':'127.0.0.1','grpc_listen_port':grpc,'log_level':'error'},\n   'common':{'instance_addr':'127.0.0.1','path_prefix':str(self.root),'replication_factor':1,'storage':{'filesystem':{'chunks_directory':str(self.root/'chunks'),'rules_directory':str(self.root/'rules')}},'ring':{'kvstore':{'store':'inmemory'}}},\n   'schema_config':{'configs':[{'from':'2020-10-24','store':'tsdb','object_store':'filesystem','schema':'v13','index':{'prefix':'index_','period':'24h'}}]},\n   'ingester':{'lifecycler':{'min_ready_duration':'0s','final_sleep':'0s','heartbeat_period':'100ms'},'wal':{'enabled':False}},\n   'limits_config':{'allow_structured_metadata':self.structured,'max_query_parallelism':2,'tsdb_max_query_parallelism':2,'split_queries_by_interval':'0s','query_timeout':'5s'},\n   'querier':{'max_concurrent':2},'analytics':{'reporting_enabled':False},'pattern_ingester':{'enabled':False},'compactor':{'working_directory':str(self.root/'compactor')}}\n  path=self.root/'config.yaml';path.write_text(yaml.safe_dump(config,sort_keys=False),encoding='utf8')\n  try:\n   self.process=subprocess.Popen([self.binary,'-config.file='+str(path)],cwd=self.root,stdout=self.log,stderr=self.log,env={**os.environ,'GOMAXPROCS':'2','GOMEMLIMIT':'192MiB','HOME':str(self.root)})\n   self.wait(lambda:self.request('/ready')==b'ready\\n','private HTTP readiness',seconds=12)\n   print('NATIVE_LOKI_READY:3.5.5',flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,data=None,tenant=None,headers=None):\n  outgoing={'Content-Type':'application/json',**(headers or {})}\n  if tenant is not None:outgoing['X-Scope-OrgID']=tenant\n  request=urllib.request.Request(self.base+path,data=None if data is None else json.dumps(data,ensure_ascii=False).encode(),headers=outgoing)\n  with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request,timeout=3) as response:\n   raw=response.read();return json.loads(raw) if raw and 'json' in response.headers.get('Content-Type','') else raw\n def wait(self,predicate,description,seconds=5):\n  deadline=time.monotonic()+seconds\n  while time.monotonic()<deadline:\n   if self.process.poll() is not None:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Loki exited: '+(self.root/'server.log').read_text(errors='replace')[-2500:])\n   try:\n    value=predicate()\n    if value:return value\n   except (OSError,urllib.error.URLError):pass\n   time.sleep(.04)\n  raise AssertionError('native Loki deadline: '+description)\n def push(self,streams,tenant=None):\n  result=self.request('/loki/api/v1/push',{'streams':streams},tenant=tenant);assert result==b''\n def logs(self,query,start,end,tenant=None):\n  params={'query':query,'start':str(start),'end':str(end),'direction':'forward','limit':'1000'}\n  result=self.request('/loki/api/v1/query_range?'+urllib.parse.urlencode(params),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='streams';return result['data']['result']\n def metric(self,query,at,tenant=None):\n  result=self.request('/loki/api/v1/query?'+urllib.parse.urlencode({'query':query,'time':str(at)}),tenant=tenant);assert result['status']=='success' and result['data']['resultType']=='vector';return result['data']['result']\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=4)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if getattr(self,'log',None):self.log.close()\n  self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,time,math,urllib.error\nsys.path.insert(0,str(pathlib.Path.cwd()));sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom loki_native import Loki\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\ndef metric(server,expression,at):\n try:return server.metric(expression,at)\n except urllib.error.HTTPError as error:raise AssertionError('submitted LogQL failed in the ready native engine') from error\nwith Loki() as server:\n at=int(time.time())-1;base=(at-1)*10**9\n data=[('checkout','a',[500,200,200,200,200]),('checkout','b',[503,200,200,200,200]),('search','a',[200]*5)]\n server.push([{'stream':{'app':'ratio','service':service,'instance':instance},'values':[[str(base+i*10**6),json.dumps({'status':code})] for i,code in enumerate(codes)]} for service,instance,codes in data])\n print('STUDENT_OPERATION_ENTERED:query',flush=True)\n result=metric(server,task.query('ratio'),at)\n assert len(result)==2 and all(set(row['metric'])=={'service'} for row in result),'label mismatch or unlabeled synthetic series changed the service scope'\n values={row['metric']['service']:float(row['value'][1]) for row in result};assert abs(values['checkout']-.2)<1e-9 and values['search']==0,'observed healthy traffic disappeared or errors were divided by the wrong scope'\n assert metric(server,task.query('no-traffic'),at)==[],'no traffic was silently reported as a healthy zero error rate'\n assert all(math.isfinite(value) for value in values.values())\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    }
+  }
+]

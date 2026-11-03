@@ -1,0 +1,507 @@
+[
+  {
+    "id": "src-925c2cad05ad35ef",
+    "title": "用 ss 精确归属本题进程的 TCP 连接",
+    "answer": "```python\nimport socket,subprocess,json,pathlib,os,re\ndef execute(pid,local_port):\n    if type(pid) is not int or pid<1 or type(local_port) is not int or not 1<=local_port<=65535:raise ValueError('invalid selector')\n    text=subprocess.run(['ss','-H','-t','-n','-p','-O'],capture_output=True,text=True,check=True,timeout=2).stdout;result=[]\n    for line in text.splitlines():\n        parts=line.split()\n        if len(parts)<6:continue\n        owners={int(value) for value in re.findall(r'\\bpid=(\\d+)',line)}\n        if pid not in owners:continue\n        local,peer=parts[3],parts[4]\n        try:port=int(local.rsplit(':',1)[1])\n        except (ValueError,IndexError):continue\n        if port==local_port:result.append({'state':parts[0],'local':local,'peer':peer})\n    return sorted(result,key=lambda row:(row['local'],row['peer'],row['state']))\n```\n\n实现execute(pid,local_port)，运行ss -H -t -n -p -O读取内核TCP连接。只返回进程owner包含精确pid且本地端口等于local_port的记录，每条{state,local,peer}；按(local,peer,state)排序。pid必须正整数，端口1..65535整数。不能把peer端口误当本地端口，不能把pid=12匹配到pid=123。验收在同进程建立两个连接，只有指定监听端接收的连接满足过滤；关闭后应不再归属原pid。命令执行超时2秒，错误须传播。\n\n原理补充：\nLinux 可用 ss -tunap 查看 TCP/UDP socket、地址和进程信息，普通用户未必能看到其他用户进程；ss -lntp 查看 TCP 监听。区分 LISTEN、ESTABLISHED、TIME_WAIT，容器场景还需确认网络命名空间；不能把监听端口当成已建立连接。",
+    "category": "网络与DNS",
+    "difficulty": "入门",
+    "section": "进程",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "Linux",
+    "original_title": "如何列出活动的网络连接?",
+    "module": "network",
+    "topic": "用 ss 精确归属本题进程的 TCP 连接",
+    "level": 3,
+    "body": "## 环境与初始材料\n非root Linux隔离工作区，Python3.11+和iproute2（ip/ss）。只读内核网络信息；测试只新建本题回环socket，不修改地址、路由、网络命名空间或防火墙，不连接外网。平台注入对应监听/连接素材。\n\n## 操作任务\n实现execute(pid,local_port)，运行ss -H -t -n -p -O读取内核TCP连接。只返回进程owner包含精确pid且本地端口等于local_port的记录，每条{state,local,peer}；按(local,peer,state)排序。pid必须正整数，端口1..65535整数。不能把peer端口误当本地端口，不能把pid=12匹配到pid=123。验收在同进程建立两个连接，只有指定监听端接收的连接满足过滤；关闭后应不再归属原pid。命令执行超时2秒，错误须传播。\n\n## 提交产物\ntask.py中的execute函数，输出任务约定的真实内核观测结果，不能硬编码或用解释文档代替。\n\n## 验收方法\npython3 checks/check.py启动受限本地socket素材，调用真实iproute2工具核对结果；正常与边界断言全部通过返回0。缺少Linux/iproute2应显示能力待验，不判作学生答案错误。\n\n失败示例：按行包含端口号筛选会同时混入对端连接；字符串包含pid也不等于内核精确进程归属。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-52e8413363220530",
+        "title": "如何列出活动连接？",
+        "category": "Linux",
+        "source": "topics/linux/README.md",
+        "sources": [
+          "topics/linux/README.md"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(*args):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(pid,local_port):\n    if type(pid) is not int or pid<1 or type(local_port) is not int or not 1<=local_port<=65535:raise ValueError('invalid selector')\n    text=subprocess.run(['ss','-H','-t','-n','-p','-O'],capture_output=True,text=True,check=True,timeout=2).stdout;result=[]\n    for line in text.splitlines():\n        parts=line.split()\n        if len(parts)<6:continue\n        owners={int(value) for value in re.findall(r'\\bpid=(\\d+)',line)}\n        if pid not in owners:continue\n        local,peer=parts[3],parts[4]\n        try:port=int(local.rsplit(':',1)[1])\n        except (ValueError,IndexError):continue\n        if port==local_port:result.append({'state':parts[0],'local':local,'peer':peer})\n    return sorted(result,key=lambda row:(row['local'],row['peer'],row['state']))\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(pid,local_port):\n    text=subprocess.run(['ss','-H','-t','-n','-p','-O'],capture_output=True,text=True,check=True).stdout;rows=[]\n    for line in text.splitlines():\n        parts=line.split()\n        if len(parts)>=6 and str(pid) in line and (':'+str(local_port)) in line:rows.append({'state':parts[0],'local':parts[3],'peer':parts[4]})\n    return sorted(rows,key=lambda row:(row['local'],row['peer'],row['state']))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(pid,local_port)，运行ss -H -t -n -p -O读取内核TCP连接。只返回进程owner包含精确pid且本地端口等于local_port的记录，每条{state,local,peer}；按(local,peer,state)排序。pid必须正整数，端口1..65535整数。不能把peer端口误当本地端口，不能把pid=12匹配到pid=123。验收在同进程建立两个连接，只有指定监听端接收的连接满足过滤；关闭后应不再归属原pid。命令执行超时2秒，错误须传播。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "非root Linux真实iproute2命令和受控回环socket断言",
+      "failure_examples": [
+        "按行包含端口号筛选会同时混入对端连接；字符串包含pid也不等于内核精确进程归属。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,socket,subprocess,json,os,threading,time,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nwith socket.socket() as listener:\n    listener.bind(('127.0.0.1',0));listener.listen();port=listener.getsockname()[1]\n    with socket.create_connection(listener.getsockname(),timeout=2) as first,socket.create_connection(listener.getsockname(),timeout=2) as second:\n        a,_=listener.accept();b,_=listener.accept()\n        with a,b:\n            result=task.execute(os.getpid(),port)\n            assert result==sorted([{'state':'ESTAB','local':'127.0.0.1:'+str(port),'peer':'127.0.0.1:'+str(c.getsockname()[1])} for c in [first,second]],key=lambda row:(row['local'],row['peer'],row['state']))\n            assert task.execute(os.getpid()+100000000,port)==[]\n    assert task.execute(os.getpid(),port)==[]\nfor pid,port in [(True,80),(0,80),(os.getpid(),0),(os.getpid(),65536)]:\n    try:task.execute(pid,port)\n    except ValueError:pass\n    else:raise AssertionError('invalid filter')\n\nwith socket.socket(socket.AF_INET6,socket.SOCK_STREAM) as listener:\n    listener.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,1);listener.bind(('::1',0));listener.listen();port=listener.getsockname()[1]\n    with socket.socket(socket.AF_INET6,socket.SOCK_STREAM) as client:\n        client.settimeout(2);client.connect(listener.getsockname());accepted,_=listener.accept()\n        with accepted:\n            result=task.execute(os.getpid(),port)\n            assert len(result)==1 and result[0]['state']=='ESTAB'\n            assert result[0]['local'].endswith(':'+str(port)) and result[0]['peer'].endswith(':'+str(client.getsockname()[1]))\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "ss"
+        ]
+      }
+    },
+    "case_signature": "network-native|src-925c2cad05ad35ef|用 ss 精确归属本题进程的 TCP 连接",
+    "conversion": {
+      "original_id": "src-925c2cad05ad35ef",
+      "original_type": "source",
+      "original_title": "如何列出活动的网络连接?",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "curated-feishu-60-070",
+    "module": "network",
+    "category": "网络与DNS",
+    "level": 2,
+    "topic": "用真实监听表识别仅回环绑定与全接口绑定",
+    "title": "用真实监听表识别仅回环绑定与全接口绑定",
+    "answer": "```python\nimport socket,subprocess,json,pathlib,os,re\ndef execute(port):\n    import ipaddress\n    if type(port) is not int or not 1<=port<=65535:raise ValueError('invalid port')\n    text=subprocess.run(['ss','-H','-l','-t','-n','-O'],capture_output=True,text=True,check=True,timeout=2).stdout;out=[]\n    for line in text.splitlines():\n        parts=line.split()\n        if len(parts)<5:continue\n        endpoint=parts[3]\n        try:address,p=endpoint.rsplit(':',1);p=int(p)\n        except (ValueError,IndexError):continue\n        if p!=port:continue\n        address=address.strip('[]')\n        if address=='*':scope='wildcard'\n        else:\n            parsed=ipaddress.ip_address(address.split('%',1)[0]);scope='wildcard' if parsed.is_unspecified else 'loopback' if parsed.is_loopback else 'specific'\n        out.append({'address':address,'scope':scope})\n    return sorted(out,key=lambda row:row['address'])\n```\n\n实现execute(port)，调用ss -H -l -t -n -O读取监听表，返回本地端口匹配项的{address,scope}列表，scope为loopback/wildcard/specific。支持IPv4与带方括号IPv6地址；127/8和::1为loopback，0.0.0.0、::或*为wildcard，其他为specific；按address排序。必须依据实际绑定地址，不根据业务名或端口猜可达性。验收只创建127.0.0.1及0.0.0.0的本题监听，不扫描外部端口；wildcard仅表示绑定范围，不证明安全组/防火墙放行。\n\n原理补充：\n通常不能，回环监听只接受该网络命名空间内发往回环地址的连接。应查看实际监听地址、地址族及是否有前置代理/端口转发。扩大监听前先确认认证、防火墙及暴露需求；不能把监听所有接口当默认排障动作。",
+    "type": "code",
+    "source": "飞书《60》技术问题改编并纠错",
+    "source_block_id": "Maf1dONl5oUCcLxHxY5c2DYxn2d",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "feishu-60-reviewed",
+    "body": "## 环境与初始材料\n非root Linux隔离工作区，Python3.11+和iproute2（ip/ss）。只读内核网络信息；测试只新建本题回环socket，不修改地址、路由、网络命名空间或防火墙，不连接外网。平台注入对应监听/连接素材。\n\n## 操作任务\n实现execute(port)，调用ss -H -l -t -n -O读取监听表，返回本地端口匹配项的{address,scope}列表，scope为loopback/wildcard/specific。支持IPv4与带方括号IPv6地址；127/8和::1为loopback，0.0.0.0、::或*为wildcard，其他为specific；按address排序。必须依据实际绑定地址，不根据业务名或端口猜可达性。验收只创建127.0.0.1及0.0.0.0的本题监听，不扫描外部端口；wildcard仅表示绑定范围，不证明安全组/防火墙放行。\n\n## 提交产物\ntask.py中的execute函数，输出任务约定的真实内核观测结果，不能硬编码或用解释文档代替。\n\n## 验收方法\npython3 checks/check.py启动受限本地socket素材，调用真实iproute2工具核对结果；正常与边界断言全部通过返回0。缺少Linux/iproute2应显示能力待验，不判作学生答案错误。\n\n失败示例：监听着并不表示绑定了外部网卡；把127.0.0.1分类为wildcard会给出错误访问建议。",
+    "rubric": [
+      "通常不能，回环监听只接受该网络命名空间内发往回环地址的连接",
+      "应查看实际监听地址、地址族及是否有前置代理/端口转发",
+      "扩大监听前先确认认证、防火墙及暴露需求；不能把监听所有接口当默认排障动作"
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c"
+    ],
+    "source_links": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_id": "Maf1dONl5oUCcLxHxY5c2DYxn2d",
+        "question": "10、如果netstat -lnpt 监听了 127.0.0.1 ，会发生什么"
+      }
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/CHfdwnh14iwE3xkGyivcdysan3c",
+        "block_ids": [
+          "Maf1dONl5oUCcLxHxY5c2DYxn2d"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(*args):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(port):\n    import ipaddress\n    if type(port) is not int or not 1<=port<=65535:raise ValueError('invalid port')\n    text=subprocess.run(['ss','-H','-l','-t','-n','-O'],capture_output=True,text=True,check=True,timeout=2).stdout;out=[]\n    for line in text.splitlines():\n        parts=line.split()\n        if len(parts)<5:continue\n        endpoint=parts[3]\n        try:address,p=endpoint.rsplit(':',1);p=int(p)\n        except (ValueError,IndexError):continue\n        if p!=port:continue\n        address=address.strip('[]')\n        if address=='*':scope='wildcard'\n        else:\n            parsed=ipaddress.ip_address(address.split('%',1)[0]);scope='wildcard' if parsed.is_unspecified else 'loopback' if parsed.is_loopback else 'specific'\n        out.append({'address':address,'scope':scope})\n    return sorted(out,key=lambda row:row['address'])\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(port):\n    text=subprocess.run(['ss','-H','-l','-t','-n','-O'],capture_output=True,text=True,check=True).stdout;out=[]\n    for line in text.splitlines():\n        parts=line.split()\n        if len(parts)>=5 and parts[3].endswith(':'+str(port)):out.append({'address':parts[3].rsplit(':',1)[0],'scope':'wildcard'})\n    return sorted(out,key=lambda row:row['address'])\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(port)，调用ss -H -l -t -n -O读取监听表，返回本地端口匹配项的{address,scope}列表，scope为loopback/wildcard/specific。支持IPv4与带方括号IPv6地址；127/8和::1为loopback，0.0.0.0、::或*为wildcard，其他为specific；按address排序。必须依据实际绑定地址，不根据业务名或端口猜可达性。验收只创建127.0.0.1及0.0.0.0的本题监听，不扫描外部端口；wildcard仅表示绑定范围，不证明安全组/防火墙放行。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "非root Linux真实iproute2命令和受控回环socket断言",
+      "failure_examples": [
+        "监听着并不表示绑定了外部网卡；把127.0.0.1分类为wildcard会给出错误访问建议。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,socket,subprocess,json,os,threading,time,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nfor address,scope in [('127.0.0.1','loopback'),('0.0.0.0','wildcard')]:\n    with socket.socket() as listener:\n        listener.bind((address,0));listener.listen();port=listener.getsockname()[1]\n        assert task.execute(port)==[{'address':address,'scope':scope}]\n    assert task.execute(port)==[]\nfor port in [True,0,65536]:\n    try:task.execute(port)\n    except ValueError:pass\n    else:raise AssertionError('invalid port')\n\nwith socket.socket(socket.AF_INET6,socket.SOCK_STREAM) as listener:\n    listener.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,1)\n    listener.bind(('::1',0));listener.listen();port=listener.getsockname()[1]\n    assert task.execute(port)==[{'address':'::1','scope':'loopback'}]\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "ss"
+        ]
+      }
+    },
+    "case_signature": "network-native|curated-feishu-60-070|用真实监听表识别仅回环绑定与全接口绑定",
+    "conversion": {
+      "original_id": "curated-feishu-60-070",
+      "original_type": "interview",
+      "original_title": "服务只监听127.0.0.1时，外部客户端能否直接访问服务器网卡地址上的同一端口？",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "src-c415e61fdfd95748",
+    "title": "读取真实 loopback 接口并验证回环流量",
+    "answer": "```python\nimport socket,subprocess,json,pathlib,os,re\ndef execute():\n    rows=json.loads(subprocess.run(['ip','-j','address','show','dev','lo'],capture_output=True,text=True,check=True,timeout=2).stdout)\n    if len(rows)!=1:raise ValueError('expected loopback interface')\n    row=rows[0];addresses=sorted({item['local'] for item in row.get('addr_info',[])})\n    with socket.socket() as listener:\n        listener.bind(('127.0.0.1',0));listener.listen();listener.settimeout(2)\n        with socket.create_connection(listener.getsockname(),timeout=2) as client:\n            accepted,_=listener.accept()\n            with accepted:\n                accepted.settimeout(2);client.sendall(b'loopback-check');client.shutdown(socket.SHUT_WR);parts=[]\n                while True:\n                    part=accepted.recv(4096)\n                    if not part:break\n                    parts.append(part)\n    return {'ifindex':row['ifindex'],'loopback':'LOOPBACK' in row.get('flags',[]),'up':'UP' in row.get('flags',[]),'addresses':addresses,'echo':b''.join(parts)}\n```\n\n实现execute()，运行ip -j address show dev lo，解析唯一接口的ifindex、flags与addr_info，返回{ifindex,loopback,up,addresses}；addresses为去重排序的本地地址，不把scope字段当地址。随后建立127.0.0.1临时TCP监听与客户端，在同进程收发标记b\"loopback-check\"并关闭所有socket，返回字段echo保存实际收到字节。必须同时验证接口信息和真实数据路径；本题不修改lo状态、不探测外网。\n\n原理补充：\nlo 是回环接口，供本机网络栈通信，常见 IPv4 为 127.0.0.1、IPv6 为 ::1。绑定 loopback 的服务通常不能从其他主机访问；容器网络命名空间里的 localhost 指向自身，不自动指向宿主机。",
+    "category": "网络与DNS",
+    "difficulty": "入门",
+    "section": "网络",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "Linux",
+    "original_title": "当你运行 `ip a` 你看到一个设备叫做 'lo'. 它是什么以及为什么我们需要它?",
+    "module": "network",
+    "topic": "读取真实 loopback 接口并验证回环流量",
+    "level": 2,
+    "body": "## 环境与初始材料\n非root Linux隔离工作区，Python3.11+和iproute2（ip/ss）。只读内核网络信息；测试只新建本题回环socket，不修改地址、路由、网络命名空间或防火墙，不连接外网。平台注入对应监听/连接素材。\n\n## 操作任务\n实现execute()，运行ip -j address show dev lo，解析唯一接口的ifindex、flags与addr_info，返回{ifindex,loopback,up,addresses}；addresses为去重排序的本地地址，不把scope字段当地址。随后建立127.0.0.1临时TCP监听与客户端，在同进程收发标记b\"loopback-check\"并关闭所有socket，返回字段echo保存实际收到字节。必须同时验证接口信息和真实数据路径；本题不修改lo状态、不探测外网。\n\n## 提交产物\ntask.py中的execute函数，输出任务约定的真实内核观测结果，不能硬编码或用解释文档代替。\n\n## 验收方法\npython3 checks/check.py启动受限本地socket素材，调用真实iproute2工具核对结果；正常与边界断言全部通过返回0。缺少Linux/iproute2应显示能力待验，不判作学生答案错误。\n\n失败示例：loopback的operstate常为UNKNOWN但flags含UP；不能用operstate==UP误判为接口停用，也不能跳过真实数据路径。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-89b87acab4913bb1",
+        "title": "当您运行 `ip a` 时，您会看到有一个名为“lo”的设备。它是什么以及为什么我们需要它？",
+        "category": "Linux",
+        "source": "topics/linux/README.md",
+        "sources": [
+          "topics/linux/README.md"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(*args):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute():\n    rows=json.loads(subprocess.run(['ip','-j','address','show','dev','lo'],capture_output=True,text=True,check=True,timeout=2).stdout)\n    if len(rows)!=1:raise ValueError('expected loopback interface')\n    row=rows[0];addresses=sorted({item['local'] for item in row.get('addr_info',[])})\n    with socket.socket() as listener:\n        listener.bind(('127.0.0.1',0));listener.listen();listener.settimeout(2)\n        with socket.create_connection(listener.getsockname(),timeout=2) as client:\n            accepted,_=listener.accept()\n            with accepted:\n                accepted.settimeout(2);client.sendall(b'loopback-check');client.shutdown(socket.SHUT_WR);parts=[]\n                while True:\n                    part=accepted.recv(4096)\n                    if not part:break\n                    parts.append(part)\n    return {'ifindex':row['ifindex'],'loopback':'LOOPBACK' in row.get('flags',[]),'up':'UP' in row.get('flags',[]),'addresses':addresses,'echo':b''.join(parts)}\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute():\n    row=json.loads(subprocess.run(['ip','-j','address','show','dev','lo'],capture_output=True,text=True,check=True).stdout)[0]\n    return {'ifindex':row['ifindex'],'loopback':row['operstate']=='UP','up':row['operstate']=='UP','addresses':[x['local'] for x in row['addr_info']],'echo':b'loopback-check'}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute()，运行ip -j address show dev lo，解析唯一接口的ifindex、flags与addr_info，返回{ifindex,loopback,up,addresses}；addresses为去重排序的本地地址，不把scope字段当地址。随后建立127.0.0.1临时TCP监听与客户端，在同进程收发标记b\"loopback-check\"并关闭所有socket，返回字段echo保存实际收到字节。必须同时验证接口信息和真实数据路径；本题不修改lo状态、不探测外网。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "非root Linux真实iproute2命令和受控回环socket断言",
+      "failure_examples": [
+        "loopback的operstate常为UNKNOWN但flags含UP；不能用operstate==UP误判为接口停用，也不能跳过真实数据路径。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,socket,subprocess,json,os,threading,time,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nbefore=set(os.listdir('/proc/self/fd'))\nresult=task.execute()\nassert type(result['ifindex']) is int and result['ifindex']>0\nassert result['loopback'] is True and result['up'] is True and '127.0.0.1' in result['addresses']\nassert result['addresses']==sorted(set(result['addresses'])) and result['echo']==b'loopback-check'\nassert set(os.listdir('/proc/self/fd'))==before\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "ip"
+        ]
+      }
+    },
+    "case_signature": "network-native|src-c415e61fdfd95748|读取真实 loopback 接口并验证回环流量",
+    "conversion": {
+      "original_id": "src-c415e61fdfd95748",
+      "original_type": "source",
+      "original_title": "当你运行 `ip a` 你看到一个设备叫做 'lo'. 它是什么以及为什么我们需要它?",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "src-95b9a41aa238412c",
+    "title": "查询内核实际路由决策并保存结构化工件",
+    "answer": "```python\nimport socket,subprocess,json,pathlib,os,re\ndef execute(destination,output):\n    import ipaddress,tempfile\n    address=str(ipaddress.IPv4Address(destination))\n    rows=json.loads(subprocess.run(['ip','-j','-4','route','get',address],capture_output=True,text=True,check=True,timeout=2).stdout)\n    if not rows or not rows[0].get('dev'):raise ValueError('route has no output device')\n    row=rows[0];result={'destination':address,'device':row['dev'],'source':row.get('prefsrc',row.get('src')),'gateway':row.get('gateway'),'type':row.get('type','unicast')}\n    target=pathlib.Path(output);fd,tmp=tempfile.mkstemp(prefix='.route-',dir=target.parent)\n    try:\n        with os.fdopen(fd,'w',encoding='utf-8') as stream:json.dump(result,stream,ensure_ascii=False)\n        os.replace(tmp,target)\n    finally:\n        if os.path.exists(tmp):os.unlink(tmp)\n    return result\n```\n\n实现execute(destination,output)，destination只允许合法IPv4字面量。调用ip -j -4 route get <destination>，这只查询内核、不发送探测包。解析第一条结果，生成JSON工件{destination,device,source,gateway,type}：source取prefsrc或src；gateway缺失为None；type缺失为unicast。完整验证命令成功与dev存在后，用临时文件+os.replace替换output；非法输入/失败保留旧工件。返回同一字典。测试loopback内不同目标，禁止用shell=True。\n\n原理补充：\n路由表决定目的前缀应经哪个接口和下一跳转发。Linux 可用 ip route、ip -6 route 查看，ip route get 目标地址检查一次路由选择；有策略路由时还要看 ip rule 与对应表。最长前缀匹配及规则会影响结果，默认路由不覆盖更具体路由。",
+    "category": "网络与DNS",
+    "difficulty": "入门",
+    "section": "网络",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "Linux",
+    "original_title": "什么是路由表? 你是怎样查看它的?",
+    "module": "network",
+    "topic": "查询内核实际路由决策并保存结构化工件",
+    "level": 3,
+    "body": "## 环境与初始材料\n非root Linux隔离工作区，Python3.11+和iproute2（ip/ss）。只读内核网络信息；测试只新建本题回环socket，不修改地址、路由、网络命名空间或防火墙，不连接外网。平台注入对应监听/连接素材。\n\n## 操作任务\n实现execute(destination,output)，destination只允许合法IPv4字面量。调用ip -j -4 route get <destination>，这只查询内核、不发送探测包。解析第一条结果，生成JSON工件{destination,device,source,gateway,type}：source取prefsrc或src；gateway缺失为None；type缺失为unicast。完整验证命令成功与dev存在后，用临时文件+os.replace替换output；非法输入/失败保留旧工件。返回同一字典。测试loopback内不同目标，禁止用shell=True。\n\n## 提交产物\ntask.py中的execute函数，输出任务约定的真实内核观测结果，不能硬编码或用解释文档代替。\n\n## 验收方法\npython3 checks/check.py启动受限本地socket素材，调用真实iproute2工具核对结果；正常与边界断言全部通过返回0。缺少Linux/iproute2应显示能力待验，不判作学生答案错误。\n\n失败示例：把gateway当源地址且所有路由当unicast会误解本机local路由；验收检查内核返回的真实本地决策和工件保留。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "merged_sources": [
+      {
+        "id": "src-e40fbeb7113a4510",
+        "title": "什么是路由表？您怎么看？",
+        "category": "Linux",
+        "source": "topics/linux/README.md",
+        "sources": [
+          "topics/linux/README.md"
+        ]
+      }
+    ],
+    "references": [
+      "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh"
+    ],
+    "source_provenance": [
+      {
+        "url": "https://uniqueyouzhi.feishu.cn/wiki/OjphwxwN1iGB4KkjuqPcEPNrnWh",
+        "block_ids": [
+          "VhzQd8iBaoK0mWxFheDcvGMynNe"
+        ]
+      }
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(*args):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(destination,output):\n    import ipaddress,tempfile\n    address=str(ipaddress.IPv4Address(destination))\n    rows=json.loads(subprocess.run(['ip','-j','-4','route','get',address],capture_output=True,text=True,check=True,timeout=2).stdout)\n    if not rows or not rows[0].get('dev'):raise ValueError('route has no output device')\n    row=rows[0];result={'destination':address,'device':row['dev'],'source':row.get('prefsrc',row.get('src')),'gateway':row.get('gateway'),'type':row.get('type','unicast')}\n    target=pathlib.Path(output);fd,tmp=tempfile.mkstemp(prefix='.route-',dir=target.parent)\n    try:\n        with os.fdopen(fd,'w',encoding='utf-8') as stream:json.dump(result,stream,ensure_ascii=False)\n        os.replace(tmp,target)\n    finally:\n        if os.path.exists(tmp):os.unlink(tmp)\n    return result\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(destination,output):\n    rows=json.loads(subprocess.run(['ip','-j','-4','route','get',destination],capture_output=True,text=True,check=True).stdout);row=rows[0]\n    result={'destination':destination,'device':row['dev'],'source':row.get('gateway'),'gateway':row.get('gateway'),'type':'unicast'}\n    pathlib.Path(output).write_text(json.dumps(result));return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(destination,output)，destination只允许合法IPv4字面量。调用ip -j -4 route get <destination>，这只查询内核、不发送探测包。解析第一条结果，生成JSON工件{destination,device,source,gateway,type}：source取prefsrc或src；gateway缺失为None；type缺失为unicast。完整验证命令成功与dev存在后，用临时文件+os.replace替换output；非法输入/失败保留旧工件。返回同一字典。测试loopback内不同目标，禁止用shell=True。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "非root Linux真实iproute2命令和受控回环socket断言",
+      "failure_examples": [
+        "把gateway当源地址且所有路由当unicast会误解本机local路由；验收检查内核返回的真实本地决策和工件保留。"
+      ],
+      "generated_artifacts": [
+        "route.json"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,socket,subprocess,json,os,threading,time,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\noutput=pathlib.Path('route.json')\nfor address in ['127.0.0.1','127.23.45.6']:\n    result=task.execute(address,output)\n    assert result['destination']==address and result['device']=='lo' and result['type']=='local' and result['gateway'] is None\n    assert result['source'].startswith('127.') and json.loads(output.read_text())==result\nold=output.read_bytes()\nfor address in ['localhost','127.0.0.1;echo injected','2001:db8::1','999.0.0.1']:\n    try:task.execute(address,output)\n    except ValueError:pass\n    else:raise AssertionError('invalid destination accepted')\n    assert output.read_bytes()==old\nassert not list(pathlib.Path('.').glob('.route-*'))\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "ip"
+        ]
+      }
+    },
+    "case_signature": "network-native|src-95b9a41aa238412c|查询内核实际路由决策并保存结构化工件",
+    "conversion": {
+      "original_id": "src-95b9a41aa238412c",
+      "original_type": "source",
+      "original_title": "什么是路由表? 你是怎样查看它的?",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "src-d17c59f45bb1e19d",
+    "title": "设置并在接收端观测真实 IPv4 TTL",
+    "answer": "```python\nimport socket,subprocess,json,pathlib,os,re\ndef execute(host,port,payload,ttl):\n    import ipaddress\n    address=ipaddress.IPv4Address(host)\n    if not address.is_loopback or type(ttl) is not int or not 1<=ttl<=255:raise ValueError('invalid target/TTL')\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as client:\n        client.setsockopt(socket.IPPROTO_IP,socket.IP_TTL,ttl)\n        return client.sendto(payload,(str(address),port))\n```\n\n实现execute(host,port,payload,ttl)，host必须是IPv4回环字面量，ttl为1..255整数（拒绝bool）。创建AF_INET UDP socket，用IPPROTO_IP/IP_TTL设置ttl，向指定端口发送完整payload，返回send返回的字节数并关闭。验收接收端启用Linux IP_RECVTTL（常量12），通过recvmsg辅助数据读取实际到达TTL；不能把ttl写进应用载荷冒充IP头。包括空报文、二进制、TTL上下边界；没有路由器跳数，不宣称验证跨网路径。\n\n原理补充：\nIPv4 TTL 是逐跳递减的生存值，到零时路由器丢弃报文并通常返回 ICMP Time Exceeded，用于限制路由环路。它不同于 DNS 记录的缓存 TTL；IPv6 对应字段叫 Hop Limit。",
+    "category": "网络与DNS",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "网络",
+    "original_title": "什么是 TTL?",
+    "module": "network",
+    "topic": "设置并在接收端观测真实 IPv4 TTL",
+    "level": 2,
+    "body": "## 环境与初始材料\n非root Linux隔离工作区，Python3.11+和iproute2（ip/ss）。只读内核网络信息；测试只新建本题回环socket，不修改地址、路由、网络命名空间或防火墙，不连接外网。平台注入对应监听/连接素材。\n\n## 操作任务\n实现execute(host,port,payload,ttl)，host必须是IPv4回环字面量，ttl为1..255整数（拒绝bool）。创建AF_INET UDP socket，用IPPROTO_IP/IP_TTL设置ttl，向指定端口发送完整payload，返回send返回的字节数并关闭。验收接收端启用Linux IP_RECVTTL（常量12），通过recvmsg辅助数据读取实际到达TTL；不能把ttl写进应用载荷冒充IP头。包括空报文、二进制、TTL上下边界；没有路由器跳数，不宣称验证跨网路径。\n\n## 提交产物\ntask.py中的execute函数，输出任务约定的真实内核观测结果，不能硬编码或用解释文档代替。\n\n## 验收方法\npython3 checks/check.py启动受限本地socket素材，调用真实iproute2工具核对结果；正常与边界断言全部通过返回0。缺少Linux/iproute2应显示能力待验，不判作学生答案错误。\n\n失败示例：没有setsockopt时接收端看到的是系统默认TTL；返回指定数字不能改变真实IP头。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(*args):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(host,port,payload,ttl):\n    import ipaddress\n    address=ipaddress.IPv4Address(host)\n    if not address.is_loopback or type(ttl) is not int or not 1<=ttl<=255:raise ValueError('invalid target/TTL')\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as client:\n        client.setsockopt(socket.IPPROTO_IP,socket.IP_TTL,ttl)\n        return client.sendto(payload,(str(address),port))\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(host,port,payload,ttl):\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as client:return client.sendto(payload,(host,port))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(host,port,payload,ttl)，host必须是IPv4回环字面量，ttl为1..255整数（拒绝bool）。创建AF_INET UDP socket，用IPPROTO_IP/IP_TTL设置ttl，向指定端口发送完整payload，返回send返回的字节数并关闭。验收接收端启用Linux IP_RECVTTL（常量12），通过recvmsg辅助数据读取实际到达TTL；不能把ttl写进应用载荷冒充IP头。包括空报文、二进制、TTL上下边界；没有路由器跳数，不宣称验证跨网路径。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "非root Linux真实iproute2命令和受控回环socket断言",
+      "failure_examples": [
+        "没有setsockopt时接收端看到的是系统默认TTL；返回指定数字不能改变真实IP头。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,socket,subprocess,json,os,threading,time,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nimport struct\nfor ttl,payload in [(1,b''),(42,b'\\x00\\xffpayload'),(255,b'end')]:\n    with socket.socket(socket.AF_INET,socket.SOCK_DGRAM) as receiver:\n        receiver.bind(('127.0.0.1',0));receiver.settimeout(2);receiver.setsockopt(socket.IPPROTO_IP,12,1)\n        assert task.execute(*receiver.getsockname(),payload,ttl)==len(payload)\n        data,anc,flags,peer=receiver.recvmsg(65535,128)\n        values=[struct.unpack('i',value[:4])[0] for level,kind,value in anc if level==socket.IPPROTO_IP and kind==socket.IP_TTL]\n        assert data==payload and values==[ttl] and not flags&socket.MSG_CTRUNC\nfor host,ttl in [('127.0.0.1',0),('127.0.0.1',256),('127.0.0.1',True),('192.0.2.1',64)]:\n    try:task.execute(host,1,b'probe',ttl)\n    except ValueError:pass\n    else:raise AssertionError('invalid TTL/target')\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": []
+      }
+    },
+    "case_signature": "network-native|src-d17c59f45bb1e19d|设置并在接收端观测真实 IPv4 TTL",
+    "conversion": {
+      "original_id": "src-d17c59f45bb1e19d",
+      "original_type": "source",
+      "original_title": "什么是 TTL?",
+      "preserve_history": true
+    }
+  },
+  {
+    "id": "src-8599cb7ce2fc90f1",
+    "title": "实现支持 IPv6 地址族的回环 TCP 客户端",
+    "answer": "```python\nimport socket,subprocess,json,pathlib,os,re\ndef execute(port,payload):\n    with socket.socket(socket.AF_INET6,socket.SOCK_STREAM) as client:\n        client.settimeout(2);client.connect(('::1',port));local=client.getsockname()[0];peer=client.getpeername()[0];client.sendall(payload);client.shutdown(socket.SHUT_WR);parts=[]\n        while True:\n            data=client.recv(4096)\n            if not data:break\n            parts.append(data)\n        return {'family':int(client.family),'local_host':local,'peer_host':peer,'data':b''.join(parts)}\n```\n\n实现execute(port,payload)，使用AF_INET6向::1连接，发送payload后shutdown(SHUT_WR)，直到服务端EOF收完整回应，返回{family,local_host,peer_host,data}；family必须是实际socket.family数值，地址由getsockname/getpeername取得。连接/读取超时2秒，保留二进制和空输入。不能把::1改成127.0.0.1，不能仅替换显示文本来伪装IPv6；测试仅本机IPv6回环，无公网IPv6要求。\n\n原理补充：\nIPv6 使用 128 位地址，扩大地址空间并采用邻居发现等机制。推广动因包括 IPv4 地址紧缺和网络规模增长；它并不自动提供加密或消除所有网络故障。迁移需规划双栈/转换、DNS、防火墙、路由和监控。\n连接建立后立即保留端点信息；双向FIN结束后Linux可能不再允许getpeername，不能等到EOF后才读取。\n",
+    "category": "网络与DNS",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "网络",
+    "original_title": "什么是IPv6? 如果我们拥有IPv4，为什么要考虑使用它?",
+    "module": "network",
+    "topic": "实现支持 IPv6 地址族的回环 TCP 客户端",
+    "level": 2,
+    "body": "## 环境与初始材料\n非root Linux隔离工作区，Python3.11+和iproute2（ip/ss）。只读内核网络信息；测试只新建本题回环socket，不修改地址、路由、网络命名空间或防火墙，不连接外网。平台注入对应监听/连接素材。\n\n## 操作任务\n实现execute(port,payload)，使用AF_INET6向::1连接，发送payload后shutdown(SHUT_WR)，直到服务端EOF收完整回应，返回{family,local_host,peer_host,data}；family必须是实际socket.family数值，地址由getsockname/getpeername取得。连接/读取超时2秒，保留二进制和空输入。不能把::1改成127.0.0.1，不能仅替换显示文本来伪装IPv6；测试仅本机IPv6回环，无公网IPv6要求。\n\n## 提交产物\ntask.py中的execute函数，输出任务约定的真实内核观测结果，不能硬编码或用解释文档代替。\n\n## 验收方法\npython3 checks/check.py启动受限本地socket素材，调用真实iproute2工具核对结果；正常与边界断言全部通过返回0。缺少Linux/iproute2应显示能力待验，不判作学生答案错误。\n\n失败示例：只改返回地址字符串而仍使用IPv4连接，在v6-only监听端口上不会建立连接。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(*args):\n    raise NotImplementedError\n"
+    },
+    "solution_files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(port,payload):\n    with socket.socket(socket.AF_INET6,socket.SOCK_STREAM) as client:\n        client.settimeout(2);client.connect(('::1',port));local=client.getsockname()[0];peer=client.getpeername()[0];client.sendall(payload);client.shutdown(socket.SHUT_WR);parts=[]\n        while True:\n            data=client.recv(4096)\n            if not data:break\n            parts.append(data)\n        return {'family':int(client.family),'local_host':local,'peer_host':peer,'data':b''.join(parts)}\n"
+    },
+    "negative_files": {
+      "task.py": "import socket,subprocess,json,pathlib,os,re\ndef execute(port,payload):\n    with socket.create_connection(('127.0.0.1',port),timeout=2) as client:\n        client.sendall(payload);client.shutdown(socket.SHUT_WR);data=client.recv(65535)\n        return {'family':int(socket.AF_INET6),'local_host':'::1','peer_host':'::1','data':data}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现execute(port,payload)，使用AF_INET6向::1连接，发送payload后shutdown(SHUT_WR)，直到服务端EOF收完整回应，返回{family,local_host,peer_host,data}；family必须是实际socket.family数值，地址由getsockname/getpeername取得。连接/读取超时2秒，保留二进制和空输入。不能把::1改成127.0.0.1，不能仅替换显示文本来伪装IPv6；测试仅本机IPv6回环，无公网IPv6要求。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "非root Linux真实iproute2命令和受控回环socket断言",
+      "failure_examples": [
+        "只改返回地址字符串而仍使用IPv4连接，在v6-only监听端口上不会建立连接。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,socket,subprocess,json,os,threading,time,contextlib\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nfor payload in [b'',b'\\x00\\xffv6'*5000]:\n    with socket.socket(socket.AF_INET6,socket.SOCK_STREAM) as server:\n        server.setsockopt(socket.IPPROTO_IPV6,socket.IPV6_V6ONLY,1);server.bind(('::1',0));server.listen();server.settimeout(2);errors=[];seen=[]\n        def worker():\n            try:\n                conn,peer=server.accept()\n                with conn:\n                    conn.settimeout(2);data=b''\n                    while True:\n                        part=conn.recv(1021)\n                        if not part:break\n                        data+=part\n                    seen.append((peer[0],data));response=b'ipv6:'+data\n                    for start in range(0,len(response),511):conn.sendall(response[start:start+511])\n            except Exception as exc:errors.append(exc)\n        thread=threading.Thread(target=worker,daemon=True);thread.start()\n        try:assert task.execute(server.getsockname()[1],payload)=={'family':int(socket.AF_INET6),'local_host':'::1','peer_host':'::1','data':b'ipv6:'+payload}\n        finally:thread.join(3)\n        assert not thread.is_alive() and not errors and seen==[('::1',payload)]\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": []
+      }
+    },
+    "case_signature": "network-native|src-8599cb7ce2fc90f1|实现支持 IPv6 地址族的回环 TCP 客户端",
+    "conversion": {
+      "original_id": "src-8599cb7ce2fc90f1",
+      "original_type": "source",
+      "original_title": "什么是IPv6? 如果我们拥有IPv4，为什么要考虑使用它?",
+      "preserve_history": true
+    }
+  }
+]

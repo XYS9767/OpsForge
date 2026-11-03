@@ -1,0 +1,78 @@
+[
+  {
+    "id": "src-393273aa20ce9929",
+    "title": "用原生OpenSSL工具交付可校验身份的标准输入输出TLS通道",
+    "answer": "```bash\n#!/usr/bin/env bash\nif (( $# != 3 )); then exit 2; fi\nport=$1\nname=$2\nca=$3\nif [[ ! $port =~ ^[0-9]{4,5}$ ]] || (( 10#$port < 1024 || 10#$port > 65535 )); then exit 2; fi\nif [[ ! $name =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || [[ ! -f $ca || ! -r $ca ]]; then exit 2; fi\nexec openssl s_client -quiet -ign_eof -verify_return_error \\\n    -verify_hostname \"$name\" -CAfile \"$ca\" \\\n    -connect \"127.0.0.1:$port\" -servername \"$name\"\n```\n\nSNI选择服务器证书，verify_hostname核对预期身份，verify_return_error使校验失败中止。quiet使stdout仅承载应用字节；ign_eof避免stdin结束后提前退出，对端正常关闭TLS后进程结束。exec保留工具退出码。\n\n原理说明：\n所谓 SSL 隧道通常指使用 TLS 保护承载流量，双方握手协商密钥并验证证书后，加密并校验应用数据。SSL 旧版本已不应使用；应区分 TLS 隧道与 SSH 端口转发。安全依赖正确证书校验、协议配置和端点信任，而不是仅看端口号。",
+    "category": "网络与 DNS",
+    "difficulty": "入门",
+    "section": "初级",
+    "type": "code",
+    "has_answer": true,
+    "source": "README-zh_CN.md",
+    "sources": [
+      "README-zh_CN.md"
+    ],
+    "version": 4,
+    "answer_source": "OpsForge 参考答案审校，2026-10-21",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "original_category": "网络",
+    "original_title": "什么是SSL 隧道? 它是怎么工作的?",
+    "module": "network",
+    "topic": "OpenSSL TLS CLI通道",
+    "level": 2,
+    "body": "## 环境与初始材料\n非root Linux、Bash、OpenSSL；tunnel.sh为初始故障脚本，平台生成临时CA及本机高端口TLS服务。\n\n## 操作任务\n交付tunnel.sh，调用方式bash tunnel.sh PORT TLS_NAME CA_FILE。仅连接127.0.0.1给定1024～65535端口，用原生openssl s_client建立已验证的TLS通道；TLS_NAME既作为SNI也用于证书主机名验证，CA_FILE提供信任根，校验失败须非零退出且不能发送应用输入。把stdin字节完整发送并将收到的应用字节原样写stdout，握手/证书诊断不能混入stdout；保持二进制/NUL/空输入，不经Shell变量存储载荷。输入结束不提前放弃尚未到达的响应，等待受信对端正常TLS关闭并传播真实退出码。参数数目、端口、空名称、不可读CA无效返回2；运行总时长由隔离平台限制，本脚本不承诺自行提供总期限。只交付一个客户端CLI通道，不配置系统级VPN或公网转发器。\n\n## 提交产物\ntunnel.sh完整脚本，无需可执行位，由bash显式运行。\n\n## 验收方法\npython3 checks/check.py通过真实TLS服务核对随机32KiB二进制、NUL、空输入、完整stdout、正常close_notify与退出状态；错域名/未知CA在发送应用字节前被拒绝，参数错误不能尝试建立通道。测试服务自动回收。 全部断言通过返回0；工具缺失属于环境待验。\n\n失败示例：仅传-servername不等于校验证书主机名；错误TLS名称仍可加密连接但不能算可信通道。",
+    "pack": "reviewed-source-answers-20261021",
+    "rubric": [
+      "核心概念与因果关系准确",
+      "前提、限制和验证方式与题意一致"
+    ],
+    "related_modules": [
+      "network"
+    ],
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "files": {
+      "tunnel.sh": "#!/usr/bin/env bash\nexit 1\n"
+    },
+    "solution_files": {
+      "tunnel.sh": "#!/usr/bin/env bash\nif (( $# != 3 )); then exit 2; fi\nport=$1\nname=$2\nca=$3\nif [[ ! $port =~ ^[0-9]{4,5}$ ]] || (( 10#$port < 1024 || 10#$port > 65535 )); then exit 2; fi\nif [[ ! $name =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || [[ ! -f $ca || ! -r $ca ]]; then exit 2; fi\nexec openssl s_client -quiet -ign_eof -verify_return_error \\\n    -verify_hostname \"$name\" -CAfile \"$ca\" \\\n    -connect \"127.0.0.1:$port\" -servername \"$name\"\n"
+    },
+    "negative_files": {
+      "tunnel.sh": "#!/usr/bin/env bash\nif (( $# != 3 )); then exit 2; fi\nport=$1\nname=$2\nca=$3\nif [[ ! $port =~ ^[0-9]{4,5}$ ]] || (( 10#$port < 1024 || 10#$port > 65535 )); then exit 2; fi\nif [[ ! $name =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]*$ ]] || [[ ! -f $ca || ! -r $ca ]]; then exit 2; fi\nexec openssl s_client -quiet -ign_eof -verify_return_error \\\n    -CAfile \"$ca\" \\\n    -connect \"127.0.0.1:$port\" -servername \"$name\"\n"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash",
+          "openssl"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,subprocess,socket,ssl,threading,contextlib,time,struct,secrets\nsys.path.insert(0,str(pathlib.Path.cwd()))\ndef cmd(*args):return subprocess.run(['openssl',*args],capture_output=True,check=True,timeout=5)\ncmd('req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-keyout','ca.key','-out','ca.crt','-days','1','-subj','/CN=DoT Test Root')\ncmd('req','-new','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-keyout','server.key','-out','server.csr','-subj','/CN=dns.lab.test')\npathlib.Path('leaf.ext').write_text('subjectAltName=DNS:dns.lab.test\\nbasicConstraints=CA:FALSE\\nextendedKeyUsage=serverAuth\\n')\ncmd('x509','-req','-in','server.csr','-CA','ca.crt','-CAkey','ca.key','-CAcreateserial','-out','server.crt','-days','1','-extfile','leaf.ext')\ncmd('req','-x509','-newkey','ec','-pkeyopt','ec_paramgen_curve:P-256','-nodes','-keyout','rogue.key','-out','rogue.crt','-days','1','-subj','/CN=Untrusted Root')\ncontext=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain('server.crt','server.key')\n\ndef exact(c,n):\n    data=b''\n    while len(data)<n:\n        part=c.recv(n-len(data))\n        if not part:raise EOFError('missing input bytes')\n        data+=part\n    return data\n@contextlib.contextmanager\ndef fixture(payload,allow_verify_failure=False):\n    listener=socket.socket();listener.bind(('127.0.0.1',0));listener.listen(1);listener.settimeout(2)\n    endpoint=listener.getsockname();stop=threading.Event();seen=[];errors=[];connections=[]\n    def worker():\n        try:\n            raw,_=listener.accept();connections.append(raw);raw.settimeout(2)\n            with raw:\n                try:secure=context.wrap_socket(raw,server_side=True)\n                except ssl.SSLError:\n                    if allow_verify_failure:return\n                    raise\n                connections.append(secure)\n                with secure:\n                    if payload is None:received=b''\n                    else:\n                        size=struct.unpack('!I',exact(secure,4))[0];received=exact(secure,size);assert received==payload\n                    seen.append(received)\n                    secure.sendall(b'\\xffreply:'+received[::-1]);plain=secure.unwrap();plain.close()\n        except OSError as exc:\n            if not stop.is_set():errors.append(repr(exc))\n        except Exception as exc:errors.append(repr(exc))\n        finally:listener.close()\n    thread=threading.Thread(target=worker);thread.start()\n    try:yield endpoint[1],seen\n    finally:\n        stop.set();listener.close()\n        for conn in connections:\n            try:conn.shutdown(socket.SHUT_RDWR)\n            except OSError:pass\n        thread.join(3);assert not thread.is_alive();assert not errors,errors\nfor payload in [b'',b'plain text\\n',secrets.token_bytes(32768),b'\\0\\xff\\r\\nEND']:\n    with fixture(payload) as (port,seen):\n        run=subprocess.run(['bash','tunnel.sh',str(port),'dns.lab.test','ca.crt'],input=struct.pack('!I',len(payload))+payload,capture_output=True,timeout=4)\n        assert run.returncode==0 and run.stdout==b'\\xffreply:'+payload[::-1],(run.returncode,run.stdout[:100],run.stderr[-300:])\n    assert seen==[payload]\nwith fixture(None) as (port,seen):\n    run=subprocess.run(['bash','tunnel.sh',str(port),'dns.lab.test','ca.crt'],input=b'',capture_output=True,timeout=4)\n    assert run.returncode==0 and run.stdout==b'\\xffreply:',('empty stdin prematurely closed tunnel',run.returncode,run.stderr)\nfor name,ca in [('wrong.lab.test','ca.crt'),('dns.lab.test','rogue.crt')]:\n    with fixture(b'private-input',True) as (port,seen):\n        run=subprocess.run(['bash','tunnel.sh',str(port),name,ca],input=struct.pack('!I',13)+b'private-input',capture_output=True,timeout=4)\n        assert run.returncode!=0 and run.stdout==b'','untrusted tunnel must fail without application output'\n    assert seen==[],'application input sent before peer identity validation'\nfor args in [[],['80','dns.lab.test','ca.crt'],['65536','dns.lab.test','ca.crt'],['abcd','dns.lab.test','ca.crt'],['40000','','ca.crt'],['40000','dns.lab.test','missing.crt']]:\n    run=subprocess.run(['bash','tunnel.sh',*args],input=b'private',capture_output=True,timeout=2)\n    assert run.returncode==2 and not run.stdout\n"
+      }
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "交付tunnel.sh，调用方式bash tunnel.sh PORT TLS_NAME CA_FILE。仅连接127.0.0.1给定1024～65535端口，用原生openssl s_client建立已验证的TLS通道；TLS_NAME既作为SNI也用于证书主机名验证，CA_FILE提供信任根，校验失败须非零退出且不能发送应用输入。把stdin字节完整发送并将收到的应用字节原样写stdout，握手/证书诊断不能混入stdout；保持二进制/NUL/空输入，不经Shell变量存储载荷。输入结束不提前放弃尚未到达的响应，等待受信对端正常TLS关闭并传播真实退出码。参数数目、端口、空名称、不可读CA无效返回2；运行总时长由隔离平台限制，本脚本不承诺自行提供总期限。只交付一个客户端CLI通道，不配置系统级VPN或公网转发器。",
+      "deliverables": [
+        "tunnel.sh"
+      ],
+      "verification": "python3 checks/check.py通过真实TLS服务核对随机32KiB二进制、NUL、空输入、完整stdout、正常close_notify与退出状态；错域名/未知CA在发送应用字节前被拒绝，参数错误不能尝试建立通道。测试服务自动回收。",
+      "failure_examples": [
+        "仅传-servername不等于校验证书主机名；错误TLS名称仍可加密连接但不能算可信通道。"
+      ]
+    },
+    "case_signature": "src-393273aa20ce9929|native-openssl-stdin-stdout-tls-channel",
+    "conversion": {
+      "original_id": "src-393273aa20ce9929",
+      "original_type": "source",
+      "original_title": "什么是SSL 隧道? 它是怎么工作的?",
+      "preserve_history": true
+    }
+  }
+]

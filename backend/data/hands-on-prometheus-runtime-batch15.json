@@ -1,0 +1,90 @@
+[
+  {
+    "id": "curated-parallel-prometheus-051",
+    "module": "prometheus",
+    "category": "Prometheus",
+    "level": 3,
+    "topic": "TSDB存储与远端传输",
+    "title": "交付精确TSDB删除请求并区分逻辑删除与物理清理",
+    "answer": "```json\n{\n  \"match\": [\n    \"demo_queue{tenant=\\\"shop\\\"}\"\n  ],\n  \"start_offset\": 60,\n  \"end_offset\": 180\n}\n```\n选择器约束租户，时间闭区间约束样本；缺一项都会扩大删除。逻辑删除立即影响查询但不等于物理空间立刻回收，clean_tombstones另行重写受影响数据。剩余租户、窗口外样本、重启持久性都要核对。\n\n原题原理：新样本进入内存Head并记录WAL以支持崩溃恢复，之后压实为持久block。WAL不是完整长期备份，Head与压实需要额外内存/磁盘余量。不能只按最终块大小估算全部资源。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "新样本进入内存Head并记录WAL以支持崩溃恢复，之后压实为持久block。",
+      "WAL不是完整长期备份，Head与压实需要额外内存/磁盘余量。",
+      "不能只按最终块大小估算全部资源。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/prometheus/latest/querying/api/#delete-series",
+      "https://prometheus.io/docs/prometheus/latest/querying/api/#clean-tombstones"
+    ],
+    "related_modules": [
+      "prometheus"
+    ],
+    "language": "json",
+    "files": {
+      "delete-request.json": "{\n  \"match\": [\n    \"demo_queue\"\n  ],\n  \"start_offset\": 60,\n  \"end_offset\": 180\n}\n",
+      "materials.json": "{\n  \"times_seconds\": [\n    0,\n    60,\n    120,\n    180,\n    240,\n    300\n  ],\n  \"demo_queue_shop\": [\n    10,\n    11,\n    12,\n    13,\n    14,\n    15\n  ],\n  \"demo_queue_auth\": [\n    20,\n    21,\n    22,\n    23,\n    24,\n    25\n  ],\n  \"delete_only\": {\n    \"tenant\": \"shop\",\n    \"inclusive_window_seconds\": [\n      60,\n      180\n    ]\n  }\n}\n"
+    },
+    "solution_files": {
+      "delete-request.json": "{\n  \"match\": [\n    \"demo_queue{tenant=\\\"shop\\\"}\"\n  ],\n  \"start_offset\": 60,\n  \"end_offset\": 180\n}\n"
+    },
+    "negative_files": {
+      "delete-request.json": "{\n  \"match\": [\n    \"demo_queue{tenant=\\\"shop\\\"}\"\n  ],\n  \"start_offset\": 60,\n  \"end_offset\": 300\n}\n"
+    },
+    "body": "## 环境与初始材料\n平台用promtool 3.5从OpenMetrics真实创建一次性TSDB持久块，再启动仅环回监听的隔离Prometheus 3.5。materials.json有两租户shop/auth各6个样本，时间偏移0/60/120/180/240/300秒，shop值10..15、auth值20..25。平台将偏移加到独立历史基准，不连接任何现有存储。\n\n## 操作任务\n修复delete-request.json，只删除demo_queue中tenant=shop且时间在闭区间[60,180]的3个样本。保留shop的0/240/300样本，以及auth全部6个样本。不能用删除全部指标/租户再重建来冒充精确删除。观察原生delete_series先写删除标记，查询不再返回这些样本，但原始chunk字节仍未改写；随后平台调用clean_tombstones，真正重写受影响块，剩余样本不得变化。最后重启隔离进程验证结果持久。\n\n## 产物\n提交delete-request.json：match为Prometheus选择器字符串数组（1到3个），start_offset/end_offset为0到300之间整数秒、起点不大于终点。平台将match转换为原生match[]参数并添加基准时间；无服务器URL、路径、凭据或任意命令字段。允许达到同样精确范围的等价标签选择器。\n\n## 验收方法\n执行python3 checks/check.py。原生查询先确认12个样本，再执行真实admin delete_series，精确核对两租户全部剩余时间和值；在clean_tombstones之前检查chunk哈希未变、tombstones文件存在。执行原生清理后确认chunk集合/哈希发生变化而查询结果相同，重启后再次核对。初始漏tenant选择器会破坏auth，错误结束时间300会多删shop，都必须拒绝。所有API只作用新建临时数据；进程限资源、finally关闭。\n\n## 边界\n这不是生产删除授权。完整Server在本题临时进程显式启用admin API，未启用任何真实服务管理入口。删除并非可逆操作；本题保留独立原始材料用于重建实验，不声称tombstones清理后能无备份恢复。只验证小型持久块，未声称真实磁盘容量回收量、WAL清理范围或生产规模删除耗时。\n",
+    "exercise": {
+      "kind": "configuration",
+      "environment": "isolated-native-prometheus-tsdb-tombstones",
+      "deliverables": [
+        "delete-request.json"
+      ],
+      "operation": "精确限定删除租户与闭区间，验证逻辑删除/物理清理/重启持久性",
+      "verification": "原生TSDB/admin API/精确样本查询/chunk哈希/tombstones/重启",
+      "capability_gap": [
+        "不删除生产数据、不证明无备份恢复、磁盘容量回收量或生产耗时"
+      ],
+      "failure_examples": [
+        "缺租户选择器误删其他租户",
+        "结束时间扩大导致越界删除",
+        "把逻辑不可见误说成原chunk已被重写"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "prometheus",
+          "promtool"
+        ],
+        "features": [
+          "prometheus:v3.5",
+          "promtool:v3.5"
+        ],
+        "python_modules": [
+          "yaml"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import pathlib,json,yaml,copy,os,subprocess,threading,time,tempfile,socket,urllib.request,urllib.parse,http.server,shutil,ctypes\nclass Strict(yaml.SafeLoader):pass\ndef mapping(loader,node,deep=False):\n loader.flatten_mapping(node);out={}\n for k,v in node.value:\n  key=loader.construct_object(k,deep=deep)\n  if key in out:raise ValueError(\"duplicate mapping key\")\n  out[key]=loader.construct_object(v,deep=deep)\n return out\nStrict.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)\ndef rss(pid):\n if os.name!=\"nt\":\n  for line in pathlib.Path(\"/proc\",str(pid),\"status\").read_text().splitlines():\n   if line.startswith(\"VmRSS:\"):return int(line.split()[1])*1024\n  raise RuntimeError(\"RSS unavailable\")\n class PMC(ctypes.Structure):\n  _fields_=[(\"cb\",ctypes.c_ulong),(\"faults\",ctypes.c_ulong),*[(s,ctypes.c_size_t) for s in [\"peak\",\"working\",\"pagedpeak\",\"paged\",\"nonpagedpeak\",\"nonpaged\",\"pagefile\",\"peakpagefile\"]]]\n k=ctypes.windll.kernel32;ps=ctypes.windll.psapi\n k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p]\n ps.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n handle=k.OpenProcess(0x410,False,pid)\n if not handle:raise RuntimeError(\"memory monitor could not open child\")\n try:\n  record=PMC();record.cb=ctypes.sizeof(record)\n  if not ps.GetProcessMemoryInfo(handle,ctypes.byref(record),record.cb):raise RuntimeError(\"memory monitor failed\")\n  return record.working\n finally:k.CloseHandle(handle)\n\nimport contextlib,hashlib,math,sys\nsys.path.insert(0,str(pathlib.Path.cwd()))\n\nENV=dict(os.environ,GOMAXPROCS='2',GOMEMLIMIT='96MiB')\nSTATS=[]\ndef run_command(args,cwd):\n proc=subprocess.Popen(args,cwd=cwd,env=ENV,stdout=subprocess.PIPE,stderr=subprocess.PIPE);deadline=time.monotonic()+20;peak=0\n try:\n  while proc.poll() is None:\n   peak=max(peak,rss(proc.pid))\n   if peak>384*1048576 or time.monotonic()>deadline:proc.kill();raise AssertionError('resource guard command')\n   time.sleep(.03)\n  out,err=proc.communicate();print(out.decode(errors='replace'));print(err.decode(errors='replace'))\n  assert proc.returncode==0,'native command failed'\n finally:\n  if proc.poll() is None:proc.kill();proc.wait(timeout=4)\n  STATS.append({'kind':'promtool','peak_rss_bytes':peak,'terminated':proc.poll() is not None})\n@contextlib.contextmanager\ndef server(root,data,live=False):\n proc=None;guard=None;stop=threading.Event();fail=[];stats={'kind':'prometheus','peak_rss_bytes':0,'terminated':False}\n config={'global':{'scrape_interval':'1m'},'scrape_configs':[]}\n if live:\n  config['rule_files']=[str(root/'live.yaml')]\n  (root/'live.yaml').write_bytes(b'groups:\\n- name: live-head-proof\\n  interval: 1s\\n  rules:\\n  - record: service:queued_tasks:sum\\n    expr: vector(999)\\n    labels:\\n      service: live\\n')\n cfg=root/(data+'-config.yaml');cfg.write_text(yaml.safe_dump(config),encoding='utf-8')\n with socket.socket() as sock:sock.bind(('127.0.0.1',0));port=sock.getsockname()[1]\n with (root/(data+'-server.log')).open('wb') as log:\n  try:\n   proc=subprocess.Popen([shutil.which('prometheus'),'--config.file='+str(cfg),'--storage.tsdb.path='+str(root/data),'--web.listen-address=127.0.0.1:'+str(port),'--log.level=error','--web.enable-admin-api'],stdout=log,stderr=log,env=ENV,cwd=root)\n   deadline=time.monotonic()+30\n   def monitor():\n    while not stop.wait(.1):\n     if proc.poll() is not None:return\n     try:\n      amount=rss(proc.pid);stats['peak_rss_bytes']=max(stats['peak_rss_bytes'],amount)\n      if amount>384*1048576 or time.monotonic()>deadline:fail.append('resource guard');proc.kill();return\n     except Exception as exc:\n      if proc.poll() is None:fail.append(str(exc));proc.kill()\n      return\n   guard=threading.Thread(target=monitor,daemon=True);guard.start();base='http://127.0.0.1:'+str(port)\n   def api(path,params=None):\n    url=base+path+('?' +urllib.parse.urlencode(params) if params else '')\n    with urllib.request.urlopen(url,timeout=2) as r:\n     raw=r.read();return json.loads(raw) if path.startswith('/api/') else raw\n   end=time.monotonic()+6\n   while True:\n    try:api('/-/ready');break\n    except OSError:\n     assert time.monotonic()<end and proc.poll() is None;time.sleep(.05)\n   yield base,api\n   assert not fail,fail\n  finally:\n   stop.set()\n   if proc is not None:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=4)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=4)\n    stats['terminated']=proc.poll() is not None\n   if guard:guard.join(timeout=2)\n   STATS.append(stats)\n   assert not fail,'resource guard: '+repr(fail)\ndef block_ids(folder):\n return sorted(p.name for p in folder.iterdir() if p.is_dir() and (p/'meta.json').is_file())\ndef digest_blocks(folder):\n return {str(p.relative_to(folder)):hashlib.sha256(p.read_bytes()).hexdigest() for bid in block_ids(folder) for p in (folder/bid).rglob('*') if p.is_file()}\ndef vector(api,expr,t=None):\n params={'query':expr}\n if t is not None:params['time']=t\n data=api('/api/v1/query',params);assert data['status']=='success';return data['data']['result']\n\n\nplan=json.loads(pathlib.Path('delete-request.json').read_text(encoding='utf-8'))\nassert isinstance(plan,dict) and set(plan)=={'match','start_offset','end_offset'}\nassert isinstance(plan['match'],list) and 1<=len(plan['match'])<=3 and all(isinstance(v,str) and 1<=len(v)<=200 for v in plan['match'])\nassert type(plan['start_offset']) is int and type(plan['end_offset']) is int and 0<=plan['start_offset']<=plan['end_offset']<=300\nbase=(int(time.time())//7200-12)*7200\ndef samples(api):\n data=api('/api/v1/query',{'query':'demo_queue[10m]','time':base+300})['data'];assert data['resultType']=='matrix'\n return {row['metric']['tenant']:[(int(t)-base,float(v)) for t,v in row['values']] for row in data['result']}\ndef chunks(root):\n return {str(p.relative_to(root)):hashlib.sha256(p.read_bytes()).hexdigest() for p in root.glob('*/chunks/*') if p.is_file()}\ndef post(url,path,params):\n data=urllib.parse.urlencode(params,doseq=True).encode()\n with urllib.request.urlopen(urllib.request.Request(url+path,data=data,method='POST'),timeout=5) as r:\n  body=r.read();assert r.status in [200,204];return json.loads(body) if body else None\nbefore={'shop':[(i*60,10+i) for i in range(6)],'auth':[(i*60,20+i) for i in range(6)]}\nafter={'shop':[(0,10),(240,14),(300,15)],'auth':before['auth']}\nwith tempfile.TemporaryDirectory(prefix='trusted-prom-tombstone-') as d:\n root=pathlib.Path(d)\n lines=['# TYPE demo_queue gauge']\n for tenant,values in before.items():\n  lines += ['demo_queue{tenant=\"'+tenant+'\"} '+str(v)+' '+str(base+t) for t,v in values]\n lines+=['# EOF'];(root/'source.om').write_bytes(('\\n'.join(lines)+'\\n').encode())\n try:\n  run_command(['promtool','tsdb','create-blocks-from','openmetrics',str(root/'source.om'),str(root/'source')],root)\n  original=chunks(root/'source');assert original\n  with server(root,'source') as (url,api):\n   assert samples(api)==before\n   post(url,'/api/v1/admin/tsdb/delete_series',{'match[]':plan['match'],'start':base+plan['start_offset'],'end':base+plan['end_offset']})\n   assert samples(api)==after,'delete must affect only shop inclusive60..180; all auth and shop boundaries must survive'\n   assert chunks(root/'source')==original,'logical deletion must not silently claim chunks were physically rewritten'\n   tombstones=list((root/'source').glob('*/tombstones'));assert tombstones and any(p.stat().st_size>0 for p in tombstones)\n   post(url,'/api/v1/admin/tsdb/clean_tombstones',{})\n   assert samples(api)==after,'cleanup must preserve surviving values and labels'\n   assert chunks(root/'source')!=original,'native cleanup should rewrite or remove affected chunk files'\n  with server(root,'source') as (url,api):\n   assert samples(api)==after,'restart must retain deletions and remaining samples'\n finally:print('native lifecycle:',json.dumps(STATS))\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_scoped_tsdb_tombstone_deletion_physical_cleanup_and_restart",
+    "conversion": {
+      "original_id": "curated-parallel-prometheus-051",
+      "original_type": "interview",
+      "original_title": "WAL、Head和持久block各处于什么数据阶段？",
+      "original_version": 1,
+      "theory_retained": true
+    }
+  }
+]

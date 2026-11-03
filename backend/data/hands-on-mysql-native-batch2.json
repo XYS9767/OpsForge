@@ -1,0 +1,261 @@
+[
+  {
+    "id": "curated-parallel-mysql-012",
+    "module": "mysql",
+    "category": "MySQL",
+    "level": 1,
+    "topic": "SQL与数据建模",
+    "title": "MySQL 实操：保留零支付客户的 LEFT JOIN 报表",
+    "answer": "### report.sql\n```sql\nSELECT c.id,COUNT(o.id) AS paid_count,COALESCE(SUM(o.amount),0) AS paid_amount\nFROM customers AS c LEFT JOIN orders AS o ON o.customer_id=c.id AND o.status='paid'\nGROUP BY c.id ORDER BY c.id;\n```\n\n原理：未匹配行的右列为NULL，WHERE右列等值条件得到UNKNOWN并被排除。若要求保留全部左行，将右表筛选条件放入ON；用匹配、不匹配和右值不合条件三类样本验收。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；MySQL 8.4 官方手册核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-data-20261021",
+    "body": "## 环境与初始材料\nMySQL 8.4 LTS、InnoDB。initial.sql 是公开初始材料；平台验收脚本自动创建独立临时数据库实例，监听随机回环端口并在结束后关闭。不得连接现有业务数据库。学员只提交 SQL 文件，不需要另开 Kubernetes 或自行搭建数据库。\n\n## 操作任务\n修复 report.sql，为 customers 中每位客户输出 id、paid 订单数量、paid 金额合计。每个客户恰好一行，包括没有订单、只有 pending/cancelled 订单的客户；零支付时数量与金额均为0。相同金额的不同订单必须分别累计。忽略 NULL customer_id 和找不到客户的孤立订单，按客户 id 升序。\n\n## 产物\n提交 report.sql，一条只读 SQL，不限定必须采用 JOIN 语法。公开样本结果为 (1,0,0.00)、(2,0,0.00)、(3,2,10.00)。金额保留 DECIMAL 精度。\n\n## 验收方法\n运行 python3 checks/check.py，真实 MySQL 验证完整结果，追加随机客户和订单；另测没有订单、零金额支付、全部客户为空。初始 WHERE 右表过滤会丢客户；负例 SUM(DISTINCT amount) 会吞掉等额独立订单。相关子查询等价解也必须通过。此考点是外连接保留性，不以单纯筛选月份报表替代。\n\n## 边界\n本题只用小型隔离数据验证 SQL 行为与数据完整性，不验证生产负载、线上 DDL 时延或连接池厂商实现。不得直接在生产运行示例。缺少原生 MySQL 或驱动属于环境能力缺失，不能当作答案错误。\n",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://dev.mysql.com/doc/refman/8.4/en/join.html",
+      "https://dev.mysql.com/doc/refman/8.4/en/group-by-functions.html"
+    ],
+    "related_modules": [
+      "mysql"
+    ],
+    "files": {
+      "initial.sql": "CREATE TABLE customers(id INT PRIMARY KEY,name VARCHAR(30) NOT NULL) ENGINE=InnoDB;\nCREATE TABLE orders(id INT PRIMARY KEY,customer_id INT NULL,status ENUM('paid','pending','cancelled') NOT NULL,amount DECIMAL(12,2) NOT NULL) ENGINE=InnoDB;\nINSERT INTO customers VALUES(1,'zero'),(2,'pending-only'),(3,'two-equal-payments');\nINSERT INTO orders VALUES(1,2,'pending',99.00),(2,3,'paid',5.00),(3,3,'paid',5.00),(4,NULL,'paid',700.00),(5,999,'paid',800.00);\n",
+      "report.sql": "SELECT c.id,COUNT(o.id) AS paid_count,COALESCE(SUM(o.amount),0) AS paid_amount\nFROM customers AS c LEFT JOIN orders AS o ON o.customer_id=c.id WHERE o.status='paid'\nGROUP BY c.id ORDER BY c.id;"
+    },
+    "solution_files": {
+      "report.sql": "SELECT c.id,COUNT(o.id) AS paid_count,COALESCE(SUM(o.amount),0) AS paid_amount\nFROM customers AS c LEFT JOIN orders AS o ON o.customer_id=c.id AND o.status='paid'\nGROUP BY c.id ORDER BY c.id;"
+    },
+    "negative_files": {
+      "report.sql": "SELECT c.id,COUNT(o.id) AS paid_count,COALESCE(SUM(DISTINCT o.amount),0) AS paid_amount\nFROM customers AS c LEFT JOIN orders AS o ON o.customer_id=c.id AND o.status='paid'\nGROUP BY c.id ORDER BY c.id;"
+    },
+    "equivalent_files": {
+      "report.sql": "SELECT c.id,(SELECT COUNT(*) FROM orders o WHERE o.customer_id=c.id AND o.status='paid'),COALESCE((SELECT SUM(o.amount) FROM orders o WHERE o.customer_id=c.id AND o.status='paid'),0) FROM customers c ORDER BY c.id;"
+    },
+    "exercise": {
+      "kind": "native-mysql-sql",
+      "environment": "isolated-ephemeral-mysql-8.4",
+      "deliverables": [
+        "report.sql"
+      ],
+      "verification": "真实MySQL执行、完整结果和边界数据断言；参考/初始/错误/等价四路",
+      "capability_gap": [
+        "交付实验镜像尚待组装验证；不表示已部署可用",
+        "非生产数据量验收"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "mysqld"
+        ],
+        "python_modules": [
+          "pymysql",
+          "cryptography"
+        ],
+        "features": [
+          "mysqld:v8.4"
+        ]
+      },
+      "test_files": {
+        "checks/mysql_fixture.py": "import pathlib,os,sys,subprocess,tempfile,socket,time,threading,ctypes,shutil,secrets,contextlib,signal\nimport pymysql\ndef rss(pid):\n class PMC(ctypes.Structure):\n  _fields_=[('cb',ctypes.c_ulong),('faults',ctypes.c_ulong),*[(x,ctypes.c_size_t) for x in ['peak','working','pagedpeak','paged','nonpagedpeak','nonpaged','pagefile','peakpagefile']]]\n k=ctypes.windll.kernel32;p=ctypes.windll.psapi;k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p];p.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n h=k.OpenProcess(0x410,False,pid)\n if not h:raise OSError('cannot monitor child')\n try:\n  x=PMC();x.cb=ctypes.sizeof(x)\n  if not p.GetProcessMemoryInfo(h,ctypes.byref(x),x.cb):raise OSError('RSS unavailable')\n  return x.working\n finally:k.CloseHandle(h)\ndef constrain(proc):\n k=ctypes.windll.kernel32;k.GetProcessAffinityMask.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p];k.SetProcessAffinityMask.argtypes=[ctypes.c_void_p,ctypes.c_size_t]\n available=ctypes.c_size_t();system=ctypes.c_size_t()\n assert k.GetProcessAffinityMask(int(proc._handle),ctypes.byref(available),ctypes.byref(system))\n cpus=[1<<i for i in range(available.value.bit_length()) if available.value&(1<<i)][:2];assert cpus and k.SetProcessAffinityMask(int(proc._handle),sum(cpus))\ndef child_job(proc):\n class BASIC(ctypes.Structure):\n  _fields_=[('PerProcessUserTimeLimit',ctypes.c_longlong),('PerJobUserTimeLimit',ctypes.c_longlong),('LimitFlags',ctypes.c_ulong),('MinimumWorkingSetSize',ctypes.c_size_t),('MaximumWorkingSetSize',ctypes.c_size_t),('ActiveProcessLimit',ctypes.c_ulong),('Affinity',ctypes.c_size_t),('PriorityClass',ctypes.c_ulong),('SchedulingClass',ctypes.c_ulong)]\n class IO(ctypes.Structure):_fields_=[(n,ctypes.c_ulonglong) for n in ['ReadOperationCount','WriteOperationCount','OtherOperationCount','ReadTransferCount','WriteTransferCount','OtherTransferCount']]\n class EXTENDED(ctypes.Structure):_fields_=[('BasicLimitInformation',BASIC),('IoInfo',IO),('ProcessMemoryLimit',ctypes.c_size_t),('JobMemoryLimit',ctypes.c_size_t),('PeakProcessMemoryUsed',ctypes.c_size_t),('PeakJobMemoryUsed',ctypes.c_size_t)]\n k=ctypes.windll.kernel32;k.CreateJobObjectW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p];k.CreateJobObjectW.restype=ctypes.c_void_p;k.SetInformationJobObject.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_void_p,ctypes.c_ulong];k.AssignProcessToJobObject.argtypes=[ctypes.c_void_p,ctypes.c_void_p];k.CloseHandle.argtypes=[ctypes.c_void_p]\n job=k.CreateJobObjectW(None,None);assert job\n limits=EXTENDED();limits.BasicLimitInformation.LimitFlags=0x2000|0x100|0x8;limits.BasicLimitInformation.ActiveProcessLimit=1;limits.ProcessMemoryLimit=384*1048576\n if not k.SetInformationJobObject(job,9,ctypes.byref(limits),ctypes.sizeof(limits)) or not k.AssignProcessToJobObject(job,int(proc._handle)):\n  proc.kill();proc.wait(timeout=4);k.CloseHandle(job);raise RuntimeError('unable to enforce single-process memory-limited Windows job')\n return job\n\ndef linux_child_guard(expected_parent):\n if not sys.platform.startswith('linux'):raise OSError('ENVIRONMENT_UNAVAILABLE: isolated mysqld requires Windows Job or Linux parent-death signal')\n libc=ctypes.CDLL(None,use_errno=True)\n libc.prctl.restype=ctypes.c_int\n libc.prctl.argtypes=[ctypes.c_int,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong]\n # Set before exec; then close the race where our parent exited before prctl.\n if libc.prctl(1,int(signal.SIGKILL),0,0,0)!=0:raise OSError(ctypes.get_errno(),'ENVIRONMENT_UNAVAILABLE: PR_SET_PDEATHSIG failed')\n observed=ctypes.c_int()\n if libc.prctl(2,ctypes.addressof(observed),0,0,0)!=0 or observed.value!=signal.SIGKILL:raise OSError('ENVIRONMENT_UNAVAILABLE: parent-death signal verification failed')\n if os.getppid()!=expected_parent:os.kill(os.getpid(),signal.SIGKILL)\n\n@contextlib.contextmanager\ndef process(args,root,name,limit=35):\n log=(root/(name+'.log')).open('wb');job=None;stop=threading.Event();stat={'peak_rss':0};proc=None;thread=None\n try:\n  expected_parent=os.getpid()\n  kw={'creationflags':subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name=='nt' else {'start_new_session':True,'preexec_fn':lambda:linux_child_guard(expected_parent)}\n  try:proc=subprocess.Popen(args,stdout=log,stderr=log,cwd=root,**kw)\n  except subprocess.SubprocessError as exc:raise FileNotFoundError('ENVIRONMENT_UNAVAILABLE: Linux mysqld parent-death guard could not be established') from exc\n  if os.name=='nt':constrain(proc);job=child_job(proc)\n  start=time.monotonic()\n  def kill():\n   if proc.poll() is None:\n    if os.name=='nt':proc.kill()\n    else:os.killpg(proc.pid,signal.SIGKILL)\n  def monitor():\n   while not stop.wait(.03):\n    if proc.poll() is not None:return\n    try:\n     if os.name=='nt':memory=rss(proc.pid)\n     else:\n      fields=pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines()\n      rss_line=next((x for x in fields if x.startswith('VmRSS:')),None)\n      if rss_line is None:\n       state=next((x.split()[1] for x in fields if x.startswith('State:')),None)\n       if state in ('Z','X','x') or proc.poll() is not None:return\n       # Linux can release mm before the task state becomes Z; allow only a bounded exit transition.\n       for _ in range(30):\n        if stop.wait(.01) or proc.poll() is not None:return\n        try:current=pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines()\n        except FileNotFoundError:return\n        state=next((x.split()[1] for x in current if x.startswith('State:')),None)\n        if state in ('Z','X','x'):return\n        rss_line=next((x for x in current if x.startswith('VmRSS:')),None)\n        if rss_line is not None:break\n       if rss_line is None:raise OSError('ENVIRONMENT_UNAVAILABLE: MySQL VmRSS unavailable for 300ms')\n      memory=int(rss_line.split()[1])*1024\n     stat['peak_rss']=max(stat['peak_rss'],memory)\n     if memory>384*1048576 or time.monotonic()-start>limit:raise RuntimeError('384MiB RSS / wall-time limit')\n    except Exception as exc:\n     if proc.poll() is None:stat['guard_error']=repr(exc);kill()\n     return\n  thread=threading.Thread(target=monitor,daemon=True);thread.start()\n  yield proc\n finally:\n  stop.set()\n  if proc is not None:\n   if proc.poll() is None:\n    if os.name=='nt':proc.terminate()\n    else:os.killpg(proc.pid,signal.SIGTERM)\n   try:proc.wait(timeout=5)\n   except subprocess.TimeoutExpired:\n    if os.name=='nt':proc.kill()\n    else:os.killpg(proc.pid,signal.SIGKILL)\n    proc.wait(timeout=4)\n  if thread:thread.join(timeout=2)\n  if job:ctypes.windll.kernel32.CloseHandle(job)\n  log.close()\n  if proc:print(name,'PID',proc.pid,'stopped',proc.poll() is not None,'peak RSS',stat['peak_rss'])\n  if stat.get('guard_error'):raise RuntimeError(stat)\n\ndef execute(conn,query,args=None):\n with conn.cursor() as c:c.execute(query,args);return c.fetchall()\n\n@contextlib.contextmanager\ndef fixture():\n exe=shutil.which('mysqld');assert exe,'mysqld unavailable'\n version=subprocess.check_output([exe,'--no-defaults','--version'],timeout=4).decode(errors='replace')\n if '8.4.' not in version or 'MariaDB' in version:raise FileNotFoundError('requires real MySQL 8.4 LTS, not MariaDB/SQLite')\n if os.name!='nt' and os.geteuid()==0:raise FileNotFoundError('MySQL lab must run as isolated nonroot user')\n base=pathlib.Path(exe).resolve().parent.parent\n with tempfile.TemporaryDirectory(prefix='trusted-mysql-native-') as d:\n  root=pathlib.Path(d).resolve();exports=root/'exports';exports.mkdir()\n  flags=[exe,'--no-defaults']+(['--no-monitor','--console'] if os.name=='nt' else [])\n  flags+=['--basedir='+str(base),'--datadir='+str(root/'data'),'--innodb-buffer-pool-size=64M','--performance-schema=OFF','--innodb-redo-log-capacity=16M','--innodb-log-buffer-size=4M','--skip-log-bin','--mysqlx=OFF','--max-connections=8','--table-open-cache=32','--table-open-cache-instances=1','--table-definition-cache=400','--thread-cache-size=0','--innodb-read-io-threads=1','--innodb-write-io-threads=1','--innodb-purge-threads=1','--tmp-table-size=1M','--max-heap-table-size=1M','--local-infile=OFF','--secure-file-priv='+str(exports)]\n  if os.name=='nt':flags+=['--plugin-dir='+str(base/'lib/plugin')]\n  with process(flags+['--initialize-insecure','--skip-networking'],root,'initialize') as p:\n   p.wait(timeout=30)\n   assert p.returncode==0,(root/'initialize.log').read_text(errors='replace')[-2500:]\n  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]\n  try:\n   with process(flags+['--bind-address=127.0.0.1','--port='+str(port),'--socket='+str(root/'mysql.sock'),'--pid-file='+str(root/'mysql.pid'),'--max-execution-time=1200'],root,'server') as p:\n    rootconn=None\n    try:\n     deadline=time.monotonic()+12\n     while rootconn is None:\n      try:rootconn=pymysql.connect(host='127.0.0.1',port=port,user='root',charset='utf8mb4',autocommit=True,connect_timeout=1,read_timeout=3,write_timeout=3,local_infile=False)\n      except pymysql.Error:\n       assert p.poll() is None and time.monotonic()<deadline,(root/'server.log').read_text(errors='replace')[-2500:]\n       time.sleep(.1)\n     assert int((root/'mysql.pid').read_text().strip())==p.pid,'server escaped monitored PID'\n     execute(rootconn,\"CREATE DATABASE training CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci\")\n     execute(rootconn,'USE training')\n     secret=secrets.token_hex(24)\n     execute(rootconn,\"CREATE USER 'student'@'127.0.0.1' IDENTIFIED BY %s\",(secret,))\n     def learner(privileges):\n      execute(rootconn,\"GRANT \"+privileges+\" ON training.* TO 'student'@'127.0.0.1'\")\n      return pymysql.connect(host='127.0.0.1',port=port,user='student',password=secret,database='training',charset='utf8mb4',autocommit=True,connect_timeout=2,read_timeout=3,write_timeout=3,local_infile=False)\n     yield rootconn,learner\n    finally:\n     if rootconn:\n      try:execute(rootconn,'SHUTDOWN')\n      except pymysql.Error:pass\n      rootconn.close()\n     try:p.wait(timeout=5)\n     except subprocess.TimeoutExpired:pass\n  finally:\n   with socket.socket() as s:assert s.connect_ex(('127.0.0.1',port))!=0,'owned MySQL port remained open'\n",
+        "checks/check.py": "import pathlib,secrets,datetime,sys\nsys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))\nfrom decimal import Decimal\nfrom mysql_fixture import fixture,execute\n\nwith fixture() as (admin,learner):\n execute(admin,'CREATE TABLE customers(id INT PRIMARY KEY,name VARCHAR(30) NOT NULL) ENGINE=InnoDB')\n execute(admin,\"CREATE TABLE orders(id INT PRIMARY KEY,customer_id INT NULL,status ENUM('paid','pending','cancelled') NOT NULL,amount DECIMAL(12,2) NOT NULL) ENGINE=InnoDB\")\n client=learner('SELECT')\n try:\n  for phase in range(5):\n   execute(admin,'DELETE FROM orders');execute(admin,'DELETE FROM customers')\n   ids=[] if phase==4 else [1,2,3]\n   data=[(1,2,'pending',Decimal('99.00')),(2,3,'paid',Decimal('5.00')),(3,3,'paid',Decimal('5.00')),(4,None,'paid',Decimal('700.00')),(5,999,'paid',Decimal('800.00'))]\n   if phase==1:\n    ids+=list(range(4,12))\n    for i in range(6,60):data.append((i,secrets.choice(ids+[None,999]),secrets.choice(['paid','pending','cancelled']),Decimal(secrets.randbelow(10000))/100))\n   if phase==2:data=[]\n   if phase==3:data=[(1,1,'paid',Decimal('0.00')),(2,2,'cancelled',Decimal('20.50'))]\n   for uid in ids:execute(admin,'INSERT INTO customers VALUES(%s,%s)',(uid,'u'+str(uid)))\n   expected={uid:[0,Decimal('0.00')] for uid in ids}\n   for row in data:\n    execute(admin,'INSERT INTO orders VALUES(%s,%s,%s,%s)',row)\n    if row[1] in expected and row[2]=='paid':expected[row[1]][0]+=1;expected[row[1]][1]+=row[3]\n   result=execute(client,pathlib.Path('report.sql').read_text(encoding='utf-8'))\n   assert result==tuple((uid,*expected[uid]) for uid in sorted(expected)),(phase,result,expected)\n   assert all(isinstance(row[2],Decimal) for row in result)\n finally:client.close()\nprint('native LEFT JOIN: unmatched/pending-only/duplicate amount/zero amount/orphan/empty/boundary datasets passed')\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_mysql_left_join_preserve_zero_paid_customers_and_duplicate_amounts",
+    "conversion": {
+      "original_id": "curated-parallel-mysql-012",
+      "original_version": 1,
+      "original_type": "interview",
+      "original_title": "为什么LEFT JOIN后在WHERE过滤右表字段可能丢失左侧孤立行？",
+      "theory_retained": true,
+      "absorbed_unpublished_drafts": [
+        "curated-lab-mysql-002: consolidate zero-order LEFT JOIN draft into this original-ID native task"
+      ]
+    }
+  },
+  {
+    "id": "curated-parallel-mysql-018",
+    "module": "mysql",
+    "category": "MySQL",
+    "level": 1,
+    "topic": "SQL与数据建模",
+    "title": "MySQL 实操：修复含 NULL 排除名单的反关联查询",
+    "answer": "### eligible.sql\n```sql\nSELECT c.id,c.name FROM customers c WHERE NOT EXISTS(SELECT 1 FROM exclusions e WHERE e.customer_id=c.id) ORDER BY c.id;\n```\n\n原理：NOT IN涉及三值逻辑，存在NULL时非匹配值也可能得UNKNOWN。可过滤子查询NULL或改用相关NOT EXISTS，并确认外层NULL的业务含义；用空值样本验收。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；MySQL 8.4 官方手册核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-data-20261021",
+    "body": "## 环境与初始材料\nMySQL 8.4 LTS、InnoDB。initial.sql 是公开初始材料；平台验收脚本自动创建独立临时数据库实例，监听随机回环端口并在结束后关闭。不得连接现有业务数据库。学员只提交 SQL 文件，不需要另开 Kubernetes 或自行搭建数据库。\n\n## 操作任务\n排除名单 exclusions.customer_id 可为 NULL，表示记录尚未关联任何客户，不能屏蔽任何人。查询未被明确排除的客户 id/name，按 id 升序；重复排除记录、未知客户 id 不得改变语义。客户 id=0 是有效客户，不能拿0代替 NULL。\n\n## 产物\n提交 eligible.sql，一条只读查询。公开样本应返回客户0、1、3；NULL 行不能令结果全空。禁止硬编码样本 ID，客户数量和名单在验收中会变化。\n\n## 验收方法\n运行 python3 checks/check.py，在真实 MySQL 的三值逻辑下执行。检查含NULL和重复排除、随机名单、空名单、全NULL名单、全部排除、空客户表。错误 NOT IN 未过滤NULL会返回空；COALESCE(NULL,0)会错排客户0。NOT EXISTS 和过滤NULL后的 NOT IN 都可通过。\n\n## 边界\n本题只用小型隔离数据验证 SQL 行为与数据完整性，不验证生产负载、线上 DDL 时延或连接池厂商实现。不得直接在生产运行示例。缺少原生 MySQL 或驱动属于环境能力缺失，不能当作答案错误。\n",
+    "hints": [],
+    "rubric": [
+      "核心机制准确，说明适用前提",
+      "给出可观察的验收结果并说明必要边界"
+    ],
+    "references": [
+      "https://dev.mysql.com/doc/refman/8.4/en/working-with-null.html",
+      "https://dev.mysql.com/doc/refman/8.4/en/exists-and-not-exists-subqueries.html"
+    ],
+    "related_modules": [
+      "mysql"
+    ],
+    "files": {
+      "initial.sql": "CREATE TABLE customers(id INT PRIMARY KEY,name VARCHAR(30) NOT NULL) ENGINE=InnoDB;\nCREATE TABLE exclusions(id INT PRIMARY KEY,customer_id INT NULL) ENGINE=InnoDB;\nINSERT INTO customers VALUES(0,'zero-id'),(1,'allowed'),(2,'excluded'),(3,'also-allowed');\nINSERT INTO exclusions VALUES(1,NULL),(2,2),(3,2),(4,999);\n",
+      "eligible.sql": "SELECT id,name FROM customers WHERE id NOT IN (SELECT customer_id FROM exclusions) ORDER BY id;"
+    },
+    "solution_files": {
+      "eligible.sql": "SELECT c.id,c.name FROM customers c WHERE NOT EXISTS(SELECT 1 FROM exclusions e WHERE e.customer_id=c.id) ORDER BY c.id;"
+    },
+    "negative_files": {
+      "eligible.sql": "SELECT id,name FROM customers WHERE id NOT IN (SELECT COALESCE(customer_id,0) FROM exclusions) ORDER BY id;"
+    },
+    "equivalent_files": {
+      "eligible.sql": "SELECT id,name FROM customers WHERE id NOT IN (SELECT customer_id FROM exclusions WHERE customer_id IS NOT NULL) ORDER BY id;"
+    },
+    "exercise": {
+      "kind": "native-mysql-sql",
+      "environment": "isolated-ephemeral-mysql-8.4",
+      "deliverables": [
+        "eligible.sql"
+      ],
+      "verification": "真实MySQL执行、完整结果和边界数据断言；参考/初始/错误/等价四路",
+      "capability_gap": [
+        "交付实验镜像尚待组装验证；不表示已部署可用",
+        "非生产数据量验收"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "mysqld"
+        ],
+        "python_modules": [
+          "pymysql",
+          "cryptography"
+        ],
+        "features": [
+          "mysqld:v8.4"
+        ]
+      },
+      "test_files": {
+        "checks/mysql_fixture.py": "import pathlib,os,sys,subprocess,tempfile,socket,time,threading,ctypes,shutil,secrets,contextlib,signal\nimport pymysql\ndef rss(pid):\n class PMC(ctypes.Structure):\n  _fields_=[('cb',ctypes.c_ulong),('faults',ctypes.c_ulong),*[(x,ctypes.c_size_t) for x in ['peak','working','pagedpeak','paged','nonpagedpeak','nonpaged','pagefile','peakpagefile']]]\n k=ctypes.windll.kernel32;p=ctypes.windll.psapi;k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p];p.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n h=k.OpenProcess(0x410,False,pid)\n if not h:raise OSError('cannot monitor child')\n try:\n  x=PMC();x.cb=ctypes.sizeof(x)\n  if not p.GetProcessMemoryInfo(h,ctypes.byref(x),x.cb):raise OSError('RSS unavailable')\n  return x.working\n finally:k.CloseHandle(h)\ndef constrain(proc):\n k=ctypes.windll.kernel32;k.GetProcessAffinityMask.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p];k.SetProcessAffinityMask.argtypes=[ctypes.c_void_p,ctypes.c_size_t]\n available=ctypes.c_size_t();system=ctypes.c_size_t()\n assert k.GetProcessAffinityMask(int(proc._handle),ctypes.byref(available),ctypes.byref(system))\n cpus=[1<<i for i in range(available.value.bit_length()) if available.value&(1<<i)][:2];assert cpus and k.SetProcessAffinityMask(int(proc._handle),sum(cpus))\ndef child_job(proc):\n class BASIC(ctypes.Structure):\n  _fields_=[('PerProcessUserTimeLimit',ctypes.c_longlong),('PerJobUserTimeLimit',ctypes.c_longlong),('LimitFlags',ctypes.c_ulong),('MinimumWorkingSetSize',ctypes.c_size_t),('MaximumWorkingSetSize',ctypes.c_size_t),('ActiveProcessLimit',ctypes.c_ulong),('Affinity',ctypes.c_size_t),('PriorityClass',ctypes.c_ulong),('SchedulingClass',ctypes.c_ulong)]\n class IO(ctypes.Structure):_fields_=[(n,ctypes.c_ulonglong) for n in ['ReadOperationCount','WriteOperationCount','OtherOperationCount','ReadTransferCount','WriteTransferCount','OtherTransferCount']]\n class EXTENDED(ctypes.Structure):_fields_=[('BasicLimitInformation',BASIC),('IoInfo',IO),('ProcessMemoryLimit',ctypes.c_size_t),('JobMemoryLimit',ctypes.c_size_t),('PeakProcessMemoryUsed',ctypes.c_size_t),('PeakJobMemoryUsed',ctypes.c_size_t)]\n k=ctypes.windll.kernel32;k.CreateJobObjectW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p];k.CreateJobObjectW.restype=ctypes.c_void_p;k.SetInformationJobObject.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_void_p,ctypes.c_ulong];k.AssignProcessToJobObject.argtypes=[ctypes.c_void_p,ctypes.c_void_p];k.CloseHandle.argtypes=[ctypes.c_void_p]\n job=k.CreateJobObjectW(None,None);assert job\n limits=EXTENDED();limits.BasicLimitInformation.LimitFlags=0x2000|0x100|0x8;limits.BasicLimitInformation.ActiveProcessLimit=1;limits.ProcessMemoryLimit=384*1048576\n if not k.SetInformationJobObject(job,9,ctypes.byref(limits),ctypes.sizeof(limits)) or not k.AssignProcessToJobObject(job,int(proc._handle)):\n  proc.kill();proc.wait(timeout=4);k.CloseHandle(job);raise RuntimeError('unable to enforce single-process memory-limited Windows job')\n return job\n\ndef linux_child_guard(expected_parent):\n if not sys.platform.startswith('linux'):raise OSError('ENVIRONMENT_UNAVAILABLE: isolated mysqld requires Windows Job or Linux parent-death signal')\n libc=ctypes.CDLL(None,use_errno=True)\n libc.prctl.restype=ctypes.c_int\n libc.prctl.argtypes=[ctypes.c_int,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong]\n # Set before exec; then close the race where our parent exited before prctl.\n if libc.prctl(1,int(signal.SIGKILL),0,0,0)!=0:raise OSError(ctypes.get_errno(),'ENVIRONMENT_UNAVAILABLE: PR_SET_PDEATHSIG failed')\n observed=ctypes.c_int()\n if libc.prctl(2,ctypes.addressof(observed),0,0,0)!=0 or observed.value!=signal.SIGKILL:raise OSError('ENVIRONMENT_UNAVAILABLE: parent-death signal verification failed')\n if os.getppid()!=expected_parent:os.kill(os.getpid(),signal.SIGKILL)\n\n@contextlib.contextmanager\ndef process(args,root,name,limit=35):\n log=(root/(name+'.log')).open('wb');job=None;stop=threading.Event();stat={'peak_rss':0};proc=None;thread=None\n try:\n  expected_parent=os.getpid()\n  kw={'creationflags':subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name=='nt' else {'start_new_session':True,'preexec_fn':lambda:linux_child_guard(expected_parent)}\n  try:proc=subprocess.Popen(args,stdout=log,stderr=log,cwd=root,**kw)\n  except subprocess.SubprocessError as exc:raise FileNotFoundError('ENVIRONMENT_UNAVAILABLE: Linux mysqld parent-death guard could not be established') from exc\n  if os.name=='nt':constrain(proc);job=child_job(proc)\n  start=time.monotonic()\n  def kill():\n   if proc.poll() is None:\n    if os.name=='nt':proc.kill()\n    else:os.killpg(proc.pid,signal.SIGKILL)\n  def monitor():\n   while not stop.wait(.03):\n    if proc.poll() is not None:return\n    try:\n     if os.name=='nt':memory=rss(proc.pid)\n     else:\n      fields=pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines()\n      rss_line=next((x for x in fields if x.startswith('VmRSS:')),None)\n      if rss_line is None:\n       state=next((x.split()[1] for x in fields if x.startswith('State:')),None)\n       if state in ('Z','X','x') or proc.poll() is not None:return\n       # Linux can release mm before the task state becomes Z; allow only a bounded exit transition.\n       for _ in range(30):\n        if stop.wait(.01) or proc.poll() is not None:return\n        try:current=pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines()\n        except FileNotFoundError:return\n        state=next((x.split()[1] for x in current if x.startswith('State:')),None)\n        if state in ('Z','X','x'):return\n        rss_line=next((x for x in current if x.startswith('VmRSS:')),None)\n        if rss_line is not None:break\n       if rss_line is None:raise OSError('ENVIRONMENT_UNAVAILABLE: MySQL VmRSS unavailable for 300ms')\n      memory=int(rss_line.split()[1])*1024\n     stat['peak_rss']=max(stat['peak_rss'],memory)\n     if memory>384*1048576 or time.monotonic()-start>limit:raise RuntimeError('384MiB RSS / wall-time limit')\n    except Exception as exc:\n     if proc.poll() is None:stat['guard_error']=repr(exc);kill()\n     return\n  thread=threading.Thread(target=monitor,daemon=True);thread.start()\n  yield proc\n finally:\n  stop.set()\n  if proc is not None:\n   if proc.poll() is None:\n    if os.name=='nt':proc.terminate()\n    else:os.killpg(proc.pid,signal.SIGTERM)\n   try:proc.wait(timeout=5)\n   except subprocess.TimeoutExpired:\n    if os.name=='nt':proc.kill()\n    else:os.killpg(proc.pid,signal.SIGKILL)\n    proc.wait(timeout=4)\n  if thread:thread.join(timeout=2)\n  if job:ctypes.windll.kernel32.CloseHandle(job)\n  log.close()\n  if proc:print(name,'PID',proc.pid,'stopped',proc.poll() is not None,'peak RSS',stat['peak_rss'])\n  if stat.get('guard_error'):raise RuntimeError(stat)\n\ndef execute(conn,query,args=None):\n with conn.cursor() as c:c.execute(query,args);return c.fetchall()\n\n@contextlib.contextmanager\ndef fixture():\n exe=shutil.which('mysqld');assert exe,'mysqld unavailable'\n version=subprocess.check_output([exe,'--no-defaults','--version'],timeout=4).decode(errors='replace')\n if '8.4.' not in version or 'MariaDB' in version:raise FileNotFoundError('requires real MySQL 8.4 LTS, not MariaDB/SQLite')\n if os.name!='nt' and os.geteuid()==0:raise FileNotFoundError('MySQL lab must run as isolated nonroot user')\n base=pathlib.Path(exe).resolve().parent.parent\n with tempfile.TemporaryDirectory(prefix='trusted-mysql-native-') as d:\n  root=pathlib.Path(d).resolve();exports=root/'exports';exports.mkdir()\n  flags=[exe,'--no-defaults']+(['--no-monitor','--console'] if os.name=='nt' else [])\n  flags+=['--basedir='+str(base),'--datadir='+str(root/'data'),'--innodb-buffer-pool-size=64M','--performance-schema=OFF','--innodb-redo-log-capacity=16M','--innodb-log-buffer-size=4M','--skip-log-bin','--mysqlx=OFF','--max-connections=8','--table-open-cache=32','--table-open-cache-instances=1','--table-definition-cache=400','--thread-cache-size=0','--innodb-read-io-threads=1','--innodb-write-io-threads=1','--innodb-purge-threads=1','--tmp-table-size=1M','--max-heap-table-size=1M','--local-infile=OFF','--secure-file-priv='+str(exports)]\n  if os.name=='nt':flags+=['--plugin-dir='+str(base/'lib/plugin')]\n  with process(flags+['--initialize-insecure','--skip-networking'],root,'initialize') as p:\n   p.wait(timeout=30)\n   assert p.returncode==0,(root/'initialize.log').read_text(errors='replace')[-2500:]\n  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]\n  try:\n   with process(flags+['--bind-address=127.0.0.1','--port='+str(port),'--socket='+str(root/'mysql.sock'),'--pid-file='+str(root/'mysql.pid'),'--max-execution-time=1200'],root,'server') as p:\n    rootconn=None\n    try:\n     deadline=time.monotonic()+12\n     while rootconn is None:\n      try:rootconn=pymysql.connect(host='127.0.0.1',port=port,user='root',charset='utf8mb4',autocommit=True,connect_timeout=1,read_timeout=3,write_timeout=3,local_infile=False)\n      except pymysql.Error:\n       assert p.poll() is None and time.monotonic()<deadline,(root/'server.log').read_text(errors='replace')[-2500:]\n       time.sleep(.1)\n     assert int((root/'mysql.pid').read_text().strip())==p.pid,'server escaped monitored PID'\n     execute(rootconn,\"CREATE DATABASE training CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci\")\n     execute(rootconn,'USE training')\n     secret=secrets.token_hex(24)\n     execute(rootconn,\"CREATE USER 'student'@'127.0.0.1' IDENTIFIED BY %s\",(secret,))\n     def learner(privileges):\n      execute(rootconn,\"GRANT \"+privileges+\" ON training.* TO 'student'@'127.0.0.1'\")\n      return pymysql.connect(host='127.0.0.1',port=port,user='student',password=secret,database='training',charset='utf8mb4',autocommit=True,connect_timeout=2,read_timeout=3,write_timeout=3,local_infile=False)\n     yield rootconn,learner\n    finally:\n     if rootconn:\n      try:execute(rootconn,'SHUTDOWN')\n      except pymysql.Error:pass\n      rootconn.close()\n     try:p.wait(timeout=5)\n     except subprocess.TimeoutExpired:pass\n  finally:\n   with socket.socket() as s:assert s.connect_ex(('127.0.0.1',port))!=0,'owned MySQL port remained open'\n",
+        "checks/check.py": "import pathlib,secrets,datetime,sys\nsys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))\nfrom decimal import Decimal\nfrom mysql_fixture import fixture,execute\n\nwith fixture() as (admin,learner):\n execute(admin,'CREATE TABLE customers(id INT PRIMARY KEY,name VARCHAR(30) NOT NULL) ENGINE=InnoDB')\n execute(admin,'CREATE TABLE exclusions(id INT PRIMARY KEY,customer_id INT NULL) ENGINE=InnoDB')\n client=learner('SELECT')\n try:\n  for phase in range(6):\n   execute(admin,'DELETE FROM exclusions');execute(admin,'DELETE FROM customers')\n   ids=[] if phase==5 else [0,1,2,3]\n   banned=[None,2,2,999]\n   if phase==1:\n    ids+=list(range(4,18));banned+=[secrets.choice(ids+[None,999]) for _ in range(25)]\n   if phase==2:banned=[]\n   if phase==3:banned=[None,None]\n   if phase==4:banned=ids+[None]\n   for uid in ids:execute(admin,'INSERT INTO customers VALUES(%s,%s)',(uid,'user-'+str(uid)))\n   for index,uid in enumerate(banned):execute(admin,'INSERT INTO exclusions VALUES(%s,%s)',(index,uid))\n   excluded={uid for uid in banned if uid is not None}\n   expected=tuple((uid,'user-'+str(uid)) for uid in sorted(ids) if uid not in excluded)\n   result=execute(client,pathlib.Path('eligible.sql').read_text(encoding='utf-8'));assert result==expected,(phase,result,expected)\n finally:client.close()\nprint('native NULL anti-join: NULL/duplicate/unknown IDs, valid zero ID, empty and total exclusion boundaries passed')\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_mysql_null_safe_anti_join_exclusion_list_zero_id_and_empty_relations",
+    "conversion": {
+      "original_id": "curated-parallel-mysql-018",
+      "original_version": 1,
+      "original_type": "interview",
+      "original_title": "为什么NOT IN子查询含NULL时可能查不出预期记录？",
+      "theory_retained": true,
+      "absorbed_unpublished_drafts": []
+    }
+  },
+  {
+    "id": "curated-parallel-mysql-103",
+    "module": "mysql",
+    "category": "MySQL",
+    "level": 3,
+    "topic": "SQL与数据建模",
+    "title": "MySQL 实操：保留每笔流水并计算确定性的窗口余额",
+    "answer": "### balances.sql\n```sql\nSELECT account,id,delta,SUM(delta) OVER(PARTITION BY account ORDER BY occurred_at,id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS balance\nFROM ledger ORDER BY account,occurred_at,id;\n```\n\n原理：窗口函数为分区内每一行保留并计算结果，GROUP BY通常把多行折叠为每组一行。检查窗口ORDER BY和frame，使用并列值验证累计结果，不能把默认RANGE视为逐行ROWS。",
+    "type": "code",
+    "source": "OpsForge 原创编审 2026-10-21；对应产品官方文档核对",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "pack": "parallel-data-20261021",
+    "body": "## 环境与初始材料\nMySQL 8.4 LTS、InnoDB。initial.sql 是公开初始材料；平台验收脚本自动创建独立临时数据库实例，监听随机回环端口并在结束后关闭。不得连接现有业务数据库。学员只提交 SQL 文件，不需要另开 Kubernetes 或自行搭建数据库。\n\n## 操作任务\n修复 balances.sql，输出每笔流水的 account、id、delta 与执行该笔后的 balance。每个账户从0开始；按 occurred_at、id 顺序逐笔累计，时间相同仍按 id 区分，不允许把同行时间的全部金额提前算入第一笔。结果按 account、occurred_at、id 排序，每条原流水必须保留，不能 GROUP BY 成每账户一行。\n\n## 产物\n提交 balances.sql，一条只读查询。公开样本账户a三笔余额依次10.00、7.00、12.00；账户b独立为-2.00。金额使用精确 DECIMAL，允许负数和零；不能依赖物理插入顺序。\n\n## 验收方法\n运行 python3 checks/check.py。真实 MySQL 以倒序装载公开和随机流水，核对全部行与余额。覆盖相同时间、不同id、跨账户、负数、零、单行、空表。初始 GROUP BY 丢行；错误 RANGE 只按时间排序会让同一时刻多行共享最终余额。明确 ROWS+唯一排序键的窗口解，以及等价相关子查询，均应通过。\n\n## 边界\n本题只用小型隔离数据验证 SQL 行为与数据完整性，不验证生产负载、线上 DDL 时延或连接池厂商实现。不得直接在生产运行示例。缺少原生 MySQL 或驱动属于环境能力缺失，不能当作答案错误。\n",
+    "hints": [],
+    "rubric": [
+      "准确解释题设机制与前提",
+      "提供对应证据、验收结果及必要风险边界"
+    ],
+    "references": [
+      "https://dev.mysql.com/doc/refman/8.4/en/window-functions-usage.html",
+      "https://dev.mysql.com/doc/refman/8.4/en/window-functions-frames.html"
+    ],
+    "related_modules": [
+      "mysql"
+    ],
+    "files": {
+      "initial.sql": "CREATE TABLE ledger(id INT PRIMARY KEY,account VARCHAR(20) NOT NULL,occurred_at DATETIME(6) NOT NULL,delta DECIMAL(12,2) NOT NULL) ENGINE=InnoDB;\nINSERT INTO ledger VALUES(1,'a','2026-10-23 08:00:00',10.00),(2,'a','2026-10-23 08:00:00',-3.00),(3,'a','2026-10-23 08:01:00',5.00),(4,'b','2026-10-23 08:00:00',-2.00);\n",
+      "balances.sql": "SELECT account,MIN(id),SUM(delta),SUM(delta) FROM ledger GROUP BY account ORDER BY account;"
+    },
+    "solution_files": {
+      "balances.sql": "SELECT account,id,delta,SUM(delta) OVER(PARTITION BY account ORDER BY occurred_at,id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS balance\nFROM ledger ORDER BY account,occurred_at,id;"
+    },
+    "negative_files": {
+      "balances.sql": "SELECT account,id,delta,SUM(delta) OVER(PARTITION BY account ORDER BY occurred_at RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS balance\nFROM ledger ORDER BY account,occurred_at,id;"
+    },
+    "equivalent_files": {
+      "balances.sql": "SELECT a.account,a.id,a.delta,(SELECT SUM(b.delta) FROM ledger b WHERE b.account=a.account AND (b.occurred_at<a.occurred_at OR (b.occurred_at=a.occurred_at AND b.id<=a.id))) FROM ledger a ORDER BY a.account,a.occurred_at,a.id;"
+    },
+    "exercise": {
+      "kind": "native-mysql-sql",
+      "environment": "isolated-ephemeral-mysql-8.4",
+      "deliverables": [
+        "balances.sql"
+      ],
+      "verification": "真实MySQL执行、完整结果和边界数据断言；参考/初始/错误/等价四路",
+      "capability_gap": [
+        "交付实验镜像尚待组装验证；不表示已部署可用",
+        "非生产数据量验收"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 65,
+      "requires": {
+        "commands": [
+          "mysqld"
+        ],
+        "python_modules": [
+          "pymysql",
+          "cryptography"
+        ],
+        "features": [
+          "mysqld:v8.4"
+        ]
+      },
+      "test_files": {
+        "checks/mysql_fixture.py": "import pathlib,os,sys,subprocess,tempfile,socket,time,threading,ctypes,shutil,secrets,contextlib,signal\nimport pymysql\ndef rss(pid):\n class PMC(ctypes.Structure):\n  _fields_=[('cb',ctypes.c_ulong),('faults',ctypes.c_ulong),*[(x,ctypes.c_size_t) for x in ['peak','working','pagedpeak','paged','nonpagedpeak','nonpaged','pagefile','peakpagefile']]]\n k=ctypes.windll.kernel32;p=ctypes.windll.psapi;k.OpenProcess.restype=ctypes.c_void_p;k.CloseHandle.argtypes=[ctypes.c_void_p];p.GetProcessMemoryInfo.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_ulong]\n h=k.OpenProcess(0x410,False,pid)\n if not h:raise OSError('cannot monitor child')\n try:\n  x=PMC();x.cb=ctypes.sizeof(x)\n  if not p.GetProcessMemoryInfo(h,ctypes.byref(x),x.cb):raise OSError('RSS unavailable')\n  return x.working\n finally:k.CloseHandle(h)\ndef constrain(proc):\n k=ctypes.windll.kernel32;k.GetProcessAffinityMask.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p];k.SetProcessAffinityMask.argtypes=[ctypes.c_void_p,ctypes.c_size_t]\n available=ctypes.c_size_t();system=ctypes.c_size_t()\n assert k.GetProcessAffinityMask(int(proc._handle),ctypes.byref(available),ctypes.byref(system))\n cpus=[1<<i for i in range(available.value.bit_length()) if available.value&(1<<i)][:2];assert cpus and k.SetProcessAffinityMask(int(proc._handle),sum(cpus))\ndef child_job(proc):\n class BASIC(ctypes.Structure):\n  _fields_=[('PerProcessUserTimeLimit',ctypes.c_longlong),('PerJobUserTimeLimit',ctypes.c_longlong),('LimitFlags',ctypes.c_ulong),('MinimumWorkingSetSize',ctypes.c_size_t),('MaximumWorkingSetSize',ctypes.c_size_t),('ActiveProcessLimit',ctypes.c_ulong),('Affinity',ctypes.c_size_t),('PriorityClass',ctypes.c_ulong),('SchedulingClass',ctypes.c_ulong)]\n class IO(ctypes.Structure):_fields_=[(n,ctypes.c_ulonglong) for n in ['ReadOperationCount','WriteOperationCount','OtherOperationCount','ReadTransferCount','WriteTransferCount','OtherTransferCount']]\n class EXTENDED(ctypes.Structure):_fields_=[('BasicLimitInformation',BASIC),('IoInfo',IO),('ProcessMemoryLimit',ctypes.c_size_t),('JobMemoryLimit',ctypes.c_size_t),('PeakProcessMemoryUsed',ctypes.c_size_t),('PeakJobMemoryUsed',ctypes.c_size_t)]\n k=ctypes.windll.kernel32;k.CreateJobObjectW.argtypes=[ctypes.c_void_p,ctypes.c_wchar_p];k.CreateJobObjectW.restype=ctypes.c_void_p;k.SetInformationJobObject.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_void_p,ctypes.c_ulong];k.AssignProcessToJobObject.argtypes=[ctypes.c_void_p,ctypes.c_void_p];k.CloseHandle.argtypes=[ctypes.c_void_p]\n job=k.CreateJobObjectW(None,None);assert job\n limits=EXTENDED();limits.BasicLimitInformation.LimitFlags=0x2000|0x100|0x8;limits.BasicLimitInformation.ActiveProcessLimit=1;limits.ProcessMemoryLimit=384*1048576\n if not k.SetInformationJobObject(job,9,ctypes.byref(limits),ctypes.sizeof(limits)) or not k.AssignProcessToJobObject(job,int(proc._handle)):\n  proc.kill();proc.wait(timeout=4);k.CloseHandle(job);raise RuntimeError('unable to enforce single-process memory-limited Windows job')\n return job\n\ndef linux_child_guard(expected_parent):\n if not sys.platform.startswith('linux'):raise OSError('ENVIRONMENT_UNAVAILABLE: isolated mysqld requires Windows Job or Linux parent-death signal')\n libc=ctypes.CDLL(None,use_errno=True)\n libc.prctl.restype=ctypes.c_int\n libc.prctl.argtypes=[ctypes.c_int,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong,ctypes.c_ulong]\n # Set before exec; then close the race where our parent exited before prctl.\n if libc.prctl(1,int(signal.SIGKILL),0,0,0)!=0:raise OSError(ctypes.get_errno(),'ENVIRONMENT_UNAVAILABLE: PR_SET_PDEATHSIG failed')\n observed=ctypes.c_int()\n if libc.prctl(2,ctypes.addressof(observed),0,0,0)!=0 or observed.value!=signal.SIGKILL:raise OSError('ENVIRONMENT_UNAVAILABLE: parent-death signal verification failed')\n if os.getppid()!=expected_parent:os.kill(os.getpid(),signal.SIGKILL)\n\n@contextlib.contextmanager\ndef process(args,root,name,limit=35):\n log=(root/(name+'.log')).open('wb');job=None;stop=threading.Event();stat={'peak_rss':0};proc=None;thread=None\n try:\n  expected_parent=os.getpid()\n  kw={'creationflags':subprocess.BELOW_NORMAL_PRIORITY_CLASS} if os.name=='nt' else {'start_new_session':True,'preexec_fn':lambda:linux_child_guard(expected_parent)}\n  try:proc=subprocess.Popen(args,stdout=log,stderr=log,cwd=root,**kw)\n  except subprocess.SubprocessError as exc:raise FileNotFoundError('ENVIRONMENT_UNAVAILABLE: Linux mysqld parent-death guard could not be established') from exc\n  if os.name=='nt':constrain(proc);job=child_job(proc)\n  start=time.monotonic()\n  def kill():\n   if proc.poll() is None:\n    if os.name=='nt':proc.kill()\n    else:os.killpg(proc.pid,signal.SIGKILL)\n  def monitor():\n   while not stop.wait(.03):\n    if proc.poll() is not None:return\n    try:\n     if os.name=='nt':memory=rss(proc.pid)\n     else:\n      fields=pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines()\n      rss_line=next((x for x in fields if x.startswith('VmRSS:')),None)\n      if rss_line is None:\n       state=next((x.split()[1] for x in fields if x.startswith('State:')),None)\n       if state in ('Z','X','x') or proc.poll() is not None:return\n       # Linux can release mm before the task state becomes Z; allow only a bounded exit transition.\n       for _ in range(30):\n        if stop.wait(.01) or proc.poll() is not None:return\n        try:current=pathlib.Path('/proc/'+str(proc.pid)+'/status').read_text().splitlines()\n        except FileNotFoundError:return\n        state=next((x.split()[1] for x in current if x.startswith('State:')),None)\n        if state in ('Z','X','x'):return\n        rss_line=next((x for x in current if x.startswith('VmRSS:')),None)\n        if rss_line is not None:break\n       if rss_line is None:raise OSError('ENVIRONMENT_UNAVAILABLE: MySQL VmRSS unavailable for 300ms')\n      memory=int(rss_line.split()[1])*1024\n     stat['peak_rss']=max(stat['peak_rss'],memory)\n     if memory>384*1048576 or time.monotonic()-start>limit:raise RuntimeError('384MiB RSS / wall-time limit')\n    except Exception as exc:\n     if proc.poll() is None:stat['guard_error']=repr(exc);kill()\n     return\n  thread=threading.Thread(target=monitor,daemon=True);thread.start()\n  yield proc\n finally:\n  stop.set()\n  if proc is not None:\n   if proc.poll() is None:\n    if os.name=='nt':proc.terminate()\n    else:os.killpg(proc.pid,signal.SIGTERM)\n   try:proc.wait(timeout=5)\n   except subprocess.TimeoutExpired:\n    if os.name=='nt':proc.kill()\n    else:os.killpg(proc.pid,signal.SIGKILL)\n    proc.wait(timeout=4)\n  if thread:thread.join(timeout=2)\n  if job:ctypes.windll.kernel32.CloseHandle(job)\n  log.close()\n  if proc:print(name,'PID',proc.pid,'stopped',proc.poll() is not None,'peak RSS',stat['peak_rss'])\n  if stat.get('guard_error'):raise RuntimeError(stat)\n\ndef execute(conn,query,args=None):\n with conn.cursor() as c:c.execute(query,args);return c.fetchall()\n\n@contextlib.contextmanager\ndef fixture():\n exe=shutil.which('mysqld');assert exe,'mysqld unavailable'\n version=subprocess.check_output([exe,'--no-defaults','--version'],timeout=4).decode(errors='replace')\n if '8.4.' not in version or 'MariaDB' in version:raise FileNotFoundError('requires real MySQL 8.4 LTS, not MariaDB/SQLite')\n if os.name!='nt' and os.geteuid()==0:raise FileNotFoundError('MySQL lab must run as isolated nonroot user')\n base=pathlib.Path(exe).resolve().parent.parent\n with tempfile.TemporaryDirectory(prefix='trusted-mysql-native-') as d:\n  root=pathlib.Path(d).resolve();exports=root/'exports';exports.mkdir()\n  flags=[exe,'--no-defaults']+(['--no-monitor','--console'] if os.name=='nt' else [])\n  flags+=['--basedir='+str(base),'--datadir='+str(root/'data'),'--innodb-buffer-pool-size=64M','--performance-schema=OFF','--innodb-redo-log-capacity=16M','--innodb-log-buffer-size=4M','--skip-log-bin','--mysqlx=OFF','--max-connections=8','--table-open-cache=32','--table-open-cache-instances=1','--table-definition-cache=400','--thread-cache-size=0','--innodb-read-io-threads=1','--innodb-write-io-threads=1','--innodb-purge-threads=1','--tmp-table-size=1M','--max-heap-table-size=1M','--local-infile=OFF','--secure-file-priv='+str(exports)]\n  if os.name=='nt':flags+=['--plugin-dir='+str(base/'lib/plugin')]\n  with process(flags+['--initialize-insecure','--skip-networking'],root,'initialize') as p:\n   p.wait(timeout=30)\n   assert p.returncode==0,(root/'initialize.log').read_text(errors='replace')[-2500:]\n  with socket.socket() as s:s.bind(('127.0.0.1',0));port=s.getsockname()[1]\n  try:\n   with process(flags+['--bind-address=127.0.0.1','--port='+str(port),'--socket='+str(root/'mysql.sock'),'--pid-file='+str(root/'mysql.pid'),'--max-execution-time=1200'],root,'server') as p:\n    rootconn=None\n    try:\n     deadline=time.monotonic()+12\n     while rootconn is None:\n      try:rootconn=pymysql.connect(host='127.0.0.1',port=port,user='root',charset='utf8mb4',autocommit=True,connect_timeout=1,read_timeout=3,write_timeout=3,local_infile=False)\n      except pymysql.Error:\n       assert p.poll() is None and time.monotonic()<deadline,(root/'server.log').read_text(errors='replace')[-2500:]\n       time.sleep(.1)\n     assert int((root/'mysql.pid').read_text().strip())==p.pid,'server escaped monitored PID'\n     execute(rootconn,\"CREATE DATABASE training CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci\")\n     execute(rootconn,'USE training')\n     secret=secrets.token_hex(24)\n     execute(rootconn,\"CREATE USER 'student'@'127.0.0.1' IDENTIFIED BY %s\",(secret,))\n     def learner(privileges):\n      execute(rootconn,\"GRANT \"+privileges+\" ON training.* TO 'student'@'127.0.0.1'\")\n      return pymysql.connect(host='127.0.0.1',port=port,user='student',password=secret,database='training',charset='utf8mb4',autocommit=True,connect_timeout=2,read_timeout=3,write_timeout=3,local_infile=False)\n     yield rootconn,learner\n    finally:\n     if rootconn:\n      try:execute(rootconn,'SHUTDOWN')\n      except pymysql.Error:pass\n      rootconn.close()\n     try:p.wait(timeout=5)\n     except subprocess.TimeoutExpired:pass\n  finally:\n   with socket.socket() as s:assert s.connect_ex(('127.0.0.1',port))!=0,'owned MySQL port remained open'\n",
+        "checks/check.py": "import pathlib,secrets,datetime,sys\nsys.path.insert(0,str(pathlib.Path(__file__).resolve().parent))\nfrom decimal import Decimal\nfrom mysql_fixture import fixture,execute\n\nwith fixture() as (admin,learner):\n execute(admin,'CREATE TABLE ledger(id INT PRIMARY KEY,account VARCHAR(20) NOT NULL,occurred_at DATETIME(6) NOT NULL,delta DECIMAL(12,2) NOT NULL) ENGINE=InnoDB')\n client=learner('SELECT')\n try:\n  for phase in range(4):\n   execute(admin,'DELETE FROM ledger')\n   data=[(1,'a','2026-10-23 08:00:00',Decimal('10.00')),(2,'a','2026-10-23 08:00:00',Decimal('-3.00')),(3,'a','2026-10-23 08:01:00',Decimal('5.00')),(4,'b','2026-10-23 08:00:00',Decimal('-2.00'))]\n   if phase==1:\n    for i in range(5,60):data.append((i,secrets.choice(['a','b','c','d']),secrets.choice(['2026-10-23 07:59:59.999999','2026-10-23 08:00:00','2026-10-23 08:01:00']),Decimal(secrets.randbelow(20001)-10000)/100))\n   if phase==2:data=[(11,'zero','2026-10-01 00:00:00',Decimal('0.00')),(4,'zero','2026-10-01 00:00:00',Decimal('-0.01')),(8,'single','2026-10-01 00:00:00',Decimal('7.11'))]\n   if phase==3:data=[]\n   for row in reversed(data):execute(admin,'INSERT INTO ledger VALUES(%s,%s,%s,%s)',row)\n   balances={};expected=[]\n   for uid,acct,stamp,delta in sorted(data,key=lambda x:(x[1],x[2],x[0])):\n    balances[acct]=balances.get(acct,Decimal('0.00'))+delta;expected.append((acct,uid,delta,balances[acct]))\n   result=execute(client,pathlib.Path('balances.sql').read_text(encoding='utf-8'));assert result==tuple(expected),(phase,result,expected)\n   assert all(isinstance(r[2],Decimal) and isinstance(r[3],Decimal) for r in result)\n finally:client.close()\nprint('native window balance: every row retained; account isolation, tied timestamps by ID, negative/zero deltas, reverse insertion, empty table passed')\n"
+      }
+    },
+    "run": "python3 checks/check.py",
+    "semantic_root": "native_mysql_running_balance_rows_not_range_stable_ties_preserve_every_ledger_row",
+    "conversion": {
+      "original_id": "curated-parallel-mysql-103",
+      "original_version": 1,
+      "original_type": "interview",
+      "original_title": "MySQL窗口函数计算与GROUP BY聚合在行数上有何关键不同？",
+      "theory_retained": true,
+      "absorbed_unpublished_drafts": [
+        "curated-data-extra-mysql-005: consolidate tied-time running balance draft into this original-ID native task"
+      ]
+    }
+  }
+]

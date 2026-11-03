@@ -1,0 +1,147 @@
+[
+  {
+    "id": "curated-advanced-clickhouse-001",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 4,
+    "topic": "表模型与数据类型",
+    "title": "真实Collapsing撤销协议：旧状态完整负记录，signed聚合与FINAL共同对账",
+    "body": "## 操作任务\n实现transition(previous,current)。状态为None或恰有entity非空str、amount精确int的dict；两非空状态entity必须同一，否则ValueError。不改输入，返回旧完整状态复制并Sign=-1，再新完整状态复制并Sign=1；创建/删除只返回相应记录，双None返回空。不能用新amount撤旧状态或只追加新状态。平台实际CollapsingMergeTree逐条INSERT并停止后台merge，确认物理行数完整，完整创建/多次更新/删除/真实零值事件同时核对sum(amount*Sign)、sum(Sign)和FINAL；仅设置Sign而丢旧字段会产生真实错误聚合。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实固定ClickHouse25.8.1.5101 Local引擎，顺序已知的完整状态协议；逐条INSERT且停止merge，检查原始物理行数，避免同块/后台物理折叠掩盖错误。无复制/网络写入/并发旧状态竞争，不证明不完整来源可恢复或所有FINAL性能。",
+    "answer": "```python\ndef transition(previous,current):\n    for row in (previous,current):\n        if row is not None and (type(row) is not dict or set(row)!={'entity','amount'} or type(row['entity']) is not str or not row['entity'] or type(row['amount']) is not int):raise ValueError('complete typed state required')\n    if previous is not None and current is not None and previous['entity']!=current['entity']:raise ValueError('identity cannot change')\n    rows=[]\n    if previous is not None:rows.append(dict(previous,Sign=-1))\n    if current is not None:rows.append(dict(current,Sign=1))\n    return rows\n```\n\n原题知识说明：\nSign正负记录表达状态与撤销，后台合并不是按任意主键自动保留最新值。应明确排序键、状态版本及撤销记录必须对应的字段，并以重复、缺失撤销和乱序到达推导未合并结果。查询不能依赖合并恰好完成，应使用符合模型的带符号聚合或经证明的最终化路径。验收将同一事件集分成不同批次并改变合并时机，结果仍须符合业务状态；出现成对关系破坏时进入对账，不能靠OPTIMIZE掩盖。若输入无法提供可靠撤销协议，应选择其他版本模型而非仅添加Sign列。",
+    "type": "code",
+    "source": "advanced-expansion-20261022:data:clickhouse",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "说明输入、输出及正确性不变量",
+      "给出题述专门的对照样本与资源证据",
+      "区分机制保证、版本能力和未实测结论"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/engines/table-engines/mergetree-family/collapsingmergetree"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-advanced-clickhouse-001",
+      "original_title": "CollapsingMergeTree的Sign为什么必须与完整状态撤销协议配套？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def transition(previous,current):\n    for row in (previous,current):\n        if row is not None and (type(row) is not dict or set(row)!={'entity','amount'} or type(row['entity']) is not str or not row['entity'] or type(row['amount']) is not int):raise ValueError('complete typed state required')\n    if previous is not None and current is not None and previous['entity']!=current['entity']:raise ValueError('identity cannot change')\n    rows=[]\n    if previous is not None:rows.append(dict(previous,Sign=-1))\n    if current is not None:rows.append(dict(current,Sign=1))\n    return rows\n"
+    },
+    "negative_files": {
+      "task.py": "def transition(previous,current):\n    for row in (previous,current):\n        if row is not None and (type(row) is not dict or set(row)!={'entity','amount'} or type(row['entity']) is not str or not row['entity'] or type(row['amount']) is not int):raise ValueError('complete typed state required')\n    if previous is not None and current is not None and previous['entity']!=current['entity']:raise ValueError('identity cannot change')\n    rows=[]\n    if previous is not None:rows.append(dict(current or previous,Sign=-1))\n    if current is not None:rows.append(dict(current,Sign=1))\n    return rows\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现transition(previous,current)。状态为None或恰有entity非空str、amount精确int的dict；两非空状态entity必须同一，否则ValueError。不改输入，返回旧完整状态复制并Sign=-1，再新完整状态复制并Sign=1；创建/删除只返回相应记录，双None返回空。不能用新amount撤旧状态或只追加新状态。平台实际CollapsingMergeTree逐条INSERT并停止后台merge，确认物理行数完整，完整创建/多次更新/删除/真实零值事件同时核对sum(amount*Sign)、sum(Sign)和FINAL；仅设置Sign而丢旧字段会产生真实错误聚合。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实固定ClickHouse25.8.1.5101 Local引擎，顺序已知的完整状态协议；逐条INSERT且停止merge，检查原始物理行数，避免同块/后台物理折叠掩盖错误。无复制/网络写入/并发旧状态竞争，不证明不完整来源可恢复或所有FINAL性能。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 50,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,copy,secrets\nsys.path.insert(0,os.getcwd());sys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nimport task\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nwith Local() as database:\n assert database.run('SELECT 1 AS ready')==[dict(ready=1)]\n print('STUDENT_OPERATION_ENTERED:complete_previous_state_cancellation_not_just_sign_flag',flush=True)\n for case in range(3):\n  a=10+secrets.randbelow(20);b=40+secrets.randbelow(20);records=[];state={}\n  changes=[('a',a),('b',b),('c',0),('a',a+7),('b',None),('c',4),('c',0),('a',a-3)]\n  for entity,amount in changes:\n   previous=copy.deepcopy(state.get(entity));current=None if amount is None else dict(entity=entity,amount=amount);before=copy.deepcopy((previous,current))\n   try:rows=task.transition(previous,current)\n   except Exception as error:raise AssertionError('student complete cancellation protocol failed') from error\n   assert (previous,current)==before and isinstance(rows,list)\n   records.extend(rows)\n   if current is None:state.pop(entity,None)\n   else:state[entity]=current\n  table='states'+str(case)\n  values=[]\n  for row in records:\n   assert set(row)=={'entity','amount','Sign'} and row['entity'] in ('a','b','c') and type(row['amount']) is int and row['Sign'] in (-1,1)\n   values.append(\"('\"+row['entity']+\"',\"+str(row['amount'])+','+str(row['Sign'])+')')\n  sql='CREATE TABLE '+table+'(entity String,amount Int64,Sign Int8) ENGINE=CollapsingMergeTree(Sign) ORDER BY entity; SYSTEM STOP MERGES '+table+';'+''.join('INSERT INTO '+table+' VALUES '+value+';' for value in values)\n  sql+=\"SELECT 'physical' AS view,count() AS raw FROM \"+table+';'\n  sql+=\"SELECT 'signed' AS view,entity,sum(amount*Sign) AS amount FROM \"+table+' GROUP BY entity HAVING sum(Sign)=1 ORDER BY entity;'\n  sql+=\"SELECT 'final' AS view,entity,amount FROM \"+table+' FINAL ORDER BY entity;'\n  actual=database.run(sql)\n  expected=[dict(view='physical',raw=len(records))]+[dict(view=view,entity=entity,amount=row['amount']) for view in ('signed','final') for entity,row in sorted(state.items())]\n  assert actual==expected,'complete cancelled state was not copied; signed aggregate and FINAL disagree with intended state'\n for previous,current in [(dict(entity='a',amount=1),dict(entity='b',amount=2)),(dict(entity='a',amount=True),None),(None,dict(entity='a')),([],None)]:\n  try:task.transition(previous,current)\n  except ValueError:pass\n  else:raise AssertionError('incomplete or changed identity state accepted')\n assert task.transition(None,None)==[]\n print('NATIVE_COLLAPSING_SIGNED_AGGREGATE_AND_FINAL_MATCH_COMPLETE_UPDATE_DELETE_ZERO_STATE',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "clickhouse"
+    ]
+  },
+  {
+    "id": "curated-advanced-clickhouse-002",
+    "module": "clickhouse",
+    "category": "ClickHouse",
+    "level": 4,
+    "topic": "查询与聚合优化",
+    "title": "真实浮点聚合重排：同三行不同sum，保留近似证据并用Decimal独立对账",
+    "body": "## 操作任务\ntask.sql读取source(raw String)，输出唯一行rows=count、approximate=真实Float64求和、exact=输入按两位小数Decimal128精确求和并toString输出精确十进制字符串（不依赖尾零显示）。不能把approximate替成精确值，也不能先Float64求和再转Decimal当精确对照。平台相同三值两种顺序真实出现不同浮点sum，但行数和精确Decimal总值保持；还验分币种前提外的普通负值/分数/精确零。此处固定原始十进制文本是精确对照依据。\n\n## 提交产物\ntask.sql\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n真实ClickHouse25.8.1.5101 Local受控输入重排和Decimal128；证明非结合性可发生且末位变化不必等于丢行。未运行真实分布式并发调度，不能仅凭这一个对照排除生产缺数据，也不承诺sumKahan对任意输入完全精确。",
+    "answer": "```sql\nSELECT count() AS rows,sum(toFloat64(raw)) AS approximate,toString(sum(toDecimal128(raw,2))) AS exact FROM source;\n```\n\n原题知识说明：\n浮点加法顺序可能影响舍入，分片和线程改变聚合树后末位变化并不自动说明丢数据。应先用相同明细校验行数、键集合和分片覆盖，再比较高精度或Decimal基准，记录绝对与相对误差。对正负大数抵消和数量级悬殊的样本专门测试，不能只用均匀正数。验收按业务定义容差，财务等精确要求应使用合适精度及溢出检查。误差超过数值分析可解释范围仍需调查重复或漏分片，不能用浮点特性为任意差异开脱；稳定输出排序也不保证聚合内部运算顺序固定。",
+    "type": "code",
+    "source": "advanced-expansion-20261022:data:clickhouse",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "advanced-expansion-20261022",
+    "hints": [],
+    "rubric": [
+      "说明输入、输出及正确性不变量",
+      "给出题述专门的对照样本与资源证据",
+      "区分机制保证、版本能力和未实测结论"
+    ],
+    "references": [
+      "https://clickhouse.com/docs/sql-reference/aggregate-functions/reference/sum",
+      "https://clickhouse.com/docs/sql-reference/data-types/decimal"
+    ],
+    "language": "sql",
+    "conversion": {
+      "original_id": "curated-advanced-clickhouse-002",
+      "original_title": "并行浮点聚合结果末位变化时，如何区分数值非结合性与数据遗漏？",
+      "original_type": "interview"
+    },
+    "files": {
+      "task.sql": "-- implement requested native operation\n"
+    },
+    "solution_files": {
+      "task.sql": "SELECT count() AS rows,sum(toFloat64(raw)) AS approximate,toString(sum(toDecimal128(raw,2))) AS exact FROM source;\n"
+    },
+    "negative_files": {
+      "task.sql": "SELECT count() AS rows,toFloat64(sum(toDecimal128(raw,2))) AS approximate,toString(sum(toDecimal128(raw,2))) AS exact FROM source;\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "task.sql读取source(raw String)，输出唯一行rows=count、approximate=真实Float64求和、exact=输入按两位小数Decimal128精确求和并toString输出精确十进制字符串（不依赖尾零显示）。不能把approximate替成精确值，也不能先Float64求和再转Decimal当精确对照。平台相同三值两种顺序真实出现不同浮点sum，但行数和精确Decimal总值保持；还验分币种前提外的普通负值/分数/精确零。此处固定原始十进制文本是精确对照依据。",
+      "deliverables": [
+        "task.sql"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "真实ClickHouse25.8.1.5101 Local受控输入重排和Decimal128；证明非结合性可发生且末位变化不必等于丢行。未运行真实分布式并发调度，不能仅凭这一个对照排除生产缺数据，也不承诺sumKahan对任意输入完全精确。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 50,
+      "requires": {
+        "commands": [
+          "clickhouse"
+        ],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/ch_fixture.py": "\"\"\"Real pinned ClickHouse Local engine; private catalog, small pools and no network.\"\"\"\nimport json,os,pathlib,shutil,subprocess,tempfile\n\nCONFIG='''<clickhouse>\n <logger><level>error</level><console>1</console></logger>\n <max_thread_pool_size>64</max_thread_pool_size>\n <background_schedule_pool_size>4</background_schedule_pool_size>\n <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>\n <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>\n <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>\n <background_pool_size>2</background_pool_size>\n <merge_tree>\n  <number_of_free_entries_in_pool_to_execute_mutation>0</number_of_free_entries_in_pool_to_execute_mutation>\n  <number_of_free_entries_in_pool_to_lower_max_size_of_merge>0</number_of_free_entries_in_pool_to_lower_max_size_of_merge>\n  <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>0</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>\n </merge_tree>\n</clickhouse>'''\n\nclass Local:\n def __init__(self):\n  self.executable=shutil.which('clickhouse')\n  if not self.executable:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: ClickHouse Local 25.8.1.5101 executable missing')\n  result=subprocess.run([self.executable,'local','--version'],capture_output=True,text=True,timeout=3)\n  if result.returncode or '25.8.1.5101' not in result.stdout:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: pinned ClickHouse Local version required')\n def __enter__(self):\n  self.temp=tempfile.TemporaryDirectory(prefix='of-clickhouse-');self.root=pathlib.Path(self.temp.name);self.config=self.root/'config.xml';self.config.write_text(CONFIG,encoding='utf8');return self\n def run(self,sql,*,data=None,structure=None,table='source',input_format='JSONEachRow'):\n  args=[self.executable,'local','--config-file='+str(self.config),'--path='+str(self.root/'data'),'--multiquery','--format=JSONEachRow',\n   '--max_threads=2','--max_memory_usage=134217728','--output_format_json_quote_64bit_integers=0','--query='+sql]\n  if data is not None:args+=['--structure='+structure,'--input-format='+input_format,'--table='+table]\n  try:result=subprocess.run(args,input=data,capture_output=True,text=True,timeout=15,cwd=self.root,env={**os.environ,'TMPDIR':str(self.root)})\n  except subprocess.TimeoutExpired as error:raise AssertionError('native ClickHouse query exceeded isolated budget') from error\n  assert result.returncode==0,'native ClickHouse SQL failed: '+result.stderr[-2500:]\n  try:return [json.loads(line) for line in result.stdout.splitlines() if line.strip()]\n  except ValueError as error:raise AssertionError('native result was not JSONEachRow') from error\n def __exit__(self,*args):self.temp.cleanup()\n",
+        "checks/check.py": "import os,sys,pathlib,json,decimal\nsys.path.insert(0,str(pathlib.Path.cwd()/'checks'))\nfrom ch_fixture import Local\nassert sys.platform=='linux' and os.geteuid()!=0\nprint('NATIVE_LINUX_READY',flush=True)\nsql=pathlib.Path('task.sql').read_text().strip()\nif not sql or sql.startswith('--'):raise NotImplementedError('submit actual aggregate evidence query')\nsamples=[['10000000000000000','1','-10000000000000000'],['10000000000000000','-10000000000000000','1'],['1000000000000.25','0.10','-1000000000000.25'],['-3.00','1.25','1.75']]\nwith Local() as database:\n baselines=[]\n for values in samples:\n  data='\\n'.join(json.dumps(dict(raw=value)) for value in values)\n  baselines.append(database.run('SELECT count() AS rows,sum(toFloat64(raw)) AS approximate FROM source;',data=data,structure='raw String')[0])\n assert baselines[0]['rows']==baselines[1]['rows']==3 and baselines[0]['approximate']!=baselines[1]['approximate'],'controlled floating aggregation orders did not exhibit different results'\n print('NATIVE_CLICKHOUSE_IDENTICAL_THREE_VALUES_DIFFERENT_FLOAT_SUM_ORDER_NO_ROWS_MISSING',flush=True)\n print('STUDENT_OPERATION_ENTERED:retain_approximate_evidence_with_exact_decimal_control',flush=True)\n for values,baseline in zip(samples,baselines):\n  data='\\n'.join(json.dumps(dict(raw=value)) for value in values)\n  expected=format(sum((decimal.Decimal(value) for value in values),decimal.Decimal(0)),'.2f')\n  actual=database.run(sql,data=data,structure='raw String')\n  assert len(actual)==1 and actual[0]['rows']==3 and actual[0]['approximate']==baseline['approximate'],(actual,baseline)\n  assert type(actual[0]['exact']) is str and decimal.Decimal(actual[0]['exact'])==decimal.Decimal(expected),('exact control passed through Float64',actual,expected)\n print('NATIVE_CLICKHOUSE_FLOAT_APPROXIMATION_OBSERVED_DECIMAL_EXACT_CONTROL_AND_COUNTS_STABLE',flush=True)\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "clickhouse"
+    ]
+  }
+]

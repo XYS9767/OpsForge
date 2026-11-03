@@ -1,0 +1,75 @@
+[
+  {
+    "id": "curated-istio-expansion-case-002",
+    "title": "Istio限流故障：gRPC服务端口错误导致失败关闭",
+    "body": "## 操作任务\n实现task.py的repair(config,approved_port)，对题目私有Envoy配置只修正名为rls的限流服务集群端口为已批准的端口，返回深拷贝，不改变failure_mode_deny、domain、描述符、其他路由或输入。私有gRPC服务实际健康，原代理因端口错误且失败关闭使业务请求失败；修复后两个代理共享额度，前两次200、第三次429，健康路径不消耗额度。\n\n## 产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；真实代理、gRPC服务、独立业务上游与健康路径对照。\n\n## 能力边界\n只验证自有user/net namespace中两个Envoy及一个私有gRPC测试服务，服务和业务上游均在loopback；无真实Istio控制面、生产服务、跨主机或Redis。失败关闭策略保持，不能据此声称生产限流及发布已恢复。",
+    "answer": "确认限流gRPC服务健康并核对代理实际集群端口；只修复批准端口，不通过关闭失败保护掩盖故障。",
+    "explanation": "失败关闭时限流服务不可达可影响业务；后端健康不代表策略依赖健康，修复后仍需验证共享额度和健康路由。",
+    "rubric": [
+      "重现真实代理的限流服务端口错误与健康上游对照，定向修复端口后共享额度恢复，失败关闭保持。"
+    ],
+    "category": "Istio",
+    "module": "istio",
+    "related_modules": [
+      "istio"
+    ],
+    "type": "code",
+    "language": "python",
+    "question_format": "case",
+    "level": 2,
+    "difficulty": "基础",
+    "has_answer": true,
+    "version": 1,
+    "review_status": "reviewed",
+    "source": "OpsForge-verified-gap-expansion",
+    "tags": [
+      "Istio",
+      "服务网格"
+    ],
+    "review_note": "原模块故障场景真实缺口，新增题号绑定冻结空名额；不计原214故障和旧题改编。",
+    "references": [
+      "https://istio.io/latest/docs/tasks/policy-enforcement/rate-limit/",
+      "https://istio.io/latest/docs/reference/config/networking/envoy-filter/"
+    ],
+    "files": {
+      "task.py": "raise NotImplementedError(\"repair approved endpoint\")\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef repair(config,approved_port):\n if type(approved_port) is not int or not 1<=approved_port<=65535:raise ValueError('invalid approved port')\n result=copy.deepcopy(config);clusters=[c for c in result['static_resources']['clusters'] if c['name']=='rls']\n if len(clusters)!=1:raise ValueError('unexpected cluster')\n endpoint=clusters[0]['load_assignment']['endpoints'][0]['lb_endpoints'][0]['endpoint']['address']['socket_address']\n endpoint['port_value']=approved_port;return result\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef repair(config,approved_port):\n if type(approved_port) is not int or not 1<=approved_port<=65535:raise ValueError('invalid approved port')\n result=copy.deepcopy(config);clusters=[c for c in result['static_resources']['clusters'] if c['name']=='rls']\n if len(clusters)!=1:raise ValueError('unexpected cluster')\n endpoint=clusters[0]['load_assignment']['endpoints'][0]['lb_endpoints'][0]['endpoint']['address']['socket_address']\n endpoint['port_value']=approved_port+1;return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "私有WSL普通student；实际Envoy、私有grpcio和自有user/net namespace",
+      "operation": "修复限流服务gRPC端口，保留失败关闭，并验证两个代理共享额度。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "只验证自有user/net namespace中两个Envoy及一个私有gRPC测试服务，服务和业务上游均在loopback；无真实Istio控制面、生产服务、跨主机或Redis。失败关闭策略保持，不能据此声称生产限流及发布已恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 50,
+      "requires": {
+        "commands": [
+          "envoy",
+          "unshare",
+          "ip"
+        ],
+        "python_modules": [
+          "grpc"
+        ],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import os,pathlib,subprocess,sys\nassert os.getuid()==1000\nprint('NATIVE_LINUX_READY',flush=True)\nbefore=os.readlink('/proc/self/ns/net');p=subprocess.run(['unshare','-Urn','--',sys.executable,'-B','checks/rls_worker.py'],capture_output=True,text=True,timeout=35)\nprint(p.stdout,flush=True);assert p.returncode==0,p.stdout+p.stderr;assert os.readlink('/proc/self/ns/net')==before\nassert 'NATIVE_ENVOY_RLS_ENDPOINT_REPAIRED_FAIL_CLOSED_PRESERVED_SHARED_POLICY_200_200_429' in p.stdout\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n",
+        "checks/rls_worker.py": "import copy,json,os,pathlib,subprocess,sys,threading\nfrom concurrent import futures\nsys.path[:0]=[str(pathlib.Path.cwd()),str(pathlib.Path.cwd()/'checks'),'/tmp/opsforge-private-grpcio-1.76.0-20261028']\nimport grpc,task\nfrom envoy_fixture import Envoy,Upstream,bootstrap,hcm,free_port,request\nassert os.getuid()==0\nsubprocess.run(['ip','link','set','lo','up'],check=True,capture_output=True)\ndef fields(raw):\n i=0;out={}\n while i<len(raw):\n  key=raw[i];i+=1;number=key>>3;wire=key&7;assert wire==2\n  n=0;shift=0\n  while True:\n   x=raw[i];i+=1;n|=(x&127)<<shift;shift+=7\n   if x<128:break\n  assert i+n<=len(raw);out.setdefault(number,[]).append(raw[i:i+n]);i+=n\n return out\nlock=threading.Lock();events=[];counts={}\ndef decide(raw,context):\n message=fields(raw);domain=message[1][0].decode();descriptors=[]\n for descriptor in message[2]:\n  for item in fields(descriptor)[1]:\n   pair=fields(item);descriptors.append((pair[1][0].decode(),pair[2][0].decode()))\n with lock:\n  events.append((domain,descriptors));key=(domain,tuple(descriptors))\n  if key==('training',(('generic_key','approved'),)):\n   counts[key]=counts.get(key,0)+1;code=2 if counts[key]>2 else 1\n  else:code=1\n return bytes([8,code])\nserver=grpc.server(futures.ThreadPoolExecutor(max_workers=2));server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler('envoy.service.ratelimit.v3.RateLimitService',{'ShouldRateLimit':grpc.unary_unary_rpc_method_handler(decide,request_deserializer=lambda b:b,response_serializer=lambda b:b)}),));port=server.add_insecure_port('127.0.0.1:0');server.start();wrong_port=free_port();assert wrong_port!=port\ntry:\n with Upstream() as upstream:\n  config=bootstrap(upstream.port);config['static_resources']['clusters'].append({'name':'rls','connect_timeout':'1s','type':'STATIC','http2_protocol_options':{},'load_assignment':{'cluster_name':'rls','endpoints':[{'lb_endpoints':[{'endpoint':{'address':{'socket_address':{'address':'127.0.0.1','port_value':wrong_port}}}}]}]}})\n  manager=hcm(config);ordinary={'match':{'prefix':'/'},'route':{'cluster':'service','timeout':'1s','rate_limits':[{'actions':[{'generic_key':{'descriptor_value':'approved'}}]}]}};health={'match':{'path':'/health'},'route':{'cluster':'service','timeout':'1s'}};manager['route_config']['virtual_hosts'][0]['routes']=[health,ordinary]\n  manager['http_filters'].insert(0,{'name':'envoy.filters.http.ratelimit','typed_config':{'@type':'type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit','domain':'training','failure_mode_deny':True,'timeout':'1s','rate_limit_service':{'grpc_service':{'envoy_grpc':{'cluster_name':'rls'}},'transport_api_version':'V3'}}})\n  original=copy.deepcopy(config)\n  assert request('http://127.0.0.1:'+str(upstream.port),'/direct')[0]==200\n  with grpc.insecure_channel('127.0.0.1:'+str(port)) as channel:\n   call=channel.unary_unary('/envoy.service.ratelimit.v3.RateLimitService/ShouldRateLimit',request_serializer=lambda x:x,response_deserializer=lambda x:x)\n   assert call(bytes.fromhex('0a0570726f626512190a170a0b67656e657269635f6b65791208617070726f766564'),timeout=3)==bytes([8,1])\n  with Envoy(config) as before:\n   assert before.request('/health')[0]==200\n   baseline=[before.request('/api/'+str(i))[0] for i in range(2)]\n   assert all(x>=500 for x in baseline),baseline\n  assert len(events)==1 and events[0][0]=='probe' and not counts\n  print('NATIVE_ENVOY_RLS_BAD_PORT_FAIL_CLOSED_UPSTREAM_AND_RLS_DIRECT_HEALTHY',flush=True)\n  print('STUDENT_OPERATION_ENTERED:repair_only_approved_global_rate_limit_endpoint',flush=True)\n  try:fixed=task.repair(config,port)\n  except Exception as error:raise AssertionError('approved endpoint repair failed') from error\n  expected=copy.deepcopy(original);expected['static_resources']['clusters'][1]['load_assignment']['endpoints'][0]['lb_endpoints'][0]['endpoint']['address']['socket_address']['port_value']=port\n  assert config==original and fixed==expected,'only approved cluster endpoint may change'\n  with Envoy(fixed) as first,Envoy(fixed) as second:\n   n=len(events);assert first.request('/health')[0]==200 and len(events)==n\n   statuses=[first.request('/api/a')[0],second.request('/api/b')[0],first.request('/api/c')[0]]\n   assert statuses==[200,200,429],statuses\n  assert events[-3:]==[('training',[('generic_key','approved')])]*3 and counts[('training',(('generic_key','approved'),))]==3\n  assert len(upstream.requests)==5,'direct check, two health checks and two approved requests'\n  print('NATIVE_ENVOY_RLS_ENDPOINT_REPAIRED_FAIL_CLOSED_PRESERVED_SHARED_POLICY_200_200_429',flush=True)\nfinally:server.stop(0).wait()\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n",
+        "checks/envoy_fixture.py": "\"\"\"Pinned standalone Envoy and loopback-only HTTP peers, no image or host changes.\"\"\"\nimport copy,http.server,json,os,pathlib,shutil,socket,subprocess,tempfile,threading,time,urllib.error,urllib.request\n\ndef free_port():\n with socket.socket() as endpoint:endpoint.bind(('127.0.0.1',0));return endpoint.getsockname()[1]\n\ndef request(base,path,method='GET',body=None,headers=None):\n req=urllib.request.Request(base+path,data=body,method=method,headers=headers or {})\n opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))\n try:\n  with opener.open(req,timeout=3) as response:return response.status,response.read(),dict(response.headers)\n except urllib.error.HTTPError as response:\n  try:return response.code,response.read(),dict(response.headers)\n  finally:response.close()\n\nclass Upstream:\n def __init__(self,status=200):self.status=status;self.requests=[];self.lock=threading.Lock()\n def __enter__(self):\n  owner=self\n  class Handler(http.server.BaseHTTPRequestHandler):\n   protocol_version='HTTP/1.1'\n   def log_message(self,*args):pass\n   def respond(self):\n    raw=self.rfile.read(int(self.headers.get('Content-Length',0)))\n    with owner.lock:owner.requests.append({'method':self.command,'path':self.path,'body':raw.decode('utf8'),'headers':dict(self.headers)});index=len(owner.requests)\n    status=owner.status(self.command,self.path,index) if callable(owner.status) else owner.status\n    body=json.dumps({'method':self.command,'path':self.path,'attempt':index}).encode()\n    self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers()\n    try:self.wfile.write(body);self.wfile.flush()\n    except (BrokenPipeError,ConnectionResetError):pass\n   do_GET=do_POST=do_PUT=respond\n  self.server=http.server.ThreadingHTTPServer(('127.0.0.1',0),Handler);self.port=self.server.server_port\n  self.thread=threading.Thread(target=lambda:self.server.serve_forever(poll_interval=.02),daemon=True);self.thread.start();return self\n def __exit__(self,*args):self.server.shutdown();self.server.server_close();self.thread.join(2)\n\ndef bootstrap(upstream_port):\n return {'node':{'id':'private-probe','cluster':'opsforge'},\n  'admin':{'address':{'socket_address':{'address':'127.0.0.1','port_value':0}}},\n  'static_resources':{'listeners':[{'name':'ingress','address':{'socket_address':{'address':'127.0.0.1','port_value':0}},'filter_chains':[{'filters':[{'name':'envoy.filters.network.http_connection_manager','typed_config':{\n   '@type':'type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager','stat_prefix':'ingress','codec_type':'AUTO',\n   'route_config':{'name':'local','virtual_hosts':[{'name':'service','domains':['*'],'routes':[{'match':{'prefix':'/'},'route':{'cluster':'service','timeout':'1s'}}]}]},\n   'http_filters':[{'name':'envoy.filters.http.router','typed_config':{'@type':'type.googleapis.com/envoy.extensions.filters.http.router.v3.Router'}}]}}]}]}],\n  'clusters':[{'name':'service','connect_timeout':'0.2s','type':'STATIC','lb_policy':'ROUND_ROBIN','load_assignment':{'cluster_name':'service','endpoints':[{'lb_endpoints':[{'endpoint':{'address':{'socket_address':{'address':'127.0.0.1','port_value':upstream_port}}}}]}]}}]}}\n\ndef hcm(config):return config['static_resources']['listeners'][0]['filter_chains'][0]['filters'][0]['typed_config']\ndef routes(config):return hcm(config)['route_config']['virtual_hosts'][0]['routes']\n\nclass Envoy:\n def __init__(self,config,binary='envoy',version='1.36.13',log_level='error'):self.config=copy.deepcopy(config);self.process=None;self.temp=None;self.log=None;self.binary=binary;self.version=version;self.log_level=log_level\n def __enter__(self):\n  binary=shutil.which(self.binary)\n  if not binary:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: standalone Envoy missing')\n  version=subprocess.run([binary,'--version'],capture_output=True,text=True,timeout=3)\n  if version.returncode or '/'+self.version+'/' not in version.stdout+version.stderr:raise RuntimeError('NATIVE_ENVIRONMENT_ERROR: Envoy'+self.version+' required')\n  self.temp=tempfile.TemporaryDirectory(prefix='of-envoy-');self.root=pathlib.Path(self.temp.name);port=free_port();admin=free_port()\n  while admin==port:admin=free_port()\n  self.config['static_resources']['listeners'][0]['address']['socket_address']['port_value']=port\n  self.config['admin']['address']['socket_address']['port_value']=admin\n  self.base='http://127.0.0.1:'+str(port);self.admin='http://127.0.0.1:'+str(admin)\n  path=self.root/'bootstrap.json';path.write_text(json.dumps(self.config),encoding='utf8');self.log=(self.root/'envoy.log').open('wb')\n  try:\n   self.process=subprocess.Popen([binary,'--config-path',str(path),'--disable-hot-restart','--concurrency','1','--log-level',self.log_level],cwd=self.root,stdout=self.log,stderr=self.log)\n   deadline=time.monotonic()+5\n   while time.monotonic()<deadline:\n    if self.process.poll() is not None:raise RuntimeError('Envoy startup failed: '+(self.root/'envoy.log').read_text(errors='replace')[-2400:])\n    try:\n     if request(self.admin,'/ready')[0]==200:break\n    except (OSError,urllib.error.URLError):pass\n    time.sleep(.02)\n   else:raise RuntimeError('Envoy private readiness deadline')\n   print('NATIVE_ENVOY_READY:'+self.version,flush=True);return self\n  except BaseException:self.__exit__(None,None,None);raise\n def request(self,path,method='GET',body=None,headers=None):return request(self.base,path,method,body,headers)\n def stats(self):return {r['name']:r['value'] for r in json.loads(request(self.admin,'/stats?format=json')[1])['stats'] if 'name' in r and 'value' in r}\n def __exit__(self,*args):\n  if self.process is not None:\n   if self.process.poll() is None:self.process.terminate()\n   try:self.process.wait(timeout=3)\n   except subprocess.TimeoutExpired:self.process.kill();self.process.wait(timeout=2)\n  if self.log:self.log.close()\n  if self.temp:self.temp.cleanup()\n\ndef student(function,*args):\n print('STUDENT_OPERATION_ENTERED:'+function.__name__,flush=True)\n try:return function(*args)\n except Exception as error:raise AssertionError('student Envoy operation failed: '+type(error).__name__) from error\n"
+      }
+    }
+  }
+]

@@ -1,0 +1,415 @@
+[
+  {
+    "id": "curated-offline-mysql-051",
+    "module": "mysql",
+    "category": "mysql",
+    "topic": "GTID区间差集审计",
+    "level": 4,
+    "type": "code",
+    "language": "python",
+    "title": "离线编程：计算两份GTID集合的缺失事务区间",
+    "body": "## 环境与初始材料\n平台Python3.11标准库隔离工作区；随题提供离线导出样本，不连接服务。\n\n## 操作任务\n对MySQL8未带tag的GTID集合计算required减executed，合并重叠/相邻区间，UUID 输入须为含连字符的 8-4-4-4-12 十六进制形式，输出规范小写并排序。区间为正十进制整数（不允许前导零），最大2^63-1；不得逐事务展开大区间。输出规范GTID文本；错误格式ValueError。\n\n## 产物\n提交task.py，函数签名 missing(required, executed)。不能修改样本绕过验收。\n\n## 验收方法\n运行平台固定注入的 checks/check.py；正常样本、边界、错误输入与非修改约束必须完整通过。骨架和典型错误实现应失败，参考解应通过。\n\n## 能力边界\n只分析离线GTID集合，不切换复制源、不执行SET GTID或声称复制恢复。平台自动提供网页工作区，学员无需另开Kubernetes。\n",
+    "files": {
+      "task.py": "def missing(required, executed):\n    raise NotImplementedError(\"待实现\")\n",
+      "gtid.json": "{\n  \"required\": \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1-10:20-25\",\n  \"executed\": \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:1-3:5-8:22-30\",\n  \"expected\": \"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa:4:9-10:20-21\"\n}\n"
+    },
+    "solution_files": {
+      "task.py": "import re,uuid\ndef missing(required,executed):\n def parse(text):\n  if not isinstance(text,str):raise ValueError('text required')\n  result={}\n  if not text.strip():return result\n  for group in text.split(','):\n   parts=group.strip().split(':')\n   if len(parts)<2:raise ValueError('missing intervals')\n   if not re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}',parts[0]):raise ValueError('canonical UUID required')\n   sid=str(uuid.UUID(parts[0]))\n   for interval in parts[1:]:\n    if not re.fullmatch(r'[1-9][0-9]*(?:-[1-9][0-9]*)?',interval):raise ValueError('invalid interval')\n    nums=[int(x) for x in interval.split('-')];a=nums[0];b=nums[-1]\n    if a>b or b>9223372036854775807:raise ValueError('range')\n    result.setdefault(sid,[]).append((a,b))\n  for sid,ranges in result.items():\n   merged=[]\n   for a,b in sorted(ranges):\n    if merged and a<=merged[-1][1]+1:merged[-1]=(merged[-1][0],max(merged[-1][1],b))\n    else:merged.append((a,b))\n   result[sid]=merged\n  return result\n wanted,done=parse(required),parse(executed);output=[]\n for sid,ranges in sorted(wanted.items()):\n  absent=[]\n  for start,end in ranges:\n   cursor=start\n   for a,b in done.get(sid,[]):\n    if b<cursor:continue\n    if a>end:break\n    if a>cursor:absent.append((cursor,min(end,a-1)))\n    cursor=max(cursor,b+1)\n    if cursor>end:break\n   if cursor<=end:absent.append((cursor,end))\n  if absent:output.append(sid+':'+':'.join(str(a) if a==b else str(a)+'-'+str(b) for a,b in absent))\n return ','.join(output)\n"
+    },
+    "negative_files": {
+      "task.py": "def missing(required,executed):\n return '' if required==executed else required\n"
+    },
+    "answer": "```python\nimport re,uuid\ndef missing(required,executed):\n def parse(text):\n  if not isinstance(text,str):raise ValueError('text required')\n  result={}\n  if not text.strip():return result\n  for group in text.split(','):\n   parts=group.strip().split(':')\n   if len(parts)<2:raise ValueError('missing intervals')\n   if not re.fullmatch(r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}',parts[0]):raise ValueError('canonical UUID required')\n   sid=str(uuid.UUID(parts[0]))\n   for interval in parts[1:]:\n    if not re.fullmatch(r'[1-9][0-9]*(?:-[1-9][0-9]*)?',interval):raise ValueError('invalid interval')\n    nums=[int(x) for x in interval.split('-')];a=nums[0];b=nums[-1]\n    if a>b or b>9223372036854775807:raise ValueError('range')\n    result.setdefault(sid,[]).append((a,b))\n  for sid,ranges in result.items():\n   merged=[]\n   for a,b in sorted(ranges):\n    if merged and a<=merged[-1][1]+1:merged[-1]=(merged[-1][0],max(merged[-1][1],b))\n    else:merged.append((a,b))\n   result[sid]=merged\n  return result\n wanted,done=parse(required),parse(executed);output=[]\n for sid,ranges in sorted(wanted.items()):\n  absent=[]\n  for start,end in ranges:\n   cursor=start\n   for a,b in done.get(sid,[]):\n    if b<cursor:continue\n    if a>end:break\n    if a>cursor:absent.append((cursor,min(end,a-1)))\n    cursor=max(cursor,b+1)\n    if cursor>end:break\n   if cursor<=end:absent.append((cursor,end))\n  if absent:output.append(sid+':'+':'.join(str(a) if a==b else str(a)+'-'+str(b) for a,b in absent))\n return ','.join(output)\n```\n\n只分析离线GTID集合，不切换复制源、不执行SET GTID或声称复制恢复",
+    "run": "python3 checks/check.py",
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,tempfile,hashlib,importlib.util\nroot=pathlib.Path(__file__).resolve().parents[1]\nspec=importlib.util.spec_from_file_location('candidate',root/'task.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\nsample=fixture('gtid.json');assert m.missing(sample['required'],sample['executed'])==sample['expected']\nsid='aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';other='bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'\nassert m.missing(sid+':1:2-4:3-6',sid+':2-5')==sid+':1:6'\nassert m.missing(sid+':1-1000000000000',sid+':2-999999999999')==sid+':1:1000000000000'\nassert m.missing(other+':1,'+sid+':1',sid+':1')==other+':1'\nassert m.missing('',sid+':1')=='' and m.missing(sid+':1',sid.upper()+':1')==''\nfor bad in ['bad:1',sid+':0',sid+':3-2',sid+':1-2-3',sid+':01',sid+':',sid+':9223372036854775808']:\n reject(m.missing,bad,'')\n\nprint('ALL_DATA_ASSERTIONS_PASSED')\n\nfor bad in [sid.replace('-',''),'{'+sid+'}','urn:uuid:'+sid]:reject(m.missing,bad+':1','')\n"
+      },
+      "timeout": 30
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台Python3.11标准库离线工作区",
+      "availability": "pending-independent-review",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": [
+        "完整运行可信Python行为合同",
+        "正常、边界、非法输入、初始骨架及典型错误实现对照"
+      ],
+      "scope": "只分析离线GTID集合，不切换复制源、不执行SET GTID或声称复制恢复"
+    },
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "case_signature": "mysql|GTID区间差集审计",
+    "source": "OpsForge 原创离线数据实作",
+    "references": [
+      "https://dev.mysql.com/doc/refman/8.0/en/replication-gtids-concepts.html"
+    ]
+  },
+  {
+    "id": "curated-offline-mysql-052",
+    "module": "mysql",
+    "category": "mysql",
+    "topic": "备份产物完整性清单",
+    "level": 3,
+    "type": "code",
+    "language": "python",
+    "title": "离线编程：核对备份文件清单的大小与摘要",
+    "body": "## 环境与初始材料\n平台Python3.11标准库隔离工作区；随题提供离线导出样本，不连接服务。\n\n## 操作任务\n实现备份清单核对：仅检查给定目录内相对路径，拒绝绝对路径、..、反斜杠、盘符和重复条目。按原始字节计算size与SHA256，报告missing/size/sha256；每文件可同时报告大小和摘要不符。不能只看文件存在。\n\n## 产物\n提交task.py，函数签名 verify(directory, manifest)。不能修改样本绕过验收。\n\n## 验收方法\n运行平台固定注入的 checks/check.py；正常样本、边界、错误输入与非修改约束必须完整通过。骨架和典型错误实现应失败，参考解应通过。\n\n## 能力边界\n只验备份文件传输完整性，不执行SQL恢复，不把摘要一致当成数据库可恢复。平台自动提供网页工作区，学员无需另开Kubernetes。\n\n随题SQL文本为UTF-8/LF字节；摘要针对原始字节，平台不得在落盘时自动改为CRLF。\n",
+    "files": {
+      "task.py": "def verify(directory, manifest):\n    raise NotImplementedError(\"待实现\")\n",
+      "schema.sql": "-- training schema\nCREATE TABLE demo(id INT PRIMARY KEY);\n",
+      "rows.sql": "-- training rows\nINSERT INTO demo VALUES(1);\n",
+      "manifest.json": "[\n  {\n    \"path\": \"schema.sql\",\n    \"size\": 58,\n    \"sha256\": \"700d4edd8f13cff8e3ef74de272f43ad862bf3658f379f1cfe3a38d202d6c2d1\"\n  },\n  {\n    \"path\": \"rows.sql\",\n    \"size\": 45,\n    \"sha256\": \"dd85b5c868d16d4579854f9d3c5a98f4b6597a2af60858aef61d4a0aab2d8c1f\"\n  }\n]\n"
+    },
+    "solution_files": {
+      "task.py": "import hashlib,re\nfrom pathlib import Path\ndef verify(directory,manifest):\n root=Path(directory).resolve();seen=set();out=[]\n for row in manifest:\n  name=row.get('path');size=row.get('size');digest=row.get('sha256')\n  if not isinstance(name,str) or not name or chr(92) in name:raise ValueError('invalid path')\n  rel=Path(name)\n  if rel.is_absolute() or '..' in rel.parts or ':' in name:raise ValueError('unsafe path')\n  target=(root/rel).resolve()\n  if not target.is_relative_to(root) or target in seen:raise ValueError('duplicate or escaped path')\n  seen.add(target)\n  if type(size)is not int or size<0 or not isinstance(digest,str) or not re.fullmatch('[0-9a-f]{64}',digest):raise ValueError('invalid manifest')\n  reasons=[]\n  if not target.is_file():reasons.append('missing')\n  else:\n   raw=target.read_bytes()\n   if len(raw)!=size:reasons.append('size')\n   if hashlib.sha256(raw).hexdigest()!=digest:reasons.append('sha256')\n  if reasons:out.append({'path':name,'errors':reasons})\n return sorted(out,key=lambda x:x['path'])\n"
+    },
+    "negative_files": {
+      "task.py": "from pathlib import Path\ndef verify(directory,manifest):\n return [{'path':r['path'],'errors':['missing']} for r in manifest if not Path(directory,r['path']).exists()]\n"
+    },
+    "answer": "```python\nimport hashlib,re\nfrom pathlib import Path\ndef verify(directory,manifest):\n root=Path(directory).resolve();seen=set();out=[]\n for row in manifest:\n  name=row.get('path');size=row.get('size');digest=row.get('sha256')\n  if not isinstance(name,str) or not name or chr(92) in name:raise ValueError('invalid path')\n  rel=Path(name)\n  if rel.is_absolute() or '..' in rel.parts or ':' in name:raise ValueError('unsafe path')\n  target=(root/rel).resolve()\n  if not target.is_relative_to(root) or target in seen:raise ValueError('duplicate or escaped path')\n  seen.add(target)\n  if type(size)is not int or size<0 or not isinstance(digest,str) or not re.fullmatch('[0-9a-f]{64}',digest):raise ValueError('invalid manifest')\n  reasons=[]\n  if not target.is_file():reasons.append('missing')\n  else:\n   raw=target.read_bytes()\n   if len(raw)!=size:reasons.append('size')\n   if hashlib.sha256(raw).hexdigest()!=digest:reasons.append('sha256')\n  if reasons:out.append({'path':name,'errors':reasons})\n return sorted(out,key=lambda x:x['path'])\n```\n\n只验备份文件传输完整性，不执行SQL恢复，不把摘要一致当成数据库可恢复",
+    "run": "python3 checks/check.py",
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,tempfile,hashlib,importlib.util\nroot=pathlib.Path(__file__).resolve().parents[1]\nspec=importlib.util.spec_from_file_location('candidate',root/'task.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\nmanifest=fixture('manifest.json');assert m.verify(root,manifest)==[]\nwith tempfile.TemporaryDirectory(dir=root) as directory:\n target=pathlib.Path(directory);(target/'schema.sql').write_bytes((root/'schema.sql').read_bytes());(target/'rows.sql').write_bytes(b'bad')\n assert m.verify(target,manifest)==[{'path':'rows.sql','errors':['size','sha256']}]\n (target/'rows.sql').unlink();assert m.verify(target,manifest)==[{'path':'rows.sql','errors':['missing']}]\nreject(m.verify,root,[manifest[0],manifest[0]])\nfor path in ['../outside','/absolute','C:/absolute','..\\\\outside']:\n reject(m.verify,root,[dict(manifest[0],path=path)])\nfor size in [-1,True]:reject(m.verify,root,[dict(manifest[0],size=size)])\nreject(m.verify,root,[dict(manifest[0],sha256='x')])\nassert m.verify(root,[])==[]\n\nprint('ALL_DATA_ASSERTIONS_PASSED')\n\nreject(m.verify,root,[manifest[0],dict(manifest[0],path='./schema.sql')])\n\nfor bad in ['sub'+chr(92)+'rows.sql',chr(92)+'relative','rows.sql'+chr(92)]:\n reject(m.verify,root,[dict(manifest[0],path=bad)])\n"
+      },
+      "timeout": 30
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台Python3.11标准库离线工作区",
+      "availability": "pending-independent-review",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": [
+        "完整运行可信Python行为合同",
+        "正常、边界、非法输入、初始骨架及典型错误实现对照"
+      ],
+      "scope": "只验备份文件传输完整性，不执行SQL恢复，不把摘要一致当成数据库可恢复"
+    },
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "case_signature": "mysql|备份产物完整性清单",
+    "source": "OpsForge 原创离线数据实作"
+  },
+  {
+    "id": "curated-offline-redis-051",
+    "module": "redis",
+    "category": "redis",
+    "topic": "Cluster slots覆盖审计",
+    "level": 3,
+    "type": "code",
+    "language": "python",
+    "title": "离线编程：审计Cluster槽位覆盖的缺口与重叠",
+    "body": "## 环境与初始材料\n平台Python3.11标准库隔离工作区；随题提供离线导出样本，不连接服务。\n\n## 操作任务\n读取CLUSTER SLOTS格式离线嵌套数组。对0..16383槽位逐个检查覆盖，输出按升序合并的闭区间missing与overlap。总分配数量等于16384不代表没有缺口或重叠；主节点ID必须存在。\n\n## 产物\n提交task.py，函数签名 audit(slots)。不能修改样本绕过验收。\n\n## 验收方法\n运行平台固定注入的 checks/check.py；正常样本、边界、错误输入与非修改约束必须完整通过。骨架和典型错误实现应失败，参考解应通过。\n\n## 能力边界\n只审计槽位映射快照，不执行reshard、failover或访问Redis集群。平台自动提供网页工作区，学员无需另开Kubernetes。\n",
+    "files": {
+      "task.py": "def audit(slots):\n    raise NotImplementedError(\"待实现\")\n",
+      "slots.json": "[\n  [\n    0,\n    8191,\n    [\n      \"127.0.0.1\",\n      7000,\n      \"node-a\"\n    ]\n  ],\n  [\n    8192,\n    16383,\n    [\n      \"127.0.0.1\",\n      7001,\n      \"node-b\"\n    ]\n  ]\n]\n"
+    },
+    "solution_files": {
+      "task.py": "def audit(slots):\n counts=[0]*16384\n for entry in slots:\n  if not isinstance(entry,list) or len(entry)<3:raise ValueError('entry')\n  start,end,node=entry[:3]\n  if type(start)is not int or type(end)is not int or not 0<=start<=end<16384:raise ValueError('range')\n  if not isinstance(node,list) or len(node)<3 or not isinstance(node[2],str) or not node[2]:raise ValueError('primary id')\n  for slot in range(start,end+1):counts[slot]+=1\n def intervals(predicate):\n  result=[];start=None\n  for i,value in enumerate(counts+[1]):\n   match=predicate(value) if i<16384 else False\n   if match and start is None:start=i\n   elif not match and start is not None:result.append([start,i-1]);start=None\n  return result\n return {'missing':intervals(lambda n:n==0),'overlap':intervals(lambda n:n>1)}\n"
+    },
+    "negative_files": {
+      "task.py": "def audit(slots):\n total=sum(x[1]-x[0]+1 for x in slots)\n return {'missing':[],'overlap':[]} if total==16384 else {'missing':[[0,16383]],'overlap':[]}\n"
+    },
+    "answer": "```python\ndef audit(slots):\n counts=[0]*16384\n for entry in slots:\n  if not isinstance(entry,list) or len(entry)<3:raise ValueError('entry')\n  start,end,node=entry[:3]\n  if type(start)is not int or type(end)is not int or not 0<=start<=end<16384:raise ValueError('range')\n  if not isinstance(node,list) or len(node)<3 or not isinstance(node[2],str) or not node[2]:raise ValueError('primary id')\n  for slot in range(start,end+1):counts[slot]+=1\n def intervals(predicate):\n  result=[];start=None\n  for i,value in enumerate(counts+[1]):\n   match=predicate(value) if i<16384 else False\n   if match and start is None:start=i\n   elif not match and start is not None:result.append([start,i-1]);start=None\n  return result\n return {'missing':intervals(lambda n:n==0),'overlap':intervals(lambda n:n>1)}\n```\n\n只审计槽位映射快照，不执行reshard、failover或访问Redis集群",
+    "run": "python3 checks/check.py",
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,tempfile,hashlib,importlib.util\nroot=pathlib.Path(__file__).resolve().parents[1]\nspec=importlib.util.spec_from_file_location('candidate',root/'task.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\nslots=fixture('slots.json');original=copy.deepcopy(slots)\nassert m.audit(slots)=={'missing':[],'overlap':[]} and slots==original\nnode=['h',1,'n']\nassert m.audit([[0,8000,node],[8000,16382,node]])=={'missing':[[16383,16383]],'overlap':[[8000,8000]]}\nassert m.audit([[2,3,node],[7,16383,node]])=={'missing':[[0,1],[4,6]],'overlap':[]}\nassert m.audit([])=={'missing':[[0,16383]],'overlap':[]}\nfor a,b in [(-1,2),(0,16384),(4,3),(True,2)]:reject(m.audit,[[a,b,node]])\nreject(m.audit,[[0,1,['h',1,'']]])\n\nprint('ALL_DATA_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台Python3.11标准库离线工作区",
+      "availability": "pending-independent-review",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": [
+        "完整运行可信Python行为合同",
+        "正常、边界、非法输入、初始骨架及典型错误实现对照"
+      ],
+      "scope": "只审计槽位映射快照，不执行reshard、failover或访问Redis集群"
+    },
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "case_signature": "redis|Cluster slots覆盖审计",
+    "source": "OpsForge 原创离线数据实作"
+  },
+  {
+    "id": "curated-offline-redis-052",
+    "module": "redis",
+    "category": "redis",
+    "topic": "INFO memory字段解析",
+    "level": 3,
+    "type": "code",
+    "language": "python",
+    "title": "离线编程：从INFO内存快照区分RSS与配置上限",
+    "body": "## 环境与初始材料\n平台Python3.11标准库隔离工作区；随题提供离线导出样本，不连接服务。\n\n## 操作任务\n解析INFO文本，仅使用used_memory、used_memory_rss、maxmemory字节整数；返回两个 Decimal 比例字符串：固定 28 位有效数字、ROUND_HALF_EVEN，不受调用方 decimal 上下文影响，也不改变调用方上下文。used_memory=0时rss_to_used=null，maxmemory=0表示未配置上限而非满；重复字段、缺少字段或非法数值拒绝。不推断高RSS的具体根因。\n\n## 产物\n提交task.py，函数签名 report(text)。不能修改样本绕过验收。\n\n## 验收方法\n运行平台固定注入的 checks/check.py；正常样本、边界、错误输入与非修改约束必须完整通过。骨架和典型错误实现应失败，参考解应通过。\n\n## 能力边界\n只分析INFO导出快照，不释放内存、不调整maxmemory，也不把RSS比例直接当成碎片根因。平台自动提供网页工作区，学员无需另开Kubernetes。\n",
+    "files": {
+      "task.py": "def report(text):\n    raise NotImplementedError(\"待实现\")\n",
+      "memory.txt": "# Memory\r\nused_memory:100\r\nused_memory_rss:250\r\nmaxmemory:200\r\n# Stats\r\nevicted_keys:0\r\n"
+    },
+    "solution_files": {
+      "task.py": "from decimal import Decimal,localcontext,ROUND_HALF_EVEN\ndef report(text):\n if not isinstance(text,str):raise ValueError('text')\n values={}\n for line in text.splitlines():\n  if not line or line.startswith('#'):continue\n  if ':' not in line:raise ValueError('line')\n  key,value=line.split(':',1)\n  if key in values:raise ValueError('duplicate field')\n  values[key]=value\n numbers={}\n for key in ('used_memory','used_memory_rss','maxmemory'):\n  value=values.get(key)\n  if value is None or not value.isascii() or not value.isdigit():raise ValueError('missing or invalid bytes')\n  numbers[key]=int(value)\n used,rss,limit=(numbers[k] for k in ('used_memory','used_memory_rss','maxmemory'))\n with localcontext() as context:\n  context.prec=28;context.rounding=ROUND_HALF_EVEN\n  return {'used_bytes':used,'rss_bytes':rss,'limit_bytes':limit,'rss_to_used':str(Decimal(rss)/Decimal(used)) if used else None,'limit_fraction':str(Decimal(used)/Decimal(limit)) if limit else None,'limit_configured':limit>0}\n"
+    },
+    "negative_files": {
+      "task.py": "def report(text):\n values=dict(line.split(':',1) for line in text.splitlines() if ':'in line)\n return {'used_bytes':int(values['used_memory']),'rss_bytes':int(values['used_memory_rss']),'limit_bytes':int(values['maxmemory']),'rss_to_used':'1','limit_fraction':'0','limit_configured':True}\n"
+    },
+    "answer": "```python\nfrom decimal import Decimal,localcontext,ROUND_HALF_EVEN\ndef report(text):\n if not isinstance(text,str):raise ValueError('text')\n values={}\n for line in text.splitlines():\n  if not line or line.startswith('#'):continue\n  if ':' not in line:raise ValueError('line')\n  key,value=line.split(':',1)\n  if key in values:raise ValueError('duplicate field')\n  values[key]=value\n numbers={}\n for key in ('used_memory','used_memory_rss','maxmemory'):\n  value=values.get(key)\n  if value is None or not value.isascii() or not value.isdigit():raise ValueError('missing or invalid bytes')\n  numbers[key]=int(value)\n used,rss,limit=(numbers[k] for k in ('used_memory','used_memory_rss','maxmemory'))\n with localcontext() as context:\n  context.prec=28;context.rounding=ROUND_HALF_EVEN\n  return {'used_bytes':used,'rss_bytes':rss,'limit_bytes':limit,'rss_to_used':str(Decimal(rss)/Decimal(used)) if used else None,'limit_fraction':str(Decimal(used)/Decimal(limit)) if limit else None,'limit_configured':limit>0}\n```\n\n只分析INFO导出快照，不释放内存、不调整maxmemory，也不把RSS比例直接当成碎片根因",
+    "run": "python3 checks/check.py",
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,tempfile,hashlib,importlib.util\nroot=pathlib.Path(__file__).resolve().parents[1]\nspec=importlib.util.spec_from_file_location('candidate',root/'task.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\ntext=(root/'memory.txt').read_text(encoding='utf-8')\nassert m.report(text)=={'used_bytes':100,'rss_bytes':250,'limit_bytes':200,'rss_to_used':'2.5','limit_fraction':'0.5','limit_configured':True}\nr=m.report('used_memory:0\\nused_memory_rss:20\\nmaxmemory:0\\n');assert r['rss_to_used'] is None and r['limit_fraction'] is None and not r['limit_configured']\nr=m.report('used_memory:250\\nused_memory_rss:200\\nmaxmemory:200\\n');assert r['rss_to_used']=='0.8' and r['limit_fraction']=='1.25'\nreject(m.report,text+'used_memory:3\\n');reject(m.report,'used_memory:1\\n')\nfor bad in ['-1','NaN','1.5','１']:reject(m.report,'used_memory:'+bad+'\\nused_memory_rss:1\\nmaxmemory:2\\n')\n\nprint('ALL_DATA_ASSERTIONS_PASSED')\n\nfrom decimal import localcontext,ROUND_DOWN\nwith localcontext() as external:\n external.prec=4;external.rounding=ROUND_DOWN\n r=m.report('used_memory:3\\nused_memory_rss:1\\nmaxmemory:7\\n')\n assert r['rss_to_used']=='0.3333333333333333333333333333'\n assert r['limit_fraction']=='0.4285714285714285714285714286'\n assert external.prec==4 and external.rounding==ROUND_DOWN\n"
+      },
+      "timeout": 30
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台Python3.11标准库离线工作区",
+      "availability": "pending-independent-review",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": [
+        "完整运行可信Python行为合同",
+        "正常、边界、非法输入、初始骨架及典型错误实现对照"
+      ],
+      "scope": "只分析INFO导出快照，不释放内存、不调整maxmemory，也不把RSS比例直接当成碎片根因"
+    },
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "case_signature": "redis|INFO memory字段解析",
+    "source": "OpsForge 原创离线数据实作",
+    "references": [
+      "https://docs.python.org/3/library/decimal.html"
+    ]
+  },
+  {
+    "id": "curated-offline-clickhouse-051",
+    "module": "clickhouse",
+    "category": "clickhouse",
+    "topic": "system.parts活跃分片分析",
+    "level": 3,
+    "type": "code",
+    "language": "python",
+    "title": "离线编程：仅统计活跃数据分片并定位小分片集中分区",
+    "body": "## 环境与初始材料\n平台Python3.11标准库隔离工作区；随题提供离线导出样本，不连接服务。\n\n## 操作任务\n按database/table/partition_id汇总system.parts导出：仅active=1计入parts/bytes/small_parts；小分片为bytes_on_disk严格小于阈值。相同database/table/name重复拒绝，不能把已合并但尚未清理的inactive分片计入活跃数据。\n\n## 产物\n提交task.py，函数签名 summarize(parts, small_bytes)。不能修改样本绕过验收。\n\n## 验收方法\n运行平台固定注入的 checks/check.py；正常样本、边界、错误输入与非修改约束必须完整通过。骨架和典型错误实现应失败，参考解应通过。\n\n## 能力边界\n仅分析system.parts快照，不触发OPTIMIZE、合并或宣称读性能提升。平台自动提供网页工作区，学员无需另开Kubernetes。\n",
+    "files": {
+      "task.py": "def summarize(parts, small_bytes):\n    raise NotImplementedError(\"待实现\")\n",
+      "parts.json": "[\n  {\n    \"database\": \"shop\",\n    \"table\": \"events\",\n    \"partition_id\": \"202610\",\n    \"name\": \"p1\",\n    \"active\": 1,\n    \"bytes_on_disk\": 30\n  },\n  {\n    \"database\": \"shop\",\n    \"table\": \"events\",\n    \"partition_id\": \"202610\",\n    \"name\": \"p2\",\n    \"active\": 1,\n    \"bytes_on_disk\": 40\n  },\n  {\n    \"database\": \"shop\",\n    \"table\": \"events\",\n    \"partition_id\": \"202610\",\n    \"name\": \"old\",\n    \"active\": 0,\n    \"bytes_on_disk\": 900\n  },\n  {\n    \"database\": \"shop\",\n    \"table\": \"events\",\n    \"partition_id\": \"202611\",\n    \"name\": \"p3\",\n    \"active\": 1,\n    \"bytes_on_disk\": 200\n  }\n]\n"
+    },
+    "solution_files": {
+      "task.py": "def summarize(parts,small_bytes):\n if type(small_bytes)is not int or small_bytes<0:raise ValueError('threshold')\n seen=set();groups={}\n for row in parts:\n  for key in ('database','table','partition_id','name'):\n   if not isinstance(row.get(key),str) or not row[key]:raise ValueError('identity')\n  identity=(row['database'],row['table'],row['name'])\n  if identity in seen:raise ValueError('duplicate part')\n  seen.add(identity);active=row.get('active');size=row.get('bytes_on_disk')\n  if type(active)is not int or active not in (0,1) or type(size)is not int or size<0:raise ValueError('invalid part')\n  if not active:continue\n  key=(row['database'],row['table'],row['partition_id'])\n  item=groups.setdefault(key,{'database':key[0],'table':key[1],'partition':key[2],'parts':0,'bytes':0,'small_parts':0})\n  item['parts']+=1;item['bytes']+=size;item['small_parts']+=size<small_bytes\n return [groups[key] for key in sorted(groups)]\n"
+    },
+    "negative_files": {
+      "task.py": "def summarize(parts,small_bytes):\n return [{'parts':len(parts),'bytes':sum(x['bytes_on_disk'] for x in parts),'small_parts':0}]\n"
+    },
+    "answer": "```python\ndef summarize(parts,small_bytes):\n if type(small_bytes)is not int or small_bytes<0:raise ValueError('threshold')\n seen=set();groups={}\n for row in parts:\n  for key in ('database','table','partition_id','name'):\n   if not isinstance(row.get(key),str) or not row[key]:raise ValueError('identity')\n  identity=(row['database'],row['table'],row['name'])\n  if identity in seen:raise ValueError('duplicate part')\n  seen.add(identity);active=row.get('active');size=row.get('bytes_on_disk')\n  if type(active)is not int or active not in (0,1) or type(size)is not int or size<0:raise ValueError('invalid part')\n  if not active:continue\n  key=(row['database'],row['table'],row['partition_id'])\n  item=groups.setdefault(key,{'database':key[0],'table':key[1],'partition':key[2],'parts':0,'bytes':0,'small_parts':0})\n  item['parts']+=1;item['bytes']+=size;item['small_parts']+=size<small_bytes\n return [groups[key] for key in sorted(groups)]\n```\n\n仅分析system.parts快照，不触发OPTIMIZE、合并或宣称读性能提升",
+    "run": "python3 checks/check.py",
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,tempfile,hashlib,importlib.util\nroot=pathlib.Path(__file__).resolve().parents[1]\nspec=importlib.util.spec_from_file_location('candidate',root/'task.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\nrows=fixture('parts.json');original=copy.deepcopy(rows)\nassert m.summarize(rows,100)==[{'database':'shop','table':'events','partition':'202610','parts':2,'bytes':70,'small_parts':2},{'database':'shop','table':'events','partition':'202611','parts':1,'bytes':200,'small_parts':0}]\nassert rows==original and m.summarize([],100)==[]\nassert m.summarize([dict(rows[0],bytes_on_disk=100)],100)[0]['small_parts']==0\nassert len(m.summarize([rows[0],dict(rows[0],database='other')],100))==2\nreject(m.summarize,[rows[0],rows[0]],100)\nfor field,bad in [('active',True),('active',2),('bytes_on_disk',-1),('bytes_on_disk',True)]:\n reject(m.summarize,[dict(rows[0],**{field:bad})],100)\nreject(m.summarize,[],True)\n\nprint('ALL_DATA_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台Python3.11标准库离线工作区",
+      "availability": "pending-independent-review",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": [
+        "完整运行可信Python行为合同",
+        "正常、边界、非法输入、初始骨架及典型错误实现对照"
+      ],
+      "scope": "仅分析system.parts快照，不触发OPTIMIZE、合并或宣称读性能提升"
+    },
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "case_signature": "clickhouse|system.parts活跃分片分析",
+    "source": "OpsForge 原创离线数据实作"
+  },
+  {
+    "id": "curated-offline-tidb-051",
+    "module": "tidb",
+    "category": "tidb",
+    "topic": "Region十六进制键范围审计",
+    "level": 4,
+    "type": "code",
+    "language": "python",
+    "title": "离线编程：检查Region键空间覆盖的缺口与重叠",
+    "body": "## 环境与初始材料\n平台Python3.11标准库隔离工作区；随题提供离线导出样本，不连接服务。\n\n## 操作任务\n读取PD Region导出的id/start_key/end_key。键为偶数位十六进制，范围左闭右开；空start代表负无穷、空end代表正无穷。扫描整个键空间，返回合并的missing/overlap半开区间；不能只比较相邻记录而误报被更大Region覆盖的区间。\n\n## 产物\n提交task.py，函数签名 audit(regions)。不能修改样本绕过验收。\n\n## 验收方法\n运行平台固定注入的 checks/check.py；正常样本、边界、错误输入与非修改约束必须完整通过。骨架和典型错误实现应失败，参考解应通过。\n\n## 能力边界\n仅审计导出的Region范围，不合并/分裂Region、不改变TiKV存储状态。平台自动提供网页工作区，学员无需另开Kubernetes。\n",
+    "files": {
+      "task.py": "def audit(regions):\n    raise NotImplementedError(\"待实现\")\n",
+      "regions.json": "[\n  {\n    \"id\": 1,\n    \"start_key\": \"\",\n    \"end_key\": \"10\"\n  },\n  {\n    \"id\": 2,\n    \"start_key\": \"10\",\n    \"end_key\": \"20\"\n  },\n  {\n    \"id\": 3,\n    \"start_key\": \"20\",\n    \"end_key\": \"\"\n  }\n]\n"
+    },
+    "solution_files": {
+      "task.py": "import re\ndef audit(regions):\n events={};active=0;seen=set()\n def decode(value):\n  if not isinstance(value,str) or len(value)%2 or not re.fullmatch('[0-9a-fA-F]*',value):raise ValueError('hex key')\n  try:return bytes.fromhex(value) if value else None\n  except ValueError:raise ValueError('hex key')\n for row in regions:\n  rid=row.get('id')\n  if type(rid)is not int or rid<1 or rid in seen:raise ValueError('region id')\n  seen.add(rid);start=decode(row.get('start_key'));end=decode(row.get('end_key'))\n  if start is not None and end is not None and start>=end:raise ValueError('empty or reversed range')\n  if start is None:active+=1\n  else:events[start]=events.get(start,0)+1\n  if end is not None:events[end]=events.get(end,0)-1\n out={'missing':[],'overlap':[]};previous=None\n def emit(left,right,count):\n  name='missing' if count==0 else 'overlap' if count>1 else None\n  if name:\n   pair=['' if left is None else left.hex(),'' if right is None else right.hex()]\n   if out[name] and out[name][-1][1]==pair[0]:out[name][-1][1]=pair[1]\n   else:out[name].append(pair)\n for key,delta in sorted(events.items()):\n  emit(previous,key,active);active+=delta;previous=key\n emit(previous,None,active)\n return out\n"
+    },
+    "negative_files": {
+      "task.py": "def audit(regions):\n return {'missing':[],'overlap':[]}\n"
+    },
+    "answer": "```python\nimport re\ndef audit(regions):\n events={};active=0;seen=set()\n def decode(value):\n  if not isinstance(value,str) or len(value)%2 or not re.fullmatch('[0-9a-fA-F]*',value):raise ValueError('hex key')\n  try:return bytes.fromhex(value) if value else None\n  except ValueError:raise ValueError('hex key')\n for row in regions:\n  rid=row.get('id')\n  if type(rid)is not int or rid<1 or rid in seen:raise ValueError('region id')\n  seen.add(rid);start=decode(row.get('start_key'));end=decode(row.get('end_key'))\n  if start is not None and end is not None and start>=end:raise ValueError('empty or reversed range')\n  if start is None:active+=1\n  else:events[start]=events.get(start,0)+1\n  if end is not None:events[end]=events.get(end,0)-1\n out={'missing':[],'overlap':[]};previous=None\n def emit(left,right,count):\n  name='missing' if count==0 else 'overlap' if count>1 else None\n  if name:\n   pair=['' if left is None else left.hex(),'' if right is None else right.hex()]\n   if out[name] and out[name][-1][1]==pair[0]:out[name][-1][1]=pair[1]\n   else:out[name].append(pair)\n for key,delta in sorted(events.items()):\n  emit(previous,key,active);active+=delta;previous=key\n emit(previous,None,active)\n return out\n```\n\n仅审计导出的Region范围，不合并/分裂Region、不改变TiKV存储状态",
+    "run": "python3 checks/check.py",
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,tempfile,hashlib,importlib.util\nroot=pathlib.Path(__file__).resolve().parents[1]\nspec=importlib.util.spec_from_file_location('candidate',root/'task.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\nrows=fixture('regions.json');original=copy.deepcopy(rows)\nassert m.audit(rows)=={'missing':[],'overlap':[]} and rows==original\nassert m.audit([{'id':1,'start_key':'','end_key':'10'},{'id':2,'start_key':'20','end_key':''}])=={'missing':[['10','20']],'overlap':[]}\nassert m.audit([{'id':1,'start_key':'','end_key':'30'},{'id':2,'start_key':'10','end_key':'20'},{'id':3,'start_key':'20','end_key':''}])=={'missing':[],'overlap':[['10','30']]}\nassert m.audit([])=={'missing':[['','']],'overlap':[]}\nassert m.audit([{'id':1,'start_key':'','end_key':''}])=={'missing':[],'overlap':[]}\nreject(m.audit,[rows[0],rows[0]])\nfor start,end in [('1','20'),('zz','20'),('20','10'),('10','10')]:reject(m.audit,[{'id':1,'start_key':start,'end_key':end}])\nreject(m.audit,[{'id':True,'start_key':'','end_key':''}])\n\nprint('ALL_DATA_ASSERTIONS_PASSED')\n\nreject(m.audit,[{'id':1,'start_key':'  ','end_key':'20'}])\nreject(m.audit,[{'id':1,'start_key':'aa  bb','end_key':'ff'}])\n"
+      },
+      "timeout": 30
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台Python3.11标准库离线工作区",
+      "availability": "pending-independent-review",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": [
+        "完整运行可信Python行为合同",
+        "正常、边界、非法输入、初始骨架及典型错误实现对照"
+      ],
+      "scope": "仅审计导出的Region范围，不合并/分裂Region、不改变TiKV存储状态"
+    },
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "case_signature": "tidb|Region十六进制键范围审计",
+    "source": "OpsForge 原创离线数据实作"
+  },
+  {
+    "id": "curated-offline-elk-051",
+    "module": "elk",
+    "category": "elk",
+    "topic": "Elasticsearch Bulk部分失败分类",
+    "level": 3,
+    "type": "code",
+    "language": "python",
+    "title": "离线编程：按Bulk逐项结果生成精准重试清单",
+    "body": "## 环境与初始材料\n平台Python3.11标准库隔离工作区；随题提供离线导出样本，不连接服务。\n\n## 操作任务\n请求只含index/create操作，按响应items顺序逐项关联op和_id。仅接受 200..599 的最终逐项状态，1xx 中间状态视为无效输入；2xx成功；本题策略429/502/503/504可重试，409单独人工确认，其余进入review。输出原始请求副本与索引，绝不能因为顶层errors=true重试整批；格式或errors标记矛盾拒绝。\n\n## 产物\n提交task.py，函数签名 classify(requests, response)。不能修改样本绕过验收。\n\n## 验收方法\n运行平台固定注入的 checks/check.py；正常样本、边界、错误输入与非修改约束必须完整通过。骨架和典型错误实现应失败，参考解应通过。\n\n## 能力边界\n仅生成Bulk响应处理计划，不执行重试或索引写入；未覆盖传输超时后服务端结果未知的幂等恢复。平台自动提供网页工作区，学员无需另开Kubernetes。\n",
+    "files": {
+      "task.py": "def classify(requests, response):\n    raise NotImplementedError(\"待实现\")\n",
+      "requests.json": "[\n  {\n    \"op\": \"index\",\n    \"id\": \"a\",\n    \"document\": {\n      \"n\": 1\n    }\n  },\n  {\n    \"op\": \"index\",\n    \"id\": \"b\",\n    \"document\": {\n      \"n\": 2\n    }\n  },\n  {\n    \"op\": \"create\",\n    \"id\": \"c\",\n    \"document\": {\n      \"n\": 3\n    }\n  },\n  {\n    \"op\": \"index\",\n    \"id\": \"d\",\n    \"document\": {\n      \"n\": 4\n    }\n  }\n]\n",
+      "response.json": "{\n  \"errors\": true,\n  \"items\": [\n    {\n      \"index\": {\n        \"_id\": \"a\",\n        \"status\": 201\n      }\n    },\n    {\n      \"index\": {\n        \"_id\": \"b\",\n        \"status\": 429\n      }\n    },\n    {\n      \"create\": {\n        \"_id\": \"c\",\n        \"status\": 409\n      }\n    },\n    {\n      \"index\": {\n        \"_id\": \"d\",\n        \"status\": 400\n      }\n    }\n  ]\n}\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef classify(requests,response):\n items=response.get('items')\n if not isinstance(items,list) or len(items)!=len(requests) or type(response.get('errors'))is not bool:raise ValueError('response shape')\n out={'accepted':[],'retry':[],'conflicts':[],'review':[]};any_error=False\n for index,(request,item) in enumerate(zip(requests,items)):\n  op=request.get('op');rid=request.get('id')\n  if op not in {'index','create'} or not isinstance(rid,str) or not rid or not isinstance(item,dict) or set(item)!={op}:raise ValueError('action mismatch')\n  result=item[op];status=result.get('status')\n  if result.get('_id')!=rid or type(status)is not int or not 200<=status<=599:raise ValueError('result mismatch')\n  any_error=any_error or status>=300\n  bucket='accepted' if 200<=status<300 else 'retry' if status in {429,502,503,504} else 'conflicts' if status==409 else 'review'\n  out[bucket].append({'index':index,'id':rid,'status':status,'request':copy.deepcopy(request)})\n if response['errors']!=any_error:raise ValueError('errors flag mismatch')\n return out\n"
+    },
+    "negative_files": {
+      "task.py": "import copy\ndef classify(requests,response):\n return {'accepted':[],'retry':[{'index':i,'id':r['id'],'status':500,'request':copy.deepcopy(r)} for i,r in enumerate(requests)],'conflicts':[],'review':[]}\n"
+    },
+    "answer": "```python\nimport copy\ndef classify(requests,response):\n items=response.get('items')\n if not isinstance(items,list) or len(items)!=len(requests) or type(response.get('errors'))is not bool:raise ValueError('response shape')\n out={'accepted':[],'retry':[],'conflicts':[],'review':[]};any_error=False\n for index,(request,item) in enumerate(zip(requests,items)):\n  op=request.get('op');rid=request.get('id')\n  if op not in {'index','create'} or not isinstance(rid,str) or not rid or not isinstance(item,dict) or set(item)!={op}:raise ValueError('action mismatch')\n  result=item[op];status=result.get('status')\n  if result.get('_id')!=rid or type(status)is not int or not 200<=status<=599:raise ValueError('result mismatch')\n  any_error=any_error or status>=300\n  bucket='accepted' if 200<=status<300 else 'retry' if status in {429,502,503,504} else 'conflicts' if status==409 else 'review'\n  out[bucket].append({'index':index,'id':rid,'status':status,'request':copy.deepcopy(request)})\n if response['errors']!=any_error:raise ValueError('errors flag mismatch')\n return out\n```\n\n仅生成Bulk响应处理计划，不执行重试或索引写入；未覆盖传输超时后服务端结果未知的幂等恢复",
+    "run": "python3 checks/check.py",
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,tempfile,hashlib,importlib.util\nroot=pathlib.Path(__file__).resolve().parents[1]\nspec=importlib.util.spec_from_file_location('candidate',root/'task.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\nrequests=fixture('requests.json');response=fixture('response.json');original=copy.deepcopy(requests);r=m.classify(requests,response)\nassert [x['id'] for x in r['accepted']]==['a'] and [x['id'] for x in r['retry']]==['b']\nassert [x['id'] for x in r['conflicts']]==['c'] and [x['id'] for x in r['review']]==['d']\nassert r['retry'][0]=={'index':1,'id':'b','status':429,'request':requests[1]} and requests==original\nr['retry'][0]['request']['document']['n']=99;assert requests==original\nassert m.classify([],{'errors':False,'items':[]})=={'accepted':[],'retry':[],'conflicts':[],'review':[]}\nfor status in [502,503,504]:\n out=m.classify([requests[0]],{'errors':True,'items':[{'index':{'_id':'a','status':status}}]});assert len(out['retry'])==1\nreject(m.classify,requests,dict(response,errors=False))\nreject(m.classify,requests,{'errors':True,'items':response['items'][:-1]})\nbad=copy.deepcopy(response);bad['items'][0]['index']['_id']='other';reject(m.classify,requests,bad)\nbad=copy.deepcopy(response);bad['items'][0]['index']['status']=True;reject(m.classify,requests,bad)\n\nprint('ALL_DATA_ASSERTIONS_PASSED')\n\nfor status in [100,199,600,-1]:\n reject(m.classify,[requests[0]],{'errors':True,'items':[{'index':{'_id':'a','status':status}}]})\n"
+      },
+      "timeout": 30
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台Python3.11标准库离线工作区",
+      "availability": "pending-independent-review",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": [
+        "完整运行可信Python行为合同",
+        "正常、边界、非法输入、初始骨架及典型错误实现对照"
+      ],
+      "scope": "仅生成Bulk响应处理计划，不执行重试或索引写入；未覆盖传输超时后服务端结果未知的幂等恢复"
+    },
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "case_signature": "elk|Elasticsearch Bulk部分失败分类",
+    "source": "OpsForge 原创离线数据实作",
+    "references": [
+      "https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-bulk"
+    ]
+  },
+  {
+    "id": "curated-offline-zabbix-051",
+    "module": "zabbix",
+    "category": "zabbix",
+    "topic": "JSON-RPC请求响应关联",
+    "level": 3,
+    "type": "code",
+    "language": "python",
+    "title": "离线编程：按请求ID关联乱序JSON-RPC响应",
+    "body": "## 环境与初始材料\n平台Python3.11标准库隔离工作区；随题提供离线导出样本，不连接服务。\n\n## 操作任务\n对多次独立Zabbix JSON-RPC调用的离线响应按id关联，不假定到达顺序。整数id与字符串id不同；缺响应标missing，错误对象保留。重复/未知响应ID、布尔ID及同时含result/error的响应拒绝。不声称Zabbix支持批量数组请求。\n\n## 产物\n提交task.py，函数签名 correlate(requests, responses)。不能修改样本绕过验收。\n\n## 验收方法\n运行平台固定注入的 checks/check.py；正常样本、边界、错误输入与非修改约束必须完整通过。骨架和典型错误实现应失败，参考解应通过。\n\n## 能力边界\n仅处理已采集的JSON-RPC请求/响应记录，不发送API请求或修改监控项。平台自动提供网页工作区，学员无需另开Kubernetes。\n",
+    "files": {
+      "task.py": "def correlate(requests, responses):\n    raise NotImplementedError(\"待实现\")\n",
+      "requests.json": "[\n  {\n    \"jsonrpc\": \"2.0\",\n    \"method\": \"host.get\",\n    \"params\": {},\n    \"id\": 1\n  },\n  {\n    \"jsonrpc\": \"2.0\",\n    \"method\": \"item.get\",\n    \"params\": {},\n    \"id\": \"2\"\n  }\n]\n",
+      "responses.json": "[\n  {\n    \"jsonrpc\": \"2.0\",\n    \"id\": \"2\",\n    \"error\": {\n      \"code\": -32602,\n      \"message\": \"Invalid params\"\n    }\n  },\n  {\n    \"jsonrpc\": \"2.0\",\n    \"id\": 1,\n    \"result\": [\n      {\n        \"hostid\": \"100\"\n      }\n    ]\n  }\n]\n"
+    },
+    "solution_files": {
+      "task.py": "import copy\ndef correlate(requests,responses):\n expected={};order=[]\n def key(value):\n  if type(value) not in (int,str):raise ValueError('id type')\n  return (type(value).__name__,value)\n for request in requests:\n  identity=key(request.get('id'))\n  if request.get('jsonrpc')!='2.0' or identity in expected:raise ValueError('request')\n  expected[identity]=request;order.append(identity)\n found={}\n for response in responses:\n  identity=key(response.get('id'))\n  if response.get('jsonrpc')!='2.0' or identity not in expected or identity in found:raise ValueError('response id')\n  if ('result'in response)==('error'in response):raise ValueError('result/error shape')\n  kind='result' if 'result'in response else 'error'\n  found[identity]={'id':response['id'],'method':expected[identity]['method'],'kind':kind,'value':copy.deepcopy(response[kind])}\n return [found.get(identity,{'id':expected[identity]['id'],'method':expected[identity]['method'],'kind':'missing','value':None}) for identity in order]\n"
+    },
+    "negative_files": {
+      "task.py": "def correlate(requests,responses):\n return [{'id':q['id'],'method':q['method'],'kind':'result','value':r.get('result')} for q,r in zip(requests,responses)]\n"
+    },
+    "answer": "```python\nimport copy\ndef correlate(requests,responses):\n expected={};order=[]\n def key(value):\n  if type(value) not in (int,str):raise ValueError('id type')\n  return (type(value).__name__,value)\n for request in requests:\n  identity=key(request.get('id'))\n  if request.get('jsonrpc')!='2.0' or identity in expected:raise ValueError('request')\n  expected[identity]=request;order.append(identity)\n found={}\n for response in responses:\n  identity=key(response.get('id'))\n  if response.get('jsonrpc')!='2.0' or identity not in expected or identity in found:raise ValueError('response id')\n  if ('result'in response)==('error'in response):raise ValueError('result/error shape')\n  kind='result' if 'result'in response else 'error'\n  found[identity]={'id':response['id'],'method':expected[identity]['method'],'kind':kind,'value':copy.deepcopy(response[kind])}\n return [found.get(identity,{'id':expected[identity]['id'],'method':expected[identity]['method'],'kind':'missing','value':None}) for identity in order]\n```\n\n仅处理已采集的JSON-RPC请求/响应记录，不发送API请求或修改监控项",
+    "run": "python3 checks/check.py",
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import sys,pathlib,json,copy,math,tempfile,hashlib,importlib.util\nroot=pathlib.Path(__file__).resolve().parents[1]\nspec=importlib.util.spec_from_file_location('candidate',root/'task.py')\nm=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)\ndef fixture(name):return json.loads((root/name).read_text(encoding='utf-8'))\ndef reject(fn,*args,**kwargs):\n try:fn(*args,**kwargs)\n except ValueError:return\n raise AssertionError('expected ValueError')\nrequests=fixture('requests.json');responses=fixture('responses.json')\nassert m.correlate(requests,responses)==[{'id':1,'method':'host.get','kind':'result','value':[{'hostid':'100'}]},{'id':'2','method':'item.get','kind':'error','value':{'code':-32602,'message':'Invalid params'}}]\nassert m.correlate(requests,[])==[{'id':1,'method':'host.get','kind':'missing','value':None},{'id':'2','method':'item.get','kind':'missing','value':None}]\ntyped=[{'jsonrpc':'2.0','method':'a','id':2},{'jsonrpc':'2.0','method':'b','id':'2'}]\nassert [x['method'] for x in m.correlate(typed,[{'jsonrpc':'2.0','id':'2','result':[]}])]==['a','b']\nreject(m.correlate,requests,[responses[0],responses[0]])\nreject(m.correlate,requests,[{'jsonrpc':'2.0','id':99,'result':[]}])\nreject(m.correlate,[dict(requests[0],id=True)],[])\nreject(m.correlate,requests,[{'jsonrpc':'2.0','id':1,'result':[],'error':{}}])\nassert m.correlate([],[])==[]\n\nprint('ALL_DATA_ASSERTIONS_PASSED')\n"
+      },
+      "timeout": 30
+    },
+    "exercise": {
+      "kind": "programming",
+      "environment": "平台Python3.11标准库离线工作区",
+      "availability": "pending-independent-review",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": [
+        "完整运行可信Python行为合同",
+        "正常、边界、非法输入、初始骨架及典型错误实现对照"
+      ],
+      "scope": "仅处理已采集的JSON-RPC请求/响应记录，不发送API请求或修改监控项"
+    },
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "case_signature": "zabbix|JSON-RPC请求响应关联",
+    "source": "OpsForge 原创离线数据实作"
+  }
+]

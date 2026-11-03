@@ -1,0 +1,73 @@
+[
+  {
+    "id": "curated-parallel-aws-096",
+    "module": "aws",
+    "category": "AWS 云模拟",
+    "level": 4,
+    "topic": "身份权限与加密",
+    "title": "KMS密钥进入PendingDeletion后旧对象无法解密",
+    "answer": "```python\ndef decrypt_decision(key_state,iam_allowed,key_policy_allows):\n    if key_state not in {\"Enabled\",\"Disabled\",\"PendingDeletion\",\"PendingImport\",\"Unavailable\"}:raise ValueError(\"unknown KMS key state\")\n    if key_state!=\"Enabled\":return {\"allowed\":False,\"reason\":\"key_state_\"+key_state,\"action\":\"restore key usability before changing IAM policy\"}\n    if not iam_allowed:return {\"allowed\":False,\"reason\":\"identity_policy_denied\",\"action\":\"inspect caller identity policy and grants\"}\n    if not key_policy_allows:return {\"allowed\":False,\"reason\":\"key_policy_or_grant_denied\",\"action\":\"inspect key policy and grants for the exact principal\"}\n    return {\"allowed\":True,\"reason\":\"enabled_and_authorized\",\"action\":\"perform a controlled decrypt and verify recovered data\"}\n\ndef cancel_deletion(state):\n    if state!=\"PendingDeletion\":raise ValueError(\"key is not pending deletion\")\n    return \"Disabled\"\n\ndef enable_key(state):\n    if state!=\"Disabled\":raise ValueError(\"only a disabled key can be enabled\")\n    return \"Enabled\"\n```\n\n原题知识说明：\n关联ScheduleKeyDeletion审计与错误时间，待删除密钥不能执行加解密。立即停止删除流程评估，授权管理员在等待期取消计划并按状态恢复启用，再验证旧密文可读。验收所有依赖与备份，密钥实际删除后无法靠同名新key恢复，不能只更新alias。",
+    "type": "code",
+    "incident_signature": "aws:kms-key-pending-deletion-decrypt-denied",
+    "source": "独立编审：AWS特定服务根因",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "parallel-development-20261021",
+    "hints": [],
+    "rubric": [
+      "用服务配置与审计证明根因",
+      "保持权限/数据安全边界",
+      "验证恢复及拒绝路径"
+    ],
+    "references": [
+      "https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys-cancelling-key-deletion.html",
+      "https://docs.aws.amazon.com/kms/latest/developerguide/deleting-keys.html"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-aws-096",
+      "original_title": "应用突然无法解密旧对象，KMS key状态为PendingDeletion，权限策略未改。如何桌面处置？",
+      "original_type": "case"
+    },
+    "body": "## 操作任务\n实现KMS解密状态决策和本地恢复状态机：当key处于PendingDeletion时，即使IAM和key policy允许也不得宣称可解密；waiting period内CancelKeyDeletion后状态变为Disabled，必须再EnableKey后才允许受控解密。先恢复key状态，再分别核对调用者IAM、key policy/grants；密钥已经删除时不承诺恢复。\n\n## 提交产物\ntask.py\n\n## 验收方法\n本地运行PendingDeletion、Cancel后Disabled、Enable后解密及策略拒绝边界。\n\n## 能力边界\n用本地确定性KMS key-state模型验证PendingDeletion阻断、取消后Disabled、重新启用及IAM/key policy拒绝。没有AWS API，不代表远端key或旧对象已经恢复。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "def decrypt_decision(key_state,iam_allowed,key_policy_allows):\n    if key_state not in {\"Enabled\",\"Disabled\",\"PendingDeletion\",\"PendingImport\",\"Unavailable\"}:raise ValueError(\"unknown KMS key state\")\n    if key_state!=\"Enabled\":return {\"allowed\":False,\"reason\":\"key_state_\"+key_state,\"action\":\"restore key usability before changing IAM policy\"}\n    if not iam_allowed:return {\"allowed\":False,\"reason\":\"identity_policy_denied\",\"action\":\"inspect caller identity policy and grants\"}\n    if not key_policy_allows:return {\"allowed\":False,\"reason\":\"key_policy_or_grant_denied\",\"action\":\"inspect key policy and grants for the exact principal\"}\n    return {\"allowed\":True,\"reason\":\"enabled_and_authorized\",\"action\":\"perform a controlled decrypt and verify recovered data\"}\n\ndef cancel_deletion(state):\n    if state!=\"PendingDeletion\":raise ValueError(\"key is not pending deletion\")\n    return \"Disabled\"\n\ndef enable_key(state):\n    if state!=\"Disabled\":raise ValueError(\"only a disabled key can be enabled\")\n    return \"Enabled\"\n"
+    },
+    "negative_files": {
+      "task.py": "def decrypt_decision(key_state,iam_allowed,key_policy_allows):\n    if key_state not in {\"Enabled\",\"Disabled\",\"PendingDeletion\",\"PendingImport\",\"Unavailable\"}:raise ValueError(\"unknown KMS key state\")\n    if False:return {\"allowed\":False,\"reason\":\"key_state_\"+key_state,\"action\":\"restore key usability before changing IAM policy\"}\n    if not iam_allowed:return {\"allowed\":False,\"reason\":\"identity_policy_denied\",\"action\":\"inspect caller identity policy and grants\"}\n    if not key_policy_allows:return {\"allowed\":False,\"reason\":\"key_policy_or_grant_denied\",\"action\":\"inspect key policy and grants for the exact principal\"}\n    return {\"allowed\":True,\"reason\":\"enabled_and_authorized\",\"action\":\"perform a controlled decrypt and verify recovered data\"}\n\ndef cancel_deletion(state):\n    if state!=\"PendingDeletion\":raise ValueError(\"key is not pending deletion\")\n    return \"Disabled\"\n\ndef enable_key(state):\n    if state!=\"Disabled\":raise ValueError(\"only a disabled key can be enabled\")\n    return \"Enabled\"\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "非root Linux，现有本地原生工具，自有短生命周期资源",
+      "operation": "实现KMS解密状态决策和本地恢复状态机：当key处于PendingDeletion时，即使IAM和key policy允许也不得宣称可解密；waiting period内CancelKeyDeletion后状态变为Disabled，必须再EnableKey后才允许受控解密。先恢复key状态，再分别核对调用者IAM、key policy/grants；密钥已经删除时不承诺恢复。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "用本地确定性KMS key-state模型验证PendingDeletion阻断、取消后Disabled、重新启用及IAM/key policy拒绝。没有AWS API，不代表远端key或旧对象已经恢复。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 15,
+      "requires": {
+        "commands": [],
+        "python_modules": [],
+        "features": [
+          "linux:nonroot_dac"
+        ]
+      },
+      "test_files": {
+        "checks/check.py": "import importlib.util,pathlib\nspec=importlib.util.spec_from_file_location('task',pathlib.Path('task.py'));task=importlib.util.module_from_spec(spec);spec.loader.exec_module(task)\nprint('NATIVE_LINUX_READY',flush=True);print('STUDENT_OPERATION_ENTERED: restore KMS key state before IAM changes',flush=True)\ninitial=task.decrypt_decision('PendingDeletion',True,True);assert not initial['allowed'] and initial['reason']=='key_state_PendingDeletion'\nstate=task.cancel_deletion('PendingDeletion');assert state=='Disabled'\nassert not task.decrypt_decision(state,True,True)['allowed'],'cancel deletion must not be reported as immediately usable'\nstate=task.enable_key(state);assert state=='Enabled' and task.decrypt_decision(state,True,True)['allowed']\nassert not task.decrypt_decision(state,False,True)['allowed']\ntry:task.cancel_deletion('Enabled')\nexcept ValueError:pass\nelse:raise AssertionError('cancel deletion accepted for enabled key')\n\nprint('NATIVE_SEMANTIC_ASSERTIONS_PASSED',flush=True)\n"
+      }
+    },
+    "related_modules": [
+      "aws"
+    ]
+  }
+]

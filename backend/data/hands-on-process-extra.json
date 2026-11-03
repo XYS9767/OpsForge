@@ -1,0 +1,3318 @@
+[
+  {
+    "id": "curated-process-004",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "进程启动参数",
+    "level": 3,
+    "type": "code",
+    "title": "保留子进程参数边界并拒绝 shell 展开",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：echo.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 launch(argv)；直接启动给定参数列表，返回 JSON 解码后的 stdout。参数中的空格、星号和分号均作为字面值，禁止 shell=True；子进程失败需抛 CalledProcessError。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：把带空格的一个参数拆为两个，或执行参数中的分号命令。",
+    "files": {
+      "echo.py": "import sys,json\nprint(json.dumps(sys.argv[1:]))\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess,json\ndef launch(argv):\n    return json.loads(subprocess.run(argv,check=True,capture_output=True,text=True,encoding='utf-8').stdout)\n```\n\n实现 launch(argv)；直接启动给定参数列表，返回 JSON 解码后的 stdout。参数中的空格、星号和分号均作为字面值，禁止 shell=True；子进程失败需抛 CalledProcessError。",
+    "solution_files": {
+      "task.py": "import subprocess,json\ndef launch(argv):\n    return json.loads(subprocess.run(argv,check=True,capture_output=True,text=True,encoding='utf-8').stdout)\n"
+    },
+    "negative_files": {
+      "task.py": "def launch(argv):return argv[2:] if all(' 'not in x for x in argv[2:]) else ' '.join(argv[2:]).split()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 launch(argv)；直接启动给定参数列表，返回 JSON 解码后的 stdout。参数中的空格、星号和分号均作为字面值，禁止 shell=True；子进程失败需抛 CalledProcessError。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "把带空格的一个参数拆为两个，或执行参数中的分号命令。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nargs=['a b','*','; echo BAD','中文','']\nassert task.launch([sys.executable,'echo.py',*args])==args\nassert task.launch([sys.executable,'echo.py'])==[]\ntry:task.launch([sys.executable,'-c','raise SystemExit(7)'])\nexcept subprocess.CalledProcessError as e:assert e.returncode==7\nelse:raise AssertionError('failed child accepted')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|进程启动参数|保留子进程参数边界并拒绝 shell 展开",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-005",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "进程环境隔离",
+    "level": 3,
+    "type": "code",
+    "title": "创建最小子进程环境而不改父进程环境",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：env.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 launch(argv,allowed,overrides)，从 os.environ 复制 allowed 白名单项后叠加 overrides，只将这个新字典传给子进程，解析其 JSON stdout。父进程环境必须不变；禁止把未允许的训练 TOKEN 传入子进程。系统运行时需用绝对 Python 路径。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：把父进程 LAB_TOKEN 一起继承到子进程，泄漏不在白名单内的环境。",
+    "files": {
+      "env.py": "import os,json\nprint(json.dumps({k:os.environ.get(k) for k in [\"LAB_TOKEN\",\"VISIBLE\",\"ADDED\"]}))\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os,subprocess,json\ndef launch(argv,allowed,overrides):\n    env={k:os.environ[k] for k in allowed if k in os.environ}\n    env.update(overrides)\n    return json.loads(subprocess.check_output(argv,env=env,text=True,encoding='utf-8'))\n```\n\n实现 launch(argv,allowed,overrides)，从 os.environ 复制 allowed 白名单项后叠加 overrides，只将这个新字典传给子进程，解析其 JSON stdout。父进程环境必须不变；禁止把未允许的训练 TOKEN 传入子进程。系统运行时需用绝对 Python 路径。",
+    "solution_files": {
+      "task.py": "import os,subprocess,json\ndef launch(argv,allowed,overrides):\n    env={k:os.environ[k] for k in allowed if k in os.environ}\n    env.update(overrides)\n    return json.loads(subprocess.check_output(argv,env=env,text=True,encoding='utf-8'))\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess,json\ndef launch(argv,allowed,overrides):return json.loads(subprocess.check_output(argv,text=True))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 launch(argv,allowed,overrides)，从 os.environ 复制 allowed 白名单项后叠加 overrides，只将这个新字典传给子进程，解析其 JSON stdout。父进程环境必须不变；禁止把未允许的训练 TOKEN 传入子进程。系统运行时需用绝对 Python 路径。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "把父进程 LAB_TOKEN 一起继承到子进程，泄漏不在白名单内的环境。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nos.environ.update(LAB_TOKEN='private',VISIBLE='base')\nbefore=dict(os.environ)\nassert task.launch([sys.executable,'env.py'],['VISIBLE'],{'ADDED':'yes'})=={'LAB_TOKEN':None,'VISIBLE':'base','ADDED':'yes'}\nassert dict(os.environ)==before\nassert task.launch([sys.executable,'env.py'],[],{'VISIBLE':'override'})['VISIBLE']=='override'\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|进程环境隔离|创建最小子进程环境而不改父进程环境",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-006",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "子进程工作目录",
+    "level": 3,
+    "type": "code",
+    "title": "以不同工作目录启动两个工件构建进程",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：build.py, left/.keep, right/.keep。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 build(argv,directory)，用 subprocess 的 cwd 参数启动进程，返回退出码；禁止 os.chdir。提供 build.py 将当前目录名写入 result.txt。连续在 left 和 right 目录构建，工件必须落在各自目录，父进程工作目录保持不变。\n\n## 提交产物\ntask.py；执行产物：left/result.txt, right/result.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：忽略 cwd，使两个进程把 result.txt 写到同一个父目录。",
+    "files": {
+      "build.py": "import pathlib\npathlib.Path(\"result.txt\").write_text(pathlib.Path.cwd().name)\n",
+      "left/.keep": "",
+      "right/.keep": "",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess\ndef build(argv,directory):\n    return subprocess.run(argv,cwd=directory,check=False).returncode\n```\n\n实现 build(argv,directory)，用 subprocess 的 cwd 参数启动进程，返回退出码；禁止 os.chdir。提供 build.py 将当前目录名写入 result.txt。连续在 left 和 right 目录构建，工件必须落在各自目录，父进程工作目录保持不变。",
+    "solution_files": {
+      "task.py": "import subprocess\ndef build(argv,directory):\n    return subprocess.run(argv,cwd=directory,check=False).returncode\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef build(argv,directory):return subprocess.run(argv).returncode\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 build(argv,directory)，用 subprocess 的 cwd 参数启动进程，返回退出码；禁止 os.chdir。提供 build.py 将当前目录名写入 result.txt。连续在 left 和 right 目录构建，工件必须落在各自目录，父进程工作目录保持不变。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "left/result.txt",
+        "right/result.txt"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "忽略 cwd，使两个进程把 result.txt 写到同一个父目录。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nbefore=pathlib.Path.cwd(); script=str(before/'build.py')\nfor d in ['left','right']:\n    assert task.build([sys.executable,script],d)==0\n    assert pathlib.Path(d,'result.txt').read_text()==d\nassert pathlib.Path.cwd()==before\nassert not pathlib.Path('result.txt').exists()\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|子进程工作目录|以不同工作目录启动两个工件构建进程",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-007",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "进程输入 EOF",
+    "level": 3,
+    "type": "code",
+    "title": "通过标准输入完整输送二进制并关闭写端",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：digest.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 digest(argv,payload)，把原始 bytes 传给子进程标准输入，等待 EOF 后返回 ASCII stdout 去掉尾换行；子进程非零退出抛异常。不得把二进制先解码为文本，空字节串也必须关闭输入并完成。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：UTF-8 忽略错误解码会丢失 0xff，导致子进程收到的字节和校验和错误。",
+    "files": {
+      "digest.py": "import sys,hashlib\nprint(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess\ndef digest(argv,payload):\n    return subprocess.run(argv,input=payload,stdout=subprocess.PIPE,check=True,timeout=5).stdout.decode('ascii').strip()\n```\n\n实现 digest(argv,payload)，把原始 bytes 传给子进程标准输入，等待 EOF 后返回 ASCII stdout 去掉尾换行；子进程非零退出抛异常。不得把二进制先解码为文本，空字节串也必须关闭输入并完成。",
+    "solution_files": {
+      "task.py": "import subprocess\ndef digest(argv,payload):\n    return subprocess.run(argv,input=payload,stdout=subprocess.PIPE,check=True,timeout=5).stdout.decode('ascii').strip()\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef digest(argv,payload):\n    return subprocess.check_output(argv,input=payload.decode('utf-8',errors='ignore').encode(),timeout=5).decode().strip()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 digest(argv,payload)，把原始 bytes 传给子进程标准输入，等待 EOF 后返回 ASCII stdout 去掉尾换行；子进程非零退出抛异常。不得把二进制先解码为文本，空字节串也必须关闭输入并完成。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "UTF-8 忽略错误解码会丢失 0xff，导致子进程收到的字节和校验和错误。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nfor data in [b'',bytes(range(256))*4096,b'\\x00\\xff\\r\\n']:\n    assert task.digest([sys.executable,'digest.py'],data)==hashlib.sha256(data).hexdigest()\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|进程输入 EOF|通过标准输入完整输送二进制并关闭写端",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-008",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "输出流落盘",
+    "level": 4,
+    "type": "code",
+    "title": "把大体积进程输出直接落盘避免内存累积",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：noisy.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 spool(argv,out_path,err_path)，stdout 与 stderr 分别直接重定向到二进制文件，返回退出码；必须覆盖旧文件，不在内存 capture_output。子进程分别输出 2MiB A 和 3MiB B 并退出 4，完整保留两路内容；所有文件句柄在返回前关闭。\n\n## 提交产物\ntask.py；执行产物：out.bin, err.bin。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：合并 stderr 到 stdout，破坏两路日志独立保留要求。",
+    "files": {
+      "noisy.py": "import os,sys\nos.write(1,b\"A\"*(2*1024*1024))\nos.write(2,b\"B\"*(3*1024*1024))\nsys.exit(4)\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess\ndef spool(argv,out_path,err_path):\n    with open(out_path,'wb') as out,open(err_path,'wb') as err:\n        return subprocess.run(argv,stdout=out,stderr=err,timeout=5).returncode\n```\n\n实现 spool(argv,out_path,err_path)，stdout 与 stderr 分别直接重定向到二进制文件，返回退出码；必须覆盖旧文件，不在内存 capture_output。子进程分别输出 2MiB A 和 3MiB B 并退出 4，完整保留两路内容；所有文件句柄在返回前关闭。",
+    "solution_files": {
+      "task.py": "import subprocess\ndef spool(argv,out_path,err_path):\n    with open(out_path,'wb') as out,open(err_path,'wb') as err:\n        return subprocess.run(argv,stdout=out,stderr=err,timeout=5).returncode\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef spool(argv,out_path,err_path):\n    with open(out_path,'wb') as f:return subprocess.run(argv,stdout=f,stderr=subprocess.STDOUT).returncode\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 spool(argv,out_path,err_path)，stdout 与 stderr 分别直接重定向到二进制文件，返回退出码；必须覆盖旧文件，不在内存 capture_output。子进程分别输出 2MiB A 和 3MiB B 并退出 4，完整保留两路内容；所有文件句柄在返回前关闭。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "out.bin",
+        "err.bin"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "合并 stderr 到 stdout，破坏两路日志独立保留要求。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nfor n in ['out.bin','err.bin']:pathlib.Path(n).write_bytes(b'old')\nassert task.spool([sys.executable,'noisy.py'],'out.bin','err.bin')==4\nassert pathlib.Path('out.bin').read_bytes()==b'A'*(2*1024*1024)\nassert pathlib.Path('err.bin').read_bytes()==b'B'*(3*1024*1024)\nassert task.spool([sys.executable,'-c','pass'],'out.bin','err.bin')==0\nassert pathlib.Path('out.bin').stat().st_size==pathlib.Path('err.bin').stat().st_size==0\n\nfrom unittest.mock import patch\nreal=task.subprocess.run\ndef checked(*args,**kw):\n    assert kw.get('stdout')not in (None,subprocess.PIPE)\n    assert kw.get('stderr')not in (None,subprocess.PIPE,subprocess.STDOUT)\n    return real(*args,**kw)\nwith patch.object(task.subprocess,'run',side_effect=checked):\n    assert task.spool([sys.executable,'noisy.py'],'out.bin','err.bin')==4\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|输出流落盘|把大体积进程输出直接落盘避免内存累积",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-009",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "双进程管道",
+    "level": 4,
+    "type": "code",
+    "title": "串联两个真实进程并同时保留各阶段退出码",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：producer.py, consumer.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 pipeline(producer,consumer)，连接第一个进程 stdout 到第二个 stdin。父进程必须关闭自己持有的上游 stdout 读端，等待两者，返回 (producer_code,consumer_code,consumer_stdout_bytes)。两端 stderr 重定向临时文件以免堵塞；提供有限输出生产者，不处理无限后台服务。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：只返回下游成功码，吞掉上游生产者的退出码 3。",
+    "files": {
+      "producer.py": "import sys\nprint(\"alpha\")\nprint(\"beta\")\nsys.exit(3)\n",
+      "consumer.py": "import sys\nprint(sys.stdin.read().upper(),end=\"\")\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess,tempfile\ndef pipeline(producer,consumer):\n    with tempfile.TemporaryFile() as pe,tempfile.TemporaryFile() as ce:\n        p=subprocess.Popen(producer,stdout=subprocess.PIPE,stderr=pe)\n        try:\n            c=subprocess.Popen(consumer,stdin=p.stdout,stdout=subprocess.PIPE,stderr=ce)\n            p.stdout.close()\n            try:\n                data=c.communicate(timeout=5)[0]\n                return p.wait(timeout=5),c.returncode,data\n            finally:\n                if c.poll() is None:c.kill()\n                c.wait()\n        finally:\n            if p.poll() is None:p.kill()\n            p.wait()\n            if p.stdout and not p.stdout.closed:p.stdout.close()\n```\n\n实现 pipeline(producer,consumer)，连接第一个进程 stdout 到第二个 stdin。父进程必须关闭自己持有的上游 stdout 读端，等待两者，返回 (producer_code,consumer_code,consumer_stdout_bytes)。两端 stderr 重定向临时文件以免堵塞；提供有限输出生产者，不处理无限后台服务。",
+    "solution_files": {
+      "task.py": "import subprocess,tempfile\ndef pipeline(producer,consumer):\n    with tempfile.TemporaryFile() as pe,tempfile.TemporaryFile() as ce:\n        p=subprocess.Popen(producer,stdout=subprocess.PIPE,stderr=pe)\n        try:\n            c=subprocess.Popen(consumer,stdin=p.stdout,stdout=subprocess.PIPE,stderr=ce)\n            p.stdout.close()\n            try:\n                data=c.communicate(timeout=5)[0]\n                return p.wait(timeout=5),c.returncode,data\n            finally:\n                if c.poll() is None:c.kill()\n                c.wait()\n        finally:\n            if p.poll() is None:p.kill()\n            p.wait()\n            if p.stdout and not p.stdout.closed:p.stdout.close()\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef pipeline(producer,consumer):\n    p=subprocess.run(producer,capture_output=True)\n    c=subprocess.run(consumer,input=p.stdout,capture_output=True)\n    return 0,c.returncode,c.stdout\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 pipeline(producer,consumer)，连接第一个进程 stdout 到第二个 stdin。父进程必须关闭自己持有的上游 stdout 读端，等待两者，返回 (producer_code,consumer_code,consumer_stdout_bytes)。两端 stderr 重定向临时文件以免堵塞；提供有限输出生产者，不处理无限后台服务。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "只返回下游成功码，吞掉上游生产者的退出码 3。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\na,b,data=task.pipeline([sys.executable,'producer.py'],[sys.executable,'consumer.py'])\nassert (a,b)==(3,0) and data.replace(b'\\r\\n',b'\\n')==b'ALPHA\\nBETA\\n'\na,b,data=task.pipeline([sys.executable,'-c','pass'],[sys.executable,'-c','import sys;sys.stdin.read();sys.exit(7)'])\nassert (a,b,data)==(0,7,b'')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|双进程管道|串联两个真实进程并同时保留各阶段退出码",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-010",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "启动错误分类",
+    "level": 3,
+    "type": "code",
+    "title": "区分无法启动与已启动后失败",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 launch(argv)，返回 {\"kind\":\"exited\",\"code\":整数}；可执行文件不存在时返回 {\"kind\":\"missing\"}；权限等其他 OSError 不得伪装为 missing。子进程无论成功失败都要等待；不捕获宽泛 Exception。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：将已成功启动但退出 127 的应用误判为操作系统找不到程序。",
+    "files": {
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess\ndef launch(argv):\n    try:\n        p=subprocess.run(argv,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n    except FileNotFoundError:\n        return {'kind':'missing'}\n    return {'kind':'exited','code':p.returncode}\n```\n\n实现 launch(argv)，返回 {\"kind\":\"exited\",\"code\":整数}；可执行文件不存在时返回 {\"kind\":\"missing\"}；权限等其他 OSError 不得伪装为 missing。子进程无论成功失败都要等待；不捕获宽泛 Exception。",
+    "solution_files": {
+      "task.py": "import subprocess\ndef launch(argv):\n    try:\n        p=subprocess.run(argv,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n    except FileNotFoundError:\n        return {'kind':'missing'}\n    return {'kind':'exited','code':p.returncode}\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef launch(argv):\n    try:\n        p=subprocess.run(argv,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n        return {'kind':'missing'}if p.returncode==127 else {'kind':'exited','code':p.returncode}\n    except FileNotFoundError:return {'kind':'missing'}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 launch(argv)，返回 {\"kind\":\"exited\",\"code\":整数}；可执行文件不存在时返回 {\"kind\":\"missing\"}；权限等其他 OSError 不得伪装为 missing。子进程无论成功失败都要等待；不捕获宽泛 Exception。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "将已成功启动但退出 127 的应用误判为操作系统找不到程序。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.launch([sys.executable,'-c','pass'])=={'kind':'exited','code':0}\nassert task.launch([sys.executable,'-c','raise SystemExit(127)'])=={'kind':'exited','code':127}\nassert task.launch([str(pathlib.Path.cwd()/'absent-program')])=={'kind':'missing'}\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|启动错误分类|区分无法启动与已启动后失败",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-011",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "无交互进程",
+    "level": 3,
+    "type": "code",
+    "title": "用 DEVNULL 启动不应等待交互输入的批处理",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：reader.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 batch(argv)，让 stdin 来自 DEVNULL，stdout 捕获 bytes，检查退出码，2 秒超时。提供 reader.py 检查标准输入立即 EOF。不能依赖父进程是否连接终端，也不能写入占位换行。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：为了结束输入而注入换行，使子进程读取到非空数据。",
+    "files": {
+      "reader.py": "import sys\nx=sys.stdin.buffer.read()\nprint(\"EMPTY\" if x==b\"\" else \"NOT_EMPTY\")\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess\ndef batch(argv):\n    return subprocess.run(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,check=True,timeout=2).stdout\n```\n\n实现 batch(argv)，让 stdin 来自 DEVNULL，stdout 捕获 bytes，检查退出码，2 秒超时。提供 reader.py 检查标准输入立即 EOF。不能依赖父进程是否连接终端，也不能写入占位换行。",
+    "solution_files": {
+      "task.py": "import subprocess\ndef batch(argv):\n    return subprocess.run(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,check=True,timeout=2).stdout\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef batch(argv):return subprocess.run(argv,input=b'\\n',stdout=subprocess.PIPE).stdout\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 batch(argv)，让 stdin 来自 DEVNULL，stdout 捕获 bytes，检查退出码，2 秒超时。提供 reader.py 检查标准输入立即 EOF。不能依赖父进程是否连接终端，也不能写入占位换行。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "为了结束输入而注入换行，使子进程读取到非空数据。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.batch([sys.executable,'reader.py']).strip()==b'EMPTY'\ntry:task.batch([sys.executable,'-c','raise SystemExit(8)'])\nexcept subprocess.CalledProcessError as e:assert e.returncode==8\nelse:raise AssertionError('failure swallowed')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|无交互进程|用 DEVNULL 启动不应等待交互输入的批处理",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-012",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "协作式服务关停",
+    "level": 4,
+    "type": "code",
+    "title": "实现单子进程的优雅 stdin 关停协议",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 stop(argv)：启动 worker.py 并从 stdout 读取 READY；向 stdin 写 STOP 加换行并 flush；关闭输入后等待，返回最后的 BYE 和退出码。各等待上限合计 5 秒，异常时 kill 并 wait 回收。题目 worker 立即 READY，不需要泛化任意未就绪服务。不得直接 terminate，worker 必须生成 flushed.txt。\n\n## 提交产物\ntask.py；执行产物：flushed.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：直接 terminate 后伪报 BYE，丢失 worker 必须写出的 flushed.txt。",
+    "files": {
+      "worker.py": "import sys,pathlib\nprint(\"READY\",flush=True)\nif sys.stdin.readline().strip()==\"STOP\":\n pathlib.Path(\"flushed.txt\").write_text(\"durable\")\n print(\"BYE\",flush=True)\nelse:sys.exit(9)\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess\ndef stop(argv):\n    p=subprocess.Popen(argv,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)\n    try:\n        if p.stdout.readline().strip()!='READY':raise RuntimeError('not ready')\n        p.stdin.write('STOP\\n');p.stdin.flush();p.stdin.close();p.stdin=None\n        out=p.communicate(timeout=5)[0].strip()\n        return out,p.returncode\n    finally:\n        if p.poll() is None:p.kill()\n        p.wait()\n```\n\n实现 stop(argv)：启动 worker.py 并从 stdout 读取 READY；向 stdin 写 STOP 加换行并 flush；关闭输入后等待，返回最后的 BYE 和退出码。各等待上限合计 5 秒，异常时 kill 并 wait 回收。题目 worker 立即 READY，不需要泛化任意未就绪服务。不得直接 terminate，worker 必须生成 flushed.txt。",
+    "solution_files": {
+      "task.py": "import subprocess\ndef stop(argv):\n    p=subprocess.Popen(argv,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True)\n    try:\n        if p.stdout.readline().strip()!='READY':raise RuntimeError('not ready')\n        p.stdin.write('STOP\\n');p.stdin.flush();p.stdin.close();p.stdin=None\n        out=p.communicate(timeout=5)[0].strip()\n        return out,p.returncode\n    finally:\n        if p.poll() is None:p.kill()\n        p.wait()\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef stop(argv):\n    p=subprocess.Popen(argv,stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)\n    p.stdout.readline();p.terminate();p.wait();return 'BYE',0\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 stop(argv)：启动 worker.py 并从 stdout 读取 READY；向 stdin 写 STOP 加换行并 flush；关闭输入后等待，返回最后的 BYE 和退出码。各等待上限合计 5 秒，异常时 kill 并 wait 回收。题目 worker 立即 READY，不需要泛化任意未就绪服务。不得直接 terminate，worker 必须生成 flushed.txt。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "flushed.txt"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "直接 terminate 后伪报 BYE，丢失 worker 必须写出的 flushed.txt。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.stop([sys.executable,'worker.py'])==('BYE',0)\nassert pathlib.Path('flushed.txt').read_text()=='durable'\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|协作式服务关停|实现单子进程的优雅 stdin 关停协议",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-013",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "多进程日志隔离",
+    "level": 4,
+    "type": "code",
+    "title": "为每个并发子进程保留独立日志工件",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 collect(jobs,directory)，jobs 为 (名字,argv) 列表；先启动所有子进程，分别将 stdout 和 stderr 写入 directory/名字.out 与名字.err，全部 wait 并关闭句柄，返回名字到退出码映射。名字只由题内 a、b 使用，不负责通用路径验证。启动异常要终止并回收已启动子进程。\n\n## 提交产物\ntask.py；执行产物：logs/a.out, logs/a.err, logs/b.out, logs/b.err。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：把所有输出写 combined.log，无法按进程区分 stderr 和 stdout。",
+    "files": {
+      "worker.py": "import sys,time\nname=sys.argv[1]\nprint(name*10000)\nprint(\"error-\"+name,file=sys.stderr)\ntime.sleep(.1)\nsys.exit(int(sys.argv[2]))\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport pathlib,subprocess\ndef collect(jobs,directory):\n    root=pathlib.Path(directory);root.mkdir(exist_ok=True)\n    children=[];streams=[]\n    try:\n        for name,argv in jobs:\n            out=open(root/(name+'.out'),'wb');streams.append(out)\n            err=open(root/(name+'.err'),'wb');streams.append(err)\n            children.append((name,subprocess.Popen(argv,stdout=out,stderr=err)))\n        return {name:p.wait(timeout=5) for name,p in children}\n    finally:\n        for _,p in children:\n            if p.poll() is None:p.kill()\n            p.wait()\n        for stream in streams:stream.close()\n```\n\n实现 collect(jobs,directory)，jobs 为 (名字,argv) 列表；先启动所有子进程，分别将 stdout 和 stderr 写入 directory/名字.out 与名字.err，全部 wait 并关闭句柄，返回名字到退出码映射。名字只由题内 a、b 使用，不负责通用路径验证。启动异常要终止并回收已启动子进程。",
+    "solution_files": {
+      "task.py": "import pathlib,subprocess\ndef collect(jobs,directory):\n    root=pathlib.Path(directory);root.mkdir(exist_ok=True)\n    children=[];streams=[]\n    try:\n        for name,argv in jobs:\n            out=open(root/(name+'.out'),'wb');streams.append(out)\n            err=open(root/(name+'.err'),'wb');streams.append(err)\n            children.append((name,subprocess.Popen(argv,stdout=out,stderr=err)))\n        return {name:p.wait(timeout=5) for name,p in children}\n    finally:\n        for _,p in children:\n            if p.poll() is None:p.kill()\n            p.wait()\n        for stream in streams:stream.close()\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib,subprocess\ndef collect(jobs,directory):\n    root=pathlib.Path(directory);root.mkdir(exist_ok=True)\n    codes={}\n    for name,argv in jobs:\n        with open(root/'combined.log','ab') as f:codes[name]=subprocess.run(argv,stdout=f,stderr=f).returncode\n    return codes\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 collect(jobs,directory)，jobs 为 (名字,argv) 列表；先启动所有子进程，分别将 stdout 和 stderr 写入 directory/名字.out 与名字.err，全部 wait 并关闭句柄，返回名字到退出码映射。名字只由题内 a、b 使用，不负责通用路径验证。启动异常要终止并回收已启动子进程。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "logs/a.out",
+        "logs/a.err",
+        "logs/b.out",
+        "logs/b.err"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "把所有输出写 combined.log，无法按进程区分 stderr 和 stdout。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\njobs=[(n,[sys.executable,'worker.py',n,str(c)])for n,c in [('a',0),('b',6)]]\nassert task.collect(jobs,'logs')=={'a':0,'b':6}\nfor n in ['a','b']:\n    assert pathlib.Path('logs',n+'.out').read_text().strip()==n*10000\n    assert pathlib.Path('logs',n+'.err').read_text().strip()=='error-'+n\nassert task.collect([],'empty')=={}\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|多进程日志隔离|为每个并发子进程保留独立日志工件",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-014",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "流式多字节解码",
+    "level": 4,
+    "type": "code",
+    "title": "恢复被截断的 UTF-8 子进程输出分块",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：utf8.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 stream(argv)，读取 stdout 每次 1 字节，用严格 UTF-8 增量解码器恢复字符串；等待退出，非零抛 CalledProcessError，非法 UTF-8 抛 UnicodeDecodeError。stderr 丢弃，异常必须回收子进程。不得对单个字节 errors=ignore，也不能用整段 read 代替本题流式解码。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：逐字节忽略 UTF-8 解码错误会把中文和 emoji 全部丢掉。",
+    "files": {
+      "utf8.py": "import os\nos.write(1,\"中🙂文\".encode())\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport codecs,subprocess\ndef stream(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)\n    decoder=codecs.getincrementaldecoder('utf-8')('strict');parts=[]\n    try:\n        while True:\n            raw=p.stdout.read(1)\n            if not raw:break\n            parts.append(decoder.decode(raw))\n        parts.append(decoder.decode(b'',final=True))\n        code=p.wait(timeout=5)\n        if code:raise subprocess.CalledProcessError(code,argv)\n        return ''.join(parts)\n    finally:\n        p.stdout.close()\n        if p.poll() is None:p.kill()\n        p.wait()\n```\n\n实现 stream(argv)，读取 stdout 每次 1 字节，用严格 UTF-8 增量解码器恢复字符串；等待退出，非零抛 CalledProcessError，非法 UTF-8 抛 UnicodeDecodeError。stderr 丢弃，异常必须回收子进程。不得对单个字节 errors=ignore，也不能用整段 read 代替本题流式解码。",
+    "solution_files": {
+      "task.py": "import codecs,subprocess\ndef stream(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)\n    decoder=codecs.getincrementaldecoder('utf-8')('strict');parts=[]\n    try:\n        while True:\n            raw=p.stdout.read(1)\n            if not raw:break\n            parts.append(decoder.decode(raw))\n        parts.append(decoder.decode(b'',final=True))\n        code=p.wait(timeout=5)\n        if code:raise subprocess.CalledProcessError(code,argv)\n        return ''.join(parts)\n    finally:\n        p.stdout.close()\n        if p.poll() is None:p.kill()\n        p.wait()\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef stream(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE);result=''\n    while True:\n        b=p.stdout.read(1)\n        if not b:break\n        result+=b.decode('utf-8',errors='ignore')\n    p.wait();return result\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 stream(argv)，读取 stdout 每次 1 字节，用严格 UTF-8 增量解码器恢复字符串；等待退出，非零抛 CalledProcessError，非法 UTF-8 抛 UnicodeDecodeError。stderr 丢弃，异常必须回收子进程。不得对单个字节 errors=ignore，也不能用整段 read 代替本题流式解码。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "逐字节忽略 UTF-8 解码错误会把中文和 emoji 全部丢掉。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.stream([sys.executable,'utf8.py'])=='中🙂文'\nassert task.stream([sys.executable,'-c','pass'])==''\ntry:task.stream([sys.executable,'-c','import os;os.write(1,bytes([255]))'])\nexcept UnicodeDecodeError:pass\nelse:raise AssertionError('invalid bytes ignored')\n\ntry:task.stream([sys.executable,'-c','raise SystemExit(6)'])\nexcept subprocess.CalledProcessError as e:assert e.returncode==6\nelse:raise AssertionError('nonzero exit ignored')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|流式多字节解码|恢复被截断的 UTF-8 子进程输出分块",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-015",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "早退消费者回收",
+    "level": 4,
+    "type": "code",
+    "title": "让生产者消费结束时及时回收长输出进程",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 first_line(argv)，启动提供的无限输出 worker，读取首行后主动 terminate，在 2 秒内 wait；仍不退出再 kill 并 wait。返回首行 bytes 和子进程 returncode；不得留下运行进程。worker 没有派生后代，此题只管理直接子进程。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：完成回收却把已经读出的首行丢弃，调用方无法消费结果。",
+    "files": {
+      "worker.py": "import sys,time\nprint(\"FIRST\",flush=True)\nwhile True:\n print(\"MORE\",flush=True)\n time.sleep(.05)\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess\ndef first_line(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)\n    try:\n        line=p.stdout.readline()\n        p.terminate()\n        try:p.wait(timeout=2)\n        except subprocess.TimeoutExpired:p.kill();p.wait()\n        return line,p.returncode\n    finally:\n        p.stdout.close()\n        if p.poll() is None:p.kill();p.wait()\n```\n\n实现 first_line(argv)，启动提供的无限输出 worker，读取首行后主动 terminate，在 2 秒内 wait；仍不退出再 kill 并 wait。返回首行 bytes 和子进程 returncode；不得留下运行进程。worker 没有派生后代，此题只管理直接子进程。",
+    "solution_files": {
+      "task.py": "import subprocess\ndef first_line(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)\n    try:\n        line=p.stdout.readline()\n        p.terminate()\n        try:p.wait(timeout=2)\n        except subprocess.TimeoutExpired:p.kill();p.wait()\n        return line,p.returncode\n    finally:\n        p.stdout.close()\n        if p.poll() is None:p.kill();p.wait()\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef first_line(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)\n    line=p.stdout.readline();p.terminate();p.wait();return b'',p.returncode\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 first_line(argv)，启动提供的无限输出 worker，读取首行后主动 terminate，在 2 秒内 wait；仍不退出再 kill 并 wait。返回首行 bytes 和子进程 returncode；不得留下运行进程。worker 没有派生后代，此题只管理直接子进程。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "完成回收却把已经读出的首行丢弃，调用方无法消费结果。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nline,code=task.first_line([sys.executable,'worker.py'])\nassert line.strip()==b'FIRST' and code is not None\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|早退消费者回收|让生产者消费结束时及时回收长输出进程",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-016",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "探针进程并发",
+    "level": 4,
+    "type": "code",
+    "title": "并发启动探针但按请求顺序汇总结果",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：probe.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 probes(commands)，使用 ThreadPoolExecutor(max_workers=3) 同时启动最多三个实际命令，捕获 stdout，保留退出码，按 commands 输入顺序返回 (code,去尾换行文本)。每个命令最多 3 秒；不因某一个非零退出而丢弃其他结果。空列表返回空列表。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：按完成顺序返回 fast、middle、slow，破坏请求和结果的对应关系。",
+    "files": {
+      "probe.py": "import sys,time\ntime.sleep(float(sys.argv[1]))\nprint(sys.argv[2])\nsys.exit(int(sys.argv[3]))\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport concurrent.futures,subprocess\ndef probes(commands):\n    def one(argv):\n        p=subprocess.run(argv,capture_output=True,text=True,timeout=3)\n        return p.returncode,p.stdout.strip()\n    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:\n        return list(pool.map(one,commands))\n```\n\n实现 probes(commands)，使用 ThreadPoolExecutor(max_workers=3) 同时启动最多三个实际命令，捕获 stdout，保留退出码，按 commands 输入顺序返回 (code,去尾换行文本)。每个命令最多 3 秒；不因某一个非零退出而丢弃其他结果。空列表返回空列表。",
+    "solution_files": {
+      "task.py": "import concurrent.futures,subprocess\ndef probes(commands):\n    def one(argv):\n        p=subprocess.run(argv,capture_output=True,text=True,timeout=3)\n        return p.returncode,p.stdout.strip()\n    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:\n        return list(pool.map(one,commands))\n"
+    },
+    "negative_files": {
+      "task.py": "import concurrent.futures,subprocess\ndef probes(commands):\n    def one(a):\n        p=subprocess.run(a,capture_output=True,text=True);return p.returncode,p.stdout.strip()\n    with concurrent.futures.ThreadPoolExecutor(max_workers=3)as pool:\n        return [f.result()for f in concurrent.futures.as_completed([pool.submit(one,a)for a in commands])]\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 probes(commands)，使用 ThreadPoolExecutor(max_workers=3) 同时启动最多三个实际命令，捕获 stdout，保留退出码，按 commands 输入顺序返回 (code,去尾换行文本)。每个命令最多 3 秒；不因某一个非零退出而丢弃其他结果。空列表返回空列表。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "按完成顺序返回 fast、middle、slow，破坏请求和结果的对应关系。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ncommands=[[sys.executable,'probe.py',delay,name,code]for delay,name,code in [('.15','slow','0'),('.01','fast','8'),('.05','middle','0')]]\nassert task.probes(commands)==[(0,'slow'),(8,'fast'),(0,'middle')]\nassert task.probes([])==[]\n\npathlib.Path('timed.py').write_text('import sys,time,pathlib,json\\np=pathlib.Path(sys.argv[1]);a=time.monotonic();time.sleep(.4);b=time.monotonic();p.write_text(json.dumps([a,b]));print(\"ok\")\\n')\ncommands=[[sys.executable,'timed.py',f'timing-{i}.json']for i in range(6)]\nassert task.probes(commands)==[(0,'ok')]*6\npoints=[]\nfor i in range(6):\n    start,end=json.loads(pathlib.Path(f'timing-{i}.json').read_text())\n    points.extend([(start,1),(end,-1)])\nactive=peak=0\nfor _,change in sorted(points):\n    active+=change;peak=max(peak,active)\nassert 2<=peak<=3,(peak,points)\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|探针进程并发|并发启动探针但按请求顺序汇总结果",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-017",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "重试策略与执行记录",
+    "level": 4,
+    "type": "code",
+    "title": "以实际子进程实现退出码白名单重试",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 retry(argv,attempts,retry_codes)：实际启动同一命令，记录每次退出码；遇 0 或不在 retry_codes 的错误立即停止，重试最多 attempts 次。attempts 必须是正 int 且不能是 bool。提供 worker 每次更新 count.txt 并按参数退出；不做 sleep 或网络请求。\n\n## 提交产物\ntask.py；执行产物：count.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：把不可重试的退出 2 也重试，重复执行了不应重复的操作。",
+    "files": {
+      "worker.py": "import pathlib,sys\np=pathlib.Path(\"count.txt\");n=int(p.read_text())if p.exists()else 0;p.write_text(str(n+1));codes=list(map(int,sys.argv[1:]));sys.exit(codes[min(n,len(codes)-1)])\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess\ndef retry(argv,attempts,retry_codes):\n    if type(attempts)is not int or attempts<1:raise ValueError('attempts')\n    codes=[]\n    for _ in range(attempts):\n        code=subprocess.run(argv,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode\n        codes.append(code)\n        if code==0 or code not in retry_codes:break\n    return codes\n```\n\n实现 retry(argv,attempts,retry_codes)：实际启动同一命令，记录每次退出码；遇 0 或不在 retry_codes 的错误立即停止，重试最多 attempts 次。attempts 必须是正 int 且不能是 bool。提供 worker 每次更新 count.txt 并按参数退出；不做 sleep 或网络请求。",
+    "solution_files": {
+      "task.py": "import subprocess\ndef retry(argv,attempts,retry_codes):\n    if type(attempts)is not int or attempts<1:raise ValueError('attempts')\n    codes=[]\n    for _ in range(attempts):\n        code=subprocess.run(argv,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode\n        codes.append(code)\n        if code==0 or code not in retry_codes:break\n    return codes\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef retry(argv,attempts,retry_codes):\n    codes=[]\n    for _ in range(attempts):\n        c=subprocess.run(argv).returncode;codes.append(c)\n        if c==0:break\n    return codes\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 retry(argv,attempts,retry_codes)：实际启动同一命令，记录每次退出码；遇 0 或不在 retry_codes 的错误立即停止，重试最多 attempts 次。attempts 必须是正 int 且不能是 bool。提供 worker 每次更新 count.txt 并按参数退出；不做 sleep 或网络请求。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "count.txt"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "把不可重试的退出 2 也重试，重复执行了不应重复的操作。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.retry([sys.executable,'worker.py','75','0','8'],4,{75})==[75,0]\nassert pathlib.Path('count.txt').read_text()=='2'\npathlib.Path('count.txt').unlink()\nassert task.retry([sys.executable,'worker.py','2','0'],4,{75})==[2]\npathlib.Path('count.txt').unlink()\nassert task.retry([sys.executable,'worker.py','75'],2,{75})==[75,75]\nfor n in [0,-1,True,1.5]:\n    try:task.retry([sys.executable,'-c','pass'],n,{75})\n    except ValueError:pass\n    else:raise AssertionError('invalid budget')\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|重试策略与执行记录|以实际子进程实现退出码白名单重试",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-018",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "工作目录回收",
+    "level": 3,
+    "type": "code",
+    "title": "子进程临时目录生命周期覆盖成功和失败",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 isolated(argv)，创建 TemporaryDirectory，作为子进程 cwd；提供的 worker 打印该目录并生成 scratch.txt。返回 (code,stdout)，进程完成或启动异常后临时目录都必须清理。argv 中脚本路径由调用方提供绝对路径，不能清理调用方原目录。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：使用 mkdtemp 后漏掉清理，失败的构建留下临时目录。",
+    "files": {
+      "worker.py": "import pathlib,sys\nprint(pathlib.Path.cwd())\npathlib.Path(\"scratch.txt\").write_text(\"x\")\nsys.exit(int(sys.argv[1]))\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport tempfile,subprocess\ndef isolated(argv):\n    with tempfile.TemporaryDirectory(prefix='lab-child-') as root:\n        p=subprocess.run(argv,cwd=root,capture_output=True,text=True,encoding='utf-8',timeout=5)\n        return p.returncode,p.stdout.strip()\n```\n\n实现 isolated(argv)，创建 TemporaryDirectory，作为子进程 cwd；提供的 worker 打印该目录并生成 scratch.txt。返回 (code,stdout)，进程完成或启动异常后临时目录都必须清理。argv 中脚本路径由调用方提供绝对路径，不能清理调用方原目录。",
+    "solution_files": {
+      "task.py": "import tempfile,subprocess\ndef isolated(argv):\n    with tempfile.TemporaryDirectory(prefix='lab-child-') as root:\n        p=subprocess.run(argv,cwd=root,capture_output=True,text=True,encoding='utf-8',timeout=5)\n        return p.returncode,p.stdout.strip()\n"
+    },
+    "negative_files": {
+      "task.py": "import tempfile,subprocess\ndef isolated(argv):\n    root=tempfile.mkdtemp()\n    p=subprocess.run(argv,cwd=root,capture_output=True,text=True);return p.returncode,p.stdout.strip()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 isolated(argv)，创建 TemporaryDirectory，作为子进程 cwd；提供的 worker 打印该目录并生成 scratch.txt。返回 (code,stdout)，进程完成或启动异常后临时目录都必须清理。argv 中脚本路径由调用方提供绝对路径，不能清理调用方原目录。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "使用 mkdtemp 后漏掉清理，失败的构建留下临时目录。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nscript=str(pathlib.Path('worker.py').resolve())\nfor code in [0,9]:\n    result,root=task.isolated([sys.executable,script,str(code)])\n    assert result==code and not pathlib.Path(root).exists()\nassert pathlib.Path('worker.py').exists()and not pathlib.Path('scratch.txt').exists()\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|工作目录回收|子进程临时目录生命周期覆盖成功和失败",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-019",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "句柄继承边界",
+    "level": 4,
+    "type": "code",
+    "title": "阻止后续进程误继承训练凭据文件描述符",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：secret.txt, probe.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 launch(argv,secret_path)：打开训练文件，将其描述符显式设为可继承，环境 FD_NUMBER 传编号，但启动子进程必须 close_fds=True。提供 probe 尝试 fstat；返回 stdout 字符串 CLOSED，并关闭父进程文件句柄。仅测试继承边界，不创建真实凭据。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：子进程仍能 fstat 父进程的训练凭据句柄，边界没有关闭。\n\n本机能力边界：Windows 通过不代表 POSIX 描述符继承通过；本题保留待 Linux 三路验证。",
+    "files": {
+      "secret.txt": "training-only\n",
+      "probe.py": "import os\nfd=int(os.environ[\"FD_NUMBER\"])\ntry:os.fstat(fd)\nexcept OSError:print(\"CLOSED\")\nelse:print(\"OPEN\")\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os,subprocess\ndef launch(argv,secret_path):\n    with open(secret_path,'rb') as secret:\n        os.set_inheritable(secret.fileno(),True)\n        env=dict(os.environ,FD_NUMBER=str(secret.fileno()))\n        return subprocess.check_output(argv,env=env,close_fds=True,text=True).strip()\n```\n\n实现 launch(argv,secret_path)：打开训练文件，将其描述符显式设为可继承，环境 FD_NUMBER 传编号，但启动子进程必须 close_fds=True。提供 probe 尝试 fstat；返回 stdout 字符串 CLOSED，并关闭父进程文件句柄。仅测试继承边界，不创建真实凭据。",
+    "solution_files": {
+      "task.py": "import os,subprocess\ndef launch(argv,secret_path):\n    with open(secret_path,'rb') as secret:\n        os.set_inheritable(secret.fileno(),True)\n        env=dict(os.environ,FD_NUMBER=str(secret.fileno()))\n        return subprocess.check_output(argv,env=env,close_fds=True,text=True).strip()\n"
+    },
+    "negative_files": {
+      "task.py": "import os,subprocess\ndef launch(argv,secret_path):\n    with open(secret_path,'rb') as secret:\n        os.set_inheritable(secret.fileno(),True)\n        env=dict(os.environ,FD_NUMBER=str(secret.fileno()))\n        return subprocess.check_output(argv,env=env,close_fds=False,text=True).strip()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 launch(argv,secret_path)：打开训练文件，将其描述符显式设为可继承，环境 FD_NUMBER 传编号，但启动子进程必须 close_fds=True。提供 probe 尝试 fstat；返回 stdout 字符串 CLOSED，并关闭父进程文件句柄。仅测试继承边界，不创建真实凭据。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "子进程仍能 fstat 父进程的训练凭据句柄，边界没有关闭。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.launch([sys.executable,'probe.py'],'secret.txt')=='CLOSED'\nassert pathlib.Path('secret.txt').read_text()=='training-only\\n'\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|句柄继承边界|阻止后续进程误继承训练凭据文件描述符",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-020",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "实例互斥工件",
+    "level": 4,
+    "type": "code",
+    "title": "以 Windows 和 Linux 都能复验的原子目录锁防止双服务启动",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 once(argv,lockdir)，用 mkdir 原子占有目录锁；若已存在返回 None 且不启动，成功占有后执行实际命令并返回退出码，finally 仅移除自己创建的空锁目录。不得移除预先存在的锁，不处理陈旧锁判定，不能使用 exists 后再 mkdir 的竞态方案。\n\n## 提交产物\ntask.py；执行产物：started.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：为了启动而删除别人已有的锁，导致两个实例同时运行。",
+    "files": {
+      "worker.py": "import pathlib\np=pathlib.Path(\"started.txt\");p.write_text(p.read_text()+\"x\"if p.exists()else\"x\")\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport pathlib,subprocess\ndef once(argv,lockdir):\n    lock=pathlib.Path(lockdir)\n    try:lock.mkdir()\n    except FileExistsError:return None\n    try:return subprocess.run(argv).returncode\n    finally:lock.rmdir()\n```\n\n实现 once(argv,lockdir)，用 mkdir 原子占有目录锁；若已存在返回 None 且不启动，成功占有后执行实际命令并返回退出码，finally 仅移除自己创建的空锁目录。不得移除预先存在的锁，不处理陈旧锁判定，不能使用 exists 后再 mkdir 的竞态方案。",
+    "solution_files": {
+      "task.py": "import pathlib,subprocess\ndef once(argv,lockdir):\n    lock=pathlib.Path(lockdir)\n    try:lock.mkdir()\n    except FileExistsError:return None\n    try:return subprocess.run(argv).returncode\n    finally:lock.rmdir()\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib,subprocess\ndef once(argv,lockdir):\n    p=pathlib.Path(lockdir)\n    if p.exists():p.rmdir()\n    p.mkdir()\n    try:return subprocess.run(argv).returncode\n    finally:p.rmdir()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 once(argv,lockdir)，用 mkdir 原子占有目录锁；若已存在返回 None 且不启动，成功占有后执行实际命令并返回退出码，finally 仅移除自己创建的空锁目录。不得移除预先存在的锁，不处理陈旧锁判定，不能使用 exists 后再 mkdir 的竞态方案。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "started.txt"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "为了启动而删除别人已有的锁，导致两个实例同时运行。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\npathlib.Path('lock').mkdir()\nassert task.once([sys.executable,'worker.py'],'lock')is None\nassert pathlib.Path('lock').is_dir()and not pathlib.Path('started.txt').exists()\npathlib.Path('lock').rmdir()\nassert task.once([sys.executable,'worker.py'],'lock')==0\nassert pathlib.Path('started.txt').read_text()=='x'and not pathlib.Path('lock').exists()\nassert task.once([sys.executable,'-c','raise SystemExit(4)'],'lock')==4\nassert not pathlib.Path('lock').exists()\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|实例互斥工件|以 Windows 和 Linux 都能复验的原子目录锁防止双服务启动",
+    "review_status": "retired",
+    "review_note": "同一题号的旧合同已归档；新版本使用不同操作机制，历史试卷继续按旧合同验收。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-021",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "部分启动失败清理",
+    "level": 5,
+    "type": "code",
+    "title": "在命令启动失败时回收已启动的同批进程",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Python3.11 subprocess。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 group(commands)，依次 Popen 所有命令；正常时等待并返回退出码列表。若后一个命令无法启动或 wait 超时，终止并 wait 回收已启动的每个直接子进程，再传播原异常。不得改变父进程默认环境，不管理进程后代。提供有限 worker，验收通过注入 Popen 包装器记录真实进程对象并检查 poll。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：第二个命令不存在时直接抛错，已经启动的 worker 继续存活。",
+    "files": {
+      "worker.py": "import time\ntime.sleep(2)\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess\ndef group(commands):\n    children=[]\n    try:\n        for argv in commands:children.append(subprocess.Popen(argv,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL))\n        return [p.wait(timeout=5)for p in children]\n    finally:\n        for p in children:\n            if p.poll()is None:p.terminate()\n        for p in children:\n            try:p.wait(timeout=1)\n            except subprocess.TimeoutExpired:p.kill();p.wait()\n```\n\n实现 group(commands)，依次 Popen 所有命令；正常时等待并返回退出码列表。若后一个命令无法启动或 wait 超时，终止并 wait 回收已启动的每个直接子进程，再传播原异常。不得改变父进程默认环境，不管理进程后代。提供有限 worker，验收通过注入 Popen 包装器记录真实进程对象并检查 poll。",
+    "solution_files": {
+      "task.py": "import subprocess\ndef group(commands):\n    children=[]\n    try:\n        for argv in commands:children.append(subprocess.Popen(argv,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL))\n        return [p.wait(timeout=5)for p in children]\n    finally:\n        for p in children:\n            if p.poll()is None:p.terminate()\n        for p in children:\n            try:p.wait(timeout=1)\n            except subprocess.TimeoutExpired:p.kill();p.wait()\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef group(commands):\n    children=[]\n    for argv in commands:children.append(subprocess.Popen(argv,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL))\n    return [p.wait()for p in children]\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 group(commands)，依次 Popen 所有命令；正常时等待并返回退出码列表。若后一个命令无法启动或 wait 超时，终止并 wait 回收已启动的每个直接子进程，再传播原异常。不得改变父进程默认环境，不管理进程后代。提供有限 worker，验收通过注入 Popen 包装器记录真实进程对象并检查 poll。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Python3.11 subprocess"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "第二个命令不存在时直接抛错，已经启动的 worker 继续存活。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nfrom unittest.mock import patch\nreal=subprocess.Popen; children=[]\ndef track(*a,**kw):\n    p=real(*a,**kw);children.append(p);return p\nwith patch.object(task.subprocess,'Popen',side_effect=track):\n    try:task.group([[sys.executable,'worker.py'],[str(pathlib.Path.cwd()/'absent')]])\n    except FileNotFoundError:pass\n    else:raise AssertionError('startup exception swallowed')\ntry:\n    assert children and all(p.poll()is not None for p in children)\nfinally:\n    for p in children:\n        if p.poll()is None:p.terminate()\n        p.wait()\nassert task.group([[sys.executable,'-c','pass'],[sys.executable,'-c','raise SystemExit(3)']])==[0,3]\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|部分启动失败清理|在命令启动失败时回收已启动的同批进程",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-022",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "管道失败传播",
+    "level": 3,
+    "type": "code",
+    "title": "让失败的生产管道向调用方报告失败",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：producer.sh。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n运行 producer.sh | cat > collected.txt。上游先输出 partial 再退出7；task.sh 必须保存输出并以7退出，不能因为 cat 成功变成0。\n\n## 提交产物\ntask.sh；执行产物：collected.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：未启用 pipefail 时 cat 成功掩盖 producer 的退出7。",
+    "files": {
+      "producer.sh": "printf \"partial\\n\"\nexit 7\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nset -o pipefail\nbash producer.sh | cat > collected.txt\n```\n\n运行 producer.sh | cat > collected.txt。上游先输出 partial 再退出7；task.sh 必须保存输出并以7退出，不能因为 cat 成功变成0。",
+    "solution_files": {
+      "task.sh": "set -o pipefail\nbash producer.sh | cat > collected.txt\n"
+    },
+    "negative_files": {
+      "task.sh": "bash producer.sh | cat > collected.txt\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "运行 producer.sh | cat > collected.txt。上游先输出 partial 再退出7；task.sh 必须保存输出并以7退出，不能因为 cat 成功变成0。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "collected.txt"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "未启用 pipefail 时 cat 成功掩盖 producer 的退出7。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==7;assert pathlib.Path(\"collected.txt\").read_text()==\"partial\\n\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|管道失败传播|让失败的生产管道向调用方报告失败",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-023",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "后台退出状态",
+    "level": 3,
+    "type": "code",
+    "title": "逐个 wait 后汇总后台作业全部退出码",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：a.sh, b.sh, c.sh。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n并发启动 a.sh、b.sh、c.sh，保存每个 PID 并按 a、b、c 顺序 wait；把退出码写 status.tsv。即使 b 失败仍要 wait c，脚本最后退出0表示汇总完成，不是所有作业成功。\n\n## 提交产物\ntask.sh；执行产物：status.tsv, c.done。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：不带 PID 的 wait 后把所有作业一律记0，丢失 b/c 的失败。",
+    "files": {
+      "a.sh": "sleep .1\nexit 0\n",
+      "b.sh": "exit 6\n",
+      "c.sh": "sleep .15\nprintf done > c.done\nexit 2\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nbash a.sh & a=$!\nbash b.sh & b=$!\nbash c.sh & c=$!\n: > status.tsv\nfor name in a b c; do\n  pid=${!name}\n  wait \"$pid\"; code=$?\n  printf '%s\\t%s\\n' \"$name\" \"$code\" >> status.tsv\ndone\nexit 0\n```\n\n并发启动 a.sh、b.sh、c.sh，保存每个 PID 并按 a、b、c 顺序 wait；把退出码写 status.tsv。即使 b 失败仍要 wait c，脚本最后退出0表示汇总完成，不是所有作业成功。",
+    "solution_files": {
+      "task.sh": "bash a.sh & a=$!\nbash b.sh & b=$!\nbash c.sh & c=$!\n: > status.tsv\nfor name in a b c; do\n  pid=${!name}\n  wait \"$pid\"; code=$?\n  printf '%s\\t%s\\n' \"$name\" \"$code\" >> status.tsv\ndone\nexit 0\n"
+    },
+    "negative_files": {
+      "task.sh": "bash a.sh &\nbash b.sh &\nbash c.sh &\nwait\nprintf \"a\\t0\\nb\\t0\\nc\\t0\\n\" > status.tsv\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "并发启动 a.sh、b.sh、c.sh，保存每个 PID 并按 a、b、c 顺序 wait；把退出码写 status.tsv。即使 b 失败仍要 wait c，脚本最后退出0表示汇总完成，不是所有作业成功。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "status.tsv",
+        "c.done"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "不带 PID 的 wait 后把所有作业一律记0，丢失 b/c 的失败。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==0;assert pathlib.Path(\"status.tsv\").read_text()==\"a\\t0\\nb\\t6\\nc\\t2\\n\";assert pathlib.Path(\"c.done\").read_text()==\"done\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|后台退出状态|逐个 wait 后汇总后台作业全部退出码",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-024",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "作业完成屏障",
+    "level": 3,
+    "type": "code",
+    "title": "修复后台任务提前退出主脚本的工件竞态",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：delayed.sh。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n启动 delayed.sh 后必须 wait 到 ready.txt 已生成，再将 ready.txt 复制为 result.txt；不得用固定 sleep 猜测完成。delayed.sh 自己在 .15 秒后写内容。\n\n## 提交产物\ntask.sh；执行产物：result.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：在 wait 前复制工件，文件尚未生成；最后 wait 成功也不能弥补缺失产物。",
+    "files": {
+      "delayed.sh": "sleep .15\nprintf ready > ready.txt\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nbash delayed.sh & pid=$!\nwait \"$pid\" || exit $?\ncp ready.txt result.txt\n```\n\n启动 delayed.sh 后必须 wait 到 ready.txt 已生成，再将 ready.txt 复制为 result.txt；不得用固定 sleep 猜测完成。delayed.sh 自己在 .15 秒后写内容。",
+    "solution_files": {
+      "task.sh": "bash delayed.sh & pid=$!\nwait \"$pid\" || exit $?\ncp ready.txt result.txt\n"
+    },
+    "negative_files": {
+      "task.sh": "bash delayed.sh & pid=$!\ncp ready.txt result.txt\nwait \"$pid\"\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "启动 delayed.sh 后必须 wait 到 ready.txt 已生成，再将 ready.txt 复制为 result.txt；不得用固定 sleep 猜测完成。delayed.sh 自己在 .15 秒后写内容。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "result.txt"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "在 wait 前复制工件，文件尚未生成；最后 wait 成功也不能弥补缺失产物。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==0;assert pathlib.Path(\"result.txt\").read_text()==\"ready\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|作业完成屏障|修复后台任务提前退出主脚本的工件竞态",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-025",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "附加日志描述符",
+    "level": 3,
+    "type": "code",
+    "title": "用描述符3把审计日志与标准输出分离",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：worker.sh。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n打开 fd3 指向 audit.log，运行给定 worker.sh；worker 把 DATA 写 stdout，把 AUDIT 写 fd3。stdout 写 output.log，stderr 写 error.log，结束后关闭 fd3，不得把 AUDIT 混入业务输出。\n\n## 提交产物\ntask.sh；执行产物：audit.log, output.log, error.log。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：把 fd3 复制为 stdout，审计输出进入 output.log 且独立文件不存在。",
+    "files": {
+      "worker.sh": "printf \"DATA\\n\"\nprintf \"AUDIT\\n\" >&3\nprintf \"WARN\\n\" >&2\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nexec 3>audit.log\nbash worker.sh >output.log 2>error.log\nrc=$?\nexec 3>&-\nexit \"$rc\"\n```\n\n打开 fd3 指向 audit.log，运行给定 worker.sh；worker 把 DATA 写 stdout，把 AUDIT 写 fd3。stdout 写 output.log，stderr 写 error.log，结束后关闭 fd3，不得把 AUDIT 混入业务输出。",
+    "solution_files": {
+      "task.sh": "exec 3>audit.log\nbash worker.sh >output.log 2>error.log\nrc=$?\nexec 3>&-\nexit \"$rc\"\n"
+    },
+    "negative_files": {
+      "task.sh": "bash worker.sh >output.log 2>error.log 3>&1\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "打开 fd3 指向 audit.log，运行给定 worker.sh；worker 把 DATA 写 stdout，把 AUDIT 写 fd3。stdout 写 output.log，stderr 写 error.log，结束后关闭 fd3，不得把 AUDIT 混入业务输出。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "audit.log",
+        "output.log",
+        "error.log"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "把 fd3 复制为 stdout，审计输出进入 output.log 且独立文件不存在。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==0;assert pathlib.Path(\"audit.log\").read_text()==\"AUDIT\\n\";assert pathlib.Path(\"output.log\").read_text()==\"DATA\\n\";assert pathlib.Path(\"error.log\").read_text()==\"WARN\\n\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|附加日志描述符|用描述符3把审计日志与标准输出分离",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-026",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "重定向顺序",
+    "level": 1,
+    "type": "code",
+    "title": "按照正确顺序合并子进程两路输出",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：worker.sh。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\nworker.sh 顺序写 OUT 到stdout、ERR到stderr。task.sh 将二者按写入顺序全部收集到 combined.log，终端应无泄漏；使用 >combined.log 2>&1。\n\n## 提交产物\ntask.sh；执行产物：combined.log。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：先 2>&1 后重定向 stdout，使 stderr 仍流向原终端。",
+    "files": {
+      "worker.sh": "printf \"OUT\\n\"\nprintf \"ERR\\n\" >&2\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nbash worker.sh >combined.log 2>&1\n```\n\nworker.sh 顺序写 OUT 到stdout、ERR到stderr。task.sh 将二者按写入顺序全部收集到 combined.log，终端应无泄漏；使用 >combined.log 2>&1。",
+    "solution_files": {
+      "task.sh": "bash worker.sh >combined.log 2>&1\n"
+    },
+    "negative_files": {
+      "task.sh": "bash worker.sh 2>&1 >combined.log\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "worker.sh 顺序写 OUT 到stdout、ERR到stderr。task.sh 将二者按写入顺序全部收集到 combined.log，终端应无泄漏；使用 >combined.log 2>&1。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "combined.log"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "先 2>&1 后重定向 stdout，使 stderr 仍流向原终端。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==0 and p.stdout==p.stderr==\"\";assert pathlib.Path(\"combined.log\").read_text()==\"OUT\\nERR\\n\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|重定向顺序|按照正确顺序合并子进程两路输出",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-027",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "PIPESTATUS 快照",
+    "level": 3,
+    "type": "code",
+    "title": "保存每段管道状态而不是只看末端",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：a.sh, b.sh。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n执行 a.sh | b.sh | cat > output.txt 后立即复制 PIPESTATUS 数组，生成 stages.txt 三行退出码4、5、0；task.sh 最后退出0。不允许任何其他命令覆盖快照。\n\n## 提交产物\ntask.sh；执行产物：stages.txt, output.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：执行 true 后才读取 PIPESTATUS，管道的三段状态被覆盖成单个0。",
+    "files": {
+      "a.sh": "printf x\nexit 4\n",
+      "b.sh": "cat >/dev/null\nprintf y\nexit 5\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nbash a.sh | bash b.sh | cat >output.txt\ncodes=(\"${PIPESTATUS[@]}\")\nprintf '%s\\n' \"${codes[@]}\" >stages.txt\n```\n\n执行 a.sh | b.sh | cat > output.txt 后立即复制 PIPESTATUS 数组，生成 stages.txt 三行退出码4、5、0；task.sh 最后退出0。不允许任何其他命令覆盖快照。",
+    "solution_files": {
+      "task.sh": "bash a.sh | bash b.sh | cat >output.txt\ncodes=(\"${PIPESTATUS[@]}\")\nprintf '%s\\n' \"${codes[@]}\" >stages.txt\n"
+    },
+    "negative_files": {
+      "task.sh": "bash a.sh | bash b.sh | cat >output.txt\ntrue\nprintf \"%s\\n\" \"${PIPESTATUS[@]}\" >stages.txt\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "执行 a.sh | b.sh | cat > output.txt 后立即复制 PIPESTATUS 数组，生成 stages.txt 三行退出码4、5、0；task.sh 最后退出0。不允许任何其他命令覆盖快照。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "stages.txt",
+        "output.txt"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "执行 true 后才读取 PIPESTATUS，管道的三段状态被覆盖成单个0。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==0;assert pathlib.Path(\"stages.txt\").read_text()==\"4\\n5\\n0\\n\";assert pathlib.Path(\"output.txt\").read_text()==\"y\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|PIPESTATUS 快照|保存每段管道状态而不是只看末端",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-028",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "退出清理钩子",
+    "level": 3,
+    "type": "code",
+    "title": "EXIT trap 清理临时工件并保持失败退出码",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n创建本题临时文件 stage.tmp，然后执行固定失败命令 exit7 的子 shell。注册 EXIT trap 删除 stage.tmp 并把原退出码写 cleanup.code；最终仍须退出7，不能被清理成功覆盖。\n\n## 提交产物\ntask.sh；执行产物：cleanup.code。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：trap 最后 exit0 吞掉原失败，清理完成不能等于业务成功。",
+    "files": {
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\ncleanup() { rc=$?; rm -f -- stage.tmp; printf '%s\\n' \"$rc\" >cleanup.code; exit \"$rc\"; }\ntrap cleanup EXIT\nprintf partial >stage.tmp\nbash -c 'exit 7'\nexit $?\n```\n\n创建本题临时文件 stage.tmp，然后执行固定失败命令 exit7 的子 shell。注册 EXIT trap 删除 stage.tmp 并把原退出码写 cleanup.code；最终仍须退出7，不能被清理成功覆盖。",
+    "solution_files": {
+      "task.sh": "cleanup() { rc=$?; rm -f -- stage.tmp; printf '%s\\n' \"$rc\" >cleanup.code; exit \"$rc\"; }\ntrap cleanup EXIT\nprintf partial >stage.tmp\nbash -c 'exit 7'\nexit $?\n"
+    },
+    "negative_files": {
+      "task.sh": "trap \"rm -f stage.tmp; exit 0\" EXIT\nprintf partial >stage.tmp\nexit 7\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "创建本题临时文件 stage.tmp，然后执行固定失败命令 exit7 的子 shell。注册 EXIT trap 删除 stage.tmp 并把原退出码写 cleanup.code；最终仍须退出7，不能被清理成功覆盖。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "cleanup.code"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "trap 最后 exit0 吞掉原失败，清理完成不能等于业务成功。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==7;assert not pathlib.Path(\"stage.tmp\").exists();assert pathlib.Path(\"cleanup.code\").read_text()==\"7\\n\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|退出清理钩子|EXIT trap 清理临时工件并保持失败退出码",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-029",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "ERR trap 继承",
+    "level": 3,
+    "type": "code",
+    "title": "在函数内启用 ERR 跟踪保留原始失败",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n开启 set -Ee 与 ERR trap；函数 run_job 执行子 shell exit9，trap 将错误码写 failure.code，脚本退出9，after.txt 不得生成。ERR trap 必须在函数失败处触发。\n\n## 提交产物\ntask.sh；执行产物：failure.code。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：只 set-e 不启用 errtrace，函数内失败退出却没有记录 failure.code。",
+    "files": {
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nset -Ee\ntrap 'code=$?; printf \"%s\\n\" \"$code\" >failure.code' ERR\nrun_job() { bash -c 'exit 9'; }\nrun_job\nprintf wrong >after.txt\n```\n\n开启 set -Ee 与 ERR trap；函数 run_job 执行子 shell exit9，trap 将错误码写 failure.code，脚本退出9，after.txt 不得生成。ERR trap 必须在函数失败处触发。",
+    "solution_files": {
+      "task.sh": "set -Ee\ntrap 'code=$?; printf \"%s\\n\" \"$code\" >failure.code' ERR\nrun_job() { bash -c 'exit 9'; }\nrun_job\nprintf wrong >after.txt\n"
+    },
+    "negative_files": {
+      "task.sh": "set -e\ntrap 'echo $? >failure.code' ERR\nrun_job() { bash -c 'exit 9'; }\nrun_job\nprintf wrong >after.txt\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "开启 set -Ee 与 ERR trap；函数 run_job 执行子 shell exit9，trap 将错误码写 failure.code，脚本退出9，after.txt 不得生成。ERR trap 必须在函数失败处触发。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "failure.code"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "只 set-e 不启用 errtrace，函数内失败退出却没有记录 failure.code。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==9;assert pathlib.Path(\"failure.code\").read_text()==\"9\\n\";assert not pathlib.Path(\"after.txt\").exists()\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|ERR trap 继承|在函数内启用 ERR 跟踪保留原始失败",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-030",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "描述符关闭",
+    "level": 3,
+    "type": "code",
+    "title": "关闭日志描述符后再启动无权限子进程",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：probe.sh。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n主脚本打开 fd3 并写 PARENT 到 audit.log；启动 probe.sh 时显式 3>&-。probe 尝试写入fd3，失败则在 stdout 输出 CLOSED；audit.log 不得包含 CHILD。\n\n## 提交产物\ntask.sh；执行产物：audit.log, result.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：未关闭fd3，子进程可往主进程审计日志中追加 CHILD。",
+    "files": {
+      "probe.sh": "if { printf CHILD >&3; } 2>/dev/null; then printf OPEN; else printf CLOSED; fi\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nexec 3>audit.log\nprintf PARENT >&3\nbash probe.sh 3>&- >result.txt\nexec 3>&-\n```\n\n主脚本打开 fd3 并写 PARENT 到 audit.log；启动 probe.sh 时显式 3>&-。probe 尝试写入fd3，失败则在 stdout 输出 CLOSED；audit.log 不得包含 CHILD。",
+    "solution_files": {
+      "task.sh": "exec 3>audit.log\nprintf PARENT >&3\nbash probe.sh 3>&- >result.txt\nexec 3>&-\n"
+    },
+    "negative_files": {
+      "task.sh": "exec 3>audit.log\nprintf PARENT >&3\nbash probe.sh >result.txt\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "主脚本打开 fd3 并写 PARENT 到 audit.log；启动 probe.sh 时显式 3>&-。probe 尝试写入fd3，失败则在 stdout 输出 CLOSED；audit.log 不得包含 CHILD。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "audit.log",
+        "result.txt"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "未关闭fd3，子进程可往主进程审计日志中追加 CHILD。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==0;assert pathlib.Path(\"audit.log\").read_text()==\"PARENT\";assert pathlib.Path(\"result.txt\").read_text()==\"CLOSED\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|描述符关闭|关闭日志描述符后再启动无权限子进程",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-031",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "并发启动门闩",
+    "level": 4,
+    "type": "code",
+    "title": "以原子目录门闩证明作业真正并发启动",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：left.sh, right.sh。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n并发运行 left.sh 与 right.sh：left 只有看到 right.ready 才生成 left.done，最多等待30轮每轮.02秒；right 写 right.ready。保存两者 PID 并 wait，两个退出码均0才成功。不得先同步执行 left。\n\n## 提交产物\ntask.sh；执行产物：left.done, right.ready。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：串行启动 left 时 right 永远没机会创建就绪工件，left 超时退出8。",
+    "files": {
+      "left.sh": "for ((i=0;i<30;i++)); do if [[ -e right.ready ]]; then printf done >left.done; exit 0; fi; sleep .02; done\nexit 8\n",
+      "right.sh": "printf ready >right.ready\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nbash left.sh & left=$!\nbash right.sh & right=$!\nwait \"$left\"; a=$?\nwait \"$right\"; b=$?\n[[ \"$a\" == 0 && \"$b\" == 0 ]]\n```\n\n并发运行 left.sh 与 right.sh：left 只有看到 right.ready 才生成 left.done，最多等待30轮每轮.02秒；right 写 right.ready。保存两者 PID 并 wait，两个退出码均0才成功。不得先同步执行 left。",
+    "solution_files": {
+      "task.sh": "bash left.sh & left=$!\nbash right.sh & right=$!\nwait \"$left\"; a=$?\nwait \"$right\"; b=$?\n[[ \"$a\" == 0 && \"$b\" == 0 ]]\n"
+    },
+    "negative_files": {
+      "task.sh": "bash left.sh || exit $?\nbash right.sh\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "并发运行 left.sh 与 right.sh：left 只有看到 right.ready 才生成 left.done，最多等待30轮每轮.02秒；right 写 right.ready。保存两者 PID 并 wait，两个退出码均0才成功。不得先同步执行 left。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "left.done",
+        "right.ready"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "串行启动 left 时 right 永远没机会创建就绪工件，left 超时退出8。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==0;assert pathlib.Path(\"left.done\").read_text()==\"done\";assert pathlib.Path(\"right.ready\").read_text()==\"ready\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|并发启动门闩|以原子目录门闩证明作业真正并发启动",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-032",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "子shell变量隔离",
+    "level": 3,
+    "type": "code",
+    "title": "后台管道中保留外层变量更新",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：items.txt。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n读取 items.txt 三行，使用 while read 循环计数；循环结束将 count 写 count.txt。必须使用输入重定向 <items.txt 让循环在当前 shell 执行；不能使用 cat | while 导致外层count仍0。末行没有换行也算一项。\n\n## 提交产物\ntask.sh；执行产物：count.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：管道内 while 在子shell更新 count，外层保持0。",
+    "files": {
+      "items.txt": "one\ntwo\nthree",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\ncount=0\nwhile IFS= read -r line || [[ -n \"$line\" ]]; do ((count+=1)); done <items.txt\nprintf \"%s\\n\" \"$count\" >count.txt\n```\n\n读取 items.txt 三行，使用 while read 循环计数；循环结束将 count 写 count.txt。必须使用输入重定向 <items.txt 让循环在当前 shell 执行；不能使用 cat | while 导致外层count仍0。末行没有换行也算一项。",
+    "solution_files": {
+      "task.sh": "count=0\nwhile IFS= read -r line || [[ -n \"$line\" ]]; do ((count+=1)); done <items.txt\nprintf \"%s\\n\" \"$count\" >count.txt\n"
+    },
+    "negative_files": {
+      "task.sh": "count=0\ncat items.txt | while read -r line; do ((count+=1)); done\nprintf \"%s\\n\" \"$count\" >count.txt\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "读取 items.txt 三行，使用 while read 循环计数；循环结束将 count 写 count.txt。必须使用输入重定向 <items.txt 让循环在当前 shell 执行；不能使用 cat | while 导致外层count仍0。末行没有换行也算一项。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "count.txt"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "管道内 while 在子shell更新 count，外层保持0。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==0;assert pathlib.Path(\"count.txt\").read_text()==\"3\\n\";pathlib.Path(\"items.txt\").write_bytes(b\"\");assert run().returncode==0;assert pathlib.Path(\"count.txt\").read_text()==\"0\\n\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|子shell变量隔离|后台管道中保留外层变量更新",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-033",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "命令级环境作用域",
+    "level": 1,
+    "type": "code",
+    "title": "只给目标命令注入临时环境变量",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：worker.sh。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n主脚本设置并导出 MODE=parent；只在运行 worker.sh 时覆盖 MODE=child，写 child.txt；之后将父shell MODE写 parent.txt。不能永久 export MODE=child。\n\n## 提交产物\ntask.sh；执行产物：child.txt, parent.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：将临时覆盖永久 export，后续命令继承了不应改变的父环境。",
+    "files": {
+      "worker.sh": "printf \"%s\" \"$MODE\"\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nexport MODE=parent\nMODE=child bash worker.sh >child.txt\nprintf \"%s\" \"$MODE\" >parent.txt\n```\n\n主脚本设置并导出 MODE=parent；只在运行 worker.sh 时覆盖 MODE=child，写 child.txt；之后将父shell MODE写 parent.txt。不能永久 export MODE=child。",
+    "solution_files": {
+      "task.sh": "export MODE=parent\nMODE=child bash worker.sh >child.txt\nprintf \"%s\" \"$MODE\" >parent.txt\n"
+    },
+    "negative_files": {
+      "task.sh": "export MODE=parent\nexport MODE=child\nbash worker.sh >child.txt\nprintf \"%s\" \"$MODE\" >parent.txt\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "主脚本设置并导出 MODE=parent；只在运行 worker.sh 时覆盖 MODE=child，写 child.txt；之后将父shell MODE写 parent.txt。不能永久 export MODE=child。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "child.txt",
+        "parent.txt"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "将临时覆盖永久 export，后续命令继承了不应改变的父环境。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==0;assert pathlib.Path(\"child.txt\").read_text()==\"child\";assert pathlib.Path(\"parent.txt\").read_text()==\"parent\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|命令级环境作用域|只给目标命令注入临时环境变量",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-034",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "描述符共享偏移",
+    "level": 3,
+    "type": "code",
+    "title": "继承只读输入描述符执行重复读取",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：input.txt。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n打开 fd4 读取 input.txt；主shell用read -u4读取第一行到first.txt，然后子shell继承fd4读取第二行到second.txt，关闭fd4。两者共享同一打开文件描述的偏移，不应各自重新打开读取第一行。\n\n## 提交产物\ntask.sh；执行产物：first.txt, second.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：每个进程重新打开文件，两个产物都是first而没有共享偏移。",
+    "files": {
+      "input.txt": "first\nsecond\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nexec 4<input.txt\nIFS= read -r -u 4 first\nprintf '%s\\n' \"$first\" >first.txt\nbash -c 'IFS= read -r -u 4 second; printf \"%s\\n\" \"$second\"' >second.txt\nexec 4<&-\n```\n\n打开 fd4 读取 input.txt；主shell用read -u4读取第一行到first.txt，然后子shell继承fd4读取第二行到second.txt，关闭fd4。两者共享同一打开文件描述的偏移，不应各自重新打开读取第一行。",
+    "solution_files": {
+      "task.sh": "exec 4<input.txt\nIFS= read -r -u 4 first\nprintf '%s\\n' \"$first\" >first.txt\nbash -c 'IFS= read -r -u 4 second; printf \"%s\\n\" \"$second\"' >second.txt\nexec 4<&-\n"
+    },
+    "negative_files": {
+      "task.sh": "head -n1 input.txt >first.txt\nhead -n1 input.txt >second.txt\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "打开 fd4 读取 input.txt；主shell用read -u4读取第一行到first.txt，然后子shell继承fd4读取第二行到second.txt，关闭fd4。两者共享同一打开文件描述的偏移，不应各自重新打开读取第一行。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "first.txt",
+        "second.txt"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "每个进程重新打开文件，两个产物都是first而没有共享偏移。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==0;assert pathlib.Path(\"first.txt\").read_text()==\"first\\n\";assert pathlib.Path(\"second.txt\").read_text()==\"second\\n\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|描述符共享偏移|继承只读输入描述符执行重复读取",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-035",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "服务返回码透传",
+    "level": 3,
+    "type": "code",
+    "title": "信号以外的退出路径仍执行服务收尾",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：worker.sh, cleanup.sh。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n执行 worker.sh，并无论其退出0还是8都运行 cleanup.sh；将 worker 的原退出码原样返回。cleanup.sh只写 cleanup.done，不能清理其他目录。\n\n## 提交产物\ntask.sh；执行产物：cleanup.done。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：使用 && 导致失败路径不运行收尾，留下未处理状态。",
+    "files": {
+      "worker.sh": "exit \"${1:-8}\"\n",
+      "cleanup.sh": "printf cleaned >cleanup.done\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nbash worker.sh \"${1:-8}\"; rc=$?\nbash cleanup.sh\nexit \"$rc\"\n```\n\n执行 worker.sh，并无论其退出0还是8都运行 cleanup.sh；将 worker 的原退出码原样返回。cleanup.sh只写 cleanup.done，不能清理其他目录。",
+    "solution_files": {
+      "task.sh": "bash worker.sh \"${1:-8}\"; rc=$?\nbash cleanup.sh\nexit \"$rc\"\n"
+    },
+    "negative_files": {
+      "task.sh": "bash worker.sh \"${1:-8}\" && bash cleanup.sh\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "执行 worker.sh，并无论其退出0还是8都运行 cleanup.sh；将 worker 的原退出码原样返回。cleanup.sh只写 cleanup.done，不能清理其他目录。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "cleanup.done"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "使用 && 导致失败路径不运行收尾，留下未处理状态。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==8;assert pathlib.Path(\"cleanup.done\").read_text()==\"cleaned\";pathlib.Path(\"cleanup.done\").unlink();assert run([\"0\"]).returncode==0;assert pathlib.Path(\"cleanup.done\").exists()\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|服务返回码透传|信号以外的退出路径仍执行服务收尾",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-036",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "服务日志追加",
+    "level": 1,
+    "type": "code",
+    "title": "给进程检查点写入追加日志而不截断历史",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：worker.sh, service.log。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n每次执行 worker.sh 把 START 和 DONE 两行写入 service.log 末尾；两次执行保留四行原顺序，已有 HISTORY 不丢失。worker stdout不应流向终端。\n\n## 提交产物\ntask.sh；执行产物：service.log。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：使用 > 每次截断旧日志，历史与第一次启动记录丢失。",
+    "files": {
+      "worker.sh": "printf \"START\\nDONE\\n\"\n",
+      "service.log": "HISTORY\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nbash worker.sh >>service.log\n```\n\n每次执行 worker.sh 把 START 和 DONE 两行写入 service.log 末尾；两次执行保留四行原顺序，已有 HISTORY 不丢失。worker stdout不应流向终端。",
+    "solution_files": {
+      "task.sh": "bash worker.sh >>service.log\n"
+    },
+    "negative_files": {
+      "task.sh": "bash worker.sh >service.log\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "每次执行 worker.sh 把 START 和 DONE 两行写入 service.log 末尾；两次执行保留四行原顺序，已有 HISTORY 不丢失。worker stdout不应流向终端。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "service.log"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "使用 > 每次截断旧日志，历史与第一次启动记录丢失。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nassert run().returncode==0;assert run().returncode==0;assert pathlib.Path(\"service.log\").read_text()==\"HISTORY\\nSTART\\nDONE\\nSTART\\nDONE\\n\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|服务日志追加|给进程检查点写入追加日志而不截断历史",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-037",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "命令替换失败",
+    "level": 3,
+    "type": "code",
+    "title": "隔离命令替换中的退出码与赋值状态",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：probe.sh。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n调用 probe.sh 得到诊断stdout并退出11；task.sh 将stdout写诊断文件 diagnosis.txt，同时返回11。不能使用 local value=$(...) 后检查 $?，因为 local 的成功会覆盖探针状态。\n\n## 提交产物\ntask.sh；执行产物：diagnosis.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：local 声明成功覆盖子命令退出11，错误探针被报成功。",
+    "files": {
+      "probe.sh": "printf \"not-ready\\n\"\nexit 11\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nmain() {\n  local value rc\n  value=$(bash probe.sh); rc=$?\n  printf '%s\\n' \"$value\" >diagnosis.txt\n  return \"$rc\"\n}\nmain\n```\n\n调用 probe.sh 得到诊断stdout并退出11；task.sh 将stdout写诊断文件 diagnosis.txt，同时返回11。不能使用 local value=$(...) 后检查 $?，因为 local 的成功会覆盖探针状态。",
+    "solution_files": {
+      "task.sh": "main() {\n  local value rc\n  value=$(bash probe.sh); rc=$?\n  printf '%s\\n' \"$value\" >diagnosis.txt\n  return \"$rc\"\n}\nmain\n"
+    },
+    "negative_files": {
+      "task.sh": "main() { local value=$(bash probe.sh); rc=$?; printf \"%s\\n\" \"$value\" >diagnosis.txt; return \"$rc\"; }\nmain\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "调用 probe.sh 得到诊断stdout并退出11；task.sh 将stdout写诊断文件 diagnosis.txt，同时返回11。不能使用 local value=$(...) 后检查 $?，因为 local 的成功会覆盖探针状态。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "diagnosis.txt"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "local 声明成功覆盖子命令退出11，错误探针被报成功。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==11;assert pathlib.Path(\"diagnosis.txt\").read_text()==\"not-ready\\n\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|命令替换失败|隔离命令替换中的退出码与赋值状态",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-038",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "后台 PID 捕获",
+    "level": 3,
+    "type": "code",
+    "title": "精确等待指定作业而不混淆最近后台 PID",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：bash。素材：slow.sh, fast.sh。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n先启动 slow.sh并立即保存PID，再启动 fast.sh并保存另一个PID；分别wait且写 slow=7、fast=0 到 status.txt。不能启动两个后连续读取同一个 $!。\n\n## 提交产物\ntask.sh；执行产物：status.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。已执行范围见 review_note，网页集成待主审。\n\n失败示例：两次使用最后的 $! 导致 slow 和 fast 都指向 fast，慢任务失败丢失。",
+    "files": {
+      "slow.sh": "sleep .1\nexit 7\n",
+      "fast.sh": "exit 0\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```shell\nbash slow.sh & slow=$!\nbash fast.sh & fast=$!\nwait \"$slow\"; a=$?\nwait \"$fast\"; b=$?\nprintf \"slow=%s\\nfast=%s\\n\" \"$a\" \"$b\" >status.txt\n```\n\n先启动 slow.sh并立即保存PID，再启动 fast.sh并保存另一个PID；分别wait且写 slow=7、fast=0 到 status.txt。不能启动两个后连续读取同一个 $!。",
+    "solution_files": {
+      "task.sh": "bash slow.sh & slow=$!\nbash fast.sh & fast=$!\nwait \"$slow\"; a=$?\nwait \"$fast\"; b=$?\nprintf \"slow=%s\\nfast=%s\\n\" \"$a\" \"$b\" >status.txt\n"
+    },
+    "negative_files": {
+      "task.sh": "bash slow.sh &\nbash fast.sh &\nslow=$!; fast=$!\nwait \"$slow\"; a=$?\nwait \"$fast\"; b=$?\nprintf \"slow=%s\\nfast=%s\\n\" \"$a\" \"$b\" >status.txt\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "先启动 slow.sh并立即保存PID，再启动 fast.sh并保存另一个PID；分别wait且写 slow=7、fast=0 到 status.txt。不能启动两个后连续读取同一个 $!。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "status.txt"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "两次使用最后的 $! 导致 slow 和 fast 都指向 fast，慢任务失败丢失。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\np=run();assert p.returncode==0;assert pathlib.Path(\"status.txt\").read_text()==\"slow=7\\nfast=0\\n\"\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|后台 PID 捕获|精确等待指定作业而不混淆最近后台 PID",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-039",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "独占日志创建",
+    "level": 3,
+    "type": "code",
+    "title": "拒绝覆盖另一次构建已经占有的日志文件",
+    "body": "## 环境与初始材料\n非 root Linux 隔离工作区，Bash 与 Python3.11；worker.sh 输出 START 并创建 ran.txt。\n\n## 操作任务\n对 service.log 使用 Bash noclobber 独占重定向：文件不存在时执行worker写START；文件已存在时必须非零退出，不得启动worker或覆盖已有内容。worker还写ran.txt，验收用它证明拒绝路径没有执行命令。限制普通文件，不处理恶意符号链接。\n\n## 提交产物\ntask.sh、service.log、首次执行的ran.txt。\n\n## 验收方法\npython3 checks/check.py 实际启动脚本：首次成功，第二次非零退出，原日志保持字节一致且第二次未生成ran.txt；全部断言通过返回0。\n\n失败示例：普通重定向覆盖旧日志并再次启动worker。",
+    "files": {
+      "worker.sh": "printf \"START\\n\"\nprintf executed >ran.txt\n",
+      "task.sh": "exit 1\n"
+    },
+    "language": "shell",
+    "run": "python3 checks/check.py",
+    "answer": "```bash\nset -o noclobber\nbash worker.sh >service.log\n```\n\n对 service.log 使用 Bash noclobber 独占重定向：文件不存在时执行worker写START；文件已存在时必须非零退出，不得启动worker或覆盖已有内容。worker还写ran.txt，验收用它证明拒绝路径没有执行命令。限制普通文件，不处理恶意符号链接。",
+    "solution_files": {
+      "task.sh": "set -o noclobber\nbash worker.sh >service.log\n"
+    },
+    "negative_files": {
+      "task.sh": "bash worker.sh >service.log\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "对 service.log 使用 Bash noclobber 独占重定向：文件不存在时执行worker写START；文件已存在时必须非零退出，不得启动worker或覆盖已有内容。worker还写ran.txt，验收用它证明拒绝路径没有执行命令。限制普通文件，不处理恶意符号链接。",
+      "deliverables": [
+        "task.sh"
+      ],
+      "output_artifacts": [
+        "service.log",
+        "ran.txt"
+      ],
+      "required_tools": [
+        "bash"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "使用普通 > 覆盖已存在日志，还执行了本应被拒绝的worker。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nassert run().returncode==0\nassert pathlib.Path('service.log').read_text()=='START\\n'\nassert pathlib.Path('ran.txt').read_text()=='executed'\npathlib.Path('ran.txt').unlink()\npathlib.Path('service.log').write_bytes(b'previous\\n')\nassert run().returncode!=0\nassert pathlib.Path('service.log').read_bytes()==b'previous\\n'\nassert not pathlib.Path('ran.txt').exists()\n"
+      },
+      "timeout": 30
+    },
+    "case_signature": "process|独占日志创建|已存在工件阻止进程启动",
+    "review_status": "reviewed",
+    "review_note": "本地独立执行参考实现、初始错误和反例，均符合预期。Helm题执行原生lint/template，进程题执行本地Python/Git Bash；未验证真实集群和Linux内核专属行为。",
+    "capability_gap": [],
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-040",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "waitpid 状态编码",
+    "level": 3,
+    "type": "code",
+    "title": "正确解码 waitpid 的正常退出状态",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 child_exit(code)，fork 后子进程 os._exit(code)，父进程 waitpid 回收；要求 WIFEXITED 后返回 WEXITSTATUS，不能直接返回原始 wait status。输入为0到255整数，本题不验证其他输入。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：直接把 waitpid 原始状态1792当成退出码，而真实退出码是7。",
+    "files": {
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os\ndef child_exit(code):\n    pid=os.fork()\n    if pid==0:os._exit(code)\n    _,status=os.waitpid(pid,0)\n    if not os.WIFEXITED(status):raise RuntimeError('not a normal exit')\n    return os.WEXITSTATUS(status)\n```\n\n实现 child_exit(code)，fork 后子进程 os._exit(code)，父进程 waitpid 回收；要求 WIFEXITED 后返回 WEXITSTATUS，不能直接返回原始 wait status。输入为0到255整数，本题不验证其他输入。",
+    "solution_files": {
+      "task.py": "import os\ndef child_exit(code):\n    pid=os.fork()\n    if pid==0:os._exit(code)\n    _,status=os.waitpid(pid,0)\n    if not os.WIFEXITED(status):raise RuntimeError('not a normal exit')\n    return os.WEXITSTATUS(status)\n"
+    },
+    "negative_files": {
+      "task.py": "import os\ndef child_exit(code):\n    pid=os.fork()\n    if pid==0:os._exit(code)\n    return os.waitpid(pid,0)[1]\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 child_exit(code)，fork 后子进程 os._exit(code)，父进程 waitpid 回收；要求 WIFEXITED 后返回 WEXITSTATUS，不能直接返回原始 wait status。输入为0到255整数，本题不验证其他输入。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "直接把 waitpid 原始状态1792当成退出码，而真实退出码是7。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nfor c in [0,1,7,255]:assert task.child_exit(c)==c\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|waitpid 状态编码|正确解码 waitpid 的正常退出状态",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-041",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "信号退出状态",
+    "level": 3,
+    "type": "code",
+    "title": "区分被信号终止和正常退出",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 child_signal()，fork 后子进程向自身发送 SIGTERM；父进程 waitpid，返回 {\"signaled\":true,\"signal\":SIGTERM}。不得把信号终止误判为 exit0。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：只用 WEXITSTATUS 而不判断 WIFSIGNALED，丢失 SIGTERM 终止原因。",
+    "files": {
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os,signal\ndef child_signal():\n    pid=os.fork()\n    if pid==0:\n        os.kill(os.getpid(),signal.SIGTERM);os._exit(99)\n    _,s=os.waitpid(pid,0)\n    return {'signaled':os.WIFSIGNALED(s),'signal':os.WTERMSIG(s)if os.WIFSIGNALED(s)else None}\n```\n\n实现 child_signal()，fork 后子进程向自身发送 SIGTERM；父进程 waitpid，返回 {\"signaled\":true,\"signal\":SIGTERM}。不得把信号终止误判为 exit0。",
+    "solution_files": {
+      "task.py": "import os,signal\ndef child_signal():\n    pid=os.fork()\n    if pid==0:\n        os.kill(os.getpid(),signal.SIGTERM);os._exit(99)\n    _,s=os.waitpid(pid,0)\n    return {'signaled':os.WIFSIGNALED(s),'signal':os.WTERMSIG(s)if os.WIFSIGNALED(s)else None}\n"
+    },
+    "negative_files": {
+      "task.py": "def child_signal():return {'signaled':False,'signal':None}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 child_signal()，fork 后子进程向自身发送 SIGTERM；父进程 waitpid，返回 {\"signaled\":true,\"signal\":SIGTERM}。不得把信号终止误判为 exit0。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "只用 WEXITSTATUS 而不判断 WIFSIGNALED，丢失 SIGTERM 终止原因。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nimport signal\nassert task.child_signal()=={\"signaled\":True,\"signal\":signal.SIGTERM}\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|信号退出状态|区分被信号终止和正常退出",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-042",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "setsid 隔离",
+    "level": 4,
+    "type": "code",
+    "title": "为实验子进程建立独立会话与进程组",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：probe.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 isolated(argv)，Popen(start_new_session=True)运行给定 probe，解析stdout JSON并返回。probe报告pid、sid、pgid；必须三者相同且不等于父进程sid，禁止对父进程调用 setsid。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：默认继承父进程会话，停止实验进程组时可能误伤宿主命令组。",
+    "files": {
+      "probe.py": "import os,json\nprint(json.dumps(dict(pid=os.getpid(),sid=os.getsid(0),pgid=os.getpgrp())))\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess,json\n def isolated(argv):\n     return json.loads(subprocess.check_output(argv,start_new_session=True,text=True))\n```\n\n实现 isolated(argv)，Popen(start_new_session=True)运行给定 probe，解析stdout JSON并返回。probe报告pid、sid、pgid；必须三者相同且不等于父进程sid，禁止对父进程调用 setsid。",
+    "solution_files": {
+      "task.py": "import subprocess,json\ndef isolated(argv):\n    return json.loads(subprocess.check_output(argv,start_new_session=True,text=True))\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess,json\ndef isolated(argv):return json.loads(subprocess.check_output(argv,text=True))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 isolated(argv)，Popen(start_new_session=True)运行给定 probe，解析stdout JSON并返回。probe报告pid、sid、pgid；必须三者相同且不等于父进程sid，禁止对父进程调用 setsid。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "默认继承父进程会话，停止实验进程组时可能误伤宿主命令组。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nr=task.isolated([sys.executable,\"probe.py\"]);assert r[\"pid\"]==r[\"sid\"]==r[\"pgid\"];assert r[\"sid\"]!=os.getsid(0)\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|setsid 隔离|为实验子进程建立独立会话与进程组",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-043",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "进程树信号范围",
+    "level": 5,
+    "type": "code",
+    "title": "在独立进程组中终止自己创建的进程树",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：leader.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 stop_tree(argv)，以新会话启动 leader.py，读取 READY 后向其进程组发 SIGTERM，等待leader最多3秒；超时SIGKILL该组并wait。leader将信号交给默认TERM的子进程并wait回收，写 reaped.txt。返回leader退出码，禁止 killpg(0,...)。\n\n## 提交产物\ntask.py；执行产物：reaped.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：直接 SIGKILL 整组使leader无法wait子进程并写回收证据。",
+    "files": {
+      "leader.py": "import os,sys,signal,subprocess,pathlib\nchild=subprocess.Popen([sys.executable,\"-c\",\"import time;time.sleep(10)\"])\ndef stop(s,f):\n child.wait(timeout=2)\n pathlib.Path(\"reaped.txt\").write_text(str(child.returncode))\n sys.exit(0)\nsignal.signal(signal.SIGTERM,stop)\nprint(\"READY\",flush=True)\nsignal.pause()\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os,signal,subprocess\ndef stop_tree(argv):\n    p=subprocess.Popen(argv,start_new_session=True,stdout=subprocess.PIPE,text=True)\n    try:\n        if p.stdout.readline().strip()!='READY':raise RuntimeError('not ready')\n        os.killpg(p.pid,signal.SIGTERM)\n        try:return p.wait(timeout=3)\n        except subprocess.TimeoutExpired:os.killpg(p.pid,signal.SIGKILL);return p.wait()\n    finally:\n        if p.poll()is None:os.killpg(p.pid,signal.SIGKILL);p.wait()\n        p.stdout.close()\n```\n\n实现 stop_tree(argv)，以新会话启动 leader.py，读取 READY 后向其进程组发 SIGTERM，等待leader最多3秒；超时SIGKILL该组并wait。leader将信号交给默认TERM的子进程并wait回收，写 reaped.txt。返回leader退出码，禁止 killpg(0,...)。",
+    "solution_files": {
+      "task.py": "import os,signal,subprocess\ndef stop_tree(argv):\n    p=subprocess.Popen(argv,start_new_session=True,stdout=subprocess.PIPE,text=True)\n    try:\n        if p.stdout.readline().strip()!='READY':raise RuntimeError('not ready')\n        os.killpg(p.pid,signal.SIGTERM)\n        try:return p.wait(timeout=3)\n        except subprocess.TimeoutExpired:os.killpg(p.pid,signal.SIGKILL);return p.wait()\n    finally:\n        if p.poll()is None:os.killpg(p.pid,signal.SIGKILL);p.wait()\n        p.stdout.close()\n"
+    },
+    "negative_files": {
+      "task.py": "import os,signal,subprocess\ndef stop_tree(argv):\n    p=subprocess.Popen(argv,start_new_session=True,stdout=subprocess.PIPE,text=True)\n    p.stdout.readline();os.killpg(p.pid,signal.SIGKILL);return p.wait()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 stop_tree(argv)，以新会话启动 leader.py，读取 READY 后向其进程组发 SIGTERM，等待leader最多3秒；超时SIGKILL该组并wait。leader将信号交给默认TERM的子进程并wait回收，写 reaped.txt。返回leader退出码，禁止 killpg(0,...)。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "reaped.txt"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "直接 SIGKILL 整组使leader无法wait子进程并写回收证据。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.stop_tree([sys.executable,\"leader.py\"])==0;assert pathlib.Path(\"reaped.txt\").read_text()==str(-15)\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|进程树信号范围|在独立进程组中终止自己创建的进程树",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-044",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "优雅信号关停",
+    "level": 4,
+    "type": "code",
+    "title": "给服务留出 SIGTERM 刷盘窗口",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 graceful(argv)，等待worker输出READY后只向该子进程SIGTERM，等待最多3秒；超时kill并回收。正确worker的信号处理器写 flushed.txt后退出0，返回退出码。不得默认使用SIGKILL。\n\n## 提交产物\ntask.py；执行产物：flushed.txt。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：SIGKILL 跳过信号处理器导致 flushed.txt 缺失。",
+    "files": {
+      "worker.py": "import signal,pathlib,sys\ndef stop(s,f):\n pathlib.Path(\"flushed.txt\").write_text(\"saved\")\n sys.exit(0)\nsignal.signal(signal.SIGTERM,stop)\nprint(\"READY\",flush=True)\nsignal.pause()\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess\ndef graceful(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,text=True)\n    try:\n        if p.stdout.readline().strip()!='READY':raise RuntimeError('not ready')\n        p.terminate()\n        try:return p.wait(timeout=3)\n        except subprocess.TimeoutExpired:p.kill();return p.wait()\n    finally:\n        if p.poll()is None:p.kill();p.wait()\n        p.stdout.close()\n```\n\n实现 graceful(argv)，等待worker输出READY后只向该子进程SIGTERM，等待最多3秒；超时kill并回收。正确worker的信号处理器写 flushed.txt后退出0，返回退出码。不得默认使用SIGKILL。",
+    "solution_files": {
+      "task.py": "import subprocess\ndef graceful(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,text=True)\n    try:\n        if p.stdout.readline().strip()!='READY':raise RuntimeError('not ready')\n        p.terminate()\n        try:return p.wait(timeout=3)\n        except subprocess.TimeoutExpired:p.kill();return p.wait()\n    finally:\n        if p.poll()is None:p.kill();p.wait()\n        p.stdout.close()\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef graceful(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,text=True);p.stdout.readline();p.kill();return p.wait()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 graceful(argv)，等待worker输出READY后只向该子进程SIGTERM，等待最多3秒；超时kill并回收。正确worker的信号处理器写 flushed.txt后退出0，返回退出码。不得默认使用SIGKILL。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "flushed.txt"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "SIGKILL 跳过信号处理器导致 flushed.txt 缺失。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.graceful([sys.executable,\"worker.py\"])==0;assert pathlib.Path(\"flushed.txt\").read_text()==\"saved\"\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|优雅信号关停|给服务留出 SIGTERM 刷盘窗口",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-045",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "关停信号升级",
+    "level": 4,
+    "type": "code",
+    "title": "识别忽略 SIGTERM 的进程并执行有界升级",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 escalate(argv)，worker输出READY后忽略SIGTERM，先terminate并wait .15秒，超时kill且wait。返回 {\"escalated\":true,\"code\":-SIGKILL}。不得只发信号就返回；仅控制直接子进程。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：未经TERM等待就强杀，并把升级标记写false，无法审计正常关停机会。",
+    "files": {
+      "worker.py": "import signal,time\nsignal.signal(signal.SIGTERM,signal.SIG_IGN)\nprint(\"READY\",flush=True)\ntime.sleep(10)\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess\ndef escalate(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,text=True)\n    try:\n        if p.stdout.readline().strip()!='READY':raise RuntimeError('not ready')\n        p.terminate()\n        try:return {'escalated':False,'code':p.wait(timeout=.15)}\n        except subprocess.TimeoutExpired:\n            p.kill();return {'escalated':True,'code':p.wait()}\n    finally:\n        if p.poll()is None:p.kill();p.wait()\n        p.stdout.close()\n```\n\n实现 escalate(argv)，worker输出READY后忽略SIGTERM，先terminate并wait .15秒，超时kill且wait。返回 {\"escalated\":true,\"code\":-SIGKILL}。不得只发信号就返回；仅控制直接子进程。",
+    "solution_files": {
+      "task.py": "import subprocess\ndef escalate(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,text=True)\n    try:\n        if p.stdout.readline().strip()!='READY':raise RuntimeError('not ready')\n        p.terminate()\n        try:return {'escalated':False,'code':p.wait(timeout=.15)}\n        except subprocess.TimeoutExpired:\n            p.kill();return {'escalated':True,'code':p.wait()}\n    finally:\n        if p.poll()is None:p.kill();p.wait()\n        p.stdout.close()\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef escalate(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,text=True);p.stdout.readline();p.kill();return {'escalated':False,'code':p.wait()}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 escalate(argv)，worker输出READY后忽略SIGTERM，先terminate并wait .15秒，超时kill且wait。返回 {\"escalated\":true,\"code\":-SIGKILL}。不得只发信号就返回；仅控制直接子进程。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "未经TERM等待就强杀，并把升级标记写false，无法审计正常关停机会。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nimport signal\nr=task.escalate([sys.executable,\"worker.py\"]);assert r=={\"escalated\":True,\"code\":-signal.SIGKILL}\n\nstart=time.monotonic();r=task.escalate([sys.executable,'worker.py']);elapsed=time.monotonic()-start\nassert r['escalated'] and .14<=elapsed<3\npathlib.Path('graceful.py').write_text(\"import signal,sys\\nsignal.signal(signal.SIGTERM,lambda s,f:sys.exit(0))\\nprint('READY',flush=True)\\nsignal.pause()\\n\")\nassert task.escalate([sys.executable,'graceful.py'])=={'escalated':False,'code':0}\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|关停信号升级|识别忽略 SIGTERM 的进程并执行有界升级",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-046",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "SIGSTOP 与 SIGCONT",
+    "level": 4,
+    "type": "code",
+    "title": "暂停再继续自己创建的作业并检查等待状态",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 pause_resume()，fork子进程先向自身SIGSTOP，再退出0。父进程 waitpid(WUNTRACED) 必须观测 WIFSTOPPED/SIGSTOP，然后发SIGCONT，正常wait回收，返回停止信号和退出码。不得将停止当结束。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：收到停止事件后直接当成功退出，子进程永远保持停止且未回收。",
+    "files": {
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os,signal\ndef pause_resume():\n    pid=os.fork()\n    if pid==0:\n        os.kill(os.getpid(),signal.SIGSTOP);os._exit(0)\n    try:\n        _,s=os.waitpid(pid,os.WUNTRACED)\n        if not os.WIFSTOPPED(s):raise RuntimeError('not stopped')\n        stopped=os.WSTOPSIG(s);os.kill(pid,signal.SIGCONT)\n        _,s=os.waitpid(pid,0)\n        return stopped,os.WEXITSTATUS(s)\n    except BaseException:\n        try:os.kill(pid,signal.SIGKILL);os.waitpid(pid,0)\n        except ProcessLookupError:pass\n        raise\n```\n\n实现 pause_resume()，fork子进程先向自身SIGSTOP，再退出0。父进程 waitpid(WUNTRACED) 必须观测 WIFSTOPPED/SIGSTOP，然后发SIGCONT，正常wait回收，返回停止信号和退出码。不得将停止当结束。",
+    "solution_files": {
+      "task.py": "import os,signal\ndef pause_resume():\n    pid=os.fork()\n    if pid==0:\n        os.kill(os.getpid(),signal.SIGSTOP);os._exit(0)\n    try:\n        _,s=os.waitpid(pid,os.WUNTRACED)\n        if not os.WIFSTOPPED(s):raise RuntimeError('not stopped')\n        stopped=os.WSTOPSIG(s);os.kill(pid,signal.SIGCONT)\n        _,s=os.waitpid(pid,0)\n        return stopped,os.WEXITSTATUS(s)\n    except BaseException:\n        try:os.kill(pid,signal.SIGKILL);os.waitpid(pid,0)\n        except ProcessLookupError:pass\n        raise\n"
+    },
+    "negative_files": {
+      "task.py": "def pause_resume():return (0,0)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 pause_resume()，fork子进程先向自身SIGSTOP，再退出0。父进程 waitpid(WUNTRACED) 必须观测 WIFSTOPPED/SIGSTOP，然后发SIGCONT，正常wait回收，返回停止信号和退出码。不得将停止当结束。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "收到停止事件后直接当成功退出，子进程永远保持停止且未回收。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nimport signal\nassert task.pause_resume()==(signal.SIGSTOP,0)\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|SIGSTOP 与 SIGCONT|暂停再继续自己创建的作业并检查等待状态",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-047",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "非阻塞 waitpid",
+    "level": 3,
+    "type": "code",
+    "title": "用 WNOHANG 检查运行中子进程且不消费其他子进程",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 poll_child()：创建pipe；fork子进程阻塞读取pipe的一个字节，父进程先waitpid(pid,WNOHANG)应返回(0,0)，再写释放字节并关闭pipe，最后阻塞waitpid同一个pid回收。返回(first_pid,exit_code)。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：把 WNOHANG 返回0误判为某个已退出PID，尚在运行的作业被错误结算。",
+    "files": {
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os\ndef poll_child():\n    r,w=os.pipe();pid=os.fork()\n    if pid==0:\n        os.close(w);os.read(r,1);os.close(r);os._exit(0)\n    os.close(r)\n    try:\n        first,_=os.waitpid(pid,os.WNOHANG)\n        os.write(w,b'x')\n    finally:os.close(w)\n    _,s=os.waitpid(pid,0)\n    return first,os.WEXITSTATUS(s)\n```\n\n实现 poll_child()：创建pipe；fork子进程阻塞读取pipe的一个字节，父进程先waitpid(pid,WNOHANG)应返回(0,0)，再写释放字节并关闭pipe，最后阻塞waitpid同一个pid回收。返回(first_pid,exit_code)。",
+    "solution_files": {
+      "task.py": "import os\ndef poll_child():\n    r,w=os.pipe();pid=os.fork()\n    if pid==0:\n        os.close(w);os.read(r,1);os.close(r);os._exit(0)\n    os.close(r)\n    try:\n        first,_=os.waitpid(pid,os.WNOHANG)\n        os.write(w,b'x')\n    finally:os.close(w)\n    _,s=os.waitpid(pid,0)\n    return first,os.WEXITSTATUS(s)\n"
+    },
+    "negative_files": {
+      "task.py": "def poll_child():return (1,0)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 poll_child()：创建pipe；fork子进程阻塞读取pipe的一个字节，父进程先waitpid(pid,WNOHANG)应返回(0,0)，再写释放字节并关闭pipe，最后阻塞waitpid同一个pid回收。返回(first_pid,exit_code)。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "把 WNOHANG 返回0误判为某个已退出PID，尚在运行的作业被错误结算。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.poll_child()==(0,0)\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|非阻塞 waitpid|用 WNOHANG 检查运行中子进程且不消费其他子进程",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-048",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "僵尸回收",
+    "level": 4,
+    "type": "code",
+    "title": "验证退出子进程经 wait 回收后不再残留",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 reap()，fork子进程立即_exit0；父进程用有界循环读取 /proc/PID/status 等待 State: Z，最多2秒；记录曾为僵尸后waitpid回收，并验证 /proc/PID 消失。返回(zombie_seen,proc_missing)。不得扫描或wait其他进程。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：只看进程退出而没有观察wait前后内核状态，遗漏僵尸回收验证。",
+    "files": {
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os,pathlib,time\ndef reap():\n    pid=os.fork()\n    if pid==0:os._exit(0)\n    seen=False;end=time.monotonic()+2\n    try:\n        while time.monotonic()<end:\n            text=pathlib.Path(f'/proc/{pid}/status').read_text()\n            if any(x.startswith('State:')and 'Z'in x.split()[1]for x in text.splitlines()):seen=True;break\n            time.sleep(.005)\n    finally:os.waitpid(pid,0)\n    return seen,not pathlib.Path(f'/proc/{pid}').exists()\n```\n\n实现 reap()，fork子进程立即_exit0；父进程用有界循环读取 /proc/PID/status 等待 State: Z，最多2秒；记录曾为僵尸后waitpid回收，并验证 /proc/PID 消失。返回(zombie_seen,proc_missing)。不得扫描或wait其他进程。",
+    "solution_files": {
+      "task.py": "import os,pathlib,time\ndef reap():\n    pid=os.fork()\n    if pid==0:os._exit(0)\n    seen=False;end=time.monotonic()+2\n    try:\n        while time.monotonic()<end:\n            text=pathlib.Path(f'/proc/{pid}/status').read_text()\n            if any(x.startswith('State:')and 'Z'in x.split()[1]for x in text.splitlines()):seen=True;break\n            time.sleep(.005)\n    finally:os.waitpid(pid,0)\n    return seen,not pathlib.Path(f'/proc/{pid}').exists()\n"
+    },
+    "negative_files": {
+      "task.py": "def reap():return (False,True)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 reap()，fork子进程立即_exit0；父进程用有界循环读取 /proc/PID/status 等待 State: Z，最多2秒；记录曾为僵尸后waitpid回收，并验证 /proc/PID 消失。返回(zombie_seen,proc_missing)。不得扫描或wait其他进程。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "只看进程退出而没有观察wait前后内核状态，遗漏僵尸回收验证。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.reap()==(True,True)\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|僵尸回收|验证退出子进程经 wait 回收后不再残留",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-049",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "RLIMIT_CPU",
+    "level": 4,
+    "type": "code",
+    "title": "在独立子进程中限制 CPU 时间",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 bounded(argv)，通过子进程preexec_fn设置CPU软限制1秒、硬限制2秒，运行只自旋的worker；最多5秒墙钟超时并确保回收。返回退出码，预期被SIGXCPU或SIGKILL结束；父进程resource限制保持原值。此函数仅在单线程验收驱动调用。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：把忙循环返回0并称运行完成，实际CPU限额未触发。",
+    "files": {
+      "worker.py": "while True:pass\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess,resource\ndef bounded(argv):\n    def limits():resource.setrlimit(resource.RLIMIT_CPU,(1,2))\n    p=subprocess.Popen(argv,preexec_fn=limits,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n    try:return p.wait(timeout=5)\n    finally:\n        if p.poll()is None:p.kill();p.wait()\n```\n\n实现 bounded(argv)，通过子进程preexec_fn设置CPU软限制1秒、硬限制2秒，运行只自旋的worker；最多5秒墙钟超时并确保回收。返回退出码，预期被SIGXCPU或SIGKILL结束；父进程resource限制保持原值。此函数仅在单线程验收驱动调用。",
+    "solution_files": {
+      "task.py": "import subprocess,resource\ndef bounded(argv):\n    def limits():resource.setrlimit(resource.RLIMIT_CPU,(1,2))\n    p=subprocess.Popen(argv,preexec_fn=limits,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n    try:return p.wait(timeout=5)\n    finally:\n        if p.poll()is None:p.kill();p.wait()\n"
+    },
+    "negative_files": {
+      "task.py": "def bounded(argv):return 0\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 bounded(argv)，通过子进程preexec_fn设置CPU软限制1秒、硬限制2秒，运行只自旋的worker；最多5秒墙钟超时并确保回收。返回退出码，预期被SIGXCPU或SIGKILL结束；父进程resource限制保持原值。此函数仅在单线程验收驱动调用。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "把忙循环返回0并称运行完成，实际CPU限额未触发。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nimport resource,signal\nbefore=resource.getrlimit(resource.RLIMIT_CPU);assert task.bounded([sys.executable,\"worker.py\"])in[-signal.SIGXCPU,-signal.SIGKILL];assert resource.getrlimit(resource.RLIMIT_CPU)==before\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|RLIMIT_CPU|在独立子进程中限制 CPU 时间",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-050",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "RLIMIT_FSIZE",
+    "level": 4,
+    "type": "code",
+    "title": "限制子进程可写文件大小而保留父限制",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 limited(argv)，仅在单线程启动的子进程preexec_fn里设置文件软硬限制为1024字节。worker尝试写4096字节；返回子进程非零退出码，big.bin不得超过1024字节；父RLIMIT_FSIZE不变。\n\n## 提交产物\ntask.py；执行产物：big.bin。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：未限制子进程文件大小，big.bin写入4097字节。",
+    "files": {
+      "worker.py": "with open(\"big.bin\",\"wb\",buffering=0)as f:f.write(b\"x\"*4096);f.write(b\"y\")\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess,resource\ndef limited(argv):\n    def limit():resource.setrlimit(resource.RLIMIT_FSIZE,(1024,1024))\n    return subprocess.run(argv,preexec_fn=limit,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=3).returncode\n```\n\n实现 limited(argv)，仅在单线程启动的子进程preexec_fn里设置文件软硬限制为1024字节。worker尝试写4096字节；返回子进程非零退出码，big.bin不得超过1024字节；父RLIMIT_FSIZE不变。",
+    "solution_files": {
+      "task.py": "import subprocess,resource\ndef limited(argv):\n    def limit():resource.setrlimit(resource.RLIMIT_FSIZE,(1024,1024))\n    return subprocess.run(argv,preexec_fn=limit,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=3).returncode\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef limited(argv):return subprocess.run(argv).returncode\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 limited(argv)，仅在单线程启动的子进程preexec_fn里设置文件软硬限制为1024字节。worker尝试写4096字节；返回子进程非零退出码，big.bin不得超过1024字节；父RLIMIT_FSIZE不变。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "big.bin"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "未限制子进程文件大小，big.bin写入4097字节。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nimport resource\nbefore=resource.getrlimit(resource.RLIMIT_FSIZE);assert task.limited([sys.executable,\"worker.py\"])!=0;assert pathlib.Path(\"big.bin\").stat().st_size<=1024;assert resource.getrlimit(resource.RLIMIT_FSIZE)==before\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|RLIMIT_FSIZE|限制子进程可写文件大小而保留父限制",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-051",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "RLIMIT_NOFILE",
+    "level": 4,
+    "type": "code",
+    "title": "让句柄耗尽只发生在训练子进程内",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 limited(argv)，子进程preexec_fn设RLIMIT_NOFILE软硬均64；worker不断打开自身源码直到EMFILE，写限额和已打开数量JSON到stdout，finally关闭全部。解析并返回JSON；父限额不变。最多3秒，非零退出抛异常。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：更改宿主限制或未触发子进程EMFILE，不能证明训练影响范围受控。",
+    "files": {
+      "worker.py": "import os,json,resource,errno\nfds=[]\ntry:\n for i in range(256):fds.append(os.open(__file__,os.O_RDONLY))\nexcept OSError as e:\n if e.errno!=errno.EMFILE:raise\n print(json.dumps({\"limit\":resource.getrlimit(resource.RLIMIT_NOFILE)[0],\"opened\":len(fds)}))\nfinally:\n for f in fds:os.close(f)\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess,resource,json\ndef limited(argv):\n    def limit():resource.setrlimit(resource.RLIMIT_NOFILE,(64,64))\n    return json.loads(subprocess.check_output(argv,preexec_fn=limit,timeout=3,text=True))\n```\n\n实现 limited(argv)，子进程preexec_fn设RLIMIT_NOFILE软硬均64；worker不断打开自身源码直到EMFILE，写限额和已打开数量JSON到stdout，finally关闭全部。解析并返回JSON；父限额不变。最多3秒，非零退出抛异常。",
+    "solution_files": {
+      "task.py": "import subprocess,resource,json\ndef limited(argv):\n    def limit():resource.setrlimit(resource.RLIMIT_NOFILE,(64,64))\n    return json.loads(subprocess.check_output(argv,preexec_fn=limit,timeout=3,text=True))\n"
+    },
+    "negative_files": {
+      "task.py": "def limited(argv):return {'limit':1024,'opened':256}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 limited(argv)，子进程preexec_fn设RLIMIT_NOFILE软硬均64；worker不断打开自身源码直到EMFILE，写限额和已打开数量JSON到stdout，finally关闭全部。解析并返回JSON；父限额不变。最多3秒，非零退出抛异常。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "更改宿主限制或未触发子进程EMFILE，不能证明训练影响范围受控。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nimport resource\nbefore=resource.getrlimit(resource.RLIMIT_NOFILE);r=task.limited([sys.executable,\"worker.py\"]);assert r[\"limit\"]==64 and 0<r[\"opened\"]<64;assert resource.getrlimit(resource.RLIMIT_NOFILE)==before\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|RLIMIT_NOFILE|让句柄耗尽只发生在训练子进程内",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-052",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "nice 调度作用域",
+    "level": 3,
+    "type": "code",
+    "title": "只降低训练子进程优先级",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 lower(argv)，子进程preexec_fn执行 os.nice(5)，worker打印自身nice；返回整数。父进程nice保持原值；要求测试父nice<=14，不提高优先级且不需要root。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：在父进程或完全不设置nice，影响范围或子进程优先级不符合要求。",
+    "files": {
+      "worker.py": "import os\nprint(os.getpriority(os.PRIO_PROCESS,0))\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os,subprocess\n def lower(argv):\n     return int(subprocess.check_output(argv,preexec_fn=lambda:os.nice(5),text=True))\n```\n\n实现 lower(argv)，子进程preexec_fn执行 os.nice(5)，worker打印自身nice；返回整数。父进程nice保持原值；要求测试父nice<=14，不提高优先级且不需要root。",
+    "solution_files": {
+      "task.py": "import os,subprocess\ndef lower(argv):\n    return int(subprocess.check_output(argv,preexec_fn=lambda:os.nice(5),text=True))\n"
+    },
+    "negative_files": {
+      "task.py": "import subprocess\ndef lower(argv):return int(subprocess.check_output(argv,text=True))\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 lower(argv)，子进程preexec_fn执行 os.nice(5)，worker打印自身nice；返回整数。父进程nice保持原值；要求测试父nice<=14，不提高优先级且不需要root。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "在父进程或完全不设置nice，影响范围或子进程优先级不符合要求。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nbefore=os.getpriority(os.PRIO_PROCESS,0);assert before<=14,\"requires initial nice <=14\";assert task.lower([sys.executable,\"worker.py\"])==before+5;assert os.getpriority(os.PRIO_PROCESS,0)==before\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|nice 调度作用域|只降低训练子进程优先级",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-053",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "proc 文件描述符",
+    "level": 3,
+    "type": "code",
+    "title": "从 proc 观察自己打开的文件描述符",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：data.txt。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 inspect(path)，打开工作区文件，通过 /proc/self/fd/FD 的readlink取得绝对目标，读取目标后关闭描述符并确认这个/proc路径消失；返回(target,closed)。不得列举其他账号进程。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：只返回输入文件名而没有核对真实fd映射和关闭后的消失状态。",
+    "files": {
+      "data.txt": "sample\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os\ndef inspect(path):\n    fd=os.open(path,os.O_RDONLY);link=f'/proc/self/fd/{fd}'\n    try:target=os.readlink(link)\n    finally:os.close(fd)\n    return target,not os.path.exists(link)\n```\n\n实现 inspect(path)，打开工作区文件，通过 /proc/self/fd/FD 的readlink取得绝对目标，读取目标后关闭描述符并确认这个/proc路径消失；返回(target,closed)。不得列举其他账号进程。",
+    "solution_files": {
+      "task.py": "import os\ndef inspect(path):\n    fd=os.open(path,os.O_RDONLY);link=f'/proc/self/fd/{fd}'\n    try:target=os.readlink(link)\n    finally:os.close(fd)\n    return target,not os.path.exists(link)\n"
+    },
+    "negative_files": {
+      "task.py": "def inspect(path):return path,False\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 inspect(path)，打开工作区文件，通过 /proc/self/fd/FD 的readlink取得绝对目标，读取目标后关闭描述符并确认这个/proc路径消失；返回(target,closed)。不得列举其他账号进程。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "只返回输入文件名而没有核对真实fd映射和关闭后的消失状态。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\ntarget,closed=task.inspect(\"data.txt\");assert pathlib.Path(target)==pathlib.Path(\"data.txt\").resolve();assert closed\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|proc 文件描述符|从 proc 观察自己打开的文件描述符",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-054",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "proc 命令行",
+    "level": 3,
+    "type": "code",
+    "title": "读取真实子进程 cmdline 的 NUL 参数边界",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 inspect(argv)，启动worker打印READY后睡眠，读取/proc/PID/cmdline bytes，以NUL拆分并去除末尾空项，返回参数列表；finally terminate并wait。保留带空格的单个参数，不按空白split。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：按空白拆分cmdline，把 a b 变成两个参数。",
+    "files": {
+      "worker.py": "import time\nprint(\"READY\",flush=True)\ntime.sleep(10)\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess,pathlib,os\ndef inspect(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,text=True)\n    try:\n        if p.stdout.readline().strip()!='READY':raise RuntimeError('not ready')\n        data=pathlib.Path(f'/proc/{p.pid}/cmdline').read_bytes()\n        parts=data.split(b'\\0')\n        if parts and parts[-1]==b'':parts.pop()\n        return [os.fsdecode(x) for x in parts]\n    finally:\n        if p.poll()is None:p.terminate()\n        p.wait();p.stdout.close()\n```\n\n实现 inspect(argv)，启动worker打印READY后睡眠，读取/proc/PID/cmdline bytes，以NUL拆分并去除末尾空项，返回参数列表；finally terminate并wait。保留带空格的单个参数，不按空白split。",
+    "solution_files": {
+      "task.py": "import subprocess,pathlib,os\ndef inspect(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,text=True)\n    try:\n        if p.stdout.readline().strip()!='READY':raise RuntimeError('not ready')\n        data=pathlib.Path(f'/proc/{p.pid}/cmdline').read_bytes()\n        parts=data.split(b'\\0')\n        if parts and parts[-1]==b'':parts.pop()\n        return [os.fsdecode(x) for x in parts]\n    finally:\n        if p.poll()is None:p.terminate()\n        p.wait();p.stdout.close()\n"
+    },
+    "negative_files": {
+      "task.py": "def inspect(argv):return ' '.join(argv).split()\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 inspect(argv)，启动worker打印READY后睡眠，读取/proc/PID/cmdline bytes，以NUL拆分并去除末尾空项，返回参数列表；finally terminate并wait。保留带空格的单个参数，不按空白split。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "按空白拆分cmdline，把 a b 变成两个参数。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nargv=[sys.executable,\"worker.py\",\"a b\",\"*\"];result=task.inspect(argv);assert result[1:]==argv[1:]\n\nargv=[sys.executable,'worker.py','','a b','','*','']\nassert task.inspect(argv)[1:]==argv[1:]\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|proc 命令行|读取真实子进程 cmdline 的 NUL 参数边界",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-055",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "删除文件仍占用",
+    "level": 4,
+    "type": "code",
+    "title": "复现已删除但仍被进程占用的日志文件",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：log.txt。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 unlink_open(path)，打开本题log文件，unlink其目录项，通过原fd读取字节并检查/proc/self/fd/FD链接含 (deleted)，然后关闭fd。返回(content_bytes,deleted_marker,path_missing)。仅对传入训练文件操作。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：认为unlink会立即使已打开fd无法读取，遗漏日志占用磁盘的真实根因。",
+    "files": {
+      "log.txt": "still-open\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os\ndef unlink_open(path):\n    fd=os.open(path,os.O_RDONLY)\n    try:\n        os.unlink(path)\n        chunks=[]\n        while True:\n            part=os.read(fd,4096)\n            if not part:break\n            chunks.append(part)\n        data=b''.join(chunks)\n        marked=os.readlink(f'/proc/self/fd/{fd}').endswith(' (deleted)')\n        return data,marked,not os.path.exists(path)\n    finally:os.close(fd)\n```\n\n实现 unlink_open(path)，打开本题log文件，unlink其目录项，通过原fd读取字节并检查/proc/self/fd/FD链接含 (deleted)，然后关闭fd。返回(content_bytes,deleted_marker,path_missing)。仅对传入训练文件操作。",
+    "solution_files": {
+      "task.py": "import os\ndef unlink_open(path):\n    fd=os.open(path,os.O_RDONLY)\n    try:\n        os.unlink(path)\n        chunks=[]\n        while True:\n            part=os.read(fd,4096)\n            if not part:break\n            chunks.append(part)\n        data=b''.join(chunks)\n        marked=os.readlink(f'/proc/self/fd/{fd}').endswith(' (deleted)')\n        return data,marked,not os.path.exists(path)\n    finally:os.close(fd)\n"
+    },
+    "negative_files": {
+      "task.py": "def unlink_open(path):return b'',False,True\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 unlink_open(path)，打开本题log文件，unlink其目录项，通过原fd读取字节并检查/proc/self/fd/FD链接含 (deleted)，然后关闭fd。返回(content_bytes,deleted_marker,path_missing)。仅对传入训练文件操作。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "认为unlink会立即使已打开fd无法读取，遗漏日志占用磁盘的真实根因。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.unlink_open(\"log.txt\")== (b\"still-open\\n\",True,True)\n\nfor content in [b'',bytes(range(256))*40]:\n    pathlib.Path('large.log').write_bytes(content)\n    assert task.unlink_open('large.log')==(content,True,True)\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|删除文件仍占用|复现已删除但仍被进程占用的日志文件",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-056",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "proc exe 取证",
+    "level": 3,
+    "type": "code",
+    "title": "从子进程可执行文件链接确认实际运行解释器",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 executable(argv)，启动worker READY后读取/proc/PID/exe链接，finally终止回收；返回真实路径。验收与当前Python可执行文件realpath相同，不能把argv[0]字符串直接当成运行证据。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：仅相信进程名称而未解析内核exe链接，无法识别真正执行文件。",
+    "files": {
+      "worker.py": "import time\nprint(\"READY\",flush=True)\ntime.sleep(10)\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport subprocess,os\ndef executable(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,text=True)\n    try:\n        if p.stdout.readline().strip()!='READY':raise RuntimeError('not ready')\n        return os.readlink(f'/proc/{p.pid}/exe')\n    finally:\n        if p.poll()is None:p.terminate()\n        p.wait();p.stdout.close()\n```\n\n实现 executable(argv)，启动worker READY后读取/proc/PID/exe链接，finally终止回收；返回真实路径。验收与当前Python可执行文件realpath相同，不能把argv[0]字符串直接当成运行证据。",
+    "solution_files": {
+      "task.py": "import subprocess,os\ndef executable(argv):\n    p=subprocess.Popen(argv,stdout=subprocess.PIPE,text=True)\n    try:\n        if p.stdout.readline().strip()!='READY':raise RuntimeError('not ready')\n        return os.readlink(f'/proc/{p.pid}/exe')\n    finally:\n        if p.poll()is None:p.terminate()\n        p.wait();p.stdout.close()\n"
+    },
+    "negative_files": {
+      "task.py": "def executable(argv):return '/missing/python'\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 executable(argv)，启动worker READY后读取/proc/PID/exe链接，finally终止回收；返回真实路径。验收与当前Python可执行文件realpath相同，不能把argv[0]字符串直接当成运行证据。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "仅相信进程名称而未解析内核exe链接，无法识别真正执行文件。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert os.path.realpath(task.executable([sys.executable,\"worker.py\"]))==os.path.realpath(sys.executable)\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|proc exe 取证|从子进程可执行文件链接确认实际运行解释器",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-057",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "pidfd 生命周期",
+    "level": 4,
+    "type": "code",
+    "title": "使用 pidfd 等待自己的子进程退出",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：worker.py。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 observe(argv)，启动有限worker，用 os.pidfd_open获取稳定句柄；select.select等待最多3秒，随后wait并关闭pidfd。返回(ready,code)。需要Linux5.3+及Python支持pidfd_open；仅观察自己创建的进程。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：把PID整数当稳定生命周期句柄，未观测pidfd可读退出事件。",
+    "files": {
+      "worker.py": "import time\ntime.sleep(.05)\nraise SystemExit(5)\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os,subprocess,select\ndef observe(argv):\n    p=subprocess.Popen(argv);fd=None\n    try:\n        fd=os.pidfd_open(p.pid)\n        ready=bool(select.select([fd],[],[],3)[0])\n        return ready,p.wait(timeout=3)\n    finally:\n        if fd is not None:os.close(fd)\n        if p.poll()is None:p.kill();p.wait()\n```\n\n实现 observe(argv)，启动有限worker，用 os.pidfd_open获取稳定句柄；select.select等待最多3秒，随后wait并关闭pidfd。返回(ready,code)。需要Linux5.3+及Python支持pidfd_open；仅观察自己创建的进程。",
+    "solution_files": {
+      "task.py": "import os,subprocess,select\ndef observe(argv):\n    p=subprocess.Popen(argv);fd=None\n    try:\n        fd=os.pidfd_open(p.pid)\n        ready=bool(select.select([fd],[],[],3)[0])\n        return ready,p.wait(timeout=3)\n    finally:\n        if fd is not None:os.close(fd)\n        if p.poll()is None:p.kill();p.wait()\n"
+    },
+    "negative_files": {
+      "task.py": "def observe(argv):return (False,5)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 observe(argv)，启动有限worker，用 os.pidfd_open获取稳定句柄；select.select等待最多3秒，随后wait并关闭pidfd。返回(ready,code)。需要Linux5.3+及Python支持pidfd_open；仅观察自己创建的进程。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "把PID整数当稳定生命周期句柄，未观测pidfd可读退出事件。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert hasattr(os,\"pidfd_open\"),\"requires pidfd_open\";assert task.observe([sys.executable,\"worker.py\"])==(True,5)\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|pidfd 生命周期|使用 pidfd 等待自己的子进程退出",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-058",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "SCM_RIGHTS 句柄传递",
+    "level": 5,
+    "type": "code",
+    "title": "通过 Unix socket 传递打开的文件描述符",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：payload.txt。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 transfer(path)：创建AF_UNIX socketpair及训练文件fd；fork子进程只接收父进程 sendmsg 的SCM_RIGHTS描述符，原文件fd在子进程先关闭。子进程读收到fd并通过socket回传内容，父进程wait并关闭所有本题fd；返回bytes。仅本机socketpair，不监听外网。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：只发送文件描述符数字而非SCM_RIGHTS，子进程没有有效打开文件。",
+    "files": {
+      "payload.txt": "descriptor-transfer\n",
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport socket,os,array,signal\ndef transfer(path):\n    fd=os.open(path,os.O_RDONLY);a,b=socket.socketpair();pid=None;reaped=False\n    a.settimeout(2);b.settimeout(2)\n    try:\n        pid=os.fork()\n        if pid==0:\n            a.close();os.close(fd)\n            try:\n                _,anc,flags,_=b.recvmsg(1,socket.CMSG_SPACE(array.array('i').itemsize))\n                fds=array.array('i')\n                for level,kind,data in anc:\n                    if level==socket.SOL_SOCKET and kind==socket.SCM_RIGHTS:fds.frombytes(data[:len(data)-len(data)%fds.itemsize])\n                if len(fds)!=1 or flags&socket.MSG_CTRUNC:os._exit(2)\n                with os.fdopen(fds[0],'rb') as stream:\n                    while True:\n                        part=stream.read(4096)\n                        if not part:break\n                        b.sendall(part)\n                b.close();os._exit(0)\n            except BaseException:os._exit(3)\n        b.close();a.sendmsg([b'x'],[(socket.SOL_SOCKET,socket.SCM_RIGHTS,array.array('i',[fd]))]);parts=[]\n        while True:\n            part=a.recv(4096)\n            if not part:break\n            parts.append(part)\n        _,status=os.waitpid(pid,0);reaped=True\n        if os.waitstatus_to_exitcode(status)!=0:raise RuntimeError('child failed')\n        return b''.join(parts)\n    finally:\n        a.close();b.close();os.close(fd)\n        if pid is not None and pid>0 and not reaped:\n            try:os.kill(pid,signal.SIGKILL)\n            except ProcessLookupError:pass\n            os.waitpid(pid,0)\n```\n\n实现 transfer(path)：创建AF_UNIX socketpair及训练文件fd；fork子进程只接收父进程 sendmsg 的SCM_RIGHTS描述符，原文件fd在子进程先关闭。子进程读收到fd并通过socket回传内容，父进程wait并关闭所有本题fd；返回bytes。仅本机socketpair，不监听外网。",
+    "solution_files": {
+      "task.py": "import socket,os,array,signal\ndef transfer(path):\n    fd=os.open(path,os.O_RDONLY);a,b=socket.socketpair();pid=None;reaped=False\n    a.settimeout(2);b.settimeout(2)\n    try:\n        pid=os.fork()\n        if pid==0:\n            a.close();os.close(fd)\n            try:\n                _,anc,flags,_=b.recvmsg(1,socket.CMSG_SPACE(array.array('i').itemsize))\n                fds=array.array('i')\n                for level,kind,data in anc:\n                    if level==socket.SOL_SOCKET and kind==socket.SCM_RIGHTS:fds.frombytes(data[:len(data)-len(data)%fds.itemsize])\n                if len(fds)!=1 or flags&socket.MSG_CTRUNC:os._exit(2)\n                with os.fdopen(fds[0],'rb') as stream:\n                    while True:\n                        part=stream.read(4096)\n                        if not part:break\n                        b.sendall(part)\n                b.close();os._exit(0)\n            except BaseException:os._exit(3)\n        b.close();a.sendmsg([b'x'],[(socket.SOL_SOCKET,socket.SCM_RIGHTS,array.array('i',[fd]))]);parts=[]\n        while True:\n            part=a.recv(4096)\n            if not part:break\n            parts.append(part)\n        _,status=os.waitpid(pid,0);reaped=True\n        if os.waitstatus_to_exitcode(status)!=0:raise RuntimeError('child failed')\n        return b''.join(parts)\n    finally:\n        a.close();b.close();os.close(fd)\n        if pid is not None and pid>0 and not reaped:\n            try:os.kill(pid,signal.SIGKILL)\n            except ProcessLookupError:pass\n            os.waitpid(pid,0)\n"
+    },
+    "negative_files": {
+      "task.py": "def transfer(path):return b''\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 transfer(path)：创建AF_UNIX socketpair及训练文件fd；fork子进程只接收父进程 sendmsg 的SCM_RIGHTS描述符，原文件fd在子进程先关闭。子进程读收到fd并通过socket回传内容，父进程wait并关闭所有本题fd；返回bytes。仅本机socketpair，不监听外网。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "只发送文件描述符数字而非SCM_RIGHTS，子进程没有有效打开文件。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.transfer(\"payload.txt\")==b\"descriptor-transfer\\n\";pathlib.Path(\"payload.txt\").write_bytes(b\"\");assert task.transfer(\"payload.txt\")==b\"\"\n\npayload=bytes(range(256))*80;pathlib.Path('payload.txt').write_bytes(payload)\nbefore=set(os.listdir('/proc/self/fd'))\nassert task.transfer('payload.txt')==payload\nassert set(os.listdir('/proc/self/fd'))==before\ntry:task.transfer('missing-file')\nexcept FileNotFoundError:pass\nelse:raise AssertionError('missing source accepted')\nassert set(os.listdir('/proc/self/fd'))==before\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|SCM_RIGHTS 句柄传递|通过 Unix socket 传递打开的文件描述符",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-059",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "PR_SET_DUMPABLE",
+    "level": 4,
+    "type": "code",
+    "title": "设置子进程非可转储属性并验证隔离范围",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 inspect()，fork子进程，通过ctypes libc.prctl(PR_SET_DUMPABLE,0)后用PR_GET_DUMPABLE读取并写pipe；父进程回收并返回(child_dumpable,parent_unchanged)。所有prctl仅作用于子进程，禁止影响当前服务进程。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：没有在子进程关闭dumpable，或错误地更改父进程的转储属性。",
+    "files": {
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport ctypes,os\ndef inspect():\n    libc=ctypes.CDLL(None,use_errno=True)\n    before=libc.prctl(3,0,0,0,0);r,w=os.pipe();pid=os.fork()\n    if pid==0:\n        os.close(r)\n        if libc.prctl(4,0,0,0,0)!=0:os._exit(2)\n        os.write(w,str(libc.prctl(3,0,0,0,0)).encode());os.close(w);os._exit(0)\n    os.close(w)\n    try:data=os.read(r,32)\n    finally:os.close(r)\n    _,s=os.waitpid(pid,0)\n    if os.waitstatus_to_exitcode(s)!=0:raise RuntimeError('child prctl failed')\n    return int(data),libc.prctl(3,0,0,0,0)==before\n```\n\n实现 inspect()，fork子进程，通过ctypes libc.prctl(PR_SET_DUMPABLE,0)后用PR_GET_DUMPABLE读取并写pipe；父进程回收并返回(child_dumpable,parent_unchanged)。所有prctl仅作用于子进程，禁止影响当前服务进程。",
+    "solution_files": {
+      "task.py": "import ctypes,os\ndef inspect():\n    libc=ctypes.CDLL(None,use_errno=True)\n    before=libc.prctl(3,0,0,0,0);r,w=os.pipe();pid=os.fork()\n    if pid==0:\n        os.close(r)\n        if libc.prctl(4,0,0,0,0)!=0:os._exit(2)\n        os.write(w,str(libc.prctl(3,0,0,0,0)).encode());os.close(w);os._exit(0)\n    os.close(w)\n    try:data=os.read(r,32)\n    finally:os.close(r)\n    _,s=os.waitpid(pid,0)\n    if os.waitstatus_to_exitcode(s)!=0:raise RuntimeError('child prctl failed')\n    return int(data),libc.prctl(3,0,0,0,0)==before\n"
+    },
+    "negative_files": {
+      "task.py": "def inspect():return (1,True)\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 inspect()，fork子进程，通过ctypes libc.prctl(PR_SET_DUMPABLE,0)后用PR_GET_DUMPABLE读取并写pipe；父进程回收并返回(child_dumpable,parent_unchanged)。所有prctl仅作用于子进程，禁止影响当前服务进程。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "没有在子进程关闭dumpable，或错误地更改父进程的转储属性。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nassert task.inspect()==(0,True)\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|PR_SET_DUMPABLE|设置子进程非可转储属性并验证隔离范围",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  },
+  {
+    "id": "curated-process-060",
+    "module": "process",
+    "category": "进程与服务",
+    "topic": "wait4 子进程用量",
+    "level": 4,
+    "type": "code",
+    "title": "测量等待子进程的资源用量而不混入宿主",
+    "body": "## 环境与初始材料\n非 root 隔离 Linux 工作区，Python 3.11+；目标工具：Linux, Python3.11。素材：。仅控制自己创建的短生命周期进程，不操作系统现有服务。\n\n## 操作任务\n实现 usage()，fork子进程做有限整数计算后退出4；父进程使用os.wait4(pid,0)拿到此子进程rusage，返回code、user_seconds、system_seconds、maxrss。验收退出码4且时间非负、maxrss正；不声称固定耗时或跨系统单位一致。\n\n## 提交产物\ntask.py；执行产物：task.py。\n\n## 验收方法\npython3 checks/check.py 在隔离工作区真实启动进程并核对输出、退出状态及约定副作用；全部断言通过且退出 0。错误骨架和典型错误实现必须失败。要求原生非root Linux内核接口；平台执行完整功能验收，不以语法检查替代。\n\n失败示例：使用空统计或宿主总量冒充指定子进程实际资源用量。",
+    "files": {
+      "task.py": "raise NotImplementedError\n"
+    },
+    "language": "python",
+    "run": "python3 checks/check.py",
+    "answer": "```python\nimport os\ndef usage():\n    pid=os.fork()\n    if pid==0:\n        sum(i*i for i in range(100000))\n        os._exit(4)\n    _,status,r=os.wait4(pid,0)\n    return {'code':os.waitstatus_to_exitcode(status),'user_seconds':r.ru_utime,'system_seconds':r.ru_stime,'maxrss':r.ru_maxrss}\n```\n\n实现 usage()，fork子进程做有限整数计算后退出4；父进程使用os.wait4(pid,0)拿到此子进程rusage，返回code、user_seconds、system_seconds、maxrss。验收退出码4且时间非负、maxrss正；不声称固定耗时或跨系统单位一致。",
+    "solution_files": {
+      "task.py": "import os\ndef usage():\n    pid=os.fork()\n    if pid==0:\n        sum(i*i for i in range(100000))\n        os._exit(4)\n    _,status,r=os.wait4(pid,0)\n    return {'code':os.waitstatus_to_exitcode(status),'user_seconds':r.ru_utime,'system_seconds':r.ru_stime,'maxrss':r.ru_maxrss}\n"
+    },
+    "negative_files": {
+      "task.py": "def usage():return {'code':4,'user_seconds':0,'system_seconds':0,'maxrss':0}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "linux",
+      "operation": "实现 usage()，fork子进程做有限整数计算后退出4；父进程使用os.wait4(pid,0)拿到此子进程rusage，返回code、user_seconds、system_seconds、maxrss。验收退出码4且时间非负、maxrss正；不声称固定耗时或跨系统单位一致。",
+      "deliverables": [
+        "task.py"
+      ],
+      "output_artifacts": [
+        "task.py"
+      ],
+      "required_tools": [
+        "Linux",
+        "Python3.11"
+      ],
+      "verification": "真实子进程与工件断言；正常、边界、错误实现验收",
+      "failure_examples": [
+        "使用空统计或宿主总量冒充指定子进程实际资源用量。"
+      ]
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "test_files": {
+        "checks/check.py": "import pathlib,subprocess,os,json,shlex,tempfile,sys,time,hashlib\nBASH=os.environ.get('OPSFORGE_BASH','bash')\ndef run(args=()):\n return subprocess.run([BASH,'-c','exec bash task.sh '+shlex.join(args)],capture_output=True,text=True,encoding='utf-8',timeout=10)\nsys.path.insert(0,str(pathlib.Path.cwd()))\nimport task\nr=task.usage();assert r[\"code\"]==4 and r[\"user_seconds\"]>=0 and r[\"system_seconds\"]>=0 and r[\"maxrss\"]>0\n"
+      },
+      "timeout": 30,
+      "requires": {
+        "commands": [
+          "bash"
+        ]
+      }
+    },
+    "case_signature": "process|wait4 子进程用量|测量等待子进程的资源用量而不混入宿主",
+    "review_status": "reviewed",
+    "review_note": "独立本地验收：参考产物通过，初始产物和典型错误实现未通过；真实集群和外部服务不在本轮执行范围。",
+    "version": 1,
+    "has_answer": true,
+    "source": "OpsForge 原创进程服务实操"
+  }
+]

@@ -1,0 +1,75 @@
+[
+  {
+    "id": "curated-parallel-alertmanager-062",
+    "module": "alertmanager",
+    "category": "Alertmanager",
+    "level": 2,
+    "topic": "配置变更与访问安全",
+    "title": "真实Alertmanager重载拒绝：磁盘新文件不代表生效，核对状态、指标和同进程通知",
+    "answer": "```python\nimport pathlib,yaml\ndef contains(actual,desired):\n    if isinstance(desired,dict):return isinstance(actual,dict) and all(k in actual and contains(actual[k],v) for k,v in desired.items())\n    if isinstance(desired,list):return isinstance(actual,list) and len(actual)==len(desired) and all(contains(a,b) for a,b in zip(actual,desired))\n    return actual==desired\ndef apply_config(base,path,candidate,request):\n    before=request(\"GET\",base+\"/api/v2/status\")[1][\"config\"][\"original\"]\n    pathlib.Path(path).write_text(candidate,encoding=\"utf8\")\n    status,_=request(\"POST\",base+\"/-/reload\")\n    effective=request(\"GET\",base+\"/api/v2/status\")[1][\"config\"][\"original\"]\n    metrics=request(\"GET\",base+\"/metrics\")[1]\n    line=next(x for x in metrics.splitlines() if x.startswith(\"alertmanager_config_last_reload_successful \"))\n    success=float(line.split()[1])==1\n    if status!=200:\n        if success or yaml.safe_load(effective)!=yaml.safe_load(before):raise RuntimeError(\"rejected reload changed effective configuration\")\n        return {\"applied\":False,\"effective\":yaml.safe_load(effective),\"reload_success\":False}\n    active=yaml.safe_load(effective);desired=yaml.safe_load(candidate)\n    if not success or not contains(active[\"route\"],desired[\"route\"]) or [x[\"name\"] for x in active[\"receivers\"]]!=[x[\"name\"] for x in desired[\"receivers\"]]:raise RuntimeError(\"visible runtime route does not match approved candidate\")\n    return {\"applied\":True,\"effective\":yaml.safe_load(effective),\"reload_success\":True}\n```\n\n原题知识说明：\n查询实际生效配置和最近重载状态，确认是否保留旧配置。先修正解析/模板/引用问题，再重载并测试路由。磁盘文件已更新不说明运行实例采用它。",
+    "type": "code",
+    "source": "OpsForge 系统方向独立编审 2026-10-21",
+    "version": 2,
+    "has_answer": true,
+    "review_status": "reviewed",
+    "review_note": "现有ID改编；完成情况按精确题目、执行bundle及原生五路证据核对，不以脚本生成认定完成。",
+    "pack": "systems-parallel-20261021",
+    "hints": [],
+    "rubric": [
+      "查询实际生效配置和最近重载状态，确认是否保留旧配置。",
+      "先修正解析/模板/引用问题，再重载并测试路由。",
+      "磁盘文件已更新不说明运行实例采用它。"
+    ],
+    "references": [
+      "https://prometheus.io/docs/alerting/latest/management_api/",
+      "https://prometheus.io/docs/alerting/latest/configuration/"
+    ],
+    "related_modules": [
+      "alertmanager"
+    ],
+    "language": "python",
+    "conversion": {
+      "original_id": "curated-parallel-alertmanager-062",
+      "original_title": "重载返回失败时Alertmanager应怎样验收现状？",
+      "original_type": "interview"
+    },
+    "body": "## 操作任务\n实现apply_config(base,path,candidate,request)。base/path仅指题定自有临时Alertmanager进程及配置文件，candidate为已审查的JSON格式YAML配置文本，request(method,url,payload=None)返回HTTP状态码与JSON或文本。读取/api/v2/status的config.original为重载前证据，将candidate以UTF8写到指定文件并POST /-/reload，再核对运行配置和/metrics的alertmanager_config_last_reload_successful。拒绝时必须证明指标为0且实际配置与此前语义一致，返回applied=False/effective=实际旧配置字典/reload_success=False；文件保留失败候选以便诊断，不把写文件当应用成功，不偷偷重启、自动放宽路由或回退文件。成功时必须证明指标为1且可见运行route包含候选route各项、receiver名称及顺序与候选一致，返回applied=True/effective=实际配置字典/reload_success=True；证据矛盾抛RuntimeError。真实进程测试先发送到old，缺失receiver的配置重载被拒后仍到old，修正后同一PID和uptime的新告警到new。配置解析采用yaml.safe_load；服务端返回的默认字段需以运行语义为准，验收候选不要求省略默认项与展开默认项的字典完全相等。\n\n## 提交产物\ntask.py\n\n## 验收方法\npython3 checks/check.py；实际隔离原生进程与明确边界。\n\n## 能力边界\n官方Alertmanager0.28.1 Windows原生进程；私有回环HTTP webhook、独立临时数据目录，真实配置解析和热重载。没有生产路由、外部聊天/邮件通道、多节点HA、秘密轮换或宿主服务变更。主配置使用YAML兼容JSON，不需要系统服务安装。原题无独立故障编号，本实操不增加故障完成数。\n状态接口中的webhook URL会脱敏为<secret>，不能从此接口证明敏感URL相等。只核对候选声明的route字段及receiver名称/顺序（服务端可展开默认字段）；接收目的地必须由题中真实本地通知验证，不把脱敏占位符当实际URL。候选duration采用该版本规范写法。",
+    "files": {
+      "task.py": "raise NotImplementedError(\"implement requested native operation\")\n"
+    },
+    "solution_files": {
+      "task.py": "import pathlib,yaml\ndef contains(actual,desired):\n    if isinstance(desired,dict):return isinstance(actual,dict) and all(k in actual and contains(actual[k],v) for k,v in desired.items())\n    if isinstance(desired,list):return isinstance(actual,list) and len(actual)==len(desired) and all(contains(a,b) for a,b in zip(actual,desired))\n    return actual==desired\ndef apply_config(base,path,candidate,request):\n    before=request(\"GET\",base+\"/api/v2/status\")[1][\"config\"][\"original\"]\n    pathlib.Path(path).write_text(candidate,encoding=\"utf8\")\n    status,_=request(\"POST\",base+\"/-/reload\")\n    effective=request(\"GET\",base+\"/api/v2/status\")[1][\"config\"][\"original\"]\n    metrics=request(\"GET\",base+\"/metrics\")[1]\n    line=next(x for x in metrics.splitlines() if x.startswith(\"alertmanager_config_last_reload_successful \"))\n    success=float(line.split()[1])==1\n    if status!=200:\n        if success or yaml.safe_load(effective)!=yaml.safe_load(before):raise RuntimeError(\"rejected reload changed effective configuration\")\n        return {\"applied\":False,\"effective\":yaml.safe_load(effective),\"reload_success\":False}\n    active=yaml.safe_load(effective);desired=yaml.safe_load(candidate)\n    if not success or not contains(active[\"route\"],desired[\"route\"]) or [x[\"name\"] for x in active[\"receivers\"]]!=[x[\"name\"] for x in desired[\"receivers\"]]:raise RuntimeError(\"visible runtime route does not match approved candidate\")\n    return {\"applied\":True,\"effective\":yaml.safe_load(effective),\"reload_success\":True}\n"
+    },
+    "negative_files": {
+      "task.py": "import pathlib,yaml\ndef contains(actual,desired):\n    if isinstance(desired,dict):return isinstance(actual,dict) and all(k in actual and contains(actual[k],v) for k,v in desired.items())\n    if isinstance(desired,list):return isinstance(actual,list) and len(actual)==len(desired) and all(contains(a,b) for a,b in zip(actual,desired))\n    return actual==desired\ndef apply_config(base,path,candidate,request):\n    before=request(\"GET\",base+\"/api/v2/status\")[1][\"config\"][\"original\"]\n    pathlib.Path(path).write_text(candidate,encoding=\"utf8\")\n    status,_=request(\"POST\",base+\"/-/reload\")\n    effective=request(\"GET\",base+\"/api/v2/status\")[1][\"config\"][\"original\"]\n    metrics=request(\"GET\",base+\"/metrics\")[1]\n    line=next(x for x in metrics.splitlines() if x.startswith(\"alertmanager_config_last_reload_successful \"))\n    success=float(line.split()[1])==1\n    if status!=200:\n        if success or yaml.safe_load(effective)!=yaml.safe_load(before):raise RuntimeError(\"rejected reload changed effective configuration\")\n        return {\"applied\":True,\"effective\":yaml.safe_load(effective),\"reload_success\":False}\n    active=yaml.safe_load(effective);desired=yaml.safe_load(candidate)\n    if not success or not contains(active[\"route\"],desired[\"route\"]) or [x[\"name\"] for x in active[\"receivers\"]]!=[x[\"name\"] for x in desired[\"receivers\"]]:raise RuntimeError(\"visible runtime route does not match approved candidate\")\n    return {\"applied\":True,\"effective\":yaml.safe_load(effective),\"reload_success\":True}\n"
+    },
+    "exercise": {
+      "kind": "code",
+      "environment": "Python/PyYAML与已校验的Alertmanager0.28.1，Windows私有回环进程；不安装系统服务",
+      "operation": "实现apply_config(base,path,candidate,request)。base/path仅指题定自有临时Alertmanager进程及配置文件，candidate为已审查的JSON格式YAML配置文本，request(method,url,payload=None)返回HTTP状态码与JSON或文本。读取/api/v2/status的config.original为重载前证据，将candidate以UTF8写到指定文件并POST /-/reload，再核对运行配置和/metrics的alertmanager_config_last_reload_successful。拒绝时必须证明指标为0且实际配置与此前语义一致，返回applied=False/effective=实际旧配置字典/reload_success=False；文件保留失败候选以便诊断，不把写文件当应用成功，不偷偷重启、自动放宽路由或回退文件。成功时必须证明指标为1且可见运行route包含候选route各项、receiver名称及顺序与候选一致，返回applied=True/effective=实际配置字典/reload_success=True；证据矛盾抛RuntimeError。真实进程测试先发送到old，缺失receiver的配置重载被拒后仍到old，修正后同一PID和uptime的新告警到new。配置解析采用yaml.safe_load；服务端返回的默认字段需以运行语义为准，验收候选不要求省略默认项与展开默认项的字典完全相等。\n\n\n状态接口URL脱敏；只比较可见route字段与receiver名称/顺序，真实送达另验。",
+      "deliverables": [
+        "task.py"
+      ],
+      "verification": "python3 checks/check.py",
+      "validation_scope": "官方Alertmanager0.28.1 Windows原生进程；私有回环HTTP webhook、独立临时数据目录，真实配置解析和热重载。没有生产路由、外部聊天/邮件通道、多节点HA、秘密轮换或宿主服务变更。主配置使用YAML兼容JSON，不需要系统服务安装。原题无独立故障编号，本实操不增加故障完成数。"
+    },
+    "assessment": {
+      "kind": "program",
+      "command": "python3 checks/check.py",
+      "timeout": 40,
+      "requires": {
+        "commands": [
+          "alertmanager"
+        ],
+        "python_modules": [
+          "yaml"
+        ],
+        "features": []
+      },
+      "test_files": {
+        "checks/check.py": "import datetime,json,pathlib,shutil,socket,subprocess,tempfile,threading,time,urllib.request,urllib.error\nfrom http.server import BaseHTTPRequestHandler,ThreadingHTTPServer\nimport yaml,task\nbinary=shutil.which(\"alertmanager\") or shutil.which(\"alertmanager.exe\")\nassert binary and \"0.28.1\" in subprocess.check_output([binary,\"--version\"],stderr=subprocess.STDOUT,text=True,timeout=5)\nprint(\"NATIVE_PLATFORM_READY\",flush=True)\nseen=[]\nclass Receiver(BaseHTTPRequestHandler):\n def do_POST(self):\n  seen.append((self.path,json.loads(self.rfile.read(int(self.headers[\"Content-Length\"])))))\n  self.send_response(200);self.send_header(\"Content-Length\",\"0\");self.end_headers()\n def log_message(self,*args):pass\nhook=ThreadingHTTPServer((\"127.0.0.1\",0),Receiver);thread=threading.Thread(target=hook.serve_forever,daemon=True);thread.start()\ndef request(method,url,payload=None):\n req=urllib.request.Request(url,data=json.dumps(payload).encode() if payload is not None else (b\"\" if method==\"POST\" else None),method=method,headers={\"Content-Type\":\"application/json\"})\n try:\n  with urllib.request.urlopen(req,timeout=3) as r:status,raw=r.status,r.read().decode()\n except urllib.error.HTTPError as e:status,raw=e.code,e.read().decode()\n try:return status,json.loads(raw)\n except ValueError:return status,raw\ndef config(receiver):\n return {\"route\":{\"receiver\":receiver,\"group_by\":[\"alertname\"],\"group_wait\":\"0s\",\"group_interval\":\"1s\",\"repeat_interval\":\"1h\"},\"receivers\":[{\"name\":name,\"webhook_configs\":[{\"url\":\"http://127.0.0.1:\"+str(hook.server_port)+\"/\"+name}]} for name in [\"old\",\"new\"]]}\ndef delivered(base,name,path):\n now=datetime.datetime.now(datetime.timezone.utc)\n alert={\"labels\":{\"alertname\":name,\"scope\":\"private-reload-acceptance\"},\"annotations\":{\"summary\":\"local synthetic validation\"},\"startsAt\":now.isoformat(),\"endsAt\":(now+datetime.timedelta(minutes=5)).isoformat()}\n assert request(\"POST\",base+\"/api/v2/alerts\",[alert])[0]==200\n limit=time.monotonic()+7\n while time.monotonic()<limit:\n  found=[p for p,payload in seen if any(a[\"labels\"][\"alertname\"]==name for a in payload[\"alerts\"])]\n  if found:assert set(found)=={path};return\n  time.sleep(.05)\n raise AssertionError(\"native webhook not delivered to expected effective receiver\")\nproc=None\ntry:\n with tempfile.TemporaryDirectory(prefix=\"opsforge-am-reload-\") as temp:\n  root=pathlib.Path(temp);path=root/\"config.json\";old=config(\"old\");new=config(\"new\");path.write_text(json.dumps(old),encoding=\"utf8\")\n  with socket.socket() as s:s.bind((\"127.0.0.1\",0));port=s.getsockname()[1]\n  base=\"http://127.0.0.1:\"+str(port)\n  with (root/\"server.log\").open(\"wb\") as log:\n   proc=subprocess.Popen([binary,\"--config.file=\"+str(path),\"--storage.path=\"+str(root/\"data\"),\"--web.listen-address=127.0.0.1:\"+str(port),\"--cluster.listen-address=\",\"--log.level=error\"],stdout=log,stderr=subprocess.STDOUT)\n   try:\n    limit=time.monotonic()+12\n    while True:\n     try:\n      if request(\"GET\",base+\"/-/ready\")[0]==200:break\n     except OSError:pass\n     if proc.poll() is not None or time.monotonic()>limit:raise RuntimeError(\"NATIVE_ENVIRONMENT_ERROR: private Alertmanager startup failed\")\n     time.sleep(.05)\n    pid=proc.pid;before=request(\"GET\",base+\"/api/v2/status\")[1]\n    delivered(base,\"InitialOld\",\"/old\")\n    broken=config(\"missing\");candidate=json.dumps(broken)\n    print(\"STUDENT_OPERATION_ENTERED: real rejected reload and runtime configuration witness\",flush=True)\n    result=task.apply_config(base,path,candidate,request)\n    assert result=={\"applied\":False,\"effective\":yaml.safe_load(before[\"config\"][\"original\"]),\"reload_success\":False},result\n    assert json.loads(path.read_text(encoding=\"utf8\"))==broken,\"must not silently rewrite failed on-disk candidate\"\n    assert proc.poll() is None and proc.pid==pid\n    delivered(base,\"AfterRejectedReload\",\"/old\")\n    print(\"NATIVE_ALERTMANAGER_REJECTED_RELOAD_METRIC_ZERO_STATUS_OLD_DISK_NEW_WEBHOOK_OLD\",flush=True)\n    result=task.apply_config(base,path,json.dumps(new),request)\n    assert result[\"applied\"] is True and result[\"reload_success\"] is True and result[\"effective\"][\"route\"][\"receiver\"]==\"new\"\n    assert proc.poll() is None and proc.pid==pid\n    delivered(base,\"AfterAcceptedReload\",\"/new\")\n    assert request(\"GET\",base+\"/api/v2/status\")[1][\"uptime\"]==before[\"uptime\"]\n    print(\"NATIVE_ALERTMANAGER_REPAIRED_RELOAD_SAME_PID_UPTIME_METRIC_ONE_STATUS_NEW_WEBHOOK_NEW\",flush=True)\n   finally:\n    if proc.poll() is None:proc.terminate()\n    try:proc.wait(timeout=5)\n    except subprocess.TimeoutExpired:proc.kill();proc.wait(timeout=5)\nfinally:\n hook.shutdown();hook.server_close();thread.join(timeout=3)\nprint(\"NATIVE_SEMANTIC_ASSERTIONS_PASSED\",flush=True)\n"
+      }
+    },
+    "question_format": "practice"
+  }
+]
