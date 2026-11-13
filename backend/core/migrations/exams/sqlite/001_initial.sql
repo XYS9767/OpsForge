@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS exams(id TEXT PRIMARY KEY, payload TEXT, deadline REAL, finished INTEGER DEFAULT 0);

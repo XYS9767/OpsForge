@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS labs(
+    id TEXT PRIMARY KEY, qid TEXT, mode TEXT,
+    payload JSONB NOT NULL, created DOUBLE PRECISION
+);
